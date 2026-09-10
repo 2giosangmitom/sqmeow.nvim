@@ -341,6 +341,8 @@ function M.open()
   end
 
   local config = require('sqmeow.config').get().ui.drawer
+  -- Whichever surface opens first records the layout, and whichever closes last puts it back.
+  require('sqmeow.ui.layout').remember()
   local previous = vim.api.nvim_get_current_win()
 
   vim.cmd(
@@ -371,6 +373,7 @@ function M.close()
     vim.api.nvim_win_close(win, true)
   end
   win = nil
+  require('sqmeow.ui.layout').restore()
 end
 
 --- Whether the drawer is showing.

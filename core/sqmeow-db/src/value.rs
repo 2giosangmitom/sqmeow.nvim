@@ -64,6 +64,18 @@ impl Cell {
         }
     }
 
+    /// The value's text, exactly as it is.
+    ///
+    /// Line breaks and tabs survive. This is what an export writes, where the file format has its
+    /// own way of carrying them and mangling them would corrupt the data.
+    pub fn text<'a>(&'a self, null_text: &'a str) -> Cow<'a, str> {
+        match self {
+            Self::Text(text) | Self::Json(text) => Cow::Borrowed(text),
+            Self::Unsupported { raw, .. } if !raw.is_empty() => Cow::Borrowed(raw),
+            other => other.display(null_text),
+        }
+    }
+
     /// The single-line form shown in a grid cell.
     ///
     /// Line breaks and tabs become their escape sequences rather than a symbol, because a grid row
@@ -240,6 +252,20 @@ mod tests {
         assert!(Cell::Decimal("1.00".into()).is_numeric());
         assert!(!Cell::Text("1".into()).is_numeric());
         assert!(!Cell::Null.is_numeric());
+    }
+
+    #[test]
+    fn text_keeps_line_breaks_that_display_escapes() {
+        let cell = Cell::Text("a\nb".into());
+        assert_eq!(cell.text("NULL"), "a\nb");
+        assert_eq!(cell.display("NULL"), "a\\nb");
+    }
+
+    #[test]
+    fn text_agrees_with_display_where_there_is_nothing_to_escape() {
+        for cell in [Cell::Int(1), Cell::Bool(true), Cell::Null, Cell::Float(1.5)] {
+            assert_eq!(cell.text("NULL"), cell.display("NULL"));
+        }
     }
 
     #[test]

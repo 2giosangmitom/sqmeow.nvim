@@ -38,6 +38,13 @@ M.current = nil
 ---@type sqmeow.CallSummary|nil
 M.call = nil
 
+--- Finished queries, newest first.
+---
+--- Mirrors the engine's own history, which is what makes reopening one of them possible: the
+--- engine still holds the rows, so the log only has to remember which call to ask for.
+---@type sqmeow.CallSummary[]
+M.calls = {}
+
 local next_id = 0
 
 --- Reserve a connection id.
@@ -94,11 +101,27 @@ function M.connection_list()
   return list
 end
 
+--- Record a finished query.
+---
+--- Capped at the engine's own history size: remembering a call whose rows the engine has already
+--- evicted would offer the user something that cannot be reopened.
+---
+---@param summary sqmeow.CallSummary
+function M.record_call(summary)
+  table.insert(M.calls, 1, vim.deepcopy(summary))
+
+  local limit = require('sqmeow.config').get().query.history_size
+  while #M.calls > limit do
+    table.remove(M.calls)
+  end
+end
+
 --- Forget everything. Used when the engine restarts, since its session went with it.
 function M.reset()
   M.connections = {}
   M.current = nil
   M.call = nil
+  M.calls = {}
   next_id = 0
 end
 

@@ -35,11 +35,23 @@ T['defaults']['give one action several keys where it helps'] = function()
   eq(find('drawer', 'toggle').lhs, { '<CR>', 'o' })
 end
 
-T['defaults']['use the same key for the same thing on every surface'] = function()
-  for surface in pairs(keymap.defaults) do
+T['defaults']['use the same key for the same thing on every read-only surface'] = function()
+  for _, surface in ipairs({ 'drawer', 'result' }) do
     eq(find(surface, 'close').lhs, { 'q' })
     eq(find(surface, 'help').lhs, { '?' })
   end
+end
+
+T['defaults']['leave an editing buffer its own motions'] = function()
+  -- A scratchpad is a buffer someone types SQL into. `?` is a search there and `q` records a
+  -- macro, and taking either would be a nasty surprise.
+  eq(find('editor', 'help'), nil)
+  eq(find('editor', 'close'), nil)
+end
+
+T['defaults']['run a selection from visual mode'] = function()
+  eq(find('editor', 'execute_selection').mode, 'x')
+  eq(find('editor', 'execute_statement').mode, 'n')
 end
 
 T['overrides'] = MiniTest.new_set()

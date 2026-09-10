@@ -7,7 +7,7 @@ owns windows, buffers, and keymaps. No row of data is ever formatted in Lua, whi
 large result from stalling the editor.
 
 > Early development. SQLite, PostgreSQL and MySQL work end to end: connect, browse the schema,
-> run SQL, and read a paginated grid. Nothing here is stable yet.
+> run SQL, read a paginated grid, and export it. Nothing here is stable yet.
 
 ## Requirements
 
@@ -28,12 +28,22 @@ Then open a `.sql` buffer and run it:
 :Sqmeow execute
 ```
 
-Results land in a split below. `L` and `H` page through them, `q` closes the window, and
-`:Sqmeow cancel` stops a query that is taking too long.
+Results land in a split below, under a header that stays put while the rows scroll. `L` and `H`
+page through them, `K` opens the row under the cursor down the page so long values are readable in
+full, `yc` and `yr` yank a cell or a row, and `q` closes the window. `:Sqmeow cancel` stops a query
+that is taking too long.
 
 `:Sqmeow toggle` opens the schema drawer: connections, then schemas, then tables and views, then
 columns with their types and keys. Each level loads when you expand it, so a database with ten
 thousand tables opens as fast as one with ten.
+
+`:Sqmeow scratch` opens a scratchpad for the current connection, an ordinary `sql` file under
+`stdpath('data')` that survives a restart. In it, `<CR>` runs the statement the cursor is in and
+`<CR>` on a selection runs that. A statement that fails becomes a diagnostic on its own lines
+rather than a message that scrolls away.
+
+`:Sqmeow export csv` writes the whole result to a file, and `:Sqmeow log` lists what has been run
+and puts any of it back on screen without running it again.
 
 ## Keys
 
@@ -61,9 +71,8 @@ vim.keymap.set('n', '<leader>dc', '<Plug>(sqmeow-cancel)')
 ## Connections
 
 `:Sqmeow save` writes a connection to a JSON file under `stdpath('data')`, and `:Sqmeow connect`
-with no argument offers everything the configured sources know about. Four sources ship with the
-plugin: inline connections from `setup()`, a JSON file, a JSON environment variable, and `g:dbs`
-for anyone arriving from vim-dadbod.
+with no argument offers everything the configured sources know about. Three sources ship with the
+plugin: inline connections from `setup()`, a JSON file, and a JSON environment variable.
 
 Passwords do not have to be written down. A URL may hold a directive that the engine expands when
 it connects, and never logs, echoes, or sends back to the editor:
@@ -83,8 +92,8 @@ Everywhere a URL is displayed, the password is masked. Set `redact_urls = false`
 | SQLite, end to end | done |
 | PostgreSQL and MySQL | done |
 | Schema drawer and keymap system | done |
-| Editor and result grid | next |
-| Statusline and picker integrations | planned |
+| Editor and result grid | done |
+| Statusline and picker integrations | next |
 | Generated documentation and prebuilt releases | planned |
 
 ## Development

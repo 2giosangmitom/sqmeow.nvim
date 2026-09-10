@@ -121,9 +121,12 @@ end
 --- arrive in the result buffer later, written by the engine itself.
 ---
 ---@param sql string One or more statements. Only the last one's rows are shown.
+---@param opts table|nil `line` runs only the statement at that zero-based line; `source_buf` is
+--- the buffer an error should be reported in.
 ---@return integer|nil call_id
 ---@return string|nil error
-function M.execute(sql)
+function M.execute(sql, opts)
+  opts = opts or {}
   local state = require('sqmeow.state')
   local connection = state.current_connection()
 
@@ -143,13 +146,24 @@ function M.execute(sql)
     conn_id = connection.id,
     sql = sql,
     buf = result.buffer(),
+    header_buf = result.header_buffer(),
+    line = opts.line,
   })
   if not call_id then
     notify(err or 'the query was refused', vim.log.levels.ERROR)
     return nil, err
   end
 
-  state.call = { call_id = call_id, conn_id = connection.id, state = 'executing' }
+  -- The SQL and the buffer it came from are the plugin's to remember: the engine has no reason to
+  -- send back text the editor already has, and an error needs somewhere to be shown.
+  state.call = {
+    call_id = call_id,
+    conn_id = connection.id,
+    state = 'executing',
+    statement = sql,
+    source_buf = opts.source_buf,
+  }
+  require('sqmeow.diagnostics').clear(opts.source_buf)
   result.update_winbar(state.call)
   return call_id
 end
@@ -158,7 +172,22 @@ end
 ---@return integer|nil call_id
 function M.execute_buffer()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  return M.execute(table.concat(lines, '\n'))
+  return M.execute(table.concat(lines, '\n'), { source_buf = vim.api.nvim_get_current_buf() })
+end
+
+--- Run the statement the cursor is in.
+---
+--- The whole buffer is sent along with the cursor line, and the engine picks the statement, using
+--- the same splitter that would have split the buffer. Doing it that way means there is one answer
+--- to what counts as a statement, rather than one here and a different one there.
+---
+---@return integer|nil call_id
+function M.execute_statement()
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  return M.execute(table.concat(lines, '\n'), {
+    line = vim.api.nvim_win_get_cursor(0)[1] - 1,
+    source_buf = vim.api.nvim_get_current_buf(),
+  })
 end
 
 --- Run the most recent visual selection.
@@ -179,7 +208,7 @@ function M.execute_selection()
     math.min(end_pos[2] + 1, #vim.fn.getline(end_pos[1])),
     {}
   )
-  return M.execute(table.concat(lines, '\n'))
+  return M.execute(table.concat(lines, '\n'), { source_buf = vim.api.nvim_get_current_buf() })
 end
 
 --- Stop the running query.
@@ -201,7 +230,12 @@ local function turn_page(opts)
     return
   end
 
-  local request = { call_id = state.call.call_id, buf = require('sqmeow.ui.result').buffer() }
+  local result = require('sqmeow.ui.result')
+  local request = {
+    call_id = state.call.call_id,
+    buf = result.buffer(),
+    header_buf = result.header_buffer(),
+  }
   request.offset = opts.offset
   request.delta = opts.delta
 
@@ -246,6 +280,81 @@ end
 --- Close the result window.
 function M.close()
   require('sqmeow.ui.result').close()
+end
+
+--- Put a past result back in the result window.
+---
+--- Nothing is run again: the engine still holds the rows, so this only asks it to repaint them.
+---
+---@param call_id integer From the query log.
+function M.reopen(call_id)
+  local state = require('sqmeow.state')
+  local result = require('sqmeow.ui.result')
+  result.open()
+
+  for _, summary in ipairs(state.calls) do
+    if summary.call_id == call_id then
+      state.call = vim.deepcopy(summary)
+      break
+    end
+  end
+
+  local _, err = engine().request('page', {
+    call_id = call_id,
+    buf = result.buffer(),
+    header_buf = result.header_buffer(),
+    offset = 0,
+  })
+  if err then
+    notify(err, vim.log.levels.WARN)
+  end
+end
+
+--- Write the current result to a file.
+---
+---@param opts table|nil `path` skips the prompt; `format` is 'csv' or 'json'.
+function M.export(opts)
+  opts = opts or {}
+  local state = require('sqmeow.state')
+  if not (state.call and state.call.call_id) then
+    notify('there is no result to export', vim.log.levels.WARN)
+    return
+  end
+
+  local format = opts.format or 'csv'
+  local function write(path)
+    if not path or path == '' then
+      return
+    end
+    local _, err = engine().request('export', {
+      call_id = state.call.call_id,
+      format = format,
+      scope = 'all',
+      path = vim.fn.fnamemodify(path, ':p'),
+    })
+    if err then
+      notify(err, vim.log.levels.ERROR)
+    end
+  end
+
+  if opts.path then
+    return write(opts.path)
+  end
+
+  vim.ui.input({
+    prompt = 'Write ' .. format .. ' to: ',
+    default = vim.fs.joinpath(vim.uv.cwd() or '.', 'result.' .. format),
+    completion = 'file',
+  }, write)
+end
+
+--- Open the scratchpad for a connection.
+---
+---@param name string|nil Defaults to the current connection.
+---@return integer buf
+function M.scratchpad(name)
+  require('sqmeow.events').ensure()
+  return require('sqmeow.ui.editor').open(name)
 end
 
 --- Show the schema drawer.

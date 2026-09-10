@@ -125,6 +125,30 @@ impl Layout {
         &self.widths
     }
 
+    /// Where each column sits, counted in display columns from the start of the line.
+    ///
+    /// Display columns rather than bytes, because a row holding CJK text puts the same column at a
+    /// different byte offset on every line. Display position is the one thing that is constant,
+    /// and it is what the editor needs to work out which cell a cursor is on.
+    ///
+    /// Returns `(start, width)` per column.
+    pub fn spans(&self) -> Vec<(usize, usize)> {
+        let mut spans = Vec::with_capacity(self.widths.len());
+        // One leading space before the first column.
+        let mut at = 1usize;
+
+        for (index, width) in self.widths.iter().enumerate() {
+            if index > 0 {
+                // The " │ " between columns.
+                at += 3;
+            }
+            spans.push((at, *width));
+            at += width;
+        }
+
+        spans
+    }
+
     /// The header line and the rule beneath it.
     pub fn header(&self, result: &ResultSet, options: &GridOptions) -> Vec<String> {
         let names: Vec<String> = result
@@ -243,6 +267,34 @@ mod tests {
         let layout = Layout::measure(&result, &GridOptions::default());
         // "id" is two wide, but "20" is as well; "name" is four, wider than "alice" is not.
         assert_eq!(layout.widths(), &[2, 5]);
+    }
+
+    #[test]
+    fn spans_line_up_with_what_was_drawn() {
+        let result = people();
+        let options = GridOptions::default();
+        let layout = Layout::measure(&result, &options);
+        let spans = layout.spans();
+
+        let header = &layout.header(&result, &options)[0];
+        for (index, (start, width)) in spans.iter().enumerate() {
+            let name = &result.columns()[index].name;
+            let taken: String = header.chars().skip(*start).take(*width).collect();
+            assert!(
+                taken.starts_with(name.as_str()),
+                "column {index}: {taken:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_result_with_no_columns_has_no_spans() {
+        let result = ResultSet::new("create table t (x int)", vec![]);
+        assert!(
+            Layout::measure(&result, &GridOptions::default())
+                .spans()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -8,5 +8,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+serde_json.workspace = true
 sqmeow-db.workspace = true
 unicode-width.workspace = true

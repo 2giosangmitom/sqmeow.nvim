@@ -10,8 +10,9 @@ use std::time::Instant;
 
 use rmpv::Value;
 use sqmeow_adapters::Backend;
-use sqmeow_db::{ColumnNode, Error as DbError, RelationNode, ResultSet, SchemaNode, sql};
-use sqmeow_render::Layout;
+use sqmeow_db::{Cell, ColumnNode, Error as DbError, RelationNode, ResultSet, SchemaNode, sql};
+use sqmeow_render::export::{Format, Rows};
+use sqmeow_render::{Layout, export};
 use sqmeow_rpc::{ApiCall, Handler, Nvim, Reply};
 use tokio::sync::Notify;
 
@@ -188,14 +189,24 @@ impl Core {
             Ok(buf) => buf,
             Err(error) => return reply.err(error),
         };
+        let header_buf = args.opt_integer("header_buf");
 
         let Some(connection) = self.session.connection(conn_id) else {
             return reply.err(format!("no connection with id {conn_id}"));
         };
 
-        let statements = sql::split(&source);
+        let mut statements = sql::split(&source);
         if statements.is_empty() {
             return reply.err("there is no statement to run");
+        }
+
+        // A line means "run only what the cursor is in". Choosing here rather than in the plugin
+        // keeps one implementation of what a statement is, the same one that split the buffer.
+        if let Some(line) = args.opt_usize("line") {
+            match sql::statement_at(&statements, line) {
+                Some(chosen) => statements = vec![chosen.clone()],
+                None => return reply.err("there is no statement to run"),
+            }
         }
 
         // The id goes back before the query starts, so the editor can show a running state and
@@ -203,7 +214,10 @@ impl Core {
         let call_id = self.session.next_call_id();
         reply.ok(Value::from(call_id));
 
-        tokio::spawn(async move { self.run_call(call_id, connection, statements, buf).await });
+        tokio::spawn(async move {
+            self.run_call(call_id, connection, statements, buf, header_buf)
+                .await
+        });
     }
 
     async fn run_call(
@@ -212,17 +226,31 @@ impl Core {
         connection: Arc<Connection>,
         statements: Vec<sql::Statement>,
         buf: i64,
+        header_buf: Option<i64>,
     ) {
         let conn_id = connection.id;
         let options = self.session.options();
         let cancel = self.session.begin_call(call_id);
         let started = Instant::now();
 
+        // The line range travels with the "executing" event so the editor can show which
+        // statement is running, which matters most when only one of several was chosen.
+        let span = statements.first().zip(statements.last());
         self.emit_call(
             call_id,
             conn_id,
             "executing",
-            vec![("statements", Value::from(statements.len() as u64))],
+            vec![
+                ("statements", Value::from(statements.len() as u64)),
+                (
+                    "start_line",
+                    optional(span.map(|(first, _)| Value::from(first.start_line as u64))),
+                ),
+                (
+                    "end_line",
+                    optional(span.map(|(_, last)| Value::from(last.end_line as u64))),
+                ),
+            ],
         );
 
         let mut last: Option<ResultSet> = None;
@@ -259,7 +287,8 @@ impl Core {
         // Only the last statement's rows are shown. A script ends with the query worth looking at.
         let result = last.unwrap_or_default();
         let layout = Layout::measure(&result, &options.grid);
-        let lines = layout.page(&result, &options.grid, 0);
+        let header = layout.header(&result, &options.grid);
+        let rows = layout.rows(&result, &options.grid, 0);
 
         let call = Call {
             id: call_id,
@@ -271,7 +300,7 @@ impl Core {
         let mut payload = summarize(&call, options.grid.page_size);
         payload.extend(elapsed(started));
 
-        self.paint(buf, lines).await;
+        self.paint(buf, header_buf, header, rows).await;
         self.session.store_call(call);
         self.session.end_call(call_id);
         self.emit_call(call_id, conn_id, "done", payload);
@@ -335,6 +364,182 @@ impl Core {
         }
     }
 
+    /// One row of a stored result, for the detail view.
+    ///
+    /// Answered from the dispatch call rather than a task: a row is bounded by the column count,
+    /// so formatting it is not the kind of work the editor should wait on a task for.
+    fn row(&self, args: &Args) -> Result<Value, String> {
+        let call_id = args.integer("call_id")? as u64;
+        let index = args.opt_usize("row").unwrap_or(0);
+        let null_text = self.session.options().grid.null_text;
+
+        let row = self
+            .session
+            .with_call(call_id, |call| {
+                if index >= call.result.row_count() {
+                    return None;
+                }
+
+                Some(Value::Array(
+                    call.result
+                        .columns()
+                        .iter()
+                        .enumerate()
+                        .map(|(column, meta)| {
+                            let cell = call.result.cell(index, column).unwrap_or(&Cell::Null);
+                            map(vec![
+                                ("name", Value::from(meta.name.clone())),
+                                ("type_name", Value::from(cell.type_name())),
+                                ("declared_type", Value::from(meta.type_name.clone())),
+                                ("is_null", Value::from(cell.is_null())),
+                                // The unescaped text: a detail view has room for the line breaks
+                                // a grid cell has to flatten away.
+                                ("value", Value::from(cell.text(&null_text).into_owned())),
+                            ])
+                        })
+                        .collect(),
+                ))
+            })
+            .ok_or_else(|| format!("result {call_id} is no longer held"))?;
+
+        row.ok_or_else(|| format!("row {index} is past the end of the result"))
+    }
+
+    fn spawn_export(self: Arc<Self>, args: &Args, reply: Reply) {
+        let call_id = match args.integer("call_id") {
+            Ok(id) => id as u64,
+            Err(error) => return reply.err(error),
+        };
+        let format = match args.opt_string("format").as_deref().map(Format::parse) {
+            Some(Some(format)) => format,
+            Some(None) => return reply.err("format must be `csv` or `json`"),
+            None => Format::Csv,
+        };
+
+        let scope = args.opt_string("scope").unwrap_or_else(|| "all".to_owned());
+        let row = args.opt_usize("row");
+        let column = args.opt_usize("column");
+        let register = args.opt_string("register");
+        let path = args.opt_string("path");
+
+        if self.session.with_call(call_id, |_| ()).is_none() {
+            return reply.err(format!("result {call_id} is no longer held"));
+        }
+
+        reply.ok(Value::from(call_id));
+        tokio::spawn(async move {
+            self.run_export(call_id, format, scope, row, column, register, path)
+                .await;
+        });
+    }
+
+    /// Render part of a result and put it somewhere the user can use it.
+    ///
+    /// The text never travels back as a reply. A hundred thousand rows of CSV would be a very
+    /// large message for the editor to decode only to hand straight to `setreg`, so the engine
+    /// writes it into the register, or into the file, itself.
+    #[expect(clippy::too_many_arguments, reason = "one argument per protocol field")]
+    async fn run_export(
+        self: Arc<Self>,
+        call_id: u64,
+        format: Format,
+        scope: String,
+        row: Option<usize>,
+        column: Option<usize>,
+        register: Option<String>,
+        path: Option<String>,
+    ) {
+        let options = self.session.options();
+        let page_size = options.grid.page_size;
+
+        let rendered = self
+            .session
+            .with_call(call_id, |call| match scope.as_str() {
+                "cell" => {
+                    let cell = call
+                        .result
+                        .cell(row.unwrap_or(0), column.unwrap_or(0))
+                        .unwrap_or(&Cell::Null);
+                    Ok(cell.text(&options.grid.null_text).into_owned())
+                }
+                "row" => Ok(export::write(
+                    &call.result,
+                    format,
+                    Rows::one(row.unwrap_or(0)),
+                )),
+                "page" => Ok(export::write(
+                    &call.result,
+                    format,
+                    Rows {
+                        start: call.offset,
+                        end: call.offset + page_size,
+                    },
+                )),
+                "all" => Ok(export::write(&call.result, format, Rows::all(&call.result))),
+                other => Err(format!(
+                    "unknown export scope `{other}`; expected cell, row, page or all"
+                )),
+            });
+
+        let text = match rendered {
+            Some(Ok(text)) => text,
+            Some(Err(error)) => return self.emit_export(call_id, Err(error)),
+            None => return self.emit_export(call_id, Err("the result is no longer held".into())),
+        };
+
+        let bytes = text.len();
+
+        match path {
+            Some(path) => match tokio::fs::write(&path, text).await {
+                Ok(()) => self.emit_export(
+                    call_id,
+                    Ok(vec![
+                        ("target", Value::from("file")),
+                        ("path", Value::from(path)),
+                        ("bytes", Value::from(bytes as u64)),
+                    ]),
+                ),
+                Err(error) => {
+                    self.emit_export(call_id, Err(format!("could not write {path}: {error}")));
+                }
+            },
+            None => {
+                let register = register.unwrap_or_else(|| "\"".to_owned());
+                let call = self.nvim.client().request(
+                    "nvim_call_function",
+                    vec![
+                        Value::from("setreg"),
+                        Value::Array(vec![Value::from(register.clone()), Value::from(text)]),
+                    ],
+                );
+
+                match call.await {
+                    Ok(_) => self.emit_export(
+                        call_id,
+                        Ok(vec![
+                            ("target", Value::from("register")),
+                            ("register", Value::from(register)),
+                            ("bytes", Value::from(bytes as u64)),
+                        ]),
+                    ),
+                    Err(error) => self.emit_export(call_id, Err(error.to_string())),
+                }
+            }
+        }
+    }
+
+    fn emit_export(&self, call_id: u64, outcome: Result<Vec<(&str, Value)>, String>) {
+        let mut payload = vec![("call_id", Value::from(call_id))];
+        match outcome {
+            Ok(fields) => payload.extend(fields),
+            Err(error) => payload.push(("error", Value::from(error))),
+        }
+
+        if let Err(error) = self.nvim.emit("export:done", map(payload)) {
+            tracing::warn!(%error, "could not report an export");
+        }
+    }
+
     fn spawn_page(self: Arc<Self>, args: &Args, reply: Reply) {
         let call_id = match args.integer("call_id") {
             Ok(id) => id as u64,
@@ -344,6 +549,7 @@ impl Core {
             Ok(buf) => buf,
             Err(error) => return reply.err(error),
         };
+        let header_buf = args.opt_integer("header_buf");
         let offset = args.opt_usize("offset");
         let delta = args.opt_integer("delta").unwrap_or(0);
 
@@ -352,10 +558,17 @@ impl Core {
         }
 
         reply.ok(Value::from(call_id));
-        tokio::spawn(async move { self.run_page(call_id, buf, offset, delta).await });
+        tokio::spawn(async move { self.run_page(call_id, buf, header_buf, offset, delta).await });
     }
 
-    async fn run_page(self: Arc<Self>, call_id: u64, buf: i64, offset: Option<usize>, delta: i64) {
+    async fn run_page(
+        self: Arc<Self>,
+        call_id: u64,
+        buf: i64,
+        header_buf: Option<i64>,
+        offset: Option<usize>,
+        delta: i64,
+    ) {
         let options = self.session.options();
         let page_size = options.grid.page_size;
 
@@ -374,16 +587,18 @@ impl Core {
         };
 
         let rendered = self.session.with_call(call_id, |call| {
-            let mut lines = call.layout.header(&call.result, &options.grid);
-            lines.extend(call.layout.rows(&call.result, &options.grid, settled));
-            (lines, summarize(call, page_size))
+            (
+                call.layout.header(&call.result, &options.grid),
+                call.layout.rows(&call.result, &options.grid, settled),
+                summarize(call, page_size),
+            )
         });
 
-        let Some((lines, payload)) = rendered else {
+        let Some((header, rows, payload)) = rendered else {
             return;
         };
 
-        self.paint(buf, lines).await;
+        self.paint(buf, header_buf, header, rows).await;
         if let Err(error) = self.nvim.emit("page:painted", map(payload)) {
             tracing::warn!(%error, "could not report a painted page");
         }
@@ -391,17 +606,57 @@ impl Core {
 
     // -- talking to the editor -------------------------------------------------------------------
 
-    /// Write lines into a buffer in one round trip.
+    /// Write a page into the editor in one round trip.
     ///
-    /// The buffer is left unmodifiable, so the option is lifted and restored around the write.
-    /// All three calls travel together: a separate message per call would let the user land in a
-    /// briefly editable buffer.
-    async fn paint(&self, buf: i64, lines: Vec<String>) {
-        let calls = vec![
-            ApiCall::buf_set_option(buf, "modifiable", Value::Boolean(true)),
-            ApiCall::buf_set_lines(buf, 0, -1, lines),
-            ApiCall::buf_set_option(buf, "modifiable", Value::Boolean(false)),
-        ];
+    /// When the editor supplies a header buffer, the column names and the rule go there and only
+    /// data rows go to `buf`. That is what lets the header stay put while the grid scrolls: it is
+    /// in a window of its own. Without one, everything goes to `buf` as a single block.
+    ///
+    /// Both buffers are left unmodifiable, so the option is lifted and restored around the write.
+    /// Every call travels together, because a separate message per call would leave the user with
+    /// a briefly editable buffer to fall into.
+    async fn paint(
+        &self,
+        buf: i64,
+        header_buf: Option<i64>,
+        header: Vec<String>,
+        rows: Vec<String>,
+    ) {
+        let mut calls = Vec::with_capacity(8);
+
+        let body = match header_buf {
+            Some(target) => {
+                calls.push(ApiCall::buf_set_option(
+                    target,
+                    "modifiable",
+                    Value::Boolean(true),
+                ));
+                calls.push(ApiCall::buf_set_lines(target, 0, -1, header));
+                calls.push(ApiCall::buf_set_option(
+                    target,
+                    "modifiable",
+                    Value::Boolean(false),
+                ));
+                rows
+            }
+            None => {
+                let mut lines = header;
+                lines.extend(rows);
+                lines
+            }
+        };
+
+        calls.push(ApiCall::buf_set_option(
+            buf,
+            "modifiable",
+            Value::Boolean(true),
+        ));
+        calls.push(ApiCall::buf_set_lines(buf, 0, -1, body));
+        calls.push(ApiCall::buf_set_option(
+            buf,
+            "modifiable",
+            Value::Boolean(false),
+        ));
 
         if let Err(error) = self.nvim.call_atomic(calls).await {
             tracing::warn!(%error, buf, "could not paint a result buffer");
@@ -480,7 +735,26 @@ fn column_nodes(columns: Vec<ColumnNode>) -> Vec<Value> {
 /// What the editor needs to describe a result: its size, its position, and whether it is whole.
 fn summarize(call: &Call, page_size: usize) -> Vec<(&'static str, Value)> {
     let result = &call.result;
+    let spans = call.layout.spans();
+
+    let columns: Vec<Value> = result
+        .columns()
+        .iter()
+        .zip(spans)
+        .map(|(column, (start, width))| {
+            map(vec![
+                ("name", Value::from(column.name.clone())),
+                ("type_name", Value::from(column.type_name.clone())),
+                // Where the column sits, in display columns, so the editor can tell which cell a
+                // cursor is on without knowing anything about how the grid was laid out.
+                ("start", Value::from(start as u64)),
+                ("width", Value::from(width as u64)),
+            ])
+        })
+        .collect();
+
     vec![
+        ("column_spans", Value::Array(columns)),
         ("call_id", Value::from(call.id)),
         ("conn_id", Value::from(call.conn_id)),
         ("rows", Value::from(result.row_count() as u64)),
@@ -515,6 +789,7 @@ impl Handler for Core {
             "ping" => Ok(Value::from("pong")),
             "configure" => self.configure(&args),
             "cancel" => self.cancel(&args),
+            "row" => self.row(&args),
             "connections" => Ok(Value::Array(self.session.describe_connections())),
             "shutdown" => {
                 self.shutdown.notify_waiters();
@@ -526,6 +801,7 @@ impl Handler for Core {
             "execute" => return self.spawn_execute(&args, reply),
             "page" => return self.spawn_page(&args, reply),
             "introspect" => return self.spawn_introspect(&args, reply),
+            "export" => return self.spawn_export(&args, reply),
 
             other => Err(format!("unknown method `{other}`")),
         };

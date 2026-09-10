@@ -1,19 +1,35 @@
---- The result grid window.
+--- The result grid.
 ---
---- The buffer's lines are written by the engine, not from here. This module only decides that the
---- buffer exists, where its window is, and what the winbar above it says.
+--- The lines are written by the engine, not from here. This module decides that the windows
+--- exist, where they are, and what the winbar says.
+---
+--- The header lives in a two-line window of its own above the grid. That is what keeps the column
+--- names visible while the rows scroll: Neovim has no way to pin a line inside a buffer, so the
+--- header has to be a separate window whose horizontal scroll is kept in step.
 
 local M = {}
 
 local buf = nil
+local header_buf = nil
 local win = nil
+local header_win = nil
+
+local augroup = vim.api.nvim_create_augroup('sqmeow.result', { clear = true })
+
+local function valid(handle, check)
+  return handle ~= nil and check(handle)
+end
 
 local function valid_buf()
-  return buf ~= nil and vim.api.nvim_buf_is_valid(buf)
+  return valid(buf, vim.api.nvim_buf_is_valid)
 end
 
 local function valid_win()
-  return win ~= nil and vim.api.nvim_win_is_valid(win)
+  return valid(win, vim.api.nvim_win_is_valid)
+end
+
+local function valid_header_win()
+  return valid(header_win, vim.api.nvim_win_is_valid)
 end
 
 --- Round a duration for display, keeping it short without lying about the magnitude.
@@ -71,82 +87,228 @@ function M.describe(summary)
   return table.concat(parts, '  ')
 end
 
---- The result buffer, created on first use.
----@return integer buf
-function M.buffer()
-  if valid_buf() then
-    return buf
-  end
+local function scratch(name, filetype)
+  local handle = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(handle, name)
 
-  buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(buf, 'sqmeow://result')
-
-  vim.bo[buf].buftype = 'nofile'
-  vim.bo[buf].bufhidden = 'hide'
-  vim.bo[buf].swapfile = false
-  vim.bo[buf].filetype = 'sqmeow-result'
+  vim.bo[handle].buftype = 'nofile'
+  vim.bo[handle].bufhidden = 'hide'
+  vim.bo[handle].swapfile = false
+  vim.bo[handle].filetype = filetype
   -- The engine lifts this around each paint. Between paints the grid is not something to type in.
-  vim.bo[buf].modifiable = false
+  vim.bo[handle].modifiable = false
 
-  require('sqmeow.keymap').apply('result', buf, M.actions)
+  return handle
+end
+
+--- The buffer the rows are written into.
+---@return integer
+function M.buffer()
+  if not valid_buf() then
+    buf = scratch('sqmeow://result', 'sqmeow-result')
+    require('sqmeow.keymap').apply('result', buf, M.actions)
+  end
   return buf
 end
 
---- Actions the result window's keys are bound to.
-M.actions = {
-  next_page = function()
-    require('sqmeow.api').next_page()
-  end,
-  prev_page = function()
-    require('sqmeow.api').prev_page()
-  end,
-  first_page = function()
-    require('sqmeow.api').first_page()
-  end,
-  last_page = function()
-    require('sqmeow.api').last_page()
-  end,
-  help = function()
-    require('sqmeow.ui.help').open('result')
-  end,
-  close = function()
-    M.close()
-  end,
-}
+--- The buffer the column names are written into.
+---@return integer
+function M.header_buffer()
+  if not valid(header_buf, vim.api.nvim_buf_is_valid) then
+    header_buf = scratch('sqmeow://result-header', 'sqmeow-result-header')
+  end
+  return header_buf
+end
 
---- Show the result window, creating it if needed.
----@return integer win
+--- Keep the header scrolled to the same column as the grid.
+local function sync_header()
+  if not (valid_win() and valid_header_win()) then
+    return
+  end
+
+  local view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
+  vim.api.nvim_win_call(header_win, function()
+    vim.fn.winrestview({ leftcol = view.leftcol })
+  end)
+end
+
+--- Where the cursor is in the result, as a row and a column of the data.
+---
+--- The row is the cursor line offset by the page, which is simple because the header is not in
+--- this buffer. The column comes from the display spans the engine sent with the page: a cursor
+--- byte position means nothing on a line of CJK text, but its display width does.
+---
+---@return { row: integer, column: integer, name: string }|nil
+function M.current_cell()
+  local call = require('sqmeow.state').call
+  if not (valid_win() and call and call.column_spans) then
+    return nil
+  end
+
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  local line = vim.api.nvim_buf_get_lines(M.buffer(), cursor[1] - 1, cursor[1], false)[1]
+  if not line then
+    return nil
+  end
+
+  local display = vim.fn.strdisplaywidth(line:sub(1, cursor[2]))
+  local found = 1
+
+  for index, span in ipairs(call.column_spans) do
+    if display >= span.start then
+      found = index
+    end
+  end
+
+  return {
+    row = (call.offset or 0) + cursor[1] - 1,
+    column = found - 1,
+    name = call.column_spans[found] and call.column_spans[found].name or '',
+  }
+end
+
+local function engine_export(request)
+  local call = require('sqmeow.state').call
+  if not (call and call.call_id) then
+    vim.notify('sqmeow: there is no result to export', vim.log.levels.WARN)
+    return
+  end
+
+  request.call_id = call.call_id
+  local _, err = require('sqmeow.rpc').request('export', request)
+  if err then
+    vim.notify('sqmeow: ' .. err, vim.log.levels.ERROR)
+  end
+end
+
+--- Actions the result window's keys are bound to.
+M.actions = {}
+
+function M.actions.next_page()
+  require('sqmeow.api').next_page()
+end
+
+function M.actions.prev_page()
+  require('sqmeow.api').prev_page()
+end
+
+function M.actions.first_page()
+  require('sqmeow.api').first_page()
+end
+
+function M.actions.last_page()
+  require('sqmeow.api').last_page()
+end
+
+--- Copy the value under the cursor, exactly as it is rather than as the grid shows it.
+function M.actions.yank_cell()
+  local cell = M.current_cell()
+  if not cell then
+    return
+  end
+  engine_export({ scope = 'cell', row = cell.row, column = cell.column, register = vim.v.register })
+end
+
+--- Copy the row under the cursor as CSV.
+function M.actions.yank_row()
+  local cell = M.current_cell()
+  if not cell then
+    return
+  end
+  engine_export({ scope = 'row', format = 'csv', row = cell.row, register = vim.v.register })
+end
+
+--- Copy the visible page as CSV.
+function M.actions.yank_page()
+  engine_export({ scope = 'page', format = 'csv', register = vim.v.register })
+end
+
+--- Write the whole result to a file.
+function M.actions.export()
+  require('sqmeow.api').export()
+end
+
+--- Show the row under the cursor as a list of columns and values.
+function M.actions.detail()
+  local cell = M.current_cell()
+  if not cell then
+    return
+  end
+  require('sqmeow.ui.detail').open(cell.row)
+end
+
+function M.actions.help()
+  require('sqmeow.ui.help').open('result')
+end
+
+function M.actions.close()
+  M.close()
+end
+
+--- Show the result windows, creating them if needed.
+---@return integer win The window the rows are in.
 function M.open()
   if valid_win() then
     return win
   end
 
   local config = require('sqmeow.config').get()
+  require('sqmeow.ui.layout').remember()
   local previous = vim.api.nvim_get_current_win()
 
   vim.cmd(('botright %dsplit'):format(config.ui.result.height))
   win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(win, M.buffer())
 
-  vim.wo[win].number = false
-  vim.wo[win].relativenumber = false
-  vim.wo[win].signcolumn = 'no'
-  vim.wo[win].wrap = false
-  vim.wo[win].cursorline = true
-  -- Other splits must not squash the grid, which would silently hide columns.
-  vim.wo[win].winfixheight = true
+  for _, target in ipairs({ win }) do
+    vim.wo[target].number = false
+    vim.wo[target].relativenumber = false
+    vim.wo[target].signcolumn = 'no'
+    vim.wo[target].wrap = false
+    vim.wo[target].cursorline = true
+    -- Other splits must not squash the grid, which would silently hide columns.
+    vim.wo[target].winfixheight = true
+  end
+
+  -- Two lines above the grid, holding the column names and the rule under them.
+  vim.cmd('aboveleft 2split')
+  header_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(header_win, M.header_buffer())
+  vim.api.nvim_win_set_height(header_win, 2)
+
+  vim.wo[header_win].number = false
+  vim.wo[header_win].relativenumber = false
+  vim.wo[header_win].signcolumn = 'no'
+  vim.wo[header_win].wrap = false
+  vim.wo[header_win].cursorline = false
+  vim.wo[header_win].winfixheight = true
+
+  vim.api.nvim_clear_autocmds({ group = augroup })
+  vim.api.nvim_create_autocmd({ 'WinScrolled', 'CursorMoved' }, {
+    group = augroup,
+    buffer = M.buffer(),
+    desc = 'Keep the sqmeow result header scrolled with the grid',
+    callback = sync_header,
+  })
 
   -- Opening a result should not steal the cursor from the query being written.
-  vim.api.nvim_set_current_win(previous)
+  if vim.api.nvim_win_is_valid(previous) then
+    vim.api.nvim_set_current_win(previous)
+  end
   return win
 end
 
---- Hide the result window, keeping the buffer and its contents.
+--- Hide the result windows, keeping their contents.
 function M.close()
-  if valid_win() then
-    vim.api.nvim_win_close(win, true)
+  for _, handle in ipairs({ header_win, win }) do
+    if handle and vim.api.nvim_win_is_valid(handle) then
+      vim.api.nvim_win_close(handle, true)
+    end
   end
-  win = nil
+  win, header_win = nil, nil
+
+  require('sqmeow.ui.detail').close()
+  require('sqmeow.ui.layout').restore()
 end
 
 --- Whether the result window is showing.
@@ -159,7 +321,7 @@ end
 ---
 ---@param summary sqmeow.CallSummary|nil
 function M.update_winbar(summary)
-  if not valid_win() or not require('sqmeow.config').get().ui.winbar then
+  if not valid_header_win() or not require('sqmeow.config').get().ui.winbar then
     return
   end
 
@@ -167,7 +329,7 @@ function M.update_winbar(summary)
   local label = connection and ('%s (%s)'):format(connection.name, connection.dialect or '?')
     or 'not connected'
 
-  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s'):format(label, M.describe(summary))
+  vim.wo[header_win].winbar = ('%%#SqmeowWinbar# %s  %%*%s'):format(label, M.describe(summary))
 end
 
 return M

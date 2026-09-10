@@ -45,15 +45,44 @@ end
 function M.on_call(payload)
   local state = require('sqmeow.state')
   local result = require('sqmeow.ui.result')
+  local diagnostics = require('sqmeow.diagnostics')
 
-  state.call = payload
-  result.update_winbar(payload)
+  -- Merge rather than replace: the SQL text and the buffer it came from are the plugin's own
+  -- record of this call, and the engine has no reason to send them back.
+  local previous = state.call or {}
+  if previous.call_id == payload.call_id then
+    state.call = vim.tbl_extend('force', previous, payload)
+  else
+    state.call = payload
+  end
+
+  result.update_winbar(state.call)
 
   if payload.state == 'error' then
+    diagnostics.set(state.call.source_buf, payload)
     notify(payload.error or 'the query failed', vim.log.levels.ERROR)
+  elseif payload.state == 'done' then
+    diagnostics.clear(state.call.source_buf)
   elseif payload.state == 'cancelled' then
     notify('query cancelled', vim.log.levels.WARN)
   end
+
+  if payload.state ~= 'executing' then
+    state.record_call(state.call)
+  end
+end
+
+--- Handle an export finishing.
+---@param payload table
+function M.on_export(payload)
+  if payload.error then
+    return notify(payload.error, vim.log.levels.ERROR)
+  end
+
+  if payload.target == 'file' then
+    return notify(('wrote %s (%d bytes)'):format(payload.path, payload.bytes))
+  end
+  notify(('yanked %d bytes into register %s'):format(payload.bytes, payload.register))
 end
 
 --- Handle a page being painted.
@@ -85,6 +114,7 @@ function M.ensure()
   rpc.on('call:state', M.on_call)
   rpc.on('page:painted', M.on_page)
   rpc.on('schema:nodes', M.on_nodes)
+  rpc.on('export:done', M.on_export)
 end
 
 return M

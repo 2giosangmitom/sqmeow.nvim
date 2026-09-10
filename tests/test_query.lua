@@ -47,8 +47,14 @@ local function page(action)
   return state.call
 end
 
+--- The data rows. The header lives in a window of its own, so it is not in this buffer.
 local function lines()
   return vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false)
+end
+
+--- The column names and the rule under them.
+local function header()
+  return vim.api.nvim_buf_get_lines(result.header_buffer(), 0, -1, false)
 end
 
 local T = MiniTest.new_set({
@@ -98,30 +104,32 @@ end
 
 T['querying']['writes an aligned grid into the buffer'] = function()
   run('select id, name from people order by id')
-  eq(lines(), {
-    ' id │ name',
-    '────┼──────',
-    '  1 │ alice',
-    '  2 │ bob',
-    '  3 │ NULL',
-  })
+  eq(header(), { ' id │ name', '────┼──────' })
+  eq(lines(), { '  1 │ alice', '  2 │ bob', '  3 │ NULL' })
+end
+
+T['querying']['keeps the header out of the scrolling buffer'] = function()
+  run('select id, name from people order by id')
+  -- The header is a separate window, which is what lets it stay put while the rows scroll.
+  eq(lines()[1], '  1 │ alice')
 end
 
 T['querying']['right-aligns numbers and left-aligns text'] = function()
   run('select id, name from people where id = 1')
-  local row = lines()[3]
-  eq(row, '  1 │ alice')
+  eq(lines()[1], '  1 │ alice')
 end
 
 T['querying']['shows a blob as hexadecimal'] = function()
   run('select avatar from people where id = 1')
-  eq(lines()[3], ' 0xdeadbeef')
+  eq(lines()[1], ' 0xdeadbeef')
 end
 
 T['querying']['keeps the header when nothing matches'] = function()
   local summary = run('select id, name from people where 0')
   eq(summary.rows, 0)
-  eq(lines(), { ' id │ name', '────┼─────' })
+  -- The columns still show, which is what makes "no rows" different from "something broke".
+  eq(header(), { ' id │ name', '────┼─────' })
+  eq(lines(), { '' })
 end
 
 T['querying']['counts rows a statement changed'] = function()
@@ -133,13 +141,13 @@ end
 T['querying']['runs several statements and shows the last'] = function()
   local summary = run('select 1 as first; select 2 as second')
   eq(summary.rows, 1)
-  eq(lines()[1], ' second')
+  eq(header()[1], ' second')
 end
 
 T['querying']['does not split on a semicolon inside a string'] = function()
   local summary = run([[select 'a;b' as v]])
   eq(summary.rows, 1)
-  eq(lines()[3], ' a;b')
+  eq(lines()[1], ' a;b')
 end
 
 T['querying']['refuses an empty query'] = function()
@@ -187,28 +195,27 @@ T['paging']['starts on the first page'] = function()
 end
 
 T['paging']['shows only a page of rows at a time'] = function()
-  -- Two lines of header plus the page size.
-  eq(#lines(), 2 + 4)
+  eq(#lines(), 4)
 end
 
 T['paging']['moves forward'] = function()
   local summary = page(api.next_page)
   eq(summary.page, 2)
-  eq(lines()[3], '  5')
+  eq(lines()[1], '  5')
 end
 
 T['paging']['moves back'] = function()
   page(api.next_page)
   local summary = page(api.prev_page)
   eq(summary.page, 1)
-  eq(lines()[3], '  1')
+  eq(lines()[1], '  1')
 end
 
 T['paging']['stops at the last page rather than emptying the view'] = function()
   local summary = page(api.last_page)
   eq(summary.page, 3)
   -- Ten rows over pages of four leaves two on the last page.
-  eq(#lines(), 2 + 2)
+  eq(#lines(), 2)
 end
 
 T['paging']['stops at the first page going back'] = function()
@@ -220,9 +227,9 @@ T['paging']['stops at the first page going back'] = function()
 end
 
 T['paging']['keeps column widths steady across pages'] = function()
-  local first = lines()[2]
+  local first = header()[2]
   page(api.next_page)
-  eq(lines()[2], first)
+  eq(header()[2], first)
 end
 
 T['limits'] = MiniTest.new_set()
@@ -236,6 +243,192 @@ T['limits']['stop at the row cap and say so'] = function()
   eq(summary.truncated, true)
 
   require('sqmeow').setup({ ui = { result = { page_size = 4 } } })
+end
+
+T['statement under the cursor'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      -- A buffer of several statements, so choosing the right one is observable.
+      vim.cmd('enew')
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, {
+        'select 1 as first;',
+        '',
+        'select 2 as second,',
+        '       3 as third;',
+        '',
+        "select 'a;b' as fourth;",
+      })
+    end,
+    post_case = function()
+      vim.cmd('bwipeout!')
+    end,
+  },
+})
+
+--- Put the cursor on a line, run what it is in, and answer with the column that came back.
+local function statement_at(line)
+  vim.api.nvim_win_set_cursor(0, { line, 0 })
+  local call_id = assert(api.execute_statement())
+  assert(vim.wait(TIMEOUT, function()
+    return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
+  end, 10))
+  return vim.api.nvim_buf_get_lines(result.header_buffer(), 0, -1, false)[1]
+end
+
+T['statement under the cursor']['runs the one the cursor is in'] = function()
+  eq(statement_at(1), ' first')
+  eq(statement_at(6), ' fourth')
+end
+
+T['statement under the cursor']['runs a statement spanning several lines'] = function()
+  eq(statement_at(3), ' second │ third')
+  eq(statement_at(4), ' second │ third')
+end
+
+T['statement under the cursor']['picks the statement above a blank line'] = function()
+  eq(statement_at(2), ' first')
+end
+
+T['statement under the cursor']['runs one statement, not the whole buffer'] = function()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local call_id = assert(api.execute_statement())
+  assert(vim.wait(TIMEOUT, function()
+    return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
+  end, 10))
+  eq(state.call.rows, 1)
+end
+
+T['errors in a buffer'] = MiniTest.new_set({
+  hooks = {
+    post_case = function()
+      vim.cmd('bwipeout!')
+    end,
+  },
+})
+
+T['errors in a buffer']['become a diagnostic on the failing statement'] = function()
+  local diagnostics = require('sqmeow.diagnostics')
+
+  vim.cmd('enew')
+  local buf = vim.api.nvim_get_current_buf()
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'select 1;', 'select nope_at_all;' })
+
+  local call_id = assert(api.execute_buffer())
+  assert(vim.wait(TIMEOUT, function()
+    return state.call ~= nil and state.call.call_id == call_id and state.call.state == 'error'
+  end, 10))
+
+  local found = vim.diagnostic.get(buf, { namespace = diagnostics.namespace })
+  eq(#found, 1)
+  eq(found[1].lnum, 1)
+  eq(found[1].message:find('nope_at_all', 1, true) ~= nil, true)
+
+  -- A query that works clears the error it replaced.
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'select 1;' })
+  local ok_id = assert(api.execute_buffer())
+  assert(vim.wait(TIMEOUT, function()
+    return state.call ~= nil and state.call.call_id == ok_id and state.call.state == 'done'
+  end, 10))
+  eq(#vim.diagnostic.get(buf, { namespace = diagnostics.namespace }), 0)
+end
+
+T['exporting'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      run('select id, name from people order by id')
+      vim.fn.setreg('"', 'untouched')
+    end,
+  },
+})
+
+--- Wait for the engine to finish an export and put the register's contents back.
+local function exported()
+  assert(
+    vim.wait(TIMEOUT, function()
+      return vim.fn.getreg('"') ~= 'untouched'
+    end, 10),
+    'the export should reach the register'
+  )
+  return vim.fn.getreg('"')
+end
+
+T['exporting']['yanks one cell exactly as it is'] = function()
+  vim.api.nvim_win_set_cursor(result.open(), { 1, 6 })
+  result.actions.yank_cell()
+  eq(exported(), 'alice')
+end
+
+T['exporting']['yanks a row as csv'] = function()
+  vim.api.nvim_win_set_cursor(result.open(), { 1, 0 })
+  result.actions.yank_row()
+  eq(exported(), 'id,name\n1,alice\n')
+end
+
+T['exporting']['yanks the page as csv'] = function()
+  result.actions.yank_page()
+
+  local text = exported()
+  eq(text:find('id,name', 1, true), 1)
+  -- NULL becomes an empty field, which is the only thing CSV can say.
+  eq(text:find('3,\n', 1, true) ~= nil, true)
+end
+
+T['exporting']['writes the whole result to a file'] = function()
+  local path = vim.fn.tempname() .. '.json'
+  api.export({ format = 'json', path = path })
+
+  assert(
+    vim.wait(TIMEOUT, function()
+      return vim.uv.fs_stat(path) ~= nil
+    end, 10),
+    'the file should be written'
+  )
+
+  local decoded = vim.json.decode(table.concat(vim.fn.readfile(path), '\n'))
+  eq(#decoded, 3)
+  eq(decoded[1].name, 'alice')
+  -- JSON can say null, so it does.
+  eq(decoded[3].name, vim.NIL)
+  vim.fn.delete(path)
+end
+
+T['exporting']['reports a path it cannot write'] = function()
+  api.export({ format = 'csv', path = '/nonexistent/dir/out.csv' })
+  -- Nothing is written and nothing crashes; the failure arrives as a notification.
+  vim.wait(300, function()
+    return false
+  end, 10)
+end
+
+T['row detail'] = MiniTest.new_set()
+
+T['row detail']['reads one row from the engine'] = function()
+  run('select id, name from people order by id')
+
+  local columns = require('sqmeow.rpc').request('row', { call_id = state.call.call_id, row = 0 })
+  eq(#columns, 2)
+  eq(columns[1].name, 'id')
+  eq(columns[1].value, '1')
+  eq(columns[2].value, 'alice')
+  eq(columns[2].is_null, false)
+end
+
+T['row detail']['says a null is a null'] = function()
+  run('select name from people where id = 3')
+
+  local columns = require('sqmeow.rpc').request('row', { call_id = state.call.call_id, row = 0 })
+  eq(columns[1].is_null, true)
+end
+
+T['row detail']['refuses a row past the end'] = function()
+  run('select id from people')
+
+  local columns, err = require('sqmeow.rpc').request('row', {
+    call_id = state.call.call_id,
+    row = 99,
+  })
+  eq(columns, nil)
+  eq(err ~= nil, true)
 end
 
 T['status'] = MiniTest.new_set()

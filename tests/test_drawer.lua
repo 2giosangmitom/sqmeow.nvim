@@ -142,8 +142,9 @@ T['actions']['preview a relation into the result window'] = function()
     return state.call ~= nil and state.call.state == 'done'
   end, 10))
 
-  local result = vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
-  eq(result[1], ' id │ name │ score')
+  local header =
+    vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').header_buffer(), 0, -1, false)
+  eq(header[1], ' id │ name │ score')
 end
 
 T['window'] = MiniTest.new_set()

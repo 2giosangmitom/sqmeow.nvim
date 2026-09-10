@@ -17,7 +17,6 @@ M.builtin = {
   memory = require('sqmeow.sources.memory'),
   env = require('sqmeow.sources.env'),
   file = require('sqmeow.sources.file'),
-  dadbod = require('sqmeow.sources.dadbod'),
 }
 
 local function valid(entry)

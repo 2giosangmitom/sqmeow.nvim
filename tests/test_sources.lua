@@ -10,7 +10,6 @@ local T = MiniTest.new_set({
     post_case = function()
       config.apply({})
       vim.env.SQMEOW_CONNECTIONS = nil
-      vim.g.dbs = nil
       pcall(vim.fn.delete, scratch)
     end,
   },
@@ -134,48 +133,23 @@ T['file']['reports malformed json'] = function()
   eq(#problems, 1)
 end
 
-T['dadbod'] = MiniTest.new_set()
-
-T['dadbod']['reads a table of names to urls'] = function()
-  vim.g.dbs = { dev = 'sqlite://dev.db', prod = 'postgres://host/prod' }
-  only({ type = 'dadbod' })
-
-  local found = sources.load()
-  eq(#found, 2)
-  -- A table has no order, so the source sorts it into one.
-  eq(found[1].name, 'dev')
-  eq(found[2].name, 'prod')
-end
-
-T['dadbod']['reads a list of name and url pairs'] = function()
-  vim.g.dbs = { { name = 'dev', url = 'sqlite://dev.db' } }
-  only({ type = 'dadbod' })
-
-  eq(sources.load()[1].name, 'dev')
-end
-
-T['dadbod']['is empty when g:dbs is unset'] = function()
-  only({ type = 'dadbod' })
-  eq(sources.load(), {})
-end
-
 T['combining'] = MiniTest.new_set()
 
 T['combining']['reads every source in order'] = function()
   vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'from-env', url = 'sqlite://e.db' } })
-  vim.g.dbs = { ['from-dadbod'] = 'sqlite://d.db' }
-  only({ type = 'env' }, { type = 'dadbod' })
+  file.add({ name = 'from-file', url = 'sqlite://f.db' }, { path = scratch })
+  only({ type = 'env' }, { type = 'file', path = scratch })
 
   local found = sources.load()
   eq(#found, 2)
   eq(found[1].source, 'env')
-  eq(found[2].source, 'dadbod')
+  eq(found[2].source, 'file')
 end
 
 T['combining']['reports a duplicate name instead of hiding it'] = function()
   vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'dev', url = 'sqlite://e.db' } })
-  vim.g.dbs = { dev = 'sqlite://d.db' }
-  only({ type = 'env' }, { type = 'dadbod' })
+  file.add({ name = 'dev', url = 'sqlite://f.db' }, { path = scratch })
+  only({ type = 'env' }, { type = 'file', path = scratch })
 
   local found, problems = sources.load()
   -- The first one still works, and the collision is surfaced rather than silently resolved.
@@ -203,8 +177,8 @@ T['combining']['reports an entry missing a url'] = function()
 end
 
 T['combining']['finds one connection by name'] = function()
-  vim.g.dbs = { dev = 'sqlite://dev.db' }
-  only({ type = 'dadbod' })
+  file.add({ name = 'dev', url = 'sqlite://dev.db' }, { path = scratch })
+  only({ type = 'file', path = scratch })
 
   eq(sources.find('dev').url, 'sqlite://dev.db')
   eq(sources.find('nope'), nil)

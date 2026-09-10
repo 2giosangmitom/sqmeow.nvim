@@ -15,6 +15,28 @@ pub struct Statement {
     pub end_line: usize,
 }
 
+/// The statement the cursor is in, or the nearest one before it.
+///
+/// A cursor on a blank line between two statements picks the one above rather than the one below.
+/// That is what running a buffer line by line feels like: you finish a statement, press the key,
+/// and the statement you just finished runs.
+///
+/// Returns `None` only when there is no statement at all.
+pub fn statement_at(statements: &[Statement], line: usize) -> Option<&Statement> {
+    if let Some(inside) = statements
+        .iter()
+        .find(|statement| statement.start_line <= line && line <= statement.end_line)
+    {
+        return Some(inside);
+    }
+
+    statements
+        .iter()
+        .rev()
+        .find(|statement| statement.start_line <= line)
+        .or_else(|| statements.first())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Code,
@@ -339,6 +361,39 @@ mod tests {
     #[test]
     fn a_bare_dollar_is_not_a_tag() {
         assert_eq!(sqls("select $1; select $2"), vec!["select $1", "select $2"]);
+    }
+
+    #[test]
+    fn the_statement_at_a_line_is_the_one_containing_it() {
+        let statements = split("select 1;\n\nselect\n  2;\n\nselect 3;");
+
+        assert_eq!(statement_at(&statements, 0).unwrap().sql, "select 1");
+        assert_eq!(statement_at(&statements, 2).unwrap().sql, "select\n  2");
+        assert_eq!(statement_at(&statements, 3).unwrap().sql, "select\n  2");
+        assert_eq!(statement_at(&statements, 5).unwrap().sql, "select 3");
+    }
+
+    #[test]
+    fn a_line_between_statements_picks_the_one_above() {
+        let statements = split("select 1;\n\nselect 2;");
+        assert_eq!(statement_at(&statements, 1).unwrap().sql, "select 1");
+    }
+
+    #[test]
+    fn a_line_before_every_statement_picks_the_first() {
+        let statements = split("\n\nselect 1;");
+        assert_eq!(statement_at(&statements, 0).unwrap().sql, "select 1");
+    }
+
+    #[test]
+    fn a_line_past_every_statement_picks_the_last() {
+        let statements = split("select 1;\nselect 2;");
+        assert_eq!(statement_at(&statements, 99).unwrap().sql, "select 2");
+    }
+
+    #[test]
+    fn there_is_no_statement_in_an_empty_buffer() {
+        assert!(statement_at(&split(""), 0).is_none());
     }
 
     #[test]

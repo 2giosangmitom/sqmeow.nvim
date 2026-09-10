@@ -37,8 +37,23 @@ M.defaults = {
     { action = 'prev_page', lhs = 'H', desc = 'Previous page' },
     { action = 'first_page', lhs = 'gg', desc = 'First page' },
     { action = 'last_page', lhs = 'G', desc = 'Last page' },
+    { action = 'detail', lhs = 'K', desc = 'Show this row down the page' },
+    { action = 'yank_cell', lhs = 'yc', desc = 'Yank this cell' },
+    { action = 'yank_row', lhs = 'yr', desc = 'Yank this row as CSV' },
+    { action = 'yank_page', lhs = 'yp', desc = 'Yank this page as CSV' },
+    { action = 'export', lhs = 'e', desc = 'Write the result to a file' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the result window' },
+  },
+
+  -- A scratchpad is an ordinary editing buffer, so it gets none of the single-letter keys the
+  -- read-only surfaces use. `?` and `q` in particular stay what they always are: a search and a
+  -- macro recording.
+  editor = {
+    { action = 'execute_statement', lhs = '<CR>', desc = 'Run the statement under the cursor' },
+    { action = 'execute_selection', lhs = '<CR>', mode = 'x', desc = 'Run the selection' },
+    { action = 'execute_buffer', lhs = '<leader>E', desc = 'Run the whole buffer' },
+    { action = 'cancel', lhs = '<C-c>', desc = 'Stop the running query' },
   },
 }
 

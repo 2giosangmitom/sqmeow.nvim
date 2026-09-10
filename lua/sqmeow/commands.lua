@@ -132,7 +132,7 @@ M.subcommands = {
   },
 
   execute = {
-    desc = 'Run the current buffer, or the given SQL',
+    desc = 'Run the current buffer, the selection, or the given SQL',
     run = function(args, opts)
       local api = require('sqmeow.api')
       if #args > 0 then
@@ -142,6 +142,32 @@ M.subcommands = {
         return void(api.execute_selection())
       end
       void(api.execute_buffer())
+    end,
+  },
+
+  statement = {
+    desc = 'Run the statement the cursor is in',
+    run = function()
+      void(require('sqmeow.api').execute_statement())
+    end,
+  },
+
+  scratch = {
+    desc = 'Open the scratchpad for this connection',
+    run = function(args)
+      void(require('sqmeow.api').scratchpad(args[1]))
+    end,
+  },
+
+  export = {
+    desc = 'Write the result to a file',
+    run = function(args)
+      require('sqmeow.api').export({ format = args[1], path = args[2] })
+    end,
+    complete = function(lead)
+      return vim.tbl_filter(function(format)
+        return format:find(lead, 1, true) == 1
+      end, { 'csv', 'json' })
     end,
   },
 
@@ -204,7 +230,14 @@ M.subcommands = {
   },
 
   log = {
-    desc = 'Show the engine log',
+    desc = 'Choose a past query and show its result again',
+    run = function()
+      require('sqmeow.ui.log').open()
+    end,
+  },
+
+  messages = {
+    desc = 'Show what the engine has been saying',
     run = function()
       local lines = require('sqmeow.rpc').messages()
       if #lines == 0 then

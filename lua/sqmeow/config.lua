@@ -15,6 +15,7 @@ local M = {}
 M.defaults = {
   -- Where connections are loaded from, in order. Later sources do not shadow earlier ones; every
   -- source contributes, and a duplicate name is reported rather than silently dropped.
+  -- Types: 'file', 'env', 'memory'.
   sources = {
     { type = 'file' },
     { type = 'env' },

@@ -39,6 +39,10 @@ local function lines()
   return vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false)
 end
 
+local function header()
+  return vim.api.nvim_buf_get_lines(result.header_buffer(), 0, -1, false)
+end
+
 local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
@@ -74,13 +78,13 @@ for dialect, url in pairs(servers) do
     local summary = run("select 1 as id, 'alice' as name")
     eq(summary.state, 'done')
     eq(summary.rows, 1)
-    eq(lines()[1], ' id │ name')
-    eq(lines()[3], '  1 │ alice')
+    eq(header()[1], ' id │ name')
+    eq(lines()[1], '  1 │ alice')
   end
 
   T[dialect]['renders null distinctly from an empty string'] = function()
     run("select null as a, '' as b")
-    eq(lines()[3], ' NULL │')
+    eq(lines()[1], ' NULL │')
   end
 
   T[dialect]['reports an error without losing the connection'] = function()
