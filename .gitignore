@@ -1,0 +1,7 @@
+/target
+/doc/tags
+*.so
+*.dylib
+*.dll
+.luarc.json
+/.deps

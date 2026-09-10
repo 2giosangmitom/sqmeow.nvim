@@ -1,0 +1,20 @@
+[package]
+name = "sqmeow-core"
+description = "Database engine backing the sqmeow.nvim editor plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "sqmeow-core"
+path = "src/main.rs"
+
+[dependencies]
+sqmeow-rpc.workspace = true
+
+rmpv.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,9 @@
+---
+# Globals selene may assume. `vim` is Neovim's Lua API; `MiniTest` is injected into test files by
+# the mini.test harness rather than required, so selene has to be told it exists.
+base: lua51
+globals:
+  vim:
+    any: true
+  MiniTest:
+    any: true

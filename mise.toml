@@ -1,0 +1,5 @@
+[tools]
+rust = "1.98.0"
+just = "latest"
+stylua = "latest"
+"aqua:Kampfkarren/selene" = "latest"
