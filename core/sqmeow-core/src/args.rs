@@ -45,14 +45,6 @@ impl Args {
     }
 
     /// A required string argument.
-    // The unit tests below exercise these, so they are only dead in a non-test build.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the query and connection methods land in the next milestone"
-        )
-    )]
     pub fn string(&self, key: &str) -> Result<String, String> {
         match self.get(key) {
             Some(Value::String(text)) => text
@@ -69,15 +61,22 @@ impl Args {
         self.get(key)?.as_str().map(str::to_owned)
     }
 
+    /// An optional integer argument. A value of the wrong type is treated as absent.
+    pub fn opt_integer(&self, key: &str) -> Option<i64> {
+        self.get(key)?.as_i64()
+    }
+
+    /// An optional count, clamped at zero so a negative never wraps.
+    pub fn opt_usize(&self, key: &str) -> Option<usize> {
+        Some(usize::try_from(self.opt_integer(key)?).unwrap_or(0))
+    }
+
+    /// An optional boolean argument.
+    pub fn opt_bool(&self, key: &str) -> Option<bool> {
+        self.get(key)?.as_bool()
+    }
+
     /// A required integer argument.
-    // The unit tests below exercise these, so they are only dead in a non-test build.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the query and connection methods land in the next milestone"
-        )
-    )]
     pub fn integer(&self, key: &str) -> Result<i64, String> {
         match self.get(key) {
             Some(value) => value
@@ -128,6 +127,28 @@ mod tests {
     #[test]
     fn a_non_table_is_rejected() {
         assert!(Args::from_params(&[Value::from("nope")]).is_err());
+    }
+
+    #[test]
+    fn optional_readers_tolerate_absent_and_wrong_types() {
+        let params = table(vec![
+            ("offset", Value::from(5)),
+            ("ascii", Value::from(true)),
+        ]);
+        let args = Args::from_params(&params).unwrap();
+
+        assert_eq!(args.opt_integer("offset"), Some(5));
+        assert_eq!(args.opt_usize("offset"), Some(5));
+        assert_eq!(args.opt_bool("ascii"), Some(true));
+        assert_eq!(args.opt_integer("missing"), None);
+        assert_eq!(args.opt_bool("offset"), None);
+    }
+
+    #[test]
+    fn a_negative_count_clamps_to_zero() {
+        let params = table(vec![("offset", Value::from(-3))]);
+        let args = Args::from_params(&params).unwrap();
+        assert_eq!(args.opt_usize("offset"), Some(0));
     }
 
     #[test]

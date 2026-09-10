@@ -13,8 +13,12 @@ path = "src/main.rs"
 
 [dependencies]
 sqmeow-rpc.workspace = true
+sqmeow-db.workspace = true
+sqmeow-adapters.workspace = true
+sqmeow-render.workspace = true
 
 rmpv.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

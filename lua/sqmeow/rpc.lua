@@ -153,7 +153,36 @@ function M.start()
   end
 
   info = handshake
+  M.configure()
   return channel
+end
+
+--- Mirror the plugin's configuration into the engine.
+---
+--- The engine needs the row cap, the page size, and the column width because it is the side that
+--- decides what a page looks like. Sending them rather than duplicating defaults means there is
+--- one place a user changes them.
+---
+---@return table|nil applied What the engine says it applied, after clamping.
+function M.configure()
+  if not channel then
+    return nil
+  end
+
+  local config = require('sqmeow.config').get()
+  local ok, applied = pcall(vim.rpcrequest, channel, 'configure', {
+    max_rows = config.query.max_rows,
+    history_size = config.query.history_size,
+    page_size = config.ui.result.page_size,
+    max_column_width = config.ui.result.max_column_width,
+    ascii = config.integrations.icons == 'ascii',
+  })
+
+  if not ok then
+    warn(('the engine refused the configuration: %s'):format(applied))
+    return nil
+  end
+  return applied
 end
 
 --- Stop the engine.

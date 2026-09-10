@@ -1,0 +1,12 @@
+[package]
+name = "sqmeow-render"
+description = "Grid layout and export formats for sqmeow.nvim result sets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sqmeow-db.workspace = true
+unicode-width.workspace = true

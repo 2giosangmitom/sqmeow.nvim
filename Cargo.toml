@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["core/sqmeow-rpc", "core/sqmeow-core"]
+members = [
+    "core/sqmeow-rpc",
+    "core/sqmeow-db",
+    "core/sqmeow-adapters",
+    "core/sqmeow-render",
+    "core/sqmeow-core",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,10 +17,17 @@ repository = "https://github.com/2giosangmitom/sqmeow.nvim"
 
 [workspace.dependencies]
 sqmeow-rpc = { path = "core/sqmeow-rpc" }
+sqmeow-db = { path = "core/sqmeow-db" }
+sqmeow-adapters = { path = "core/sqmeow-adapters" }
+sqmeow-render = { path = "core/sqmeow-render" }
 
 rmpv = "1.3"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
+tokio-util = "0.7"
+unicode-width = "0.2"
+futures-util = { version = "0.3", default-features = false }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

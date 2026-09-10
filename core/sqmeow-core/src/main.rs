@@ -6,6 +6,8 @@
 
 mod args;
 mod core;
+mod session;
+mod value;
 
 use std::sync::Arc;
 

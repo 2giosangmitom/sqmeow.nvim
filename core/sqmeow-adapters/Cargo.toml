@@ -1,0 +1,20 @@
+[package]
+name = "sqmeow-adapters"
+description = "Database adapters for sqmeow.nvim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sqmeow-db.workspace = true
+
+futures-util.workspace = true
+sqlx = { workspace = true, features = ["sqlite"] }
+tokio = { workspace = true, features = ["sync", "macros"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

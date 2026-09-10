@@ -30,6 +30,20 @@ function M.setup(opts)
   for _, err in ipairs(errors) do
     vim.notify('sqmeow: ' .. err, vim.log.levels.ERROR)
   end
+
+  require('sqmeow.ui.highlights').setup()
+
+  -- A colourscheme change wipes every group, including ours.
+  vim.api.nvim_create_autocmd('ColorScheme', {
+    group = vim.api.nvim_create_augroup('sqmeow.highlights', { clear = true }),
+    desc = 'Redefine sqmeow highlight groups',
+    callback = function()
+      require('sqmeow.ui.highlights').setup()
+    end,
+  })
+
+  -- A running engine holds the old settings, so tell it about the new ones.
+  require('sqmeow.rpc').configure()
 end
 
 --- Stop the engine. It restarts on the next call that needs it.

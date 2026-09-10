@@ -34,6 +34,18 @@ impl ApiCall {
         )
     }
 
+    /// Set a buffer-local option.
+    pub fn buf_set_option(buf: i64, name: &str, value: Value) -> Self {
+        Self::new(
+            "nvim_set_option_value",
+            vec![
+                Value::from(name),
+                value,
+                Value::Map(vec![(Value::from("buf"), Value::from(buf))]),
+            ],
+        )
+    }
+
     fn into_value(self) -> Value {
         Value::Array(vec![Value::from(self.method), Value::Array(self.args)])
     }

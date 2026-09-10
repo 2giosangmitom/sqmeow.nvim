@@ -6,21 +6,36 @@ The engine owns connections, queries, type decoding, and the layout of result gr
 owns windows, buffers, and keymaps. No row of data is ever formatted in Lua, which is what keeps a
 large result from stalling the editor.
 
-> Early development. The engine speaks to the editor and reports its health; database adapters are
-> the next milestone. Nothing here is stable yet.
+> Early development. SQLite works end to end: connect, run SQL, and read a paginated grid.
+> PostgreSQL and MySQL are next. Nothing here is stable yet.
 
 ## Requirements
 
 - Neovim 0.10 or newer
 - No database client tools, and no Rust toolchain once prebuilt engines ship
 
+## Trying it
+
+```vim
+:Sqmeow connect sqlite://./app.db
+```
+
+Then open a `.sql` buffer and run it:
+
+```vim
+:Sqmeow execute
+```
+
+Results land in a split below. `L` and `H` page through them, `q` closes the window, and
+`:Sqmeow cancel` stops a query that is taking too long.
+
 ## Status
 
 | Milestone | State |
 | --- | --- |
 | Channel to the engine, configuration, health check | done |
-| SQLite, end to end | next |
-| PostgreSQL and MySQL | planned |
+| SQLite, end to end | done |
+| PostgreSQL and MySQL | next |
 | Schema drawer and keymap system | planned |
 | Editor and result grid | planned |
 | Statusline and picker integrations | planned |
