@@ -9,6 +9,7 @@ use std::future::Future;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::Result;
+use crate::node::{ColumnNode, RelationNode, SchemaNode};
 use crate::result::ResultSet;
 
 /// Which SQL dialect a connection speaks.
@@ -70,6 +71,23 @@ pub trait Adapter: Send + Sync {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> impl Future<Output = Result<ResultSet>> + Send;
+
+    /// The schemas, or for MySQL the databases, this connection can see.
+    fn schemas(&self) -> impl Future<Output = Result<Vec<SchemaNode>>> + Send;
+
+    /// The tables and views in one schema.
+    fn relations(&self, schema: &str) -> impl Future<Output = Result<Vec<RelationNode>>> + Send;
+
+    /// The columns of one relation.
+    ///
+    /// Loaded when the user expands that relation and not before. A database with ten thousand
+    /// tables would otherwise stall the drawer on open, for information almost none of which is
+    /// about to be read.
+    fn columns(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> impl Future<Output = Result<Vec<ColumnNode>>> + Send;
 
     /// Close the connection pool.
     fn close(&self) -> impl Future<Output = ()> + Send;

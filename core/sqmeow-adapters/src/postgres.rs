@@ -13,7 +13,10 @@ use sqlx::{
     AssertSqlSafe, Column as _, Decode, Executor, Postgres, Row, SqlSafeStr, Statement as _, Type,
     TypeInfo, ValueRef, types,
 };
-use sqmeow_db::{Adapter, Cell, Column, Dialect, Error, Result, ResultSet};
+use sqmeow_db::{
+    Adapter, Cell, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
+    ResultSet, SchemaNode,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::stream::drain;
@@ -98,6 +101,98 @@ impl Adapter for PostgresAdapter {
 
         result.set_elapsed(started.elapsed());
         Ok(result)
+    }
+
+    async fn schemas(&self) -> Result<Vec<SchemaNode>> {
+        // The catalogue schemas are hidden: they are the same on every server and are not what
+        // anyone opened the drawer to look at.
+        let rows = sqlx::query(
+            "select nspname as name, nspname = current_schema() as is_default
+             from pg_namespace
+             where nspname not like 'pg\\_%' and nspname <> 'information_schema'
+             order by nspname",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                Some(SchemaNode {
+                    name: row.try_get::<String, _>("name").ok()?,
+                    is_default: row
+                        .try_get::<Option<bool>, _>("is_default")
+                        .ok()?
+                        .unwrap_or(false),
+                })
+            })
+            .collect())
+    }
+
+    async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
+        let rows = sqlx::query(
+            "select c.relname as name, c.relkind as kind
+             from pg_class c
+             join pg_namespace n on n.oid = c.relnamespace
+             where n.nspname = $1 and c.relkind in ('r', 'p', 'v', 'm', 'f')
+             order by c.relname",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let name = row.try_get::<String, _>("name").ok()?;
+                // relkind is a "char", which decodes as one byte.
+                let kind = match row.try_get::<i8, _>("kind").ok()? as u8 {
+                    // An ordinary table and a partitioned one are both tables to the user.
+                    b'r' | b'p' => RelationKind::Table,
+                    b'v' => RelationKind::View,
+                    b'm' => RelationKind::MaterializedView,
+                    _ => RelationKind::Other,
+                };
+                Some(RelationNode { name, kind })
+            })
+            .collect())
+    }
+
+    async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
+        // `format_type` renders the type the way the schema declares it, so `varchar(10)` and
+        // `numeric(30,3)` keep their parameters instead of collapsing to a base type name.
+        let rows = sqlx::query(
+            "select a.attname as name,
+                    format_type(a.atttypid, a.atttypmod) as type_name,
+                    not a.attnotnull as nullable,
+                    coalesce(i.indisprimary, false) as primary_key
+             from pg_attribute a
+             join pg_class c on c.oid = a.attrelid
+             join pg_namespace n on n.oid = c.relnamespace
+             left join pg_index i
+               on i.indrelid = c.oid and i.indisprimary and a.attnum = any(i.indkey)
+             where n.nspname = $1 and c.relname = $2 and a.attnum > 0 and not a.attisdropped
+             order by a.attnum",
+        )
+        .bind(schema)
+        .bind(relation)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                Some(ColumnNode {
+                    name: row.try_get::<String, _>("name").ok()?,
+                    type_name: row.try_get::<String, _>("type_name").ok()?,
+                    nullable: row.try_get::<bool, _>("nullable").unwrap_or(true),
+                    primary_key: row.try_get::<bool, _>("primary_key").unwrap_or(false),
+                })
+            })
+            .collect())
     }
 
     async fn close(&self) {

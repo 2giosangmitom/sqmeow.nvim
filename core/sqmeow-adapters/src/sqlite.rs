@@ -12,7 +12,10 @@ use sqlx::{
     AssertSqlSafe, Column as _, Executor, Row, SqlSafeStr, SqlitePool, Statement as _, TypeInfo,
     ValueRef,
 };
-use sqmeow_db::{Adapter, Cell, Column, Dialect, Error, Result, ResultSet};
+use sqmeow_db::{
+    Adapter, Cell, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
+    ResultSet, SchemaNode,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::stream::drain;
@@ -110,6 +113,82 @@ impl Adapter for SqliteAdapter {
 
         result.set_elapsed(started.elapsed());
         Ok(result)
+    }
+
+    /// SQLite calls them databases: `main`, `temp`, and anything attached.
+    async fn schemas(&self) -> Result<Vec<SchemaNode>> {
+        let rows = sqlx::query("pragma database_list")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| row.try_get::<String, _>("name").ok())
+            .map(|name| SchemaNode {
+                is_default: name == "main",
+                name,
+            })
+            .collect())
+    }
+
+    async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
+        // The schema cannot be a bind parameter here: it qualifies the table being read, not a
+        // value in it. Quoting it is what makes that safe.
+        let sql = format!(
+            "select name, type from {}.sqlite_master
+             where type in ('table', 'view') and name not like 'sqlite_%'
+             order by name",
+            self.quote_ident(schema)
+        );
+
+        let rows = sqlx::query(AssertSqlSafe(sql))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let name = row.try_get::<String, _>("name").ok()?;
+                let kind = match row.try_get::<String, _>("type").ok()?.as_str() {
+                    "view" => RelationKind::View,
+                    "table" => RelationKind::Table,
+                    _ => RelationKind::Other,
+                };
+                Some(RelationNode { name, kind })
+            })
+            .collect())
+    }
+
+    async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
+        let sql = format!(
+            "pragma {}.table_info({})",
+            self.quote_ident(schema),
+            self.quote_ident(relation)
+        );
+
+        let rows = sqlx::query(AssertSqlSafe(sql))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                Some(ColumnNode {
+                    name: row.try_get::<String, _>("name").ok()?,
+                    // A column with no declared type is legal in SQLite, and its values can be
+                    // anything, which is worth showing rather than leaving blank.
+                    type_name: match row.try_get::<String, _>("type").ok()? {
+                        empty if empty.is_empty() => "any".to_owned(),
+                        declared => declared,
+                    },
+                    nullable: row.try_get::<i64, _>("notnull").unwrap_or(0) == 0,
+                    primary_key: row.try_get::<i64, _>("pk").unwrap_or(0) > 0,
+                })
+            })
+            .collect())
     }
 
     async fn close(&self) {

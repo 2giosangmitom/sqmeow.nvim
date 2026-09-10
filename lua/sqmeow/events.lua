@@ -25,6 +25,8 @@ function M.on_connection(payload)
   connection.dialect = payload.dialect or connection.dialect
   connection.error = payload.error
 
+  require('sqmeow.ui.drawer').render()
+
   if payload.state == 'connected' then
     notify(('connected to %s (%s)'):format(connection.name, connection.dialect))
   elseif payload.state == 'error' then
@@ -65,6 +67,12 @@ function M.on_page(payload)
   end
 end
 
+--- Handle one level of the schema tree arriving.
+---@param payload table
+function M.on_nodes(payload)
+  require('sqmeow.ui.drawer').on_nodes(payload)
+end
+
 --- Subscribe to engine events. Safe to call repeatedly.
 function M.ensure()
   if wired then
@@ -76,6 +84,7 @@ function M.ensure()
   rpc.on('conn:state', M.on_connection)
   rpc.on('call:state', M.on_call)
   rpc.on('page:painted', M.on_page)
+  rpc.on('schema:nodes', M.on_nodes)
 end
 
 return M

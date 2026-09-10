@@ -88,34 +88,31 @@ function M.buffer()
   -- The engine lifts this around each paint. Between paints the grid is not something to type in.
   vim.bo[buf].modifiable = false
 
-  M.apply_keymaps(buf)
+  require('sqmeow.keymap').apply('result', buf, M.actions)
   return buf
 end
 
---- Bind the result buffer's keys.
----
---- Buffer-local only: the plugin takes no key outside its own windows. These move into the
---- declarative keymap table when the drawer lands and there is more than one surface to keep
---- consistent.
----@param target integer Buffer handle.
-function M.apply_keymaps(target)
-  local api = require('sqmeow.api')
-  local maps = {
-    { 'L', api.next_page, 'Next page' },
-    { 'H', api.prev_page, 'Previous page' },
-    { 'gg', api.first_page, 'First page' },
-    { 'G', api.last_page, 'Last page' },
-    { 'q', M.close, 'Close the result window' },
-  }
-
-  for _, entry in ipairs(maps) do
-    vim.keymap.set('n', entry[1], entry[2], {
-      buffer = target,
-      nowait = true,
-      desc = 'sqmeow: ' .. entry[3],
-    })
-  end
-end
+--- Actions the result window's keys are bound to.
+M.actions = {
+  next_page = function()
+    require('sqmeow.api').next_page()
+  end,
+  prev_page = function()
+    require('sqmeow.api').prev_page()
+  end,
+  first_page = function()
+    require('sqmeow.api').first_page()
+  end,
+  last_page = function()
+    require('sqmeow.api').last_page()
+  end,
+  help = function()
+    require('sqmeow.ui.help').open('result')
+  end,
+  close = function()
+    M.close()
+  end,
+}
 
 --- Show the result window, creating it if needed.
 ---@return integer win

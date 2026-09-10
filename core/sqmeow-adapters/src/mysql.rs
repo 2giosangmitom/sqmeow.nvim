@@ -12,7 +12,10 @@ use sqlx::{
     AssertSqlSafe, Column as _, Decode, Executor, MySql, Row, SqlSafeStr, Statement as _, Type,
     TypeInfo, ValueRef, types,
 };
-use sqmeow_db::{Adapter, Cell, Column, Dialect, Error, Result, ResultSet};
+use sqmeow_db::{
+    Adapter, Cell, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
+    ResultSet, SchemaNode,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::stream::drain;
@@ -96,6 +99,91 @@ impl Adapter for MySqlAdapter {
 
         result.set_elapsed(started.elapsed());
         Ok(result)
+    }
+
+    /// MySQL has no schemas within a database, so its databases fill that level of the tree.
+    async fn schemas(&self) -> Result<Vec<SchemaNode>> {
+        let rows = sqlx::query(
+            "select schema_name as name, schema_name = database() as is_default
+             from information_schema.schemata
+             where schema_name not in
+                   ('information_schema', 'performance_schema', 'mysql', 'sys')
+             order by schema_name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                Some(SchemaNode {
+                    name: row.try_get::<String, _>("name").ok()?,
+                    // `database()` is null when the URL named no database, and comparing against
+                    // null is null rather than false.
+                    is_default: row
+                        .try_get::<Option<bool>, _>("is_default")
+                        .ok()?
+                        .unwrap_or(false),
+                })
+            })
+            .collect())
+    }
+
+    async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
+        let rows = sqlx::query(
+            "select table_name as name, table_type as kind
+             from information_schema.tables
+             where table_schema = ?
+             order by table_name",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let name = row.try_get::<String, _>("name").ok()?;
+                let kind = match row.try_get::<String, _>("kind").ok()?.as_str() {
+                    "BASE TABLE" => RelationKind::Table,
+                    "VIEW" => RelationKind::View,
+                    _ => RelationKind::Other,
+                };
+                Some(RelationNode { name, kind })
+            })
+            .collect())
+    }
+
+    async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
+        // `column_type` keeps the declared width and signedness, which `data_type` drops.
+        let rows = sqlx::query(
+            "select column_name as name,
+                    column_type as type_name,
+                    is_nullable as nullable,
+                    column_key as key_kind
+             from information_schema.columns
+             where table_schema = ? and table_name = ?
+             order by ordinal_position",
+        )
+        .bind(schema)
+        .bind(relation)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                Some(ColumnNode {
+                    name: row.try_get::<String, _>("name").ok()?,
+                    type_name: row.try_get::<String, _>("type_name").ok()?,
+                    nullable: row.try_get::<String, _>("nullable").ok()? == "YES",
+                    primary_key: row.try_get::<String, _>("key_kind").ok()? == "PRI",
+                })
+            })
+            .collect())
     }
 
     async fn close(&self) {

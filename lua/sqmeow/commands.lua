@@ -168,6 +168,20 @@ M.subcommands = {
     end,
   },
 
+  toggle = {
+    desc = 'Show the schema drawer, or hide it',
+    run = function()
+      require('sqmeow.api').toggle()
+    end,
+  },
+
+  drawer = {
+    desc = 'Show the schema drawer',
+    run = function()
+      require('sqmeow.api').open_drawer()
+    end,
+  },
+
   open = {
     desc = 'Show the result window',
     run = function()
@@ -218,6 +232,7 @@ M.subcommands = {
     run = function()
       require('sqmeow.rpc').stop()
       require('sqmeow.state').reset()
+      require('sqmeow.ui.drawer').reset()
       notify('engine stopped')
     end,
   },
@@ -228,6 +243,7 @@ M.subcommands = {
       local channel, err = require('sqmeow.rpc').restart()
       -- The engine's session went with it, so the mirrored state is no longer true.
       require('sqmeow.state').reset()
+      require('sqmeow.ui.drawer').reset()
       if channel then
         return notify('engine restarted')
       end
@@ -241,7 +257,7 @@ local function run(opts)
   local name = table.remove(args, 1)
 
   if not name then
-    return require('sqmeow.api').open()
+    return require('sqmeow.api').toggle()
   end
 
   local subcommand = M.subcommands[name]

@@ -9,7 +9,7 @@ pub mod postgres;
 pub mod sqlite;
 mod stream;
 
-use sqmeow_db::{Adapter, Dialect, Error, Result, ResultSet};
+use sqmeow_db::{Adapter, ColumnNode, Dialect, Error, RelationNode, Result, ResultSet, SchemaNode};
 use tokio_util::sync::CancellationToken;
 
 /// How long to keep trying to open a connection before giving up.
@@ -69,6 +69,33 @@ impl Backend {
             Self::Sqlite(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::Postgres(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::MySql(adapter) => adapter.execute(statement, max_rows, cancel).await,
+        }
+    }
+
+    /// The schemas, or for MySQL the databases, this connection can see.
+    pub async fn schemas(&self) -> Result<Vec<SchemaNode>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.schemas().await,
+            Self::Postgres(adapter) => adapter.schemas().await,
+            Self::MySql(adapter) => adapter.schemas().await,
+        }
+    }
+
+    /// The tables and views in one schema.
+    pub async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.relations(schema).await,
+            Self::Postgres(adapter) => adapter.relations(schema).await,
+            Self::MySql(adapter) => adapter.relations(schema).await,
+        }
+    }
+
+    /// The columns of one relation.
+    pub async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.columns(schema, relation).await,
+            Self::Postgres(adapter) => adapter.columns(schema, relation).await,
+            Self::MySql(adapter) => adapter.columns(schema, relation).await,
         }
     }
 

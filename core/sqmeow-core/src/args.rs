@@ -76,6 +76,21 @@ impl Args {
         self.get(key)?.as_bool()
     }
 
+    /// An optional array of strings. Anything that is not a string is dropped.
+    pub fn opt_strings(&self, key: &str) -> Option<Vec<String>> {
+        match self.get(key)? {
+            Value::Array(items) => Some(
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect(),
+            ),
+            // Lua sends an empty table as an empty map, since it cannot tell a list from a table.
+            Value::Map(pairs) if pairs.is_empty() => Some(Vec::new()),
+            _ => None,
+        }
+    }
+
     /// A required integer argument.
     pub fn integer(&self, key: &str) -> Result<i64, String> {
         match self.get(key) {
@@ -142,6 +157,27 @@ mod tests {
         assert_eq!(args.opt_bool("ascii"), Some(true));
         assert_eq!(args.opt_integer("missing"), None);
         assert_eq!(args.opt_bool("offset"), None);
+    }
+
+    #[test]
+    fn a_string_array_is_read() {
+        let params = table(vec![(
+            "path",
+            Value::Array(vec![Value::from("public"), Value::from("users")]),
+        )]);
+        let args = Args::from_params(&params).unwrap();
+        assert_eq!(
+            args.opt_strings("path"),
+            Some(vec!["public".to_owned(), "users".to_owned()])
+        );
+    }
+
+    #[test]
+    fn an_empty_lua_list_reads_as_an_empty_array() {
+        let params = table(vec![("path", Value::Map(vec![]))]);
+        let args = Args::from_params(&params).unwrap();
+        assert_eq!(args.opt_strings("path"), Some(vec![]));
+        assert_eq!(Args::from_params(&[]).unwrap().opt_strings("path"), None);
     }
 
     #[test]

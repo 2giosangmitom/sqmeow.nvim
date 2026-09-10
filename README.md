@@ -6,8 +6,8 @@ The engine owns connections, queries, type decoding, and the layout of result gr
 owns windows, buffers, and keymaps. No row of data is ever formatted in Lua, which is what keeps a
 large result from stalling the editor.
 
-> Early development. SQLite, PostgreSQL and MySQL work end to end: connect, run SQL, and read a
-> paginated grid. The schema drawer is next. Nothing here is stable yet.
+> Early development. SQLite, PostgreSQL and MySQL work end to end: connect, browse the schema,
+> run SQL, and read a paginated grid. Nothing here is stable yet.
 
 ## Requirements
 
@@ -30,6 +30,33 @@ Then open a `.sql` buffer and run it:
 
 Results land in a split below. `L` and `H` page through them, `q` closes the window, and
 `:Sqmeow cancel` stops a query that is taking too long.
+
+`:Sqmeow toggle` opens the schema drawer: connections, then schemas, then tables and views, then
+columns with their types and keys. Each level loads when you expand it, so a database with ten
+thousand tables opens as fast as one with ten.
+
+## Keys
+
+The plugin sets no global mappings. Every key it binds is buffer-local to one of its own windows,
+carries a description that which-key will show, and can be changed or removed:
+
+```lua
+require('sqmeow').setup({
+  keymaps = {
+    result = { next_page = '<C-n>' },
+    drawer = { yank_select = false },
+  },
+})
+```
+
+Press `?` in any plugin window for that window's keys. For anything you want on a key of your own,
+bind a `<Plug>` mapping:
+
+```lua
+vim.keymap.set('n', '<leader>dd', '<Plug>(sqmeow-toggle)')
+vim.keymap.set('n', '<leader>de', '<Plug>(sqmeow-execute)')
+vim.keymap.set('n', '<leader>dc', '<Plug>(sqmeow-cancel)')
+```
 
 ## Connections
 
@@ -55,8 +82,8 @@ Everywhere a URL is displayed, the password is masked. Set `redact_urls = false`
 | Channel to the engine, configuration, health check | done |
 | SQLite, end to end | done |
 | PostgreSQL and MySQL | done |
-| Schema drawer and keymap system | next |
-| Editor and result grid | planned |
+| Schema drawer and keymap system | done |
+| Editor and result grid | next |
 | Statusline and picker integrations | planned |
 | Generated documentation and prebuilt releases | planned |
 

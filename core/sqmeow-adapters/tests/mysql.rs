@@ -4,10 +4,26 @@
 //! `SQMEOW_TEST_MYSQL_URL` these tests report that they were skipped rather than failing.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Error, ResultSet};
+use sqmeow_db::{Cell, Error, RelationKind, ResultSet};
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
+
+// Introspection reads the catalogue, which a temporary table does not appear in. Each test
+// therefore owns a differently named real table, so the cases stay independent while running in
+// parallel.
+const SCHEMA: &str = "sqmeow";
+
+async fn fixture(backend: &Backend, table: &str) {
+    run(backend, &format!("drop table if exists {table}")).await;
+    run(
+        backend,
+        &format!(
+            "create table {table} (id int primary key, label varchar(10) not null, optional text)"
+        ),
+    )
+    .await;
+}
 
 macro_rules! server {
     () => {
@@ -240,4 +256,85 @@ async fn quotes_identifiers_for_the_dialect() {
     let backend = connect(&server!()).await;
     assert_eq!(backend.quote_ident("plain"), "`plain`");
     assert_eq!(backend.quote_ident("od`d"), "`od``d`");
+}
+
+#[tokio::test]
+async fn lists_its_schemas() {
+    let backend = connect(&server!()).await;
+    let schemas = backend.schemas().await.expect("schemas should load");
+
+    assert!(
+        !schemas.is_empty(),
+        "a server always has at least one schema"
+    );
+    assert!(
+        schemas.iter().any(|schema| schema.is_default),
+        "one schema is the one unqualified names resolve to"
+    );
+    // The catalogue is hidden; it is the same everywhere and nobody opened the drawer for it.
+    assert!(
+        !schemas
+            .iter()
+            .any(|schema| schema.name == "information_schema"),
+        "the catalogue should be hidden"
+    );
+}
+
+#[tokio::test]
+async fn lists_tables_and_views() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "listed").await;
+    run(
+        &backend,
+        "create or replace view listed_view as select id from listed",
+    )
+    .await;
+
+    let relations = backend
+        .relations(SCHEMA)
+        .await
+        .expect("relations should load");
+    let named = |name: &str| {
+        relations
+            .iter()
+            .find(|relation| relation.name == name)
+            .cloned()
+    };
+
+    assert_eq!(named("listed").map(|r| r.kind), Some(RelationKind::Table));
+    assert_eq!(
+        named("listed_view").map(|r| r.kind),
+        Some(RelationKind::View)
+    );
+}
+
+#[tokio::test]
+async fn lists_columns_in_their_declared_order() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "described").await;
+
+    let columns = backend
+        .columns(SCHEMA, "described")
+        .await
+        .expect("columns should load");
+
+    let names: Vec<&str> = columns.iter().map(|column| column.name.as_str()).collect();
+    assert_eq!(names, vec!["id", "label", "optional"]);
+
+    assert!(columns[0].primary_key, "id is the primary key");
+    assert!(!columns[1].primary_key);
+    assert!(!columns[1].nullable, "label is declared not null");
+    assert!(columns[2].nullable, "optional is nullable");
+    // The declared width survives, rather than collapsing to a base type name.
+    assert!(
+        columns[1].type_name.contains("10"),
+        "{}",
+        columns[1].type_name
+    );
+}
+
+#[tokio::test]
+async fn a_relation_that_is_not_there_has_no_columns() {
+    let backend = connect(&server!()).await;
+    assert!(backend.columns(SCHEMA, "absent").await.unwrap().is_empty());
 }

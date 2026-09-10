@@ -4,7 +4,7 @@
 //! cleanup, and still exercises the real driver rather than a stand-in.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Error};
+use sqmeow_db::{Cell, Error, RelationKind};
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -254,4 +254,80 @@ async fn quotes_identifiers_for_the_dialect() {
     let backend = database().await;
     assert_eq!(backend.quote_ident("plain"), "\"plain\"");
     assert_eq!(backend.quote_ident("od\"d"), "\"od\"\"d\"");
+}
+
+#[tokio::test]
+async fn lists_its_schemas() {
+    let backend = database().await;
+    let schemas = backend.schemas().await.expect("schemas should load");
+
+    let main = schemas
+        .iter()
+        .find(|schema| schema.name == "main")
+        .expect("every SQLite database has a main schema");
+    assert!(main.is_default);
+}
+
+#[tokio::test]
+async fn lists_tables_and_views_but_not_its_own_bookkeeping() {
+    let backend = seeded().await;
+    run(
+        &backend,
+        "create view adults as select * from people where score > 8",
+    )
+    .await;
+
+    let relations = backend
+        .relations("main")
+        .await
+        .expect("relations should load");
+    let named = |name: &str| {
+        relations
+            .iter()
+            .find(|relation| relation.name == name)
+            .cloned()
+    };
+
+    assert_eq!(named("people").map(|r| r.kind), Some(RelationKind::Table));
+    assert_eq!(named("adults").map(|r| r.kind), Some(RelationKind::View));
+    // sqlite_sequence and friends are the database's own bookkeeping, not the user's schema.
+    assert!(
+        relations
+            .iter()
+            .all(|relation| !relation.name.starts_with("sqlite_")),
+        "internal tables should be hidden"
+    );
+}
+
+#[tokio::test]
+async fn lists_columns_in_their_declared_order() {
+    let backend = seeded().await;
+    let columns = backend
+        .columns("main", "people")
+        .await
+        .expect("columns should load");
+
+    let names: Vec<&str> = columns.iter().map(|column| column.name.as_str()).collect();
+    assert_eq!(names, vec!["id", "name", "score", "avatar"]);
+
+    assert!(columns[0].primary_key);
+    assert!(!columns[1].primary_key);
+    assert_eq!(columns[1].type_name, "TEXT");
+    assert!(columns[1].nullable);
+}
+
+#[tokio::test]
+async fn a_column_with_no_declared_type_says_so() {
+    // SQLite allows a column with no type at all, and its values can be anything.
+    let backend = database().await;
+    run(&backend, "create table loose (v)").await;
+
+    let columns = backend.columns("main", "loose").await.unwrap();
+    assert_eq!(columns[0].type_name, "any");
+}
+
+#[tokio::test]
+async fn a_relation_that_is_not_there_has_no_columns() {
+    let backend = database().await;
+    assert!(backend.columns("main", "absent").await.unwrap().is_empty());
 }

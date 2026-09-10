@@ -248,6 +248,26 @@ function M.close()
   require('sqmeow.ui.result').close()
 end
 
+--- Show the schema drawer.
+function M.open_drawer()
+  require('sqmeow.events').ensure()
+  require('sqmeow.ui.drawer').open()
+end
+
+--- Hide the schema drawer.
+function M.close_drawer()
+  require('sqmeow.ui.drawer').close()
+end
+
+--- Show the drawer, or hide it if it is already showing.
+function M.toggle()
+  local drawer = require('sqmeow.ui.drawer')
+  if drawer.is_open() then
+    return drawer.close()
+  end
+  M.open_drawer()
+end
+
 --- Every open connection.
 ---@return sqmeow.Connection[]
 function M.connections()

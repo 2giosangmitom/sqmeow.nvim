@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use rmpv::Value;
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Error as DbError, ResultSet, sql};
+use sqmeow_db::{ColumnNode, Error as DbError, RelationNode, ResultSet, SchemaNode, sql};
 use sqmeow_render::Layout;
 use sqmeow_rpc::{ApiCall, Handler, Nvim, Reply};
 use tokio::sync::Notify;
@@ -277,6 +277,64 @@ impl Core {
         self.emit_call(call_id, conn_id, "done", payload);
     }
 
+    fn spawn_introspect(self: Arc<Self>, args: &Args, reply: Reply) {
+        let conn_id = match args.integer("conn_id") {
+            Ok(id) => id,
+            Err(error) => return reply.err(error),
+        };
+        // An empty path means the connection itself, whose children are its schemas.
+        let path = args.opt_strings("path").unwrap_or_default();
+        if path.len() > 2 {
+            return reply.err("a schema path is at most [schema, relation]");
+        }
+
+        let Some(connection) = self.session.connection(conn_id) else {
+            return reply.err(format!("no connection with id {conn_id}"));
+        };
+
+        reply.ok(Value::Boolean(true));
+        tokio::spawn(async move { self.run_introspect(connection, path).await });
+    }
+
+    /// Read one level of the schema tree.
+    ///
+    /// One level at a time, on demand. Reading a whole schema up front would stall the drawer on
+    /// a database with ten thousand tables, to fetch information almost none of which is about to
+    /// be looked at.
+    async fn run_introspect(self: Arc<Self>, connection: Arc<Connection>, path: Vec<String>) {
+        let nodes = match path.as_slice() {
+            [] => connection.backend.schemas().await.map(schema_nodes),
+            [schema] => connection
+                .backend
+                .relations(schema)
+                .await
+                .map(relation_nodes),
+            [schema, relation] => connection
+                .backend
+                .columns(schema, relation)
+                .await
+                .map(column_nodes),
+            _ => return,
+        };
+
+        let mut payload = vec![
+            ("conn_id", Value::from(connection.id)),
+            ("path", strings(path)),
+        ];
+
+        match nodes {
+            Ok(nodes) => payload.push(("nodes", Value::Array(nodes))),
+            Err(error) => {
+                payload.push(("nodes", Value::Array(vec![])));
+                payload.push(("error", Value::from(error.to_string())));
+            }
+        }
+
+        if let Err(error) = self.nvim.emit("schema:nodes", map(payload)) {
+            tracing::warn!(%error, "could not report schema nodes");
+        }
+    }
+
     fn spawn_page(self: Arc<Self>, args: &Args, reply: Reply) {
         let call_id = match args.integer("call_id") {
             Ok(id) => id as u64,
@@ -373,6 +431,52 @@ impl Core {
     }
 }
 
+/// The drawer draws every level the same way, so every level answers with the same fields:
+/// a name, what kind of thing it is, and whether it has children worth expanding.
+fn schema_nodes(schemas: Vec<SchemaNode>) -> Vec<Value> {
+    schemas
+        .into_iter()
+        .map(|schema| {
+            map(vec![
+                ("name", Value::from(schema.name)),
+                ("kind", Value::from("schema")),
+                ("expandable", Value::from(true)),
+                ("is_default", Value::from(schema.is_default)),
+            ])
+        })
+        .collect()
+}
+
+fn relation_nodes(relations: Vec<RelationNode>) -> Vec<Value> {
+    relations
+        .into_iter()
+        .map(|relation| {
+            map(vec![
+                ("name", Value::from(relation.name)),
+                ("kind", Value::from(relation.kind.name())),
+                ("expandable", Value::from(true)),
+            ])
+        })
+        .collect()
+}
+
+fn column_nodes(columns: Vec<ColumnNode>) -> Vec<Value> {
+    columns
+        .into_iter()
+        .map(|column| {
+            map(vec![
+                ("name", Value::from(column.name)),
+                ("kind", Value::from("column")),
+                // A column is a leaf; the tree stops here.
+                ("expandable", Value::from(false)),
+                ("type_name", Value::from(column.type_name)),
+                ("nullable", Value::from(column.nullable)),
+                ("primary_key", Value::from(column.primary_key)),
+            ])
+        })
+        .collect()
+}
+
 /// What the editor needs to describe a result: its size, its position, and whether it is whole.
 fn summarize(call: &Call, page_size: usize) -> Vec<(&'static str, Value)> {
     let result = &call.result;
@@ -421,6 +525,7 @@ impl Handler for Core {
             "disconnect" => return self.spawn_disconnect(&args, reply),
             "execute" => return self.spawn_execute(&args, reply),
             "page" => return self.spawn_page(&args, reply),
+            "introspect" => return self.spawn_introspect(&args, reply),
 
             other => Err(format!("unknown method `{other}`")),
         };

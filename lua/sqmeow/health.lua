@@ -17,12 +17,18 @@ end
 local function check_config()
   vim.health.start('configuration')
   local errors = require('sqmeow.config').validate(require('sqmeow').user_config or {})
-  if #errors == 0 then
+  local keymaps = require('sqmeow.keymap').problems()
+
+  if #errors == 0 and #keymaps == 0 then
     vim.health.ok('configuration is valid')
     return
   end
   for _, err in ipairs(errors) do
     vim.health.error(err)
+  end
+
+  for _, problem in ipairs(require('sqmeow.keymap').problems()) do
+    vim.health.error(problem)
   end
 end
 

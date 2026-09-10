@@ -6,3 +6,4 @@ end
 vim.g.loaded_sqmeow = true
 
 require('sqmeow.commands').register()
+require('sqmeow.keymap').register_plug()
