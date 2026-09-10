@@ -79,9 +79,13 @@ impl Cell {
             | Self::Date(text)
             | Self::Time(text)
             | Self::Uuid(text) => escape(text),
-            Self::Text(text) | Self::Json(text) | Self::Unsupported { raw: text, .. } => {
-                escape(text)
+            Self::Text(text) | Self::Json(text) => escape(text),
+            // A driver that cannot give a text form still owes the user the type name, so the
+            // cell reads as "a value of a type we cannot show" rather than as an empty one.
+            Self::Unsupported { type_name, raw } if raw.is_empty() => {
+                Cow::Owned(format!("<{type_name}>"))
             }
+            Self::Unsupported { raw, .. } => escape(raw),
             Self::Bytes { head, len } => Cow::Owned(format_bytes(head, *len)),
             Self::Array(items) => Cow::Owned(format_array(items, null_text)),
         }
@@ -236,6 +240,15 @@ mod tests {
         assert!(Cell::Decimal("1.00".into()).is_numeric());
         assert!(!Cell::Text("1".into()).is_numeric());
         assert!(!Cell::Null.is_numeric());
+    }
+
+    #[test]
+    fn an_unsupported_value_with_no_text_shows_its_type() {
+        let cell = Cell::Unsupported {
+            type_name: "INTERVAL".into(),
+            raw: String::new(),
+        };
+        assert_eq!(shown(&cell), "<INTERVAL>");
     }
 
     #[test]

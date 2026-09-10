@@ -183,15 +183,12 @@ impl Layout {
             let text = width::truncate(text, *target, options.style.ellipsis);
             let right = align && self.align_right.get(index).copied().unwrap_or(false);
 
-            // The last column is padded only when it aligns right, so no line carries trailing
-            // whitespace into the buffer.
-            if right || index + 1 < self.widths.len() {
-                line.push_str(&width::pad(&text, *target, right));
-            } else {
-                line.push_str(&text);
-            }
+            line.push_str(&width::pad(&text, *target, right));
         }
 
+        // Nothing needs the padding past the last visible character, and a buffer full of lines
+        // with invisible trailing spaces is a nuisance to yank from and to diff.
+        line.truncate(line.trim_end().len());
         line
     }
 
@@ -271,6 +268,28 @@ mod tests {
     #[test]
     fn no_line_carries_trailing_whitespace() {
         for line in render(&people(), &GridOptions::default()) {
+            assert_eq!(line.trim_end(), line, "trailing space in {line:?}");
+        }
+    }
+
+    #[test]
+    fn an_empty_last_cell_leaves_no_trailing_space() {
+        // The separator before a column carries a space of its own, so an empty final cell would
+        // otherwise end the line with it.
+        let mut result = ResultSet::new("select a, b", vec![column("a"), column("b")]);
+        result.push_row(vec![Cell::Null, Cell::Text(String::new())]);
+
+        let lines = render(&result, &GridOptions::default());
+        assert_eq!(lines[2], " NULL │");
+    }
+
+    #[test]
+    fn a_short_last_cell_leaves_no_trailing_space() {
+        let mut result = ResultSet::new("select a, b", vec![column("a"), column("b")]);
+        result.push_row(vec![Cell::Text("x".into()), Cell::Text("y".into())]);
+        result.push_row(vec![Cell::Text("xx".into()), Cell::Text("yyyy".into())]);
+
+        for line in render(&result, &GridOptions::default()) {
             assert_eq!(line.trim_end(), line, "trailing space in {line:?}");
         }
     }
@@ -378,7 +397,7 @@ mod tests {
     fn a_result_with_no_columns_renders_nothing_useful_but_does_not_panic() {
         let result = ResultSet::new("create table t (x int)", vec![]);
         let lines = render(&result, &GridOptions::default());
-        assert_eq!(lines, vec![" ".to_string(), "─".to_string()]);
+        assert_eq!(lines, vec![String::new(), "─".to_string()]);
     }
 
     #[test]

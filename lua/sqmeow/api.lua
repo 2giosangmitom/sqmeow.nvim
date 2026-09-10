@@ -45,6 +45,46 @@ function M.connect(url, opts)
   return id
 end
 
+--- Connect to a connection declared by a source.
+---
+---@param name string The name the source gave it.
+---@return integer|nil id
+---@return string|nil error
+function M.connect_named(name)
+  local spec = require('sqmeow.sources').find(name)
+  if not spec then
+    local message = ('there is no configured connection named `%s`'):format(name)
+    notify(message, vim.log.levels.ERROR)
+    return nil, message
+  end
+
+  return M.connect(spec.url, { name = spec.name })
+end
+
+--- Every connection the configured sources declare.
+---
+--- Reading a source is cheap, and re-reading it means a file edited outside the editor is picked
+--- up without a restart.
+---
+---@return sqmeow.ConnectionSpec[] connections
+---@return string[] problems
+function M.available()
+  return require('sqmeow.sources').load()
+end
+
+--- Save a connection to the file source.
+---
+---@param name string
+---@param url string
+---@return boolean written
+function M.save(name, url)
+  local written, err = require('sqmeow.sources').save({ name = name, url = url })
+  if not written then
+    notify(err, vim.log.levels.ERROR)
+  end
+  return written
+end
+
 --- Close a connection.
 ---
 ---@param id integer|nil Defaults to the current connection.

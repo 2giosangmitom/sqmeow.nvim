@@ -1,0 +1,31 @@
+# Databases for the integration tests. Ports are deliberately non-standard so this never collides
+# with a server the developer already runs.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: sqmeow
+      POSTGRES_PASSWORD: sqmeow
+      POSTGRES_DB: sqmeow
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sqmeow"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: sqmeow
+      MYSQL_DATABASE: sqmeow
+      MYSQL_USER: sqmeow
+      MYSQL_PASSWORD: sqmeow
+    ports:
+      - "53306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-psqmeow"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

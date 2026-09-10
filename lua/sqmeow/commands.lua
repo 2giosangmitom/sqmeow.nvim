@@ -23,18 +23,74 @@ local function void(_) end
 ---@type table<string, sqmeow.Subcommand>
 M.subcommands = {
   connect = {
-    desc = 'Connect to a database URL',
+    desc = 'Connect to a saved connection, or to a URL',
     run = function(args)
-      local url = args[1]
-      if not url then
-        vim.ui.input({ prompt = 'Database URL: ' }, function(entered)
+      local api = require('sqmeow.api')
+      local target = args[1]
+
+      if target then
+        -- A URL has a scheme; anything else is the name of a configured connection.
+        if target:find(':', 1, true) then
+          return void(api.connect(target, { name = args[2] }))
+        end
+        return void(api.connect_named(target))
+      end
+
+      local available, problems = api.available()
+      for _, problem in ipairs(problems) do
+        notify(problem, vim.log.levels.WARN)
+      end
+
+      if #available == 0 then
+        return vim.ui.input({ prompt = 'Database URL: ' }, function(entered)
           if entered and entered ~= '' then
-            require('sqmeow.api').connect(entered)
+            void(api.connect(entered))
           end
         end)
-        return
       end
-      require('sqmeow.api').connect(url, { name = args[2] })
+
+      vim.ui.select(available, {
+        prompt = 'Connect to',
+        format_item = function(connection)
+          return ('%s  %s'):format(connection.name, require('sqmeow.url').display(connection.url))
+        end,
+      }, function(chosen)
+        if chosen then
+          void(api.connect(chosen.url, { name = chosen.name }))
+        end
+      end)
+    end,
+    complete = function(lead)
+      local names = vim.tbl_map(function(connection)
+        return connection.name
+      end, (require('sqmeow.api').available()))
+
+      table.sort(names)
+      return vim.tbl_filter(function(name)
+        return name:find(lead, 1, true) == 1
+      end, names)
+    end,
+  },
+
+  save = {
+    desc = 'Save a connection for next time',
+    run = function(args)
+      local api = require('sqmeow.api')
+
+      if args[1] and args[2] then
+        return void(api.save(args[1], args[2]))
+      end
+
+      local current = require('sqmeow.state').current_connection()
+      if not current then
+        return notify('connect first, or pass a name and a url', vim.log.levels.WARN)
+      end
+
+      vim.ui.input({ prompt = 'Save as: ', default = current.name }, function(name)
+        if name and name ~= '' then
+          void(api.save(name, current.url))
+        end
+      end)
     end,
   },
 

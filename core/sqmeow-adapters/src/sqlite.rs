@@ -7,14 +7,15 @@
 use std::str::FromStr;
 use std::time::Instant;
 
-use futures_util::StreamExt;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{
-    AssertSqlSafe, Column as _, Either, Executor, Row, SqlSafeStr, SqlitePool, Statement as _,
-    TypeInfo, ValueRef,
+    AssertSqlSafe, Column as _, Executor, Row, SqlSafeStr, SqlitePool, Statement as _, TypeInfo,
+    ValueRef,
 };
 use sqmeow_db::{Adapter, Cell, Column, Dialect, Error, Result, ResultSet};
 use tokio_util::sync::CancellationToken;
+
+use crate::stream::drain;
 
 /// A pool against one SQLite database.
 #[derive(Debug)]
@@ -36,6 +37,9 @@ impl SqliteAdapter {
         let options = SqliteConnectOptions::from_str(url).map_err(Error::driver)?;
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            // sqlx retries a refused connection until this expires. A mistyped host should say so
+            // while the user still remembers typing it, not half a minute later.
+            .acquire_timeout(crate::CONNECT_TIMEOUT)
             .connect_with(options)
             .await
             .map_err(Error::driver)?;
@@ -92,30 +96,17 @@ impl Adapter for SqliteAdapter {
         // The SQL is whatever the user typed into their own editor, against their own
         // database. There is no untrusted input to escape here, and refusing to run it would
         // defeat the point of the plugin.
-        let mut stream = sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(&self.pool);
+        let stream = sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(&self.pool);
 
-        loop {
-            tokio::select! {
-                // Cancellation wins a tie, so a held cancel is honoured even while rows are
-                // arriving faster than the loop can drain them.
-                biased;
-
-                () = cancel.cancelled() => return Err(Error::Cancelled),
-
-                item = stream.next() => match item {
-                    None => break,
-                    Some(Err(error)) => return Err(Error::driver(error)),
-                    Some(Ok(Either::Left(outcome))) => result.set_affected(outcome.rows_affected()),
-                    Some(Ok(Either::Right(row))) => {
-                        if result.row_count() >= max_rows {
-                            result.mark_truncated();
-                            break;
-                        }
-                        result.push_row(decode_row(&row, width));
-                    }
-                },
-            }
-        }
+        drain(
+            stream,
+            &mut result,
+            max_rows,
+            &cancel,
+            |outcome| outcome.rows_affected(),
+            |row| decode_row(row, width),
+        )
+        .await?;
 
         result.set_elapsed(started.elapsed());
         Ok(result)

@@ -117,6 +117,19 @@ impl Core {
     async fn run_connect(self: Arc<Self>, id: i64, name: String, url: String) {
         self.emit_connection(id, "connecting", vec![("name", Value::from(name.clone()))]);
 
+        // The expanded URL holds the password and never leaves this function: it is not logged,
+        // not echoed back to the editor, and not put in an error message.
+        let url = match crate::template::expand(&url).await {
+            Ok(url) => url,
+            Err(error) => {
+                return self.emit_connection(
+                    id,
+                    "error",
+                    vec![("name", Value::from(name)), ("error", Value::from(error))],
+                );
+            }
+        };
+
         match Backend::connect(&url).await {
             Ok(backend) => {
                 let dialect = backend.dialect().name();

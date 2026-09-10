@@ -6,8 +6,8 @@ The engine owns connections, queries, type decoding, and the layout of result gr
 owns windows, buffers, and keymaps. No row of data is ever formatted in Lua, which is what keeps a
 large result from stalling the editor.
 
-> Early development. SQLite works end to end: connect, run SQL, and read a paginated grid.
-> PostgreSQL and MySQL are next. Nothing here is stable yet.
+> Early development. SQLite, PostgreSQL and MySQL work end to end: connect, run SQL, and read a
+> paginated grid. The schema drawer is next. Nothing here is stable yet.
 
 ## Requirements
 
@@ -18,6 +18,8 @@ large result from stalling the editor.
 
 ```vim
 :Sqmeow connect sqlite://./app.db
+:Sqmeow connect postgres://user@localhost/app
+:Sqmeow connect mysql://user@localhost/app
 ```
 
 Then open a `.sql` buffer and run it:
@@ -29,14 +31,31 @@ Then open a `.sql` buffer and run it:
 Results land in a split below. `L` and `H` page through them, `q` closes the window, and
 `:Sqmeow cancel` stops a query that is taking too long.
 
+## Connections
+
+`:Sqmeow save` writes a connection to a JSON file under `stdpath('data')`, and `:Sqmeow connect`
+with no argument offers everything the configured sources know about. Four sources ship with the
+plugin: inline connections from `setup()`, a JSON file, a JSON environment variable, and `g:dbs`
+for anyone arriving from vim-dadbod.
+
+Passwords do not have to be written down. A URL may hold a directive that the engine expands when
+it connects, and never logs, echoes, or sends back to the editor:
+
+```
+postgres://app:{{ env "PGPASSWORD" }}@localhost/dev
+postgres://app:{{ exec "pass show db/prod" }}@db.internal/app
+```
+
+Everywhere a URL is displayed, the password is masked. Set `redact_urls = false` to turn that off.
+
 ## Status
 
 | Milestone | State |
 | --- | --- |
 | Channel to the engine, configuration, health check | done |
 | SQLite, end to end | done |
-| PostgreSQL and MySQL | next |
-| Schema drawer and keymap system | planned |
+| PostgreSQL and MySQL | done |
+| Schema drawer and keymap system | next |
 | Editor and result grid | planned |
 | Statusline and picker integrations | planned |
 | Generated documentation and prebuilt releases | planned |
@@ -49,9 +68,13 @@ The toolchain is pinned with [mise](https://mise.jdx.dev), and every command CI 
 ```sh
 mise install     # rust, just, stylua, selene
 just deps        # clone mini.nvim, used for tests and docs
+just db-up       # PostgreSQL and MySQL for the integration tests
 just             # lint and test, the same way CI does
 just build       # release engine, which the plugin prefers to load
 ```
+
+The PostgreSQL and MySQL tests report themselves skipped when those servers are not running, so
+`just test` works without Docker. It just covers less.
 
 The plugin finds an engine in three places, in this order: `core.path` from your configuration, the
 managed copy under `stdpath('data')`, and a local `cargo build` inside the plugin directory. The

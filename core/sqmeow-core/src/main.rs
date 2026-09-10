@@ -7,6 +7,7 @@
 mod args;
 mod core;
 mod session;
+mod template;
 mod value;
 
 use std::sync::Arc;

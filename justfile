@@ -36,11 +36,33 @@ fmt:
 
 test: test-rust test-lua
 
+# Rust tests. The PostgreSQL and MySQL tests report themselves skipped unless `just db-up` has
+# started the servers they need.
 test-rust:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "$(docker compose ps --status running --quiet postgres 2>/dev/null)" ]; then
+        export SQMEOW_TEST_POSTGRES_URL="postgres://sqmeow:sqmeow@127.0.0.1:55432/sqmeow"
+        export SQMEOW_TEST_MYSQL_URL="mysql://sqmeow:sqmeow@127.0.0.1:53306/sqmeow"
+    fi
     cargo test --all-features
 
-# Needs a built engine, so build first.
+# Start the PostgreSQL and MySQL servers the integration tests use.
+db-up:
+    docker compose up -d --wait
+
+# Stop them and throw away their data.
+db-down:
+    docker compose down -v
+
+# Needs a built engine, so build first. The server-backed cases skip unless `just db-up` has run.
 test-lua: build-debug
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "$(docker compose ps --status running --quiet postgres 2>/dev/null)" ]; then
+        export SQMEOW_TEST_POSTGRES_URL="postgres://sqmeow:sqmeow@127.0.0.1:55432/sqmeow"
+        export SQMEOW_TEST_MYSQL_URL="mysql://sqmeow:sqmeow@127.0.0.1:53306/sqmeow"
+    fi
     nvim --headless -u tests/minimal_init.lua -c "lua require('mini.test').setup(); MiniTest.run()"
 
 # Regenerate doc/sqmeow.txt from the annotated sources.

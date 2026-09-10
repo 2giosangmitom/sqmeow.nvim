@@ -11,11 +11,42 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  SQMEOW_TEST_POSTGRES_URL: postgres://sqmeow:sqmeow@127.0.0.1:5432/sqmeow
+  SQMEOW_TEST_MYSQL_URL: mysql://sqmeow:sqmeow@127.0.0.1:3306/sqmeow
 
 jobs:
   rust:
     name: rust
     runs-on: ubuntu-latest
+
+    # The adapter tests talk to real servers. A stub would prove the adapters agree with the stub.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: sqmeow
+          POSTGRES_PASSWORD: sqmeow
+          POSTGRES_DB: sqmeow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sqmeow"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: sqmeow
+          MYSQL_DATABASE: sqmeow
+          MYSQL_USER: sqmeow
+          MYSQL_PASSWORD: sqmeow
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -psqmeow"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -29,6 +60,34 @@ jobs:
   lua:
     name: lua
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: sqmeow
+          POSTGRES_PASSWORD: sqmeow
+          POSTGRES_DB: sqmeow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sqmeow"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: sqmeow
+          MYSQL_DATABASE: sqmeow
+          MYSQL_USER: sqmeow
+          MYSQL_PASSWORD: sqmeow
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -psqmeow"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
     steps:
       - uses: actions/checkout@v4
 
