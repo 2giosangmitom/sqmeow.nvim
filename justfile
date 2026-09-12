@@ -63,6 +63,11 @@ db-down:
 test-lua: build-debug
     #!/usr/bin/env bash
     set -euo pipefail
+    # Scratchpads live under `stdpath('data')`, so the suite gets a data directory of its own
+    # rather than writing into the one the person running it uses every day.
+    XDG_DATA_HOME="$(mktemp -d)"
+    export XDG_DATA_HOME
+    trap 'rm -rf "$XDG_DATA_HOME"' EXIT
     # Each server is checked on its own: one of them being down should skip its own cases, not
     # point the other dialect's tests at a port with nothing behind it.
     if [ -n "$(docker compose ps --status running --quiet postgres 2>/dev/null)" ]; then

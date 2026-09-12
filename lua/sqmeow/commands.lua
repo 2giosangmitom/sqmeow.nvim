@@ -36,12 +36,8 @@ M.subcommands = {
         return void(api.connect_named(target))
       end
 
-      local available, problems = api.available()
-      for _, problem in ipairs(problems) do
-        notify(problem, vim.log.levels.WARN)
-      end
-
-      if #available == 0 then
+      -- Nothing saved and nothing open leaves only one useful question to ask.
+      if #api.available() == 0 and #api.connections() == 0 then
         return vim.ui.input({ prompt = 'Database URL: ' }, function(entered)
           if entered and entered ~= '' then
             void(api.connect(entered))
@@ -49,15 +45,7 @@ M.subcommands = {
         end)
       end
 
-      require('sqmeow.integrations.picker').pick(available, {
-        prompt = 'Connect to',
-        format = function(connection)
-          return ('%s  %s'):format(connection.name, require('sqmeow.url').display(connection.url))
-        end,
-        on_choice = function(chosen)
-          void(api.connect(chosen.url, { name = chosen.name }))
-        end,
-      })
+      require('sqmeow.pickers').connections({ prompt = 'Connect to' })
     end,
     complete = function(lead)
       local names = vim.tbl_map(function(connection)

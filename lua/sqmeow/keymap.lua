@@ -120,6 +120,12 @@ M.plug = {
       require('sqmeow.pickers').scratchpads()
     end,
   },
+  ['sqmeow-scratch'] = {
+    desc = 'Open the scratchpad for this connection',
+    run = function()
+      require('sqmeow.api').scratchpad()
+    end,
+  },
 }
 
 local function as_list(value)

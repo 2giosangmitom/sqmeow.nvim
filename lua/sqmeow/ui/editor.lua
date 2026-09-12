@@ -33,6 +33,53 @@ function M.path(name)
   return vim.fs.joinpath(M.directory(), M.slug(name) .. '.sql')
 end
 
+--- Every scratchpad that has been saved.
+---
+--- Read from the directory each time rather than remembered, so one written in another Neovim, or
+--- deleted outside the editor, is right without a refresh.
+---
+---@return { name: string, path: string, modified: integer }[] # Most recently written first.
+function M.list()
+  local directory = M.directory()
+  local pads = {}
+
+  for entry, kind in vim.fs.dir(directory) do
+    if kind == 'file' and entry:sub(-4) == '.sql' then
+      local path = vim.fs.joinpath(directory, entry)
+      local stat = vim.uv.fs_stat(path)
+      table.insert(pads, {
+        name = entry:sub(1, -5),
+        path = path,
+        modified = stat and stat.mtime.sec or 0,
+      })
+    end
+  end
+
+  table.sort(pads, function(left, right)
+    if left.modified ~= right.modified then
+      return left.modified > right.modified
+    end
+    return left.name < right.name
+  end)
+  return pads
+end
+
+--- Open a scratchpad by its path.
+---
+--- Used by the drawer and the picker, both of which already know where the file is and should not
+--- have to turn a name back into one.
+---
+---@param path string
+---@return integer buf
+function M.open_path(path)
+  vim.cmd.edit(vim.fn.fnameescape(path))
+  local buf = vim.api.nvim_get_current_buf()
+
+  vim.bo[buf].filetype = 'sql'
+  M.attach(buf)
+  return buf
+end
+
 --- Actions the scratchpad's keys are bound to.
 M.actions = {
   execute_statement = function()
@@ -70,15 +117,8 @@ end
 ---@param name string|nil Connection name. Defaults to the current connection.
 ---@return integer buf
 function M.open(name)
-  local path = M.path(name)
   vim.fn.mkdir(M.directory(), 'p')
-
-  vim.cmd.edit(vim.fn.fnameescape(path))
-  local buf = vim.api.nvim_get_current_buf()
-
-  vim.bo[buf].filetype = 'sql'
-  M.attach(buf)
-  return buf
+  return M.open_path(M.path(name))
 end
 
 --- Whether a buffer is one of ours.

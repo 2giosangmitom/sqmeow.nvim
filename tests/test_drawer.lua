@@ -32,8 +32,22 @@ local function line_matching(pattern)
   return found
 end
 
---- Put the cursor on a line and expand what is there.
+--- Put the cursor on a line and make sure what is there is open.
+---
+--- Open-only rather than a toggle, so a case that runs after one which already expanded the same
+--- node does not quietly collapse it again.
 local function expand(pattern)
+  local number = line_matching(pattern)
+  if lines()[number]:find('^%s*v') then
+    return
+  end
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { number, 0 })
+  drawer.actions.toggle()
+end
+
+--- Put the cursor on a line and close what is there.
+local function collapse(pattern)
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching(pattern), 0 })
   drawer.actions.toggle()
 end
@@ -77,14 +91,14 @@ local T = MiniTest.new_set({
 T['tree'] = MiniTest.new_set()
 
 T['tree']['starts with connections collapsed'] = function()
-  eq(lines(), { '> # scratch  sqlite' })
+  eq(lines(), { '> s scratch  sqlite', '> + scratchpads  none saved' })
 end
 
 T['tree']['expands a connection into its schemas'] = function()
   expand('scratch')
   line_matching('main')
 
-  eq(lines()[1], 'v # scratch  sqlite')
+  eq(lines()[1], 'v s scratch  sqlite')
   eq(lines()[2], '  > @ main')
 end
 
@@ -109,7 +123,7 @@ end
 
 T['tree']['collapses again'] = function()
   local before = #lines()
-  expand('people')
+  collapse('people')
   eq(#lines() < before, true)
   eq(drawer.is_expanded(state.current, { 'main', 'people' }), false)
 end
@@ -147,6 +161,53 @@ T['actions']['preview a relation into the result window'] = function()
   -- grid the engine draws as well as the markers the drawer draws.
   local grid = vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
   eq(grid[1], ' id | name | score')
+end
+
+T['scratchpads'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      local editor = require('sqmeow.ui.editor')
+      vim.fn.mkdir(editor.directory(), 'p')
+      vim.fn.writefile({ 'select 1' }, vim.fs.joinpath(editor.directory(), 'notes.sql'))
+      drawer.render()
+    end,
+    post_case = function()
+      vim.fn.delete(vim.fs.joinpath(require('sqmeow.ui.editor').directory(), 'notes.sql'))
+      drawer.render()
+    end,
+  },
+})
+
+T['scratchpads']['are listed under a heading of their own'] = function()
+  local heading = line_matching('scratchpads')
+  eq(lines()[heading], '> + scratchpads  1')
+end
+
+T['scratchpads']['expand into the saved files'] = function()
+  expand('scratchpads')
+  -- The icon sits in the same column as one on a branch, so a leaf lines up with its siblings.
+  eq(lines()[line_matching('notes')], '    * notes')
+end
+
+T['scratchpads']['open the file when chosen'] = function()
+  expand('scratchpads')
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  drawer.actions.toggle()
+
+  local opened = vim.api.nvim_buf_get_name(0)
+  eq(vim.fs.basename(opened), 'notes.sql')
+  eq(vim.bo.filetype, 'sql')
+
+  -- Back to the drawer, so the next case starts where this one did.
+  vim.cmd.bwipeout()
+  drawer.open()
+end
+
+T['scratchpads']['say so when there are none'] = function()
+  vim.fn.delete(vim.fs.joinpath(require('sqmeow.ui.editor').directory(), 'notes.sql'))
+  drawer.render()
+
+  eq(lines()[line_matching('scratchpads')]:find('none saved') ~= nil, true)
 end
 
 T['window'] = MiniTest.new_set()

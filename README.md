@@ -42,6 +42,10 @@ thousand tables opens as fast as one with ten.
 `<CR>` on a selection runs that. A statement that fails becomes a diagnostic on its own lines
 rather than a message that scrolls away.
 
+Every scratchpad you have written is listed in the drawer under its own heading, below the
+connections, and `<CR>` on one opens it. `:Sqmeow find scratchpads` is the same list as a fuzzy
+picker, and `:Sqmeow scratch <name>` opens or creates one under a name of your choosing.
+
 `:Sqmeow export csv` writes the whole result to a file, and `:Sqmeow log` lists what has been run
 and puts any of it back on screen without running it again.
 
@@ -116,11 +120,42 @@ long it took when one finishes.
 
 ## Icons and notifications
 
-Icons come from mini.icons, then nvim-web-devicons, then a plain ASCII set that needs no patched
-font. Set `integrations.icons = 'ascii'` to force the last one, which also switches the result grid
-to ASCII rules. Long operations report through `vim.notify`, so nvim-notify, snacks.notifier and
-dressing.nvim all render them, and connecting rewrites its own message rather than stacking a
-second one. Set `integrations.notify = false` to keep everything but the errors quiet.
+The drawer draws a nerd font glyph for every kind of thing it shows, and a connection wears its own
+dialect's icon so a drawer holding three databases tells them apart without reading a word. Whether
+glyphs are used at all is decided by what is installed: mini.icons, then nvim-web-devicons, then a
+plain ASCII set that needs no patched font. Set `integrations.icons = 'ascii'` to force the last
+one, which also switches the result grid to ASCII rules.
+
+Any icon can be replaced, by kind:
+
+```lua
+require('sqmeow').setup({
+  integrations = {
+    icon_overrides = {
+      table = '',
+      view = '',
+      postgres = '',
+    },
+  },
+})
+```
+
+The kinds are `connection`, `schema`, `table`, `view`, `materialized view`, `relation`, `column`,
+`scratchpads`, `scratchpad`, `query`, and the dialects `postgres`, `mysql` and `sqlite`. An override
+applies whether or not a patched font was detected, because writing one is a decision about what
+you want to see. A kind that does not exist is reported by `:checkhealth sqmeow` rather than
+silently ignored.
+
+Colours are not set there. Every icon has a `SqmeowIcon*` highlight group, linked to a standard
+group so any colourscheme works, and redefining the group is how you recolour it:
+
+```lua
+vim.api.nvim_set_hl(0, 'SqmeowIconTable', { fg = '#7aa2f7' })
+```
+
+Long operations report through `vim.notify`, so nvim-notify, snacks.notifier and dressing.nvim all
+render them, and connecting rewrites its own message rather than stacking a second one. Set
+`integrations.notify = false` to keep everything but the errors quiet.
 
 ## Connections
 

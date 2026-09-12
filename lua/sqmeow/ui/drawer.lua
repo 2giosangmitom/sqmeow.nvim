@@ -1,4 +1,4 @@
---- The connection and schema tree.
+--- The connection and schema tree, and the scratchpads below it.
 ---
 --- Each level is fetched when the user expands it and not before. A database with ten thousand
 --- tables would otherwise stall the drawer on open, to fetch names almost none of which are about
@@ -105,6 +105,33 @@ local function annotate(node)
   return table.concat(parts, '  ')
 end
 
+--- Add one row, with its icon coloured by what kind of thing it names.
+---
+--- The icon and the text beside it get different groups on purpose: an icon carries the kind of a
+--- node, and colouring it is most of what makes a tree readable without reading it.
+---
+---@return string # The label, so a caller can measure where its own trailing note begins.
+local function emit(lines, highlights, node)
+  local icon, icon_group = require('sqmeow.integrations.icons').get(node.kind)
+  local prefix = ('%s%s '):format(node.indent or '', node.marker)
+  local label = ('%s%s %s'):format(prefix, icon, node.name)
+
+  local note = node.note or ''
+  table.insert(lines, note == '' and label or ('%s  %s'):format(label, note))
+  table.insert(rows, node.row)
+
+  local line = #lines - 1
+  table.insert(
+    highlights,
+    { line = line, group = icon_group, from = #prefix, to = #prefix + #icon }
+  )
+  if note ~= '' then
+    table.insert(highlights, { line = line, group = 'SqmeowNull', from = #label, to = -1 })
+  end
+
+  return label
+end
+
 local function draw(lines, highlights, conn_id, path, depth)
   local entry = cache[node_key(conn_id, path)]
   if not entry then
@@ -134,26 +161,59 @@ local function draw(lines, highlights, conn_id, path, depth)
       marker = M.is_expanded(conn_id, child) and marks.open or marks.closed
     end
 
-    local icon = require('sqmeow.integrations.icons').get(node.kind)
-    local label = ('%s%s %s %s'):format(indent, marker, icon, node.name)
-    local note = annotate(node)
-
-    table.insert(lines, note == '' and label or ('%s  %s'):format(label, note))
-    table.insert(rows, {
-      conn_id = conn_id,
-      path = child,
-      name = node.name,
+    emit(lines, highlights, {
+      indent = indent,
+      marker = marker,
       kind = node.kind,
-      expandable = node.expandable == true,
+      name = node.name,
+      note = annotate(node),
+      row = {
+        conn_id = conn_id,
+        path = child,
+        name = node.name,
+        kind = node.kind,
+        expandable = node.expandable == true,
+      },
     })
-
-    if note ~= '' then
-      table.insert(highlights, { line = #lines - 1, group = 'SqmeowNull', from = #label, to = -1 })
-    end
 
     if node.expandable and M.is_expanded(conn_id, child) then
       draw(lines, highlights, conn_id, child, depth + 1)
     end
+  end
+end
+
+-- The scratchpad section is keyed on this rather than a connection id, because a scratchpad
+-- belongs to the plugin's data directory and outlives whatever connection it was written for.
+local SCRATCHPADS = 'scratchpads'
+
+--- Draw the saved scratchpads under a heading of their own.
+---
+--- Below the connections, because the tree is about databases first. They are here rather than
+--- only in a picker so that reopening yesterday's query is something a user can see, not something
+--- they have to remember exists.
+local function draw_scratchpads(lines, highlights, marks)
+  local pads = require('sqmeow.ui.editor').list()
+  local open = expanded[SCRATCHPADS] == true
+
+  emit(lines, highlights, {
+    marker = open and marks.open or marks.closed,
+    kind = 'scratchpads',
+    name = 'scratchpads',
+    note = #pads == 0 and 'none saved' or tostring(#pads),
+    row = { kind = 'scratchpads', name = 'scratchpads', expandable = true },
+  })
+  if not open then
+    return
+  end
+
+  for _, pad in ipairs(pads) do
+    emit(lines, highlights, {
+      indent = '  ',
+      marker = marks.leaf,
+      kind = 'scratchpad',
+      name = pad.name,
+      row = { kind = 'scratchpad', name = pad.name, path = pad.path, expandable = false },
+    })
   end
 end
 
@@ -170,20 +230,19 @@ function M.render()
 
   for _, connection in ipairs(state.connection_list()) do
     local open = M.is_expanded(connection.id, {})
-    local icon = require('sqmeow.integrations.icons').get('connection')
-    local label = ('%s %s %s'):format(open and marks.open or marks.closed, icon, connection.name)
-    local note = connection.dialect or connection.state
-
-    table.insert(lines, ('%s  %s'):format(label, note))
-    table.insert(rows, {
-      conn_id = connection.id,
-      path = {},
+    emit(lines, highlights, {
+      marker = open and marks.open or marks.closed,
+      kind = require('sqmeow.integrations.icons').connection_kind(connection.dialect),
       name = connection.name,
-      kind = 'connection',
-      expandable = true,
+      note = connection.dialect or connection.state,
+      row = {
+        conn_id = connection.id,
+        path = {},
+        name = connection.name,
+        kind = 'connection',
+        expandable = true,
+      },
     })
-    table.insert(highlights, { line = #lines - 1, group = 'SqmeowHeader', from = 0, to = #label })
-    table.insert(highlights, { line = #lines - 1, group = 'SqmeowNull', from = #label, to = -1 })
 
     if open then
       draw(lines, highlights, connection.id, {}, 1)
@@ -191,8 +250,11 @@ function M.render()
   end
 
   if #lines == 0 then
-    lines = { 'no connections', '', 'run :Sqmeow connect' }
+    table.insert(lines, 'no connections, run :Sqmeow connect')
+    table.insert(rows, false)
   end
+
+  draw_scratchpads(lines, highlights, marks)
 
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -226,11 +288,26 @@ end
 --- Actions the drawer's keys are bound to.
 M.actions = {}
 
---- Expand or collapse the node under the cursor.
+--- Act on the node under the cursor.
+---
+--- One key, because what the primary action is depends on the thing rather than on the user: a
+--- branch opens, and a scratchpad, which is a leaf holding a file, opens the file.
 function M.actions.toggle()
   local node = M.current_node()
-  if not node or not node.expandable then
+  if not node then
     return
+  end
+
+  if node.kind == 'scratchpad' then
+    return require('sqmeow.ui.editor').open_path(node.path)
+  end
+  if not node.expandable then
+    return
+  end
+
+  if node.kind == 'scratchpads' then
+    expanded[SCRATCHPADS] = not expanded[SCRATCHPADS] or nil
+    return M.render()
   end
 
   local id = node_key(node.conn_id, node.path)
@@ -251,6 +328,10 @@ function M.actions.refresh()
   if not node then
     return
   end
+  -- Scratchpads are read from the directory on every draw, so redrawing is the whole refresh.
+  if not node.conn_id then
+    return M.render()
+  end
 
   M.invalidate(node.conn_id, node.path)
   if M.is_expanded(node.conn_id, node.path) then
@@ -262,7 +343,7 @@ end
 --- Run a `SELECT` over the relation under the cursor.
 function M.actions.preview()
   local node = M.current_node()
-  if not node or #node.path ~= 2 then
+  if not node or not node.path or #node.path ~= 2 then
     return
   end
 
@@ -280,7 +361,7 @@ end
 --- Copy the qualified name of the node under the cursor.
 function M.actions.yank_name()
   local node = M.current_node()
-  if not node or #node.path == 0 then
+  if not node or not node.path or #node.path == 0 then
     return
   end
 
@@ -292,7 +373,7 @@ end
 --- Copy a `SELECT` for the relation under the cursor.
 function M.actions.yank_select()
   local node = M.current_node()
-  if not node or #node.path ~= 2 then
+  if not node or not node.path or #node.path ~= 2 then
     return
   end
 
@@ -311,12 +392,16 @@ end
 --- it is about the whole connection. That is what makes one key useful at every level of the tree.
 function M.actions.find()
   local node = M.current_node()
-  if node then
+  if node and node.kind == 'scratchpad' or node and node.kind == 'scratchpads' then
+    return require('sqmeow.pickers').scratchpads()
+  end
+
+  if node and node.conn_id then
     require('sqmeow.api').use(node.conn_id)
   end
 
   require('sqmeow.pickers').relations({
-    schema = node and #node.path >= 1 and node.path[1] or nil,
+    schema = node and node.path and #node.path >= 1 and node.path[1] or nil,
   })
 end
 
@@ -401,7 +486,11 @@ end
 
 --- Forget everything. Used when the engine restarts, since its session went with it.
 function M.reset()
-  expanded = {}
+  -- The scratchpad section is kept open if it was: those are the plugin's own files, and the
+  -- engine restarting says nothing about them.
+  local pads = expanded[SCRATCHPADS]
+
+  expanded = { [SCRATCHPADS] = pads }
   cache = {}
   rows = {}
   M.render()

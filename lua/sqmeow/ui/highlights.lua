@@ -7,6 +7,11 @@
 local M = {}
 
 --- Group name to the standard group it follows.
+---
+--- The `SqmeowIcon*` groups are how a colourscheme reaches the drawer's icons. They are separate
+--- from the text beside them on purpose: an icon carries the kind of a thing, and colouring it is
+--- most of what makes a tree readable at a glance. Icons themselves can be changed through
+--- `integrations.icon_overrides`; their colours are changed here.
 M.links = {
   SqmeowWinbar = 'Title',
   SqmeowHeader = 'Title',
@@ -16,6 +21,17 @@ M.links = {
   SqmeowText = 'Normal',
   SqmeowTruncated = 'WarningMsg',
   SqmeowError = 'ErrorMsg',
+
+  SqmeowIconConnection = 'Directory',
+  SqmeowIconSchema = 'Directory',
+  SqmeowIconTable = 'Type',
+  SqmeowIconView = 'Special',
+  SqmeowIconColumn = 'Identifier',
+  SqmeowIconScratchpad = 'String',
+  SqmeowIconQuery = 'Function',
+  SqmeowIconPostgres = 'Constant',
+  SqmeowIconMysql = 'Constant',
+  SqmeowIconSqlite = 'Constant',
 }
 
 --- Define the groups, leaving any the user has already defined alone.

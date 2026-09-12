@@ -61,6 +61,11 @@ M.defaults = {
     picker = 'auto',
     -- 'auto' prefers mini.icons, then nvim-web-devicons, then plain ASCII.
     icons = 'auto',
+    -- Icons to use instead of the built-in ones, by kind: 'connection', 'schema', 'table',
+    -- 'view', 'materialized view', 'relation', 'column', 'scratchpads', 'scratchpad', 'query',
+    -- and the dialects 'postgres', 'mysql' and 'sqlite'. Colours are not set here: redefine the
+    -- matching `SqmeowIcon*` highlight group instead.
+    icon_overrides = {},
     -- Expose the lualine component. Adding it to a statusline stays the user's job.
     lualine = true,
     notify = true,
@@ -82,6 +87,7 @@ local freeform = {
   ['sources'] = true,
   ['connections'] = true,
   ['keymaps'] = true,
+  ['integrations.icon_overrides'] = true,
 }
 
 -- Options with no usable default to infer a type from.
@@ -131,6 +137,18 @@ end
 function M.validate(opts)
   local errors = {}
   validate(opts, M.defaults, '', errors)
+
+  -- Freeform tables are only checked for being tables, and this one's values have to be strings:
+  -- a table where an icon belongs would reach the drawer and break a line rather than a setting.
+  for kind, icon in pairs(vim.tbl_get(opts, 'integrations', 'icon_overrides') or {}) do
+    if type(icon) ~= 'string' then
+      table.insert(
+        errors,
+        ('`integrations.icon_overrides.%s` must be a string, got %s'):format(kind, type(icon))
+      )
+    end
+  end
+
   table.sort(errors)
   return errors
 end

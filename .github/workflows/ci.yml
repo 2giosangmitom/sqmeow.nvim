@@ -113,7 +113,10 @@ jobs:
       # The suite drives a real engine over a real channel, so it needs one built first.
       - run: cargo build
       - run: git clone --filter=blob:none --depth 1 https://github.com/nvim-mini/mini.nvim .deps/mini.nvim
+      # A data directory of its own, because scratchpads live under `stdpath('data')`.
       - run: nvim --headless -u tests/minimal_init.lua -c "lua require('mini.test').setup(); MiniTest.run()"
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/sqmeow-data
 
   docs:
     name: docs

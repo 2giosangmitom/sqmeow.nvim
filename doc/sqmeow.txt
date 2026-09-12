@@ -111,6 +111,11 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       picker = 'auto',
       -- 'auto' prefers mini.icons, then nvim-web-devicons, then plain ASCII.
       icons = 'auto',
+      -- Icons to use instead of the built-in ones, by kind: 'connection', 'schema', 'table',
+      -- 'view', 'materialized view', 'relation', 'column', 'scratchpads', 'scratchpad', 'query',
+      -- and the dialects 'postgres', 'mysql' and 'sqlite'. Colours are not set here: redefine the
+      -- matching `SqmeowIcon*` highlight group instead.
+      icon_overrides = {},
       -- Expose the lualine component. Adding it to a statusline stays the user's job.
       lualine = true,
       notify = true,

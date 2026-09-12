@@ -134,10 +134,13 @@ M.backends.snacks = {
       title = opts.prompt,
       items = entries,
       format = 'text',
+      -- Named explicitly, both branches. Left unset, snacks previews the item's `file`, and none
+      -- of these lists is a list of files, so every row would report "Item has no `file`".
       preview = opts.preview and function(ctx)
+        ctx.preview:reset()
         ctx.preview:set_lines(opts.preview(ctx.item.value))
         ctx.preview:highlight({ ft = opts.filetype or 'text' })
-      end or nil,
+      end or 'none',
       confirm = function(picker, entry)
         picker:close()
         if entry then

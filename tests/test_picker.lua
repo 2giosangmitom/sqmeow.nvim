@@ -130,6 +130,78 @@ T['pick']['falls back to the built-in prompt when a backend raises'] = function(
   eq(chosen, 'one')
 end
 
+T['snacks'] = MiniTest.new_set()
+
+--- Stand in for snacks, capturing the options its picker would be opened with.
+local function fake_snacks()
+  local opened = {}
+  package.loaded['snacks'] =
+    { picker = {
+      pick = function(opts)
+        opened.opts = opts
+      end,
+    } }
+  MiniTest.finally(function()
+    package.loaded['snacks'] = nil
+  end)
+  return opened
+end
+
+T['snacks']['names a previewer even when the list has none'] = function()
+  local opened = fake_snacks()
+  config.apply({ integrations = { picker = 'snacks' } })
+
+  picker.pick({ 'one' }, {
+    prompt = 'Pick',
+    format = tostring,
+    on_choice = function() end,
+  })
+
+  -- Left unset, snacks previews the item's `file`. None of these lists holds files, so every row
+  -- would report "Item has no `file`" instead of showing nothing.
+  eq(opened.opts.preview, 'none')
+end
+
+T['snacks']["previews through the caller's function when there is one"] = function()
+  local opened = fake_snacks()
+  config.apply({ integrations = { picker = 'snacks' } })
+
+  picker.pick({ 'one' }, {
+    prompt = 'Pick',
+    format = tostring,
+    preview = function(item)
+      return { item }
+    end,
+    on_choice = function() end,
+  })
+
+  eq(type(opened.opts.preview), 'function')
+end
+
+T['snacks']['carries the item through to the caller'] = function()
+  local opened = fake_snacks()
+  config.apply({ integrations = { picker = 'snacks' } })
+
+  local chosen = nil
+  picker.pick({ 'one', 'two' }, {
+    prompt = 'Pick',
+    format = tostring,
+    on_choice = function(item)
+      chosen = item
+    end,
+  })
+
+  local closed = false
+  opened.opts.confirm({
+    close = function()
+      closed = true
+    end,
+  }, opened.opts.items[2])
+
+  eq(closed, true)
+  eq(chosen, 'two')
+end
+
 T['builtin'] = MiniTest.new_set()
 
 T['builtin']["formats each row through the caller's function"] = function()

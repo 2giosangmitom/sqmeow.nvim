@@ -174,19 +174,8 @@ end
 function M.scratchpads(opts)
   opts = opts or {}
   local editor = require('sqmeow.ui.editor')
-  local directory = editor.directory()
 
-  local items = {}
-  for name, kind in vim.fs.dir(directory) do
-    if kind == 'file' and name:sub(-4) == '.sql' then
-      table.insert(items, { name = name:sub(1, -5), path = vim.fs.joinpath(directory, name) })
-    end
-  end
-  table.sort(items, function(left, right)
-    return left.name < right.name
-  end)
-
-  pick(items, {
+  pick(editor.list(), {
     prompt = opts.prompt or 'Scratchpads',
     empty = 'there are no saved scratchpads',
     filetype = 'sql',
@@ -198,7 +187,7 @@ function M.scratchpads(opts)
       return ok and lines or { 'could not read ' .. item.path }
     end,
     on_choice = function(item)
-      editor.open(item.name)
+      editor.open_path(item.path)
     end,
   })
 end

@@ -142,11 +142,15 @@ local function check_integrations()
     vim.health.ok('pickers: ' .. chosen)
   end
 
-  local icons = require('sqmeow.integrations.icons').provider()
-  if icons == 'ascii' then
+  local icons = require('sqmeow.integrations.icons')
+  local provider = icons.provider()
+  if provider == 'ascii' then
     vim.health.info('icons are plain ASCII; install mini.icons or nvim-web-devicons for glyphs')
   else
-    vim.health.ok('icons: ' .. icons)
+    vim.health.ok('icons: ' .. provider)
+  end
+  for _, problem in ipairs(icons.problems()) do
+    vim.health.error(problem)
   end
 
   if pcall(require, 'lualine') then
