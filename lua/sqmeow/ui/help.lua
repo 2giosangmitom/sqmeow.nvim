@@ -20,6 +20,11 @@ function M.lines(surface)
   local keys = {}
   for index, entry in ipairs(entries) do
     keys[index] = table.concat(entry.lhs, ', ')
+    -- Two surfaces bind `<CR>` twice, once per mode, and a list that showed them as the same key
+    -- twice would be a puzzle rather than a reference.
+    if entry.mode ~= 'n' then
+      keys[index] = ('%s (%s)'):format(keys[index], entry.mode)
+    end
     widest = math.max(widest, vim.fn.strdisplaywidth(keys[index]))
   end
 

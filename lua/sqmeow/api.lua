@@ -4,6 +4,7 @@
 --- change shape; this is the surface that is documented and kept stable.
 ---
 ---@tag sqmeow-api
+---@toc_entry Public interface
 
 local M = {}
 

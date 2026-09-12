@@ -108,9 +108,29 @@ jobs:
       - uses: NTBBloodbath/selene-action@v1.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: lua plugin tests
+          args: lua plugin telescope tests
 
       # The suite drives a real engine over a real channel, so it needs one built first.
       - run: cargo build
       - run: git clone --filter=blob:none --depth 1 https://github.com/nvim-mini/mini.nvim .deps/mini.nvim
       - run: nvim --headless -u tests/minimal_init.lua -c "lua require('mini.test').setup(); MiniTest.run()"
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+
+      - run: git clone --filter=blob:none --depth 1 https://github.com/nvim-mini/mini.nvim .deps/mini.nvim
+
+      # The help file is committed, because plugin managers do not run build steps and
+      # `:help sqmeow` has to work on a fresh install. This is what keeps it current: a pull
+      # request that changes an annotation without regenerating fails here.
+      - run: nvim --headless -u scripts/minidoc_init.lua -c "lua require('mini.doc').generate()" -c "qa!"
+      - run: git diff --exit-code doc/

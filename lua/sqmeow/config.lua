@@ -4,14 +4,17 @@
 --- overrides what it names. Validation runs once, at `setup()`, and names the offending key,
 --- because a typo in a nested option is otherwise invisible until the feature it controls
 --- misbehaves much later.
+---
+---@tag sqmeow-config
+---@toc_entry Configuration
 
 local M = {}
 
 --- Default configuration.
 ---
---- This table is the single source of truth. The help file inlines it at generation time, so the
---- documented defaults cannot drift from the ones the code uses.
----@tag sqmeow-config
+--- This table is the single source of truth. What follows is inlined from it when the help file
+--- is built, so the documented defaults cannot drift from the ones the code uses.
+---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 M.defaults = {
   -- Where connections are loaded from, in order. Later sources do not shadow earlier ones; every
   -- source contributes, and a duplicate name is reported rather than silently dropped.
@@ -69,6 +72,7 @@ M.defaults = {
   -- Mask the password in every URL the plugin displays.
   redact_urls = true,
 }
+--minidoc_afterlines_end
 
 --- The active configuration. Replaced wholesale by `setup()`.
 M.current = vim.deepcopy(M.defaults)

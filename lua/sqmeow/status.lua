@@ -4,6 +4,10 @@
 --- hand-written `'statusline'` all want the same facts in different shapes, so what lives here is
 --- the facts. The lualine component is a thin wrapper, and the tests exercise this rather than
 --- lualine, so the component cannot break without a test noticing.
+---
+---@tag sqmeow.status
+---@toc_entry Statusline
+---
 
 local M = {}
 

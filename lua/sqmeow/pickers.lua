@@ -5,6 +5,7 @@
 --- when they have none. Nothing here knows which picker it is talking to.
 ---
 ---@tag sqmeow-pickers
+---@toc_entry Pickers
 
 local M = {}
 

@@ -7,6 +7,9 @@
 ---@tag sqmeow.nvim
 ---@toc_entry Introduction
 
+--- Contents ~
+---@toc
+
 local M = {}
 
 --- The configuration the user passed, kept unmerged for `:checkhealth`.

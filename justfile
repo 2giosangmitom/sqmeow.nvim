@@ -1,6 +1,6 @@
 # Everything CI runs, runnable locally with the same command.
 
-default: lint test
+default: lint test docs-check
 
 # Clone the test and documentation dependency.
 deps:
@@ -68,3 +68,7 @@ test-lua: build-debug
 # Regenerate doc/sqmeow.txt from the annotated sources.
 docs:
     nvim --headless -u scripts/minidoc_init.lua -c "lua require('mini.doc').generate()" -c "qa!"
+
+# Fail if the committed help file is behind the sources, the way CI does.
+docs-check: docs
+    git diff --exit-code doc/

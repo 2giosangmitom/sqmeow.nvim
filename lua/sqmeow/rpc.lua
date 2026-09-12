@@ -95,12 +95,24 @@ function M.start()
   end
 
   local install = require('sqmeow.install')
+  local config = require('sqmeow.config').get()
+
   local path, source = install.resolve()
+  if not path and config.core.auto_install then
+    -- The first call that needs an engine is the moment to fetch one. Doing it at startup would
+    -- make a plugin nobody used that session pay for a download.
+    vim.notify('sqmeow: downloading the engine…')
+    local err
+    path, err = install.ensure()
+    source = 'managed'
+    if not path then
+      return nil, err
+    end
+  end
   if not path then
     return nil, 'no engine binary found; run `:Sqmeow update` to download one'
   end
 
-  local config = require('sqmeow.config').get()
   local spawned = vim.fn.jobstart({ path }, {
     rpc = true,
     env = { SQMEOW_LOG = config.core.log_level },

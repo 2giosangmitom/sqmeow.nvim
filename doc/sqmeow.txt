@@ -1,0 +1,703 @@
+*sqmeow.txt*  A database client for Neovim
+
+                                                                   *sqmeow.nvim*
+sqmeow.nvim, a database client for Neovim.
+
+A Lua frontend over a Rust engine. The engine owns connections, queries, and the layout of
+result grids; the plugin owns windows, buffers, and keymaps. Nothing in the plugin ever
+touches a row of data, which is what keeps a large result from stalling the editor.
+
+
+------------------------------------------------------------------------------
+Contents ~
+  Introduction ................................................. |sqmeow.nvim|
+  Configuration .............................................. |sqmeow-config|
+  Keymaps ................................................... |sqmeow-keymaps|
+  Public interface .............................................. |sqmeow-api|
+  Pickers ................................................... |sqmeow-pickers|
+  Statusline ................................................. |sqmeow.status|
+  
+
+------------------------------------------------------------------------------
+                                                            *sqmeow.user_config*
+                              `sqmeow.user_config`
+The configuration the user passed, kept unmerged for `:checkhealth`.
+Type ~
+`(table|nil)`
+
+------------------------------------------------------------------------------
+                                                                *sqmeow.setup()*
+                             `sqmeow.setup`({opts})
+Configure the plugin.
+
+Optional. Every option has a default, and a partial table overrides only what it names.
+
+Parameters ~
+{opts} `(table|nil)` See |sqmeow-config|.
+Usage ~
+>lua
+  require('sqmeow').setup({
+    ui = { drawer = { width = 40 } },
+  })
+<
+------------------------------------------------------------------------------
+                                                                 *sqmeow.stop()*
+                                `sqmeow.stop`()
+Stop the engine. It restarts on the next call that needs it.
+
+
+==============================================================================
+------------------------------------------------------------------------------
+                                                                 *sqmeow-config*
+Configuration defaults and validation.
+
+Every option has a default, so `setup()` is optional and calling it with a partial table only
+overrides what it names. Validation runs once, at `setup()`, and names the offending key,
+because a typo in a nested option is otherwise invisible until the feature it controls
+misbehaves much later.
+
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.config.defaults*
+                            `sqmeow.config.defaults`
+Default configuration.
+
+This table is the single source of truth. What follows is inlined from it when the help file
+is built, so the documented defaults cannot drift from the ones the code uses.
+>lua
+  sqmeow.config.defaults = {
+    -- Where connections are loaded from, in order. Later sources do not shadow earlier ones; every
+    -- source contributes, and a duplicate name is reported rather than silently dropped.
+    -- Types: 'file', 'env', 'memory'.
+    sources = {
+      { type = 'file' },
+      { type = 'env' },
+    },
+
+    -- Connections declared inline. Equivalent to a `memory` source, and handy for a single database
+    -- that does not deserve a file.
+    connections = {},
+
+    core = {
+      -- Absolute path to the engine binary. `nil` means the managed one.
+      path = nil,
+      -- Download the engine on first use when it is missing.
+      auto_install = true,
+      -- One of 'error', 'warn', 'info', 'debug', 'trace'.
+      log_level = 'warn',
+    },
+
+    ui = {
+      -- 'ide' is drawer left, editor top right, result bottom right.
+      layout = 'ide',
+      drawer = { width = 36, position = 'left' },
+      result = { height = 16, page_size = 100, max_column_width = 48 },
+      border = 'rounded',
+      winbar = true,
+      persist_session = false,
+    },
+
+    query = {
+      -- Rows held per result. Reached, the result is marked truncated rather than failed.
+      max_rows = 100000,
+      -- Milliseconds before a query is cancelled. 0 disables the timeout.
+      timeout_ms = 0,
+      -- Results kept for reopening from the call log.
+      history_size = 32,
+    },
+
+    integrations = {
+      -- 'auto' picks the first of telescope, fzf-lua and snacks that is installed.
+      picker = 'auto',
+      -- 'auto' prefers mini.icons, then nvim-web-devicons, then plain ASCII.
+      icons = 'auto',
+      -- Expose the lualine component. Adding it to a statusline stays the user's job.
+      lualine = true,
+      notify = true,
+    },
+
+    -- Merged by action name over the built-in mappings. Set an action to `false` to drop it.
+    keymaps = {},
+
+    -- Mask the password in every URL the plugin displays.
+    redact_urls = true,
+  }
+<
+------------------------------------------------------------------------------
+                                                         *sqmeow.config.current*
+                            `sqmeow.config.current`
+The active configuration. Replaced wholesale by `setup()`.
+
+------------------------------------------------------------------------------
+                                                      *sqmeow.config.validate()*
+                        `sqmeow.config.validate`({opts})
+Validate a user configuration against the defaults.
+
+Parameters ~
+{opts} `(table)` Configuration as passed to `setup()`.
+Return ~
+`(string[])` # Every problem found, so one call reports them all.
+
+------------------------------------------------------------------------------
+                                                         *sqmeow.config.apply()*
+                         `sqmeow.config.apply`({opts})
+Merge a user configuration over the defaults and make it current.
+
+Parameters ~
+{opts} `(table|nil)` Configuration as passed to `setup()`.
+Return ~
+`(table)` config The merged configuration.
+Return ~
+`(string[])` errors Problems found. The configuration is still merged when non-empty.
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.config.get()*
+                             `sqmeow.config.get`()
+Read the active configuration.
+
+Return ~
+`(table)` config
+
+
+==============================================================================
+------------------------------------------------------------------------------
+                                                                *sqmeow-keymaps*
+Every mapping the plugin makes.
+
+One table, keyed by surface and then by action name. It is the only source: the mappings that
+get applied, the `?` cheatsheet, and the help file all read from here, so none of the three can
+drift from the others.
+
+The plugin takes no key outside its own windows. Mappings are buffer-local, applied when a
+surface's buffer is created. Anything worth putting on a global key is offered as a `<Plug>`
+mapping instead, for the user to bind or ignore.
+
+
+------------------------------------------------------------------------------
+Class ~
+{sqmeow.Keymap}
+Fields ~
+{action} `(string)` The name the configuration overrides it by.
+{lhs} `(string|string[])` One key, or several that do the same thing.
+{mode} `(string|string[])` Defaults to normal mode.
+{desc} `(string)` Shown by which-key, by `:map`, and in the cheatsheet.
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.keymap.defaults*
+                            `sqmeow.keymap.defaults`
+Built-in mappings, per surface.
+
+A list rather than a table, so the cheatsheet and the help file present them in a deliberate
+order rather than whatever order Lua happens to iterate in.
+
+What follows is generated from this table when the help file is built, so it is the mappings
+the plugin actually applies rather than a second list that can fall behind them.
+drawer
+ <CR>, o   Expand or collapse the node
+ p         Show the first page of this relation
+ r         Reload this subtree
+ y         Yank the qualified name
+ s         Yank a SELECT for this relation
+ f         Find a relation from here
+ ?         Show these mappings
+ q         Close the drawer
+
+result
+ L    Next page
+ H    Previous page
+ gg   First page
+ G    Last page
+ K    Show this row down the page
+ yc   Yank this cell
+ yr   Yank this row as CSV
+ yp   Yank this page as CSV
+ e    Write the result to a file
+ f    Jump to a column
+ ?    Show these mappings
+ q    Close the result window
+
+editor
+ <CR>        Run the statement under the cursor
+ <CR> (x)    Run the selection
+ <leader>E   Run the whole buffer
+ <C-c>       Stop the running query
+Type ~
+`(table<string, sqmeow.Keymap[]>)`
+
+------------------------------------------------------------------------------
+                                                            *sqmeow.keymap.plug*
+                              `sqmeow.keymap.plug`
+Actions that are worth a key of the user's own choosing.
+
+Defined globally as `<Plug>` mappings and bound to nothing. Offering them this way is what lets
+the plugin be convenient without taking a key someone else is using.
+Type ~
+`(table<string, { desc: string, run: fun() }>)`
+
+------------------------------------------------------------------------------
+                                                       *sqmeow.keymap.resolve()*
+                       `sqmeow.keymap.resolve`({surface})
+The mappings for one surface, after the user's overrides.
+
+Overriding one action does not require restating the rest, because the merge is by action name
+rather than by position.
+
+Parameters ~
+{surface} `(string)` 'drawer' or 'result'.
+Return ~
+`(sqmeow.Keymap[])` # In presentation order. An action the user disabled has no keys.
+
+------------------------------------------------------------------------------
+                                                      *sqmeow.keymap.problems()*
+                           `sqmeow.keymap.problems`()
+Overrides that name an action the surface does not have.
+
+Reported by `:checkhealth` rather than silently ignored: a mistyped action name would otherwise
+look exactly like a mapping that refuses to work.
+
+Return ~
+`(string[])`
+
+------------------------------------------------------------------------------
+                                                         *sqmeow.keymap.apply()*
+               `sqmeow.keymap.apply`({surface}, {buf}, {actions})
+Bind a surface's mappings in one buffer.
+
+Parameters ~
+{surface} `(string)`
+{buf} `(integer)`
+{actions} `(table<string, fun()>)` Action name to what it does. An action with no function is
+skipped, so a surface can leave one unimplemented without breaking the rest.
+
+------------------------------------------------------------------------------
+                                                       *sqmeow.keymap.summary()*
+                           `sqmeow.keymap.summary`()
+Every surface's mappings, as lines, for the help file.
+
+The same lines the `?` cheatsheet shows, so the two cannot disagree and neither can disagree
+with what is bound: all three read `M.resolve`.
+
+Return ~
+`(string[])`
+
+------------------------------------------------------------------------------
+                                                 *sqmeow.keymap.register_plug()*
+                        `sqmeow.keymap.register_plug`()
+Define the `<Plug>` mappings.
+
+
+==============================================================================
+------------------------------------------------------------------------------
+                                                                    *sqmeow-api*
+The public interface.
+
+Everything a user or another plugin should call lives here. The modules underneath are free to
+change shape; this is the surface that is documented and kept stable.
+
+
+------------------------------------------------------------------------------
+                                                          *sqmeow.api.connect()*
+                      `sqmeow.api.connect`({url}, {opts})
+Open a connection.
+
+Returns as soon as the engine has accepted the request. The connection is not usable until it
+reports success, which arrives as an event and is announced to the user.
+
+Parameters ~
+{url} `(string)` A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
+{opts} `(table|nil)` Options: `name` for the label shown in the interface.
+Return ~
+`(integer|nil)` id The connection id, or nil if the engine refused the request.
+Return ~
+`(string|nil)` error
+Usage ~
+>lua
+  require('sqmeow.api').connect('sqlite://./app.db', { name = 'app' })
+<
+------------------------------------------------------------------------------
+                                                    *sqmeow.api.connect_named()*
+                       `sqmeow.api.connect_named`({name})
+Connect to a connection declared by a source.
+
+Parameters ~
+{name} `(string)` The name the source gave it.
+Return ~
+`(integer|nil)` id
+Return ~
+`(string|nil)` error
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.api.available()*
+                            `sqmeow.api.available`()
+Every connection the configured sources declare.
+
+Reading a source is cheap, and re-reading it means a file edited outside the editor is picked
+up without a restart.
+
+Return ~
+`(sqmeow.ConnectionSpec[])` connections
+Return ~
+`(string[])` problems
+
+------------------------------------------------------------------------------
+                                                             *sqmeow.api.save()*
+                        `sqmeow.api.save`({name}, {url})
+Save a connection to the file source.
+
+Parameters ~
+{name} `(string)`
+{url} `(string)`
+Return ~
+`(boolean)` written
+
+------------------------------------------------------------------------------
+                                                       *sqmeow.api.disconnect()*
+                         `sqmeow.api.disconnect`({id})
+Close a connection.
+
+Parameters ~
+{id} `(integer|nil)` Defaults to the current connection.
+
+------------------------------------------------------------------------------
+                                                              *sqmeow.api.use()*
+                             `sqmeow.api.use`({id})
+Make a connection the one queries run against.
+
+Parameters ~
+{id} `(integer)`
+Return ~
+`(boolean)` changed
+
+------------------------------------------------------------------------------
+                                                          *sqmeow.api.execute()*
+                      `sqmeow.api.execute`({sql}, {opts})
+Run SQL on the current connection.
+
+Returns as soon as the engine has accepted the query, with the id that identifies it. Rows
+arrive in the result buffer later, written by the engine itself.
+
+Parameters ~
+{sql} `(string)` One or more statements. Only the last one's rows are shown.
+{opts} `(table|nil)` `line` runs only the statement at that zero-based line; `source_buf` is
+the buffer an error should be reported in.
+Return ~
+`(integer|nil)` call_id
+Return ~
+`(string|nil)` error
+
+------------------------------------------------------------------------------
+                                                   *sqmeow.api.execute_buffer()*
+                         `sqmeow.api.execute_buffer`()
+Run the whole current buffer.
+Return ~
+`(integer|nil)` call_id
+
+------------------------------------------------------------------------------
+                                                *sqmeow.api.execute_statement()*
+                        `sqmeow.api.execute_statement`()
+Run the statement the cursor is in.
+
+The whole buffer is sent along with the cursor line, and the engine picks the statement, using
+the same splitter that would have split the buffer. Doing it that way means there is one answer
+to what counts as a statement, rather than one here and a different one there.
+
+Return ~
+`(integer|nil)` call_id
+
+------------------------------------------------------------------------------
+                                                *sqmeow.api.execute_selection()*
+                        `sqmeow.api.execute_selection`()
+Run the most recent visual selection.
+
+Reads the `<` and `>` marks, so it works both from a `:` command on a selection and from a
+mapping that leaves visual mode first.
+Return ~
+`(integer|nil)` call_id
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.api.cancel()*
+                             `sqmeow.api.cancel`()
+Stop the running query.
+
+Return ~
+`(boolean)` stopped Whether there was a query to stop.
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.api.next_page()*
+                            `sqmeow.api.next_page`()
+Show the next page of the current result.
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.api.prev_page()*
+                            `sqmeow.api.prev_page`()
+Show the previous page of the current result.
+
+------------------------------------------------------------------------------
+                                                       *sqmeow.api.first_page()*
+                           `sqmeow.api.first_page`()
+Show the first page of the current result.
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.api.last_page()*
+                            `sqmeow.api.last_page`()
+Show the last page of the current result.
+
+The offset comes from the row count the engine reported. The engine clamps anything past the
+end anyway, so the fallback below is safe even when no summary has arrived yet.
+
+------------------------------------------------------------------------------
+                                                             *sqmeow.api.open()*
+                              `sqmeow.api.open`()
+Open the result window.
+
+------------------------------------------------------------------------------
+                                                            *sqmeow.api.close()*
+                              `sqmeow.api.close`()
+Close the result window.
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.api.reopen()*
+                         `sqmeow.api.reopen`({call_id})
+Put a past result back in the result window.
+
+Nothing is run again: the engine still holds the rows, so this only asks it to repaint them.
+
+Parameters ~
+{call_id} `(integer)` From the query log.
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.api.export()*
+                          `sqmeow.api.export`({opts})
+Write the current result to a file.
+
+Parameters ~
+{opts} `(table|nil)` `path` skips the prompt; `format` is 'csv' or 'json'.
+
+------------------------------------------------------------------------------
+                                                       *sqmeow.api.scratchpad()*
+                        `sqmeow.api.scratchpad`({name})
+Open the scratchpad for a connection.
+
+Parameters ~
+{name} `(string|nil)` Defaults to the current connection.
+Return ~
+`(integer)` buf
+
+------------------------------------------------------------------------------
+                                                      *sqmeow.api.open_drawer()*
+                           `sqmeow.api.open_drawer`()
+Show the schema drawer.
+
+------------------------------------------------------------------------------
+                                                     *sqmeow.api.close_drawer()*
+                          `sqmeow.api.close_drawer`()
+Hide the schema drawer.
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.api.toggle()*
+                             `sqmeow.api.toggle`()
+Show the drawer, or hide it if it is already showing.
+
+------------------------------------------------------------------------------
+                                                      *sqmeow.api.connections()*
+                           `sqmeow.api.connections`()
+Every open connection.
+Return ~
+`(sqmeow.Connection[])`
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.api.status()*
+                             `sqmeow.api.status`()
+What the engine is doing, for a statusline.
+
+The same table |sqmeow.status| returns, which is where the shape is documented and where the
+lualine component reads it from.
+
+Return ~
+`(sqmeow.Status)`
+
+------------------------------------------------------------------------------
+                                                             *sqmeow.api.find()*
+                       `sqmeow.api.find`({name}, {opts})
+Show one of the plugin's lists.
+
+Parameters ~
+{name} `(string|nil)` One of 'connections', 'relations', 'history', 'scratchpads', 'columns'.
+Nil asks which.
+{opts} `(table|nil)` Passed to the picker.
+
+
+==============================================================================
+------------------------------------------------------------------------------
+                                                                *sqmeow-pickers*
+The lists the plugin offers.
+
+Every one of them goes through |sqmeow.integrations.picker|, so each is written once and shown
+with whichever of telescope, fzf-lua and snacks.picker the user has, or with `vim.ui.select`
+when they have none. Nothing here knows which picker it is talking to.
+
+
+------------------------------------------------------------------------------
+                                                  *sqmeow.pickers.connections()*
+                      `sqmeow.pickers.connections`({opts})
+Switch the current connection, or open one that is configured but not yet open.
+
+Open connections come first, since switching between them is the common case, and a configured
+one is offered below so a connection is never more than one list away.
+
+Parameters ~
+{opts} `(table|nil)` Passed through to the picker.
+
+------------------------------------------------------------------------------
+                                                    *sqmeow.pickers.relations()*
+                       `sqmeow.pickers.relations`({opts})
+Find a table or a view anywhere in the current connection.
+
+The list is read once per connection and then held, so the second time it opens instantly. A
+schema the user cannot read is left out rather than failing the list.
+
+Parameters ~
+{opts} `(table|nil)` `schema` limits the list to one schema; `refresh` re-reads it.
+
+------------------------------------------------------------------------------
+                                                      *sqmeow.pickers.history()*
+                        `sqmeow.pickers.history`({opts})
+Reopen a past result.
+
+Nothing is run again. The engine still holds the rows, so choosing an entry only asks it to
+paint them, which is what makes going back to an expensive query free.
+
+Parameters ~
+{opts} `(table|nil)`
+
+------------------------------------------------------------------------------
+                                                  *sqmeow.pickers.scratchpads()*
+                      `sqmeow.pickers.scratchpads`({opts})
+Open one of the saved scratchpads.
+
+Parameters ~
+{opts} `(table|nil)`
+
+------------------------------------------------------------------------------
+                                                      *sqmeow.pickers.columns()*
+                        `sqmeow.pickers.columns`({opts})
+Jump to a column of the current result.
+
+A wide result is the reason this exists: scrolling sideways to find a column is exactly the
+kind of thing a fuzzy list is better at.
+
+Parameters ~
+{opts} `(table|nil)`
+
+------------------------------------------------------------------------------
+                                                            *sqmeow.pickers.all*
+                              `sqmeow.pickers.all`
+Every picker, by the name `:Sqmeow find` and the telescope extension use.
+Type ~
+`(table<string, fun(opts: table|nil)>)`
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.pickers.names()*
+                            `sqmeow.pickers.names`()
+The picker names, sorted, for completion.
+Return ~
+`(string[])`
+
+------------------------------------------------------------------------------
+                                                         *sqmeow.pickers.open()*
+                     `sqmeow.pickers.open`({name}, {opts})
+Show a picker by name, or ask which one.
+
+Parameters ~
+{name} `(string|nil)`
+{opts} `(table|nil)`
+
+
+==============================================================================
+------------------------------------------------------------------------------
+                                                                 *sqmeow.status*
+What the plugin is doing, as a plain table.
+
+Deliberately frontend-agnostic. lualine is one consumer, but heirline, mini.statusline and a
+hand-written `'statusline'` all want the same facts in different shapes, so what lives here is
+the facts. The lualine component is a thin wrapper, and the tests exercise this rather than
+lualine, so the component cannot break without a test noticing.
+
+------------------------------------------------------------------------------
+Class ~
+{sqmeow.Status}
+Fields ~
+{connection} `(string|nil)` The current connection's name.
+{dialect} `(string|nil)` 'postgres', 'mysql' or 'sqlite'.
+{state} '`(idle)`'|'executing'|'done'|'error'|'cancelled' What the last query is doing.
+{rows} `(integer|nil)` Rows in the current result.
+{page} `(integer|nil)` Which page is shown, counting from one.
+{pages} `(integer|nil)` How many pages there are.
+{elapsed_ms} `(integer|nil)` How long the last query took.
+{truncated} `(boolean|nil)` Whether the row cap was reached.
+
+------------------------------------------------------------------------------
+                                                         *sqmeow.status.spinner*
+                            `sqmeow.status.spinner`
+Frames of the spinner shown while a query runs.
+
+Advanced by the clock rather than by a timer, so nothing has to be started, stopped, or cleaned
+up: a statusline redraws often enough on its own that reading the time is all it takes.
+
+------------------------------------------------------------------------------
+                                                   *sqmeow.status.ascii_spinner*
+                         `sqmeow.status.ascii_spinner`
+The ASCII spinner, for terminals without a patched font.
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.status.frame_ms*
+                            `sqmeow.status.frame_ms`
+How long each spinner frame is shown.
+
+------------------------------------------------------------------------------
+                                                         *sqmeow.status.frame()*
+                          `sqmeow.status.frame`({now})
+The current spinner frame.
+
+Parameters ~
+{now} `(integer|nil)` Milliseconds, for tests. Defaults to the clock.
+Return ~
+`(string)`
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.status.get()*
+                             `sqmeow.status.get`()
+A snapshot of the session.
+
+Always the same shape. `state` is `'idle'` rather than nil when nothing has run, so a consumer
+can switch on it without checking for absence first.
+
+Return ~
+`(sqmeow.Status)`
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.status.active()*
+                            `sqmeow.status.active`()
+Whether there is anything worth putting in a statusline.
+
+False before the first connection, which is what keeps the component invisible for users who
+have the plugin installed and are not using it right now.
+Return ~
+`(boolean)`
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.status.render()*
+                        `sqmeow.status.render`({status})
+The one-line form, for a statusline that wants a string.
+
+Shows the connection, and then whatever the last query is doing: a spinner while it runs, the
+row count and how long it took once it is finished, and the page position when there is more
+than one page.
+
+Parameters ~
+{status} `(sqmeow.Status|nil)` Defaults to the current one.
+Return ~
+`(string)`
+
+
+ vim:tw=78:ts=8:noet:ft=help:norl:

@@ -148,7 +148,18 @@ Everywhere a URL is displayed, the password is masked. Set `redact_urls = false`
 | Schema drawer and keymap system | done |
 | Editor and result grid | done |
 | Statusline and picker integrations | done |
-| Generated documentation and prebuilt releases | next |
+| Generated documentation and prebuilt releases | done |
+
+## Documentation
+
+`:help sqmeow` is generated from the annotated sources with
+[mini.doc](https://github.com/nvim-mini/mini.doc) and committed, because plugin managers do not run
+build steps. The default configuration and the keymap table are evaluated at generation time and
+inlined, so the documented defaults are literally the ones the code uses and cannot fall behind.
+`just docs` regenerates it, and CI fails a pull request that changes an annotation without doing so.
+
+The protocol the two halves speak is written down in [core/PROTOCOL.md](core/PROTOCOL.md). It is the
+contract both sides code against, so a field cannot change without that document changing first.
 
 ## Development
 
@@ -169,6 +180,12 @@ The PostgreSQL and MySQL tests report themselves skipped when those servers are 
 The plugin finds an engine in three places, in this order: `core.path` from your configuration, the
 managed copy under `stdpath('data')`, and a local `cargo build` inside the plugin directory. The
 last one means a checkout works with no install step.
+
+When there is none, the first call that needs an engine downloads one. Tagging a release
+cross-compiles for Linux, macOS and Windows on both x86-64 and ARM, and publishes a manifest naming
+each archive and its SHA-256, which is what the download verifies against. If no prebuilt target
+matches, and only then, it falls back to `cargo build --release`. `:Sqmeow update` does the same
+thing on demand, and `core.auto_install = false` turns the automatic path off.
 
 Run `:checkhealth sqmeow` to see which engine is in use and whether it matches this plugin.
 

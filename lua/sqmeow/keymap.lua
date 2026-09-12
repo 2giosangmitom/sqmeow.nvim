@@ -7,6 +7,9 @@
 --- The plugin takes no key outside its own windows. Mappings are buffer-local, applied when a
 --- surface's buffer is created. Anything worth putting on a global key is offered as a `<Plug>`
 --- mapping instead, for the user to bind or ignore.
+---
+---@tag sqmeow-keymaps
+---@toc_entry Keymaps
 
 local M = {}
 
@@ -20,6 +23,10 @@ local M = {}
 ---
 --- A list rather than a table, so the cheatsheet and the help file present them in a deliberate
 --- order rather than whatever order Lua happens to iterate in.
+---
+--- What follows is generated from this table when the help file is built, so it is the mappings
+--- the plugin actually applies rather than a second list that can fall behind them.
+---@eval return require('sqmeow.keymap').summary()
 ---@type table<string, sqmeow.Keymap[]>
 M.defaults = {
   drawer = {
@@ -203,6 +210,26 @@ function M.apply(surface, buf, actions)
       end
     end
   end
+end
+
+--- Every surface's mappings, as lines, for the help file.
+---
+--- The same lines the `?` cheatsheet shows, so the two cannot disagree and neither can disagree
+--- with what is bound: all three read `M.resolve`.
+---
+---@return string[]
+function M.summary()
+  local lines = {}
+
+  for _, surface in ipairs({ 'drawer', 'result', 'editor' }) do
+    table.insert(lines, surface)
+    vim.list_extend(lines, require('sqmeow.ui.help').lines(surface))
+    table.insert(lines, '')
+  end
+
+  -- The trailing blank would become an extra line in the help file.
+  table.remove(lines)
+  return lines
 end
 
 --- Define the `<Plug>` mappings.

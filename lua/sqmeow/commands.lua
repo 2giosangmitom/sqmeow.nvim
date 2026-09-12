@@ -213,6 +213,24 @@ M.subcommands = {
     end,
   },
 
+  update = {
+    desc = 'Download the engine this plugin needs',
+    run = function(args)
+      notify('fetching the engine…')
+
+      local path, err = require('sqmeow.install').ensure({ force = true, version = args[1] })
+      if not path then
+        return notify(err, vim.log.levels.ERROR)
+      end
+
+      -- The old one is still running and still speaking the old protocol, so it has to go.
+      require('sqmeow.rpc').stop()
+      require('sqmeow.state').reset()
+      require('sqmeow.ui.drawer').reset()
+      notify('installed ' .. path)
+    end,
+  },
+
   health = {
     desc = 'Run the health check',
     run = function()

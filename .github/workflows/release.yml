@@ -1,0 +1,151 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and attach the archives to
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # musl rather than glibc, so the binary is not tied to a distribution newer than the
+          # one the user is running.
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }} -p sqmeow-core
+          else
+            cargo build --release --locked --target ${{ matrix.target }} -p sqmeow-core
+          fi
+
+      # One archive per target, named after it, holding the binary and nothing else. The manifest
+      # job reads the checksum files rather than recomputing anything.
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          name="sqmeow-core-${{ matrix.target }}"
+
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            7z a "dist/$name.zip" "./target/${{ matrix.target }}/release/sqmeow-core.exe"
+            archive="dist/$name.zip"
+          else
+            tar -czf "dist/$name.tar.gz" -C "target/${{ matrix.target }}/release" sqmeow-core
+            archive="dist/$name.tar.gz"
+          fi
+
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$archive" | awk '{print $1}' > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" | awk '{print $1}' > "$archive.sha256"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  manifest:
+    name: manifest
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # What `install.lua` reads to decide which archive to fetch and what it should hash to.
+      - name: Write manifest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          base="https://github.com/${{ github.repository }}/releases/download/$tag"
+
+          python3 - "$tag" "$base" <<'PY'
+          import hashlib, json, os, sys
+
+          tag, base = sys.argv[1], sys.argv[2]
+          targets = {}
+
+          for name in sorted(os.listdir('dist')):
+              if name.endswith('.sha256'):
+                  continue
+              path = os.path.join('dist', name)
+              triple = name.removeprefix('sqmeow-core-')
+              triple = triple.removesuffix('.tar.gz').removesuffix('.zip')
+
+              with open(path + '.sha256') as digest:
+                  sha256 = digest.read().strip()
+              # Recomputed, so a mismatched checksum file cannot become a manifest nobody can use.
+              actual = hashlib.sha256(open(path, 'rb').read()).hexdigest()
+              assert actual == sha256, f'{name}: {actual} != {sha256}'
+
+              targets[triple] = {
+                  'url': f'{base}/{name}',
+                  'sha256': sha256,
+                  'size': os.path.getsize(path),
+              }
+
+          with open('dist/manifest.json', 'w') as out:
+              json.dump({'version': tag.lstrip('v'), 'targets': targets}, out, indent=2)
+              out.write('\n')
+          PY
+
+          cat dist/manifest.json
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
