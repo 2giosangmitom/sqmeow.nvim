@@ -8,6 +8,27 @@ local drawer = require('sqmeow.ui.drawer')
 
 local TIMEOUT = 5000
 
+--- Every extmark on a line, as a list of `{ group, from, to }`, in column order.
+local function marks_on(number)
+  local namespace = vim.api.nvim_get_namespaces()['sqmeow.drawer']
+  local found = vim.api.nvim_buf_get_extmarks(
+    drawer.buffer(),
+    namespace,
+    { number - 1, 0 },
+    { number - 1, -1 },
+    { details = true }
+  )
+
+  local spans = vim.tbl_map(function(mark)
+    return { group = mark[4].hl_group, from = mark[3], to = mark[4].end_col }
+  end, found)
+
+  table.sort(spans, function(left, right)
+    return left.from < right.from
+  end)
+  return spans
+end
+
 local function lines()
   return vim.api.nvim_buf_get_lines(drawer.buffer(), 0, -1, false)
 end
@@ -113,6 +134,19 @@ T['tree']['starts with connections collapsed'] = function()
   eq(lines(), { '> s scratch  sqlite', '> + scratchpads  none saved' })
 end
 
+T['tree']['colours the marker apart from the icon'] = function()
+  expand('scratch')
+  line_matching('main')
+
+  -- `v s scratch  sqlite`: the marker, the connection's dialect icon, and the trailing note,
+  -- each in its own group.
+  eq(marks_on(1), {
+    { group = 'SqmeowMarker', from = 0, to = 1 },
+    { group = 'SqmeowIconSqlite', from = 2, to = 3 },
+    { group = 'SqmeowNull', from = 11, to = 19 },
+  })
+end
+
 T['tree']['expands a connection into its schemas'] = function()
   expand('scratch')
   line_matching('main')
@@ -138,6 +172,17 @@ T['tree']['expands a relation into its columns'] = function()
   eq(text:find('id%s+INTEGER%s+primary key') ~= nil, true)
   eq(text:find('name%s+TEXT%s+not null') ~= nil, true)
   eq(text:find('score%s+REAL') ~= nil, true)
+end
+
+T['tree']['leaves a blank marker unmarked'] = function()
+  expand('people')
+  local number = line_matching('score')
+
+  -- A leaf's marker is a space, and an extmark over nothing is one more thing to track on every
+  -- row of a long tree.
+  for _, span in ipairs(marks_on(number)) do
+    eq(span.group ~= 'SqmeowMarker', true)
+  end
 end
 
 T['tree']['collapses again'] = function()

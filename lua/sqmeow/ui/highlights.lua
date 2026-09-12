@@ -11,7 +11,8 @@ local M = {}
 --- The `SqmeowIcon*` groups are how a colourscheme reaches the drawer's icons. They are separate
 --- from the text beside them on purpose: an icon carries the kind of a thing, and colouring it is
 --- most of what makes a tree readable at a glance. The icons themselves are set under `icons` in
---- the configuration; their colours are set here.
+--- the configuration; their colours are set here. The expand markers share one group,
+--- `SqmeowMarker`, because they say whether a row is open rather than what it holds.
 M.links = {
   SqmeowWinbar = 'Title',
   SqmeowHeader = 'Title',
@@ -21,6 +22,7 @@ M.links = {
   SqmeowText = 'Normal',
   SqmeowTruncated = 'WarningMsg',
   SqmeowError = 'ErrorMsg',
+  SqmeowMarker = 'Comment',
 
   SqmeowIconConnection = 'Directory',
   SqmeowIconSchema = 'Directory',

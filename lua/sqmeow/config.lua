@@ -86,7 +86,7 @@ M.defaults = {
     sqlite = '',
 
     -- What sits before a drawer row: whether its children are showing, or that it has none.
-    markers = { open = '▾', closed = '▸', leaf = ' ' },
+    markers = { open = '', closed = '', leaf = ' ' },
 
     -- Cycled while a query runs, one frame every 80 milliseconds. Any number of frames works.
     spinner = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' },

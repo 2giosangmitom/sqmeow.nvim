@@ -136,7 +136,7 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       sqlite = '',
 
       -- What sits before a drawer row: whether its children are showing, or that it has none.
-      markers = { open = '▾', closed = '▸', leaf = ' ' },
+      markers = { open = '', closed = '', leaf = ' ' },
 
       -- Cycled while a query runs, one frame every 80 milliseconds. Any number of frames works.
       spinner = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' },

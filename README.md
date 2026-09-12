@@ -153,11 +153,13 @@ The three grid separators have to be one column wide. A wider one is ignored, be
 from it would no longer line up with the header above it. The ellipsis may be any width, since the
 column it truncates is measured against whatever it is.
 
-Colours are not set there. Every icon has a `SqmeowIcon*` highlight group, linked to a standard
-group so any colourscheme works, and redefining the group is how you recolour it:
+Colours are not set there. Every icon has a `SqmeowIcon*` highlight group and the expand markers
+share `SqmeowMarker`, which follows `Comment`. Each links to a standard group so any colourscheme
+works, and redefining one is how you recolour it:
 
 ```lua
 vim.api.nvim_set_hl(0, 'SqmeowIconTable', { fg = '#7aa2f7' })
+vim.api.nvim_set_hl(0, 'SqmeowMarker', { link = 'NonText' })
 ```
 
 Long operations report through `vim.notify`, so nvim-notify, snacks.notifier and dressing.nvim all

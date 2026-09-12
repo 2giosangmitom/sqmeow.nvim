@@ -106,15 +106,17 @@ local function annotate(node)
   return table.concat(parts, '  ')
 end
 
---- Add one row, with its icon coloured by what kind of thing it names.
+--- Add one row, with its marker and its icon coloured apart from the text.
 ---
---- The icon and the text beside it get different groups on purpose: an icon carries the kind of a
---- node, and colouring it is most of what makes a tree readable without reading it.
+--- The three spans get different groups on purpose. A marker says whether a row is open, an icon
+--- says what the row holds, and colouring them is most of what makes a tree readable without
+--- reading it. Every marker shares `SqmeowMarker`, since none of them names a kind of thing.
 ---
 ---@return string # The label, so a caller can measure where its own trailing note begins.
 local function emit(lines, highlights, node)
   local icon, icon_group = require('sqmeow.icons').get(node.kind)
-  local prefix = ('%s%s '):format(node.indent or '', node.marker)
+  local indent = node.indent or ''
+  local prefix = ('%s%s '):format(indent, node.marker)
   local label = ('%s%s %s'):format(prefix, icon, node.name)
 
   local note = node.note or ''
@@ -122,6 +124,16 @@ local function emit(lines, highlights, node)
   table.insert(rows, node.row)
 
   local line = #lines - 1
+  -- A leaf's marker is blank by default, and an extmark over nothing is one more thing for the
+  -- editor to keep track of on every row of a long tree.
+  if node.marker:match('%S') then
+    table.insert(highlights, {
+      line = line,
+      group = 'SqmeowMarker',
+      from = #indent,
+      to = #indent + #node.marker,
+    })
+  end
   table.insert(
     highlights,
     { line = line, group = icon_group, from = #prefix, to = #prefix + #icon }
