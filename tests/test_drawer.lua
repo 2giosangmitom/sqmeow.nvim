@@ -203,6 +203,75 @@ T['scratchpads']['open the file when chosen'] = function()
   drawer.open()
 end
 
+T['scratchpads']['open somewhere other than the drawer'] = function()
+  expand('scratchpads')
+  local sidebar = drawer.open()
+  vim.api.nvim_win_set_cursor(sidebar, { line_matching('notes'), 0 })
+  vim.api.nvim_set_current_win(sidebar)
+
+  drawer.actions.toggle()
+
+  -- A plain `:edit` would have opened the file in the window the key was pressed in, which is the
+  -- sidebar, replacing the tree with a SQL buffer.
+  eq(vim.api.nvim_get_current_win() ~= sidebar, true)
+  eq(vim.bo[vim.api.nvim_win_get_buf(sidebar)].filetype, 'sqmeow-drawer')
+  eq(drawer.is_open(), true)
+
+  vim.cmd.bwipeout()
+  drawer.open()
+end
+
+T['scratchpads']['are deleted once the question is answered'] = function()
+  local editor = require('sqmeow.ui.editor')
+  local answer = 'yes'
+  local select = vim.ui.select
+  vim.ui.select = function(_, _, on_choice)
+    on_choice(answer)
+  end
+  MiniTest.finally(function()
+    vim.ui.select = select
+  end)
+
+  expand('scratchpads')
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  drawer.actions.delete()
+
+  eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'notes.sql')), nil)
+  eq(lines()[line_matching('scratchpads')]:find('none saved') ~= nil, true)
+end
+
+T['scratchpads']['are left alone when the question is declined'] = function()
+  local editor = require('sqmeow.ui.editor')
+  local select = vim.ui.select
+  vim.ui.select = function(_, _, on_choice)
+    on_choice('no')
+  end
+  MiniTest.finally(function()
+    vim.ui.select = select
+  end)
+
+  expand('scratchpads')
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  drawer.actions.delete()
+
+  eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'notes.sql')) ~= nil, true)
+end
+
+T['scratchpads']['are not deleted from a row that is not one'] = function()
+  local called = false
+  local select = vim.ui.select
+  vim.ui.select = function()
+    called = true
+  end
+  MiniTest.finally(function()
+    vim.ui.select = select
+  end)
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
+  drawer.actions.delete()
+  eq(called, false)
+end
+
 T['scratchpads']['say so when there are none'] = function()
   vim.fn.delete(vim.fs.joinpath(require('sqmeow.ui.editor').directory(), 'notes.sql'))
   drawer.render()

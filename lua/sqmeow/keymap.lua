@@ -36,6 +36,7 @@ M.defaults = {
     { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified name' },
     { action = 'yank_select', lhs = 's', desc = 'Yank a SELECT for this relation' },
     { action = 'find', lhs = 'f', desc = 'Find a relation from here' },
+    { action = 'delete', lhs = 'd', desc = 'Delete the scratchpad under the cursor' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the drawer' },
   },

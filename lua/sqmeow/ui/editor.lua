@@ -69,15 +69,55 @@ end
 --- Used by the drawer and the picker, both of which already know where the file is and should not
 --- have to turn a name back into one.
 ---
+--- The window is chosen rather than assumed. A plain `:edit` opens in the current window, and the
+--- current window when the drawer's `<CR>` fires is the drawer itself, which would put a SQL file
+--- where the tree was.
+---
 ---@param path string
 ---@return integer buf
 function M.open_path(path)
+  require('sqmeow.ui.layout').editing_window()
   vim.cmd.edit(vim.fn.fnameescape(path))
-  local buf = vim.api.nvim_get_current_buf()
 
+  local buf = vim.api.nvim_get_current_buf()
   vim.bo[buf].filetype = 'sql'
   M.attach(buf)
   return buf
+end
+
+--- Delete a scratchpad.
+---
+--- The buffer goes with the file. Leaving it loaded would write the scratchpad back on the next
+--- `:w`, which is a confusing way to learn that a delete did not stick.
+---
+---@param path string
+---@return boolean removed
+---@return string|nil error
+function M.remove(path)
+  path = vim.fs.normalize(path)
+
+  -- Only ever a file this plugin wrote. A path from anywhere else reaching here would delete
+  -- something nobody was asked about.
+  if vim.fs.dirname(path) ~= vim.fs.normalize(M.directory()) then
+    return false, ('%s is not a scratchpad'):format(path)
+  end
+  if not vim.uv.fs_stat(path) then
+    return false, ('there is no scratchpad at %s'):format(path)
+  end
+
+  for _, handle in ipairs(vim.api.nvim_list_bufs()) do
+    if
+      vim.api.nvim_buf_is_valid(handle)
+      and vim.fs.normalize(vim.api.nvim_buf_get_name(handle)) == path
+    then
+      vim.api.nvim_buf_delete(handle, { force = true })
+    end
+  end
+
+  if vim.fn.delete(path) ~= 0 then
+    return false, ('could not delete %s'):format(path)
+  end
+  return true
 end
 
 --- Actions the scratchpad's keys are bound to.

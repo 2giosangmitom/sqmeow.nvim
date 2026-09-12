@@ -20,8 +20,16 @@ local function valid_buf()
   return valid(buf, vim.api.nvim_buf_is_valid)
 end
 
+--- Whether the result window is still the result window.
+---
+--- A valid handle is not enough. Something else can take a window over, which `:bdelete` on the
+--- buffer it held, a session restore, and a picker opening a file all do, and the window would
+--- then still be valid while showing someone else's buffer. Treating that as closed means the
+--- next query opens a window of its own rather than painting into whatever moved in.
 local function valid_win()
   return valid(win, vim.api.nvim_win_is_valid)
+    and valid_buf()
+    and vim.api.nvim_win_get_buf(win) == buf
 end
 
 --- How many lines of the buffer are header rather than data.
@@ -363,7 +371,7 @@ end
 --- Hide the result window, keeping what it holds.
 function M.close()
   if valid_win() then
-    vim.api.nvim_win_close(win, true)
+    require('sqmeow.ui.layout').close_window(win)
   end
   win = nil
 

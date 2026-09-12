@@ -204,6 +204,7 @@ drawer
  y         Yank the qualified name
  s         Yank a SELECT for this relation
  f         Find a relation from here
+ d         Delete the scratchpad under the cursor
  ?         Show these mappings
  q         Close the drawer
 

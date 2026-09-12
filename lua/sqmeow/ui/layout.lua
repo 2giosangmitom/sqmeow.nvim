@@ -45,6 +45,88 @@ function M.restore()
   end
 end
 
+--- Whether a window is somewhere an ordinary file could be opened.
+---
+--- The plugin's own surfaces all name themselves in their filetype, and none of them is a place
+--- for a file: the drawer is a sidebar and the result is a grid, and opening a file in either
+--- replaces a surface the user still wants to see. A float belongs to whoever opened it, and a
+--- window pinned to its buffer refuses a new one outright. Another tab is not this tab, and
+--- opening a file should not move anyone between them.
+---@param win integer
+---@return boolean
+local function usable(win)
+  if not vim.api.nvim_win_is_valid(win) then
+    return false
+  end
+  if vim.api.nvim_win_get_tabpage(win) ~= vim.api.nvim_get_current_tabpage() then
+    return false
+  end
+  if vim.api.nvim_win_get_config(win).relative ~= '' then
+    return false
+  end
+  -- `winfixbuf` only exists from Neovim 0.11, and reading it on an older one would error.
+  if vim.fn.exists('&winfixbuf') == 1 and vim.wo[win].winfixbuf then
+    return false
+  end
+
+  return vim.bo[vim.api.nvim_win_get_buf(win)].filetype:sub(1, 7) ~= 'sqmeow-'
+end
+
+--- A window an ordinary file belongs in.
+---
+--- Opening a scratchpad from the drawer must not put it in the drawer, which is what a plain
+--- `:edit` does, because the drawer is the window the key was pressed in.
+---
+--- A dashboard is a fair target: replacing one is what opening a file in it has always done.
+---
+---@return integer win Focused, and guaranteed to accept a file.
+function M.editing_window()
+  -- The current window first, because someone who ran a command from a window they can type in
+  -- meant that window. Then the one the plugin was opened from, which is where they were before a
+  -- surface took the focus. Then anything else in this tab.
+  local candidates = { vim.api.nvim_get_current_win() }
+  if saved then
+    table.insert(candidates, saved.win)
+  end
+  vim.list_extend(candidates, vim.api.nvim_tabpage_list_wins(0))
+
+  for _, win in ipairs(candidates) do
+    if usable(win) then
+      vim.api.nvim_set_current_win(win)
+      return win
+    end
+  end
+
+  -- Every window in this tab belongs to the plugin, so there is nowhere to put a file but a new
+  -- one. `vnew` and `new` rather than a split, which would clone the surface being avoided.
+  if vim.bo.filetype == 'sqmeow-drawer' then
+    -- Beside the sidebar, which is where an editor sits in the layout the sidebar is part of.
+    vim.cmd('rightbelow vnew')
+  else
+    vim.cmd('topleft new')
+  end
+
+  return vim.api.nvim_get_current_win()
+end
+
+--- Close one of the plugin's windows, or empty it when it is the last one left.
+---
+--- Neovim refuses to close the last window in a tab, and `q` in a result grid that happens to be
+--- the only window should not throw. Putting an ordinary buffer there instead leaves the user
+--- somewhere they can type, which is what closing the surface was for.
+---
+---@param win integer
+function M.close_window(win)
+  if not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+
+  if #vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win)) > 1 then
+    return vim.api.nvim_win_close(win, true)
+  end
+  vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))
+end
+
 --- Forget the recorded layout without applying it.
 function M.forget()
   saved = nil

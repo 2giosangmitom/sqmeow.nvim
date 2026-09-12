@@ -43,8 +43,9 @@ thousand tables opens as fast as one with ten.
 rather than a message that scrolls away.
 
 Every scratchpad you have written is listed in the drawer under its own heading, below the
-connections, and `<CR>` on one opens it. `:Sqmeow find scratchpads` is the same list as a fuzzy
-picker, and `:Sqmeow scratch <name>` opens or creates one under a name of your choosing.
+connections. `<CR>` on one opens it, in a real editing window rather than in the sidebar, and `d`
+deletes it after asking. `:Sqmeow find scratchpads` is the same list as a fuzzy picker, and
+`:Sqmeow scratch <name>` opens or creates one under a name of your choosing.
 
 `:Sqmeow export csv` writes the whole result to a file, and `:Sqmeow log` lists what has been run
 and puts any of it back on screen without running it again.

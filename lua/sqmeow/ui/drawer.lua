@@ -30,8 +30,16 @@ local function valid_buf()
   return buf ~= nil and vim.api.nvim_buf_is_valid(buf)
 end
 
+--- Whether the drawer window is still the drawer window.
+---
+--- A valid handle is not enough: something else can take a window over, and the tree would then
+--- be drawn into a buffer nobody is looking at. Treating that as closed means the next `:Sqmeow
+--- toggle` opens a sidebar rather than fighting over one.
 local function valid_win()
-  return win ~= nil and vim.api.nvim_win_is_valid(win)
+  return win ~= nil
+    and vim.api.nvim_win_is_valid(win)
+    and valid_buf()
+    and vim.api.nvim_win_get_buf(win) == buf
 end
 
 local function markers()
@@ -212,7 +220,7 @@ local function draw_scratchpads(lines, highlights, marks)
       marker = marks.leaf,
       kind = 'scratchpad',
       name = pad.name,
-      row = { kind = 'scratchpad', name = pad.name, path = pad.path, expandable = false },
+      row = { kind = 'scratchpad', name = pad.name, file = pad.path, expandable = false },
     })
   end
 end
@@ -299,7 +307,7 @@ function M.actions.toggle()
   end
 
   if node.kind == 'scratchpad' then
-    return require('sqmeow.ui.editor').open_path(node.path)
+    return require('sqmeow.ui.editor').open_path(node.file)
   end
   if not node.expandable then
     return
@@ -405,6 +413,33 @@ function M.actions.find()
   })
 end
 
+--- Delete the scratchpad under the cursor.
+---
+--- Asked first, because a scratchpad is a file the user wrote and deleting one cannot be undone.
+--- `no` is the first choice, so a `<CR>` meant for something else does nothing.
+function M.actions.delete()
+  local node = M.current_node()
+  if not node or node.kind ~= 'scratchpad' then
+    return
+  end
+
+  vim.ui.select({ 'no', 'yes' }, {
+    prompt = ('Delete the scratchpad `%s`?'):format(node.name),
+  }, function(answer)
+    if answer ~= 'yes' then
+      return
+    end
+
+    local removed, err = require('sqmeow.ui.editor').remove(node.file)
+    if not removed then
+      return vim.notify('sqmeow: ' .. err, vim.log.levels.ERROR)
+    end
+
+    vim.notify('sqmeow: deleted the scratchpad ' .. node.name)
+    M.render()
+  end)
+end
+
 --- Show the drawer's mappings.
 function M.actions.help()
   require('sqmeow.ui.help').open('drawer')
@@ -472,7 +507,7 @@ end
 --- Hide the drawer, keeping what it has loaded.
 function M.close()
   if valid_win() then
-    vim.api.nvim_win_close(win, true)
+    require('sqmeow.ui.layout').close_window(win)
   end
   win = nil
   require('sqmeow.ui.layout').restore()

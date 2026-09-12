@@ -243,4 +243,201 @@ T['layout']['waits for the last window before restoring'] = function()
   require('sqmeow.ui.drawer').close()
 end
 
+T['editing window'] = MiniTest.new_set({
+  hooks = {
+    post_case = function()
+      require('sqmeow.ui.result').close()
+      require('sqmeow.ui.drawer').close()
+      layout.forget()
+    end,
+  },
+})
+
+T['editing window']['is the current one when it can hold a file'] = function()
+  local here = vim.api.nvim_get_current_win()
+  eq(layout.editing_window(), here)
+end
+
+T['editing window']['is never the drawer'] = function()
+  local drawer = require('sqmeow.ui.drawer')
+  local sidebar = drawer.open()
+  vim.api.nvim_set_current_win(sidebar)
+
+  eq(layout.editing_window() ~= sidebar, true)
+end
+
+T['editing window']['is never the result grid'] = function()
+  local result = require('sqmeow.ui.result')
+  local grid = result.open()
+  vim.api.nvim_set_current_win(grid)
+
+  eq(layout.editing_window() ~= grid, true)
+end
+
+T['editing window']['is made when every window in the tab belongs to the plugin'] = function()
+  vim.cmd('tabnew')
+  MiniTest.finally(function()
+    vim.cmd('tabclose')
+  end)
+
+  -- The one window in this tab holds a plugin surface, so there is nowhere for a file to go.
+  -- Wiped afterwards: a stray buffer claiming to be one of ours is a plausible fallback for
+  -- Neovim to pick when some other buffer is deleted, which would confuse later cases.
+  local pretend = vim.api.nvim_get_current_buf()
+  vim.bo[pretend].filetype = 'sqmeow-result'
+  MiniTest.finally(function()
+    pcall(vim.api.nvim_buf_delete, pretend, { force = true })
+  end)
+
+  local before = #vim.api.nvim_tabpage_list_wins(0)
+  local chosen = layout.editing_window()
+
+  eq(#vim.api.nvim_tabpage_list_wins(0), before + 1)
+  eq(chosen, vim.api.nvim_get_current_win())
+  eq(vim.bo[vim.api.nvim_win_get_buf(chosen)].filetype, '')
+end
+
+T['editing window']['stays in the tab it was asked from'] = function()
+  local elsewhere = vim.api.nvim_get_current_win()
+
+  vim.cmd('tabnew')
+  MiniTest.finally(function()
+    vim.cmd('tabclose')
+  end)
+
+  eq(layout.editing_window() ~= elsewhere, true)
+end
+
+T['closing'] = MiniTest.new_set()
+
+T['closing']['empties the window rather than throwing when it is the last one'] = function()
+  vim.cmd('tabnew')
+  MiniTest.finally(function()
+    vim.cmd('tabclose')
+  end)
+
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, require('sqmeow.ui.result').buffer())
+
+  -- Neovim refuses to close the last window in a tab, and `q` in a result grid should not throw.
+  layout.close_window(win)
+
+  eq(vim.api.nvim_win_is_valid(win), true)
+  eq(vim.bo[vim.api.nvim_win_get_buf(win)].filetype, '')
+end
+
+T['closing']['closes the window when there is another'] = function()
+  vim.cmd('tabnew')
+  MiniTest.finally(function()
+    vim.cmd('tabclose')
+  end)
+
+  vim.cmd('split')
+  local win = vim.api.nvim_get_current_win()
+
+  layout.close_window(win)
+  eq(vim.api.nvim_win_is_valid(win), false)
+end
+
+T['surfaces'] = MiniTest.new_set({
+  hooks = {
+    post_case = function()
+      require('sqmeow.ui.result').close()
+      layout.forget()
+    end,
+  },
+})
+
+T['surfaces']['count as closed once something else takes their window'] = function()
+  local result = require('sqmeow.ui.result')
+  local win = result.open()
+  eq(result.is_open(), true)
+
+  -- A `:bdelete` elsewhere, a session restore, or a picker opening a file can all leave the
+  -- window valid while showing someone else's buffer. Painting a result into that would write
+  -- rows over whatever moved in.
+  vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(false, true))
+  eq(result.is_open(), false)
+end
+
+T['surfaces']['open a window of their own rather than taking one back'] = function()
+  local result = require('sqmeow.ui.result')
+  local taken = result.open()
+  vim.api.nvim_win_set_buf(taken, vim.api.nvim_create_buf(false, true))
+
+  local reopened = result.open()
+  eq(reopened ~= taken, true)
+  eq(vim.api.nvim_win_get_buf(reopened), result.buffer())
+
+  -- The window somebody else moved into is left exactly as it was.
+  eq(vim.api.nvim_win_is_valid(taken), true)
+  eq(vim.api.nvim_win_get_buf(taken) ~= result.buffer(), true)
+  vim.api.nvim_win_close(taken, true)
+end
+
+T['remove'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      vim.fn.mkdir(editor.directory(), 'p')
+    end,
+  },
+})
+
+T['remove']['deletes the file'] = function()
+  local path = vim.fs.joinpath(editor.directory(), 'doomed.sql')
+  vim.fn.writefile({ 'select 1' }, path)
+
+  eq(editor.remove(path), true)
+  eq(vim.uv.fs_stat(path), nil)
+end
+
+T['remove']['unloads the buffer, so a later write cannot bring it back'] = function()
+  local path = vim.fs.joinpath(editor.directory(), 'loaded.sql')
+  vim.fn.writefile({ 'select 1' }, path)
+
+  local buf = editor.open_path(path)
+  eq(editor.remove(path), true)
+  eq(vim.api.nvim_buf_is_valid(buf), false)
+end
+
+T['remove']['refuses a path outside the scratchpad directory'] = function()
+  local elsewhere = vim.fn.tempname()
+  vim.fn.writefile({ 'important' }, elsewhere)
+  MiniTest.finally(function()
+    vim.fn.delete(elsewhere)
+  end)
+
+  local removed, err = editor.remove(elsewhere)
+  eq(removed, false)
+  eq(err:find('is not a scratchpad') ~= nil, true)
+  eq(vim.uv.fs_stat(elsewhere) ~= nil, true)
+end
+
+T['remove']['says so when there is nothing there'] = function()
+  local removed, err = editor.remove(vim.fs.joinpath(editor.directory(), 'absent.sql'))
+  eq(removed, false)
+  eq(err:find('there is no scratchpad') ~= nil, true)
+end
+
+T['list'] = MiniTest.new_set()
+
+T['list']['names the saved files without their extension, newest first'] = function()
+  vim.fn.mkdir(editor.directory(), 'p')
+  for _, name in ipairs({ 'older', 'newer' }) do
+    vim.fn.writefile({ 'select 1' }, vim.fs.joinpath(editor.directory(), name .. '.sql'))
+  end
+  MiniTest.finally(function()
+    for _, name in ipairs({ 'older', 'newer' }) do
+      vim.fn.delete(vim.fs.joinpath(editor.directory(), name .. '.sql'))
+    end
+  end)
+
+  local names = vim.tbl_map(function(pad)
+    return pad.name
+  end, editor.list())
+
+  eq(vim.tbl_contains(names, 'older'), true)
+  eq(vim.tbl_contains(names, 'newer'), true)
+end
+
 return T
