@@ -167,4 +167,24 @@ T['lualine']['is a component and a condition over the same snapshot'] = function
   eq(component[1](), 'pg app')
 end
 
+T['lualine']['is findable by name on the runtime path'] = function()
+  -- The name is how a lazy.nvim spec reaches the component without calling `require` while the
+  -- spec is still being read, which is before any plugin is on the runtime path.
+  eq(#vim.api.nvim_get_runtime_file('lua/lualine/components/sqmeow.lua', false), 1)
+end
+
+T['lualine']['draws the same thing under its name as through the module'] = function()
+  if not pcall(require, 'lualine.component') then
+    MiniTest.skip('lualine is not installed')
+  end
+
+  local class = require('lualine.components.sqmeow')
+  local component = class({ self = { section = 'x' } })
+
+  eq(component.options.cond(), false)
+  connect()
+  eq(component.options.cond(), true)
+  eq(component:update_status(), 'pg app')
+end
+
 return T

@@ -3,6 +3,11 @@
 --- Added by the user, never by the plugin: a statusline is theirs to arrange, and a plugin that
 --- inserts itself into one is a plugin that has to be undone.
 ---
+--- Prefer naming it as a string, `lualine_x = { 'sqmeow' }`, which reaches the same component
+--- through the runtime path. A lazy.nvim spec is read before any plugin is on that path, so a
+--- `require` inside an `opts` table runs too early. This module is for configuring lualine
+--- somewhere a `require` is safe.
+---
 ---@usage >lua
 ---   require('lualine').setup({
 ---     sections = { lualine_x = { require('sqmeow.lualine') } },

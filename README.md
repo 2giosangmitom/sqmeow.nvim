@@ -109,16 +109,35 @@ time. A schema you cannot read is left out rather than emptying the list.
 `require('sqmeow.status').get()` returns a plain table: the connection, its dialect, what the last
 query is doing, and how big its result was. Anything that renders a statusline can read it.
 
-For lualine there is a component built on top of it:
+For lualine there is a component built on top of it, named `sqmeow`:
 
 ```lua
 require('lualine').setup({
-  sections = { lualine_x = { require('sqmeow.lualine') } },
+  sections = { lualine_x = { 'sqmeow' } },
 })
 ```
 
 It shows nothing until you connect, spins while a query runs, and reports the row count and how
 long it took when one finishes.
+
+Name it as a string rather than calling `require`. A lazy.nvim spec is read before any plugin is
+on the runtime path, so `require('sqmeow.lualine')` inside an `opts` table runs too early and the
+component never arrives:
+
+```lua
+{
+  'nvim-lualine/lualine.nvim',
+  -- lualine looks the component up by name when it is configured, so this plugin has to be on
+  -- the runtime path by then. That is all the dependency is for.
+  dependencies = { '2giosangmitom/sqmeow.nvim' },
+  opts = {
+    sections = { lualine_x = { 'sqmeow' } },
+  },
+}
+```
+
+`require('sqmeow.lualine')` returns the same component for anyone configuring lualine somewhere a
+`require` is safe.
 
 ## Icons and notifications
 

@@ -147,7 +147,7 @@ local function check_integrations()
   vim.health.info('icons need a Nerd Font; set `icons` if boxes appear in the drawer')
 
   if pcall(require, 'lualine') then
-    vim.health.ok("lualine: add `require('sqmeow.lualine')` to a section")
+    vim.health.ok("lualine: add `'sqmeow'` to a section")
   end
   if not configured.notify then
     vim.health.info('notifications are off; errors are still reported')
