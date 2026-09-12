@@ -39,9 +39,17 @@ M.subcommands = {
       -- Nothing saved and nothing open leaves only one useful question to ask.
       if #api.available() == 0 and #api.connections() == 0 then
         return vim.ui.input({ prompt = 'Database URL: ' }, function(entered)
-          if entered and entered ~= '' then
-            void(api.connect(entered))
+          if not entered or entered == '' then
+            return
           end
+          -- Asked rather than derived, because `app@db.internal` is what the connection would
+          -- otherwise be called everywhere it appears, and a name is cheaper to read than a host.
+          vim.ui.input(
+            { prompt = 'Call it: ', default = require('sqmeow.url').label(entered) },
+            function(name)
+              void(api.connect(entered, { name = name ~= '' and name or nil }))
+            end
+          )
         end)
       end
 
@@ -78,6 +86,53 @@ M.subcommands = {
           void(api.save(name, current.url))
         end
       end)
+    end,
+  },
+
+  edit = {
+    desc = 'Change a saved connection: what it is called, or where it points',
+    run = function(args)
+      local function prompt(spec)
+        vim.ui.input({ prompt = 'Call it: ', default = spec.name }, function(name)
+          if not name or name == '' then
+            return
+          end
+          vim.ui.input({ prompt = 'URL: ', default = spec.url }, function(url)
+            if not url or url == '' then
+              return
+            end
+            require('sqmeow.api').edit(spec.name, { name = name, url = url })
+          end)
+        end)
+      end
+
+      if args[1] then
+        local spec = require('sqmeow.sources').find(args[1])
+        if not spec then
+          return notify(
+            ('there is no configured connection named `%s`'):format(args[1]),
+            vim.log.levels.WARN
+          )
+        end
+        return prompt(spec)
+      end
+
+      require('sqmeow.pickers').connections({
+        prompt = 'Edit',
+        -- Only the saved ones: an open connection that was never saved has no entry to change.
+        only = 'saved',
+        on_choice = prompt,
+      })
+    end,
+    complete = function(lead)
+      local names = vim.tbl_map(function(connection)
+        return connection.name
+      end, (require('sqmeow.api').available()))
+
+      table.sort(names)
+      return vim.tbl_filter(function(name)
+        return name:find(lead, 1, true) == 1
+      end, names)
     end,
   },
 

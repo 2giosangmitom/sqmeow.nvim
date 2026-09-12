@@ -397,9 +397,47 @@ T['scratchpads']['are not renamed from a row that is not one'] = function()
     vim.ui.input = input
   end)
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
+  -- A schema is neither a scratchpad nor a connection, so there is no name of its own to change.
+  expand('scratch')
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('@ main'), 0 })
   drawer.actions.rename()
   eq(called, false)
+end
+
+T['connections'] = MiniTest.new_set()
+
+T['connections']['are renamed from the row that shows them'] = function()
+  local input = vim.ui.input
+  vim.ui.input = function(opts, on_confirm)
+    -- The current name is the default, so the prompt is somewhere to edit rather than to retype.
+    eq(opts.default, 'scratch')
+    on_confirm('local sqlite')
+  end
+  MiniTest.finally(function()
+    vim.ui.input = input
+    api.rename(state.current, 'scratch')
+    drawer.render()
+  end)
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
+  drawer.actions.rename()
+
+  eq(state.connections[state.current].name, 'local sqlite')
+  eq(lines()[1]:find('local sqlite', 1, true) ~= nil, true)
+end
+
+T['connections']['keep their name when the prompt is dismissed'] = function()
+  local input = vim.ui.input
+  vim.ui.input = function(_, on_confirm)
+    on_confirm(nil)
+  end
+  MiniTest.finally(function()
+    vim.ui.input = input
+  end)
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
+  drawer.actions.rename()
+  eq(state.connections[state.current].name, 'scratch')
 end
 
 T['scratchpads']['are deleted once the question is answered'] = function()

@@ -238,7 +238,7 @@ drawer
  y         Yank the qualified name
  s         Yank a SELECT for this relation
  f         Find a relation from here
- R         Rename the scratchpad under the cursor
+ R         Rename the connection or scratchpad under the cursor
  d         Delete the scratchpad under the cursor
  ?         Show these mappings
  q         Close the drawer
@@ -390,6 +390,38 @@ Parameters ~
 {url} `(string)`
 Return ~
 `(boolean)` written
+
+------------------------------------------------------------------------------
+                                                             *sqmeow.api.edit()*
+                      `sqmeow.api.edit`({name}, {changes})
+Change what a saved connection is called, or where it points.
+
+The saved entry and any open connection under that name are changed together, since a user who
+renames one of them meant both: they are one connection as far as anyone but this plugin is
+concerned.
+
+Parameters ~
+{name} `(string)` The name it is saved under now.
+{changes} `(table)` `name` and `url`; either may be left out to keep what is there.
+Return ~
+`(boolean)` written
+Usage ~
+>lua
+  require('sqmeow.api').edit('app', { name = 'production' })
+<
+------------------------------------------------------------------------------
+                                                           *sqmeow.api.rename()*
+                       `sqmeow.api.rename`({id}, {name})
+Change what an open connection is called.
+
+The name is the plugin's own: the engine keeps one for its log, and everything the user sees is
+drawn from here. So this is a local change, and nothing has to be reconnected for it.
+
+Parameters ~
+{id} `(integer)`
+{name} `(string)`
+Return ~
+`(boolean)` renamed
 
 ------------------------------------------------------------------------------
                                                        *sqmeow.api.disconnect()*
@@ -587,7 +619,8 @@ Open connections come first, since switching between them is the common case, an
 one is offered below so a connection is never more than one list away.
 
 Parameters ~
-{opts} `(table|nil)` Passed through to the picker.
+{opts} `(table|nil)` Passed through to the picker, plus `only = 'saved'` to leave out the open
+ones and `on_choice` to do something other than switch to what was chosen.
 
 ------------------------------------------------------------------------------
                                                     *sqmeow.pickers.relations()*

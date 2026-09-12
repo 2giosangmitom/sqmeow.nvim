@@ -73,6 +73,44 @@ function M.save(connections, opts)
   return true
 end
 
+--- Replace one connection, which may give it a different name.
+---
+--- Separate from `add` because a rename is two operations to a file keyed by name, and doing them
+--- as an add and a remove would lose the connection's place in the list, or leave two of it behind
+--- if the second half failed.
+---
+---@param name string The name it is saved under now.
+---@param connection sqmeow.ConnectionSpec What to save instead.
+---@param opts table|nil
+---@return boolean written
+---@return string|nil error
+function M.update(name, connection, opts)
+  local connections, err = M.load(opts)
+  if err then
+    return false, err
+  end
+
+  local found
+  for index, existing in ipairs(connections) do
+    if existing.name == name then
+      found = index
+      break
+    end
+  end
+  if not found then
+    return false, ('there is no saved connection called `%s`'):format(name)
+  end
+
+  for index, existing in ipairs(connections) do
+    if index ~= found and existing.name == connection.name then
+      return false, ('there is already a saved connection called `%s`'):format(connection.name)
+    end
+  end
+
+  connections[found] = { name = connection.name, url = connection.url }
+  return M.save(connections, opts)
+end
+
 --- Add one connection, keeping the rest.
 ---
 ---@param connection sqmeow.ConnectionSpec

@@ -123,6 +123,43 @@ T['file']['does not write back the source label it read'] = function()
   eq(written[1].source, nil)
 end
 
+T['file']['edits one connection in place'] = function()
+  file.add({ name = 'a', url = 'sqlite://a.db' }, { path = scratch })
+  file.add({ name = 'b', url = 'sqlite://b.db' }, { path = scratch })
+
+  eq(file.update('a', { name = 'first', url = 'sqlite://first.db' }, { path = scratch }), true)
+  only({ type = 'file', path = scratch })
+
+  local found = sources.load()
+  -- Renamed where it stood, rather than removed and appended, so the list keeps its order.
+  eq(found[1].name, 'first')
+  eq(found[1].url, 'sqlite://first.db')
+  eq(found[2].name, 'b')
+end
+
+T['file']['refuses to edit one that is not there'] = function()
+  file.add({ name = 'a', url = 'sqlite://a.db' }, { path = scratch })
+
+  local written, err = file.update('nope', { name = 'x', url = 'sqlite://x.db' }, {
+    path = scratch,
+  })
+  eq(written, false)
+  eq(err:find('nope', 1, true) ~= nil, true)
+end
+
+T['file']['refuses a rename onto a name already taken'] = function()
+  file.add({ name = 'a', url = 'sqlite://a.db' }, { path = scratch })
+  file.add({ name = 'b', url = 'sqlite://b.db' }, { path = scratch })
+
+  -- Two rows under one name is a list the loader cannot tell apart.
+  local written, err = file.update('a', { name = 'b', url = 'sqlite://a.db' }, { path = scratch })
+  eq(written, false)
+  eq(err:find('already', 1, true) ~= nil, true)
+
+  only({ type = 'file', path = scratch })
+  eq(#sources.load(), 2)
+end
+
 T['file']['reports malformed json'] = function()
   vim.fn.mkdir(vim.fs.dirname(scratch), 'p')
   vim.fn.writefile({ 'not json' }, scratch)
@@ -131,6 +168,61 @@ T['file']['reports malformed json'] = function()
   local found, problems = sources.load()
   eq(found, {})
   eq(#problems, 1)
+end
+
+T['editing'] = MiniTest.new_set({
+  hooks = {
+    post_case = function()
+      require('sqmeow.state').reset()
+    end,
+  },
+})
+
+T['editing']['changes the saved connection'] = function()
+  file.add({ name = 'app', url = 'sqlite://app.db' }, { path = scratch })
+  only({ type = 'file', path = scratch })
+
+  eq(require('sqmeow.api').edit('app', { name = 'production' }), true)
+
+  local found = sources.load()
+  eq(found[1].name, 'production')
+  -- Only what was named changed. A url left out of the table is the url it already had.
+  eq(found[1].url, 'sqlite://app.db')
+end
+
+T['editing']['renames an open connection along with the saved one'] = function()
+  local state = require('sqmeow.state')
+  file.add({ name = 'app', url = 'sqlite://app.db' }, { path = scratch })
+  only({ type = 'file', path = scratch })
+
+  local id = state.next_connection_id()
+  state.add_connection({
+    id = id,
+    name = 'app',
+    url = 'sqlite://app.db',
+    dialect = 'sqlite',
+    state = 'connected',
+  })
+
+  require('sqmeow.api').edit('app', { name = 'production' })
+  eq(state.connections[id].name, 'production')
+end
+
+T['editing']['refuses a connection no source declares'] = function()
+  only({ type = 'file', path = scratch })
+  eq(require('sqmeow.api').edit('nope', { name = 'x' }), false)
+end
+
+T['editing']['renames an open connection on its own'] = function()
+  local state = require('sqmeow.state')
+  local id = state.next_connection_id()
+  state.add_connection({ id = id, name = 'scratch', url = 'sqlite::memory:', state = 'connected' })
+
+  eq(require('sqmeow.api').rename(id, 'notes'), true)
+  eq(state.connections[id].name, 'notes')
+  -- An empty name would leave a row with nothing on it.
+  eq(require('sqmeow.api').rename(id, ''), false)
+  eq(require('sqmeow.api').rename(id + 99, 'nowhere'), false)
 end
 
 T['combining'] = MiniTest.new_set()

@@ -91,21 +91,39 @@ function M.find(name)
   return nil
 end
 
+--- The options of the configured file source.
+---
+--- The file source is the only writable one: a connection read from the environment or from
+--- dadbod belongs to whatever wrote it there, and this plugin has nowhere to put a change to it.
+local function writable()
+  for _, spec in ipairs(require('sqmeow.config').get().sources) do
+    if spec.type == 'file' then
+      return spec
+    end
+  end
+  return nil
+end
+
 --- Save a connection to the file source.
 ---
 ---@param connection sqmeow.ConnectionSpec
 ---@return boolean written
 ---@return string|nil error
 function M.save(connection)
-  local opts
-  for _, spec in ipairs(require('sqmeow.config').get().sources) do
-    if spec.type == 'file' then
-      opts = spec
-      break
-    end
-  end
+  return require('sqmeow.sources.file').add(
+    { name = connection.name, url = connection.url },
+    writable()
+  )
+end
 
-  return require('sqmeow.sources.file').add({ name = connection.name, url = connection.url }, opts)
+--- Change a saved connection, by the name it is saved under.
+---
+---@param name string
+---@param connection sqmeow.ConnectionSpec The name and url to save instead.
+---@return boolean written
+---@return string|nil error
+function M.update(name, connection)
+  return require('sqmeow.sources.file').update(name, connection, writable())
 end
 
 return M

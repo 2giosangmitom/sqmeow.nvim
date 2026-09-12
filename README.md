@@ -207,6 +207,16 @@ render them, and connecting rewrites its own message rather than stacking a seco
 with no argument offers everything the configured sources know about. Three sources ship with the
 plugin: inline connections from `setup()`, a JSON file, and a JSON environment variable.
 
+Every connection has a name, and the name is what appears in the drawer, the statusline and the
+pickers. Connecting to a URL you typed asks what to call it, offering the host and database as the
+default, so the sidebar reads `production` rather than `app@db.internal`. `:Sqmeow connect <url>
+<name>` says it up front instead.
+
+`R` on a connection in the drawer renames it, and `:Sqmeow edit [name]` changes both the name and
+the URL of a saved one. A rename reaches the saved entry and the open connection together, since
+they are one connection to everyone but this plugin. A changed URL takes effect on the next
+connect, which the plugin says at the time rather than leaving you to wonder.
+
 Passwords do not have to be written down. A URL may hold a directive that the engine expands when
 it connects, and never logs, echoes, or sends back to the editor:
 

@@ -22,14 +22,15 @@ end
 --- Open connections come first, since switching between them is the common case, and a configured
 --- one is offered below so a connection is never more than one list away.
 ---
----@param opts table|nil Passed through to the picker.
+---@param opts table|nil Passed through to the picker, plus `only = 'saved'` to leave out the open
+--- ones and `on_choice` to do something other than switch to what was chosen.
 function M.connections(opts)
   opts = opts or {}
   local api = require('sqmeow.api')
   local url = require('sqmeow.url')
 
   local items = {}
-  for _, connection in ipairs(api.connections()) do
+  for _, connection in ipairs(opts.only == 'saved' and {} or api.connections()) do
     table.insert(items, {
       kind = 'open',
       id = connection.id,
@@ -68,7 +69,7 @@ function M.connections(opts)
     preview = function(item)
       return { item.name, url.display(item.url), item.detail }
     end,
-    on_choice = function(item)
+    on_choice = opts.on_choice or function(item)
       if item.kind == 'open' then
         return api.use(item.id)
       end

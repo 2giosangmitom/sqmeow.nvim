@@ -86,6 +86,67 @@ function M.save(name, url)
   return written
 end
 
+--- Change what a saved connection is called, or where it points.
+---
+--- The saved entry and any open connection under that name are changed together, since a user who
+--- renames one of them meant both: they are one connection as far as anyone but this plugin is
+--- concerned.
+---
+---@param name string The name it is saved under now.
+---@param changes table `name` and `url`; either may be left out to keep what is there.
+---@return boolean written
+---@usage >lua
+---   require('sqmeow.api').edit('app', { name = 'production' })
+--- <
+function M.edit(name, changes)
+  local spec = require('sqmeow.sources').find(name)
+  if not spec then
+    notify(('there is no configured connection named `%s`'):format(name), vim.log.levels.WARN)
+    return false
+  end
+
+  local wanted = { name = changes.name or spec.name, url = changes.url or spec.url }
+  local written, err = require('sqmeow.sources').update(name, wanted)
+  if not written then
+    notify(err, vim.log.levels.ERROR)
+    return false
+  end
+
+  for _, connection in ipairs(M.connections()) do
+    if connection.name == name then
+      M.rename(connection.id, wanted.name)
+    end
+  end
+
+  -- A URL that changed reaches an open connection only on the next connect, and saying so beats
+  -- leaving the user to wonder why their query still goes to the old server.
+  if changes.url and changes.url ~= spec.url then
+    notify(('`%s` will use its new url the next time you connect'):format(wanted.name))
+  end
+  return true
+end
+
+--- Change what an open connection is called.
+---
+--- The name is the plugin's own: the engine keeps one for its log, and everything the user sees is
+--- drawn from here. So this is a local change, and nothing has to be reconnected for it.
+---
+---@param id integer
+---@param name string
+---@return boolean renamed
+function M.rename(id, name)
+  local state = require('sqmeow.state')
+  local connection = state.connections[id]
+  if not connection or name == '' then
+    return false
+  end
+
+  connection.name = name
+  require('sqmeow.ui.drawer').render()
+  require('sqmeow.ui.result').update_winbar(state.call)
+  return true
+end
+
 --- Close a connection.
 ---
 ---@param id integer|nil Defaults to the current connection.

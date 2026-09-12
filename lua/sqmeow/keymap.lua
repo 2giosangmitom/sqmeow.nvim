@@ -38,7 +38,7 @@ M.defaults = {
     { action = 'find', lhs = 'f', desc = 'Find a relation from here' },
     -- `r` refreshes on every surface, so renaming takes the shifted key rather than the one a
     -- user has already learned means something harmless.
-    { action = 'rename', lhs = 'R', desc = 'Rename the scratchpad under the cursor' },
+    { action = 'rename', lhs = 'R', desc = 'Rename the connection or scratchpad under the cursor' },
     { action = 'delete', lhs = 'd', desc = 'Delete the scratchpad under the cursor' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the drawer' },

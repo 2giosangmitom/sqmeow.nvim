@@ -463,12 +463,26 @@ function M.actions.find()
   })
 end
 
---- Rename the scratchpad under the cursor.
+--- Rename the connection or the scratchpad under the cursor.
 ---
 --- The current name is offered as the default, so the prompt is somewhere to edit rather than
 --- somewhere to retype, and leaving it alone changes nothing.
 function M.actions.rename()
   local node = M.current_node()
+  if node and node.kind ~= 'scratchpad' and node.conn_id and #node.path == 0 then
+    return vim.ui.input({ prompt = 'Call it: ', default = node.name }, function(name)
+      if not name or name == '' or name == node.name then
+        return
+      end
+      -- A connection that was saved under the old name is renamed with it, since a user who
+      -- renames what they are looking at meant the connection, not this session's copy of it.
+      if require('sqmeow.sources').find(node.name) then
+        return require('sqmeow.api').edit(node.name, { name = name })
+      end
+      require('sqmeow.api').rename(node.conn_id, name)
+    end)
+  end
+
   if not node or node.kind ~= 'scratchpad' then
     return
   end
