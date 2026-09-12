@@ -101,19 +101,22 @@ function M.start()
   local config = require('sqmeow.config').get()
 
   local path, source = install.resolve()
-  if not path and config.core.auto_install then
-    -- The first call that needs an engine is the moment to fetch one. Doing it at startup would
-    -- make a plugin nobody used that session pay for a download.
-    vim.notify('sqmeow: downloading the engine…')
-    local err
-    path, err = install.ensure()
-    source = 'managed'
-    if not path then
-      return nil, err
-    end
-  end
   if not path then
-    return nil, 'no engine binary found; run `:Sqmeow update` to download one'
+    -- The install is never waited on. Starting one and then blocking here would freeze the editor
+    -- for as long as the download took, which on a slow connection is minutes of a window that
+    -- does not repaint. The call that found no engine fails instead, and the user is told when
+    -- there is one to try again with.
+    local step = install.installing()
+    if step then
+      return nil, ('the engine is still being installed (%s)'):format(step)
+    end
+
+    if not config.core.auto_install then
+      return nil, 'no engine binary found; run `:Sqmeow update` to download one'
+    end
+
+    install.ensure()
+    return nil, 'the engine is being downloaded; try again once it is ready'
   end
 
   local spawned = vim.fn.jobstart({ path }, {

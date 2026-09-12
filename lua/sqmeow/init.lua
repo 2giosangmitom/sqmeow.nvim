@@ -106,6 +106,14 @@ function M.setup(opts)
 
   -- A running engine holds the old settings, so tell it about the new ones.
   require('sqmeow.rpc').configure()
+
+  -- Fetching only on first use would mean the call that wanted an engine is the one that has to
+  -- fail and be made again. Starting here usually has one ready before anything asks for it, and
+  -- it returns at once when there already is one, so a session that never opens a database pays
+  -- nothing for this beyond a `stat`.
+  if require('sqmeow.config').get().core.auto_install then
+    require('sqmeow.install').ensure()
+  end
 end
 
 --- Stop the engine. It restarts on the next call that needs it.

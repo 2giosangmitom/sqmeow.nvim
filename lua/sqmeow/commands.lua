@@ -315,18 +315,18 @@ M.subcommands = {
   update = {
     desc = 'Download the engine this plugin needs',
     run = function(args)
-      notify('fetching the engine…')
+      -- Nothing is said here, and nothing is waited for: the install reports each step it takes
+      -- and calls back when it is done, and the editor is usable throughout.
+      require('sqmeow.install').ensure({ force = true, version = args[1] }, function(path)
+        if not path then
+          return
+        end
 
-      local path, err = require('sqmeow.install').ensure({ force = true, version = args[1] })
-      if not path then
-        return notify(err, vim.log.levels.ERROR)
-      end
-
-      -- The old one is still running and still speaking the old protocol, so it has to go.
-      require('sqmeow.rpc').stop()
-      require('sqmeow.state').reset()
-      require('sqmeow.ui.drawer').reset()
-      notify('installed ' .. path)
+        -- The old one is still running and still speaking the old protocol, so it has to go.
+        require('sqmeow.rpc').stop()
+        require('sqmeow.state').reset()
+        require('sqmeow.ui.drawer').reset()
+      end)
     end,
   },
 

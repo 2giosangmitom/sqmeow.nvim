@@ -40,6 +40,12 @@ local function check_engine()
   local path, source = install.resolve()
 
   if not path then
+    local step = install.installing()
+    if step then
+      vim.health.warn(('the engine is being installed right now (%s)'):format(step))
+      return
+    end
+
     vim.health.error(
       'no engine binary found',
       { 'Run `:Sqmeow update` to download one', 'Or build one with `cargo build --release`' }
