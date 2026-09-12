@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.1](https://github.com/2giosangmitom/sqmeow.nvim/compare/v1.0.0...v1.0.1) (2026-09-12)
+
+
+### Fixes
+
+* **install:** don't freeze editor while download Rust binary ([097ae52](https://github.com/2giosangmitom/sqmeow.nvim/commit/097ae528abc6ea69c060eb269eaf2f7e32fce6c3))
+
+
+### Documentation
+
+* **readme:** use latest stable release ([fdee840](https://github.com/2giosangmitom/sqmeow.nvim/commit/fdee840d8d93e1a1c2cb39dfd3bf8ab07cc2e7ac))
+
 ## 1.0.0 (2026-09-12)
 
 
