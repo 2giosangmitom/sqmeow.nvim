@@ -38,6 +38,7 @@ M.defaults = {
     -- `r` refreshes on every surface, so renaming takes the shifted key rather than the one a
     -- user has already learned means something harmless.
     { action = 'rename', lhs = 'R', desc = 'Rename the connection or scratchpad under the cursor' },
+    { action = 'use', lhs = 'u', desc = 'Run queries against this connection' },
     { action = 'add', lhs = 'A', desc = 'Add a connection' },
     { action = 'edit', lhs = 'e', desc = 'Edit the connection under the cursor' },
     { action = 'delete', lhs = 'd', desc = 'Delete the scratchpad, or empty the query log' },

@@ -82,7 +82,7 @@ function M.reopen(entry)
     return require('sqmeow.api').reopen(entry.call_id)
   end
 
-  require('sqmeow.ui.editor').open_statement(entry.statement)
+  require('sqmeow.ui.editor').open_statement(entry.statement, entry.connection)
   vim.notify('sqmeow: the rows are long gone, so here is the query')
 end
 

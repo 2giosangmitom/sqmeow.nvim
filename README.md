@@ -178,6 +178,23 @@ is the quick version that changes only the name. `:Sqmeow edit [name]` opens the
 the command line. A saved URL is taken apart into the same fields it was built from, so editing
 shows the connection as it stands rather than a string to pick through.
 
+One connection is **active**, and its name is highlighted in the drawer. `u` makes the connection
+under the cursor active, `<CR>` does the same while opening the row out, and `:Sqmeow use [name]`
+does it from the command line.
+
+A scratchpad overrides that. It is opened for one database and named after it, so it runs there
+whatever else is active, and the line above it says which database that is:
+
+```
+ orders (postgres)
+select * from orders where total > 100;
+```
+
+Two scratchpads side by side therefore reach two databases with nothing switched between them.
+`:Sqmeow bind <name>` ties any other buffer to a connection the same way, and `:Sqmeow bind none`
+unties it. A buffer tied to a database that is not open refuses to run rather than quietly falling
+back, because running `staging.sql` against production is the mistake worth being loud about.
+
 A rename reaches the saved entry and the open connection together, since they are one connection to
 everyone but this plugin. A changed URL takes effect on the next connect, which the plugin says at
 the time rather than leaving you to wonder.

@@ -129,10 +129,17 @@ M.subcommands = {
     run = function(args)
       local api = require('sqmeow.api')
 
+      local function activate(id)
+        local connection = api.use(id)
+        if connection then
+          notify(('queries now run on %s'):format(connection.name))
+        end
+      end
+
       if args[1] then
         for _, connection in ipairs(api.connections()) do
           if connection.name == args[1] then
-            return api.use(connection.id)
+            return activate(connection.id)
           end
         end
         return notify(('nothing open is called `%s`'):format(args[1]), vim.log.levels.WARN)
@@ -150,9 +157,7 @@ M.subcommands = {
       local opened, err = require('sqmeow.ui.form').menu({
         title = 'Use',
         items = items,
-        on_choice = function(id)
-          api.use(id)
-        end,
+        on_choice = activate,
       })
       if not opened then
         notify(err, vim.log.levels.ERROR)
@@ -162,6 +167,52 @@ M.subcommands = {
       local names = vim.tbl_map(function(connection)
         return connection.name
       end, require('sqmeow.api').connections())
+
+      table.sort(names)
+      return vim.tbl_filter(function(name)
+        return name:find(lead, 1, true) == 1
+      end, names)
+    end,
+  },
+
+  bind = {
+    desc = 'Tie this buffer to one connection, or `none` to untie it',
+    run = function(args)
+      local name = args[1]
+
+      if name == 'none' then
+        vim.b.sqmeow_connection = nil
+        require('sqmeow.ui.editor').update_winbar()
+        return notify('this buffer follows the active connection again')
+      end
+
+      if not name then
+        local bound = vim.b.sqmeow_connection
+        return notify(
+          bound and ('this buffer runs on %s'):format(bound)
+            or 'this buffer follows the active connection'
+        )
+      end
+
+      if
+        not require('sqmeow.sources').find(name)
+        and not require('sqmeow.state').connection_by_name(name)
+      then
+        return notify(('there is no connection called `%s`'):format(name), vim.log.levels.WARN)
+      end
+
+      vim.b.sqmeow_connection = name
+      require('sqmeow.ui.editor').update_winbar()
+      notify(('this buffer runs on %s'):format(name))
+    end,
+    complete = function(lead)
+      local names = { 'none' }
+      for _, spec in ipairs((require('sqmeow.sources').load())) do
+        table.insert(names, spec.name)
+      end
+      for _, connection in ipairs(require('sqmeow.api').connections()) do
+        table.insert(names, connection.name)
+      end
 
       table.sort(names)
       return vim.tbl_filter(function(name)

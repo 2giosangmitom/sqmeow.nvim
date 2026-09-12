@@ -26,6 +26,7 @@ function M.on_connection(payload)
   connection.error = payload.error
 
   require('sqmeow.ui.drawer').render()
+  require('sqmeow.ui.editor').update_winbar()
 
   -- Connecting says nothing: the drawer already shows the dot beside the connection, and a line
   -- in the message area for something visible on screen is noise.

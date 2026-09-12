@@ -33,6 +33,30 @@ function M.path(name)
   return vim.fs.joinpath(M.directory(), M.slug(name) .. '.sql')
 end
 
+--- The connection a scratchpad belongs to.
+---
+--- Worked out from the file name, which is the connection's own name run through `M.slug`. Every
+--- connection the plugin knows about is checked, open or merely saved, so a scratchpad written for
+--- a database that is not open still knows which one it wants.
+---
+---@param path string
+---@return string|nil name
+function M.connection_for(path)
+  local slug = vim.fn.fnamemodify(path, ':t:r')
+
+  for _, connection in ipairs(require('sqmeow.state').connection_list()) do
+    if M.slug(connection.name) == slug then
+      return connection.name
+    end
+  end
+  for _, spec in ipairs((require('sqmeow.sources').load())) do
+    if M.slug(spec.name) == slug then
+      return spec.name
+    end
+  end
+  return nil
+end
+
 --- Every loaded buffer holding one file.
 ---
 ---@param path string Already normalised.
@@ -92,7 +116,7 @@ function M.open_path(path)
 
   local buf = vim.api.nvim_get_current_buf()
   vim.bo[buf].filetype = 'sql'
-  M.attach(buf)
+  M.attach(buf, M.connection_for(path))
   return buf
 end
 
@@ -103,8 +127,9 @@ end
 --- scratchpad's keys so running it again is `<CR>`.
 ---
 ---@param statement string
+---@param connection string|nil The connection it last ran on, so it goes back to the same one.
 ---@return integer buf
-function M.open_statement(statement)
+function M.open_statement(statement, connection)
   require('sqmeow.ui.layout').editing_window()
 
   local buf = vim.api.nvim_create_buf(true, true)
@@ -113,7 +138,7 @@ function M.open_statement(statement)
   vim.bo[buf].bufhidden = 'wipe'
 
   vim.api.nvim_win_set_buf(0, buf)
-  M.attach(buf)
+  M.attach(buf, connection)
   return buf
 end
 
@@ -233,9 +258,35 @@ M.actions = {
 --- be an unpleasant surprise; `<Plug>(sqmeow-execute)` is there for that.
 ---
 ---@param target integer
-function M.attach(target)
+---@param connection string|nil The database this buffer runs against, whatever else is active.
+function M.attach(target, connection)
   require('sqmeow.keymap').apply('editor', target, M.actions)
   vim.b[target].sqmeow_editor = true
+  vim.b[target].sqmeow_connection = connection
+  M.update_winbar()
+end
+
+--- Say which database the buffer under the cursor will run against.
+---
+--- On the scratchpad rather than only on the result window, because the result window may be
+--- closed, or showing something from another database entirely, at the moment someone presses
+--- `<CR>`. The one place a person is looking when they run a query is the query.
+function M.update_winbar()
+  if not require('sqmeow.config').get().ui.winbar then
+    return
+  end
+
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    -- Scratchpads, and any other buffer someone has tied to a connection with `:Sqmeow bind`.
+    if M.is_scratchpad(buf) or vim.b[buf].sqmeow_connection then
+      local connection, reason = require('sqmeow.api').target(buf)
+      local label = connection and ('%s (%s)'):format(connection.name, connection.dialect or '?')
+        or reason
+
+      vim.wo[win].winbar = ('%%#SqmeowWinbar# %s %%*'):format(label)
+    end
+  end
 end
 
 --- Open the scratchpad for a connection.

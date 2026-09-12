@@ -143,10 +143,26 @@ function M.remove_connection(id)
   end
 end
 
---- The connection queries run against.
+--- The active connection: the one a query runs on when nothing says otherwise.
 ---@return sqmeow.Connection|nil
 function M.current_connection()
   return M.current and M.connections[M.current] or nil
+end
+
+--- An open connection by the name the interface calls it.
+---
+--- Names rather than ids are what outlive an engine restart, so anything remembered in a buffer or
+--- a file holds one of these instead of an id.
+---
+---@param name string
+---@return sqmeow.Connection|nil
+function M.connection_by_name(name)
+  for _, connection in pairs(M.connections) do
+    if connection.name == name then
+      return connection
+    end
+  end
+  return nil
 end
 
 --- Every connection, ordered by id so the interface does not reshuffle between draws.

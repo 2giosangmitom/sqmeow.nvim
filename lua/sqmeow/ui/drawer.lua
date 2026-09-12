@@ -171,6 +171,13 @@ local function emit(lines, highlights, node)
     highlights,
     { line = line, group = icon_group, from = #prefix, to = #prefix + #icon }
   )
+  if node.name_group then
+    local from = #prefix + #icon + 1
+    table.insert(
+      highlights,
+      { line = line, group = node.name_group, from = from, to = from + #node.name }
+    )
+  end
   if note ~= '' then
     table.insert(highlights, { line = line, group = 'SqmeowNull', from = #label, to = -1 })
   end
@@ -354,6 +361,8 @@ function M.render()
   local lines, highlights = {}, {}
   rows = {}
 
+  local active = require('sqmeow.state').current
+
   for _, connection in ipairs(M.connection_rows()) do
     local open = connection.id ~= nil and M.is_expanded(connection.id, {})
     emit(lines, highlights, {
@@ -361,6 +370,9 @@ function M.render()
       badge = connection.connected and 'connected' or 'disconnected',
       kind = require('sqmeow.icons').connection_kind(connection.dialect),
       name = connection.name,
+      -- The active one is the database a query runs on unless the buffer names another, so it is
+      -- the one row in the tree worth telling apart from its neighbours.
+      name_group = connection.id == active and 'SqmeowActive' or nil,
       note = connection.dialect or connection.note,
       row = {
         conn_id = connection.id,
@@ -457,12 +469,16 @@ function M.actions.toggle()
   end
 
   if node.kind == 'connection' then
-    -- One key for the whole row. A connection that is not open, opens; one that is open becomes
-    -- the connection queries run against, and its schemas appear.
+    -- One key for the whole row. A connection that is not open, opens and becomes active; one that
+    -- is open becomes active, and its schemas appear.
     if not node.conn_id then
-      return require('sqmeow.api').connect_named(node.name)
+      local id = require('sqmeow.api').connect_named(node.name)
+      if id then
+        require('sqmeow.state').current = id
+      end
+      return
     end
-    require('sqmeow.api').use(node.conn_id)
+    M.actions.use()
   end
 
   if not node.expandable then
@@ -592,6 +608,25 @@ function M.actions.rename()
     vim.notify(('sqmeow: renamed %s to %s'):format(node.name, vim.fn.fnamemodify(renamed, ':t:r')))
     M.render()
   end)
+end
+
+--- Run queries against the connection under the cursor.
+---
+--- Separate from `<CR>`, which activates a connection as well but opens it out at the same time. A
+--- key that only switches is what you want when the tree is already arranged the way you like it.
+function M.actions.use()
+  local node = M.current_node()
+  if not node or node.kind ~= 'connection' then
+    return
+  end
+  if not node.conn_id then
+    return vim.notify(('sqmeow: `%s` is not open yet'):format(node.name), vim.log.levels.WARN)
+  end
+
+  local connection = require('sqmeow.api').use(node.conn_id)
+  if connection then
+    vim.notify(('sqmeow: queries now run on %s'):format(connection.name))
+  end
 end
 
 --- Add a connection.

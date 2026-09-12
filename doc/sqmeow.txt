@@ -12,6 +12,7 @@ touches a row of data, which is what keeps a large result from stalling the edit
 Contents ~
   Introduction ................................................. |sqmeow.nvim|
   Making a connection .................................... |sqmeow-connecting|
+  Which database a query runs on ............................. |sqmeow-active|
   The query log ............................................. |sqmeow-history|
   Configuration .............................................. |sqmeow-config|
   Keymaps ................................................... |sqmeow-keymaps|
@@ -36,6 +37,23 @@ The first thing it asks for is a name, and it suggests nothing: the name is what
 will call this database from now on, so it is yours to choose. The URL is never shown. >lua
   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
 <
+
+------------------------------------------------------------------------------
+                                                                 *sqmeow-active*
+Which database a query runs on ~
+
+One connection is active, and it is the one whose name is highlighted in the drawer. `u` in the
+drawer makes the connection under the cursor active, `<CR>` does it as well as opening the row
+out, and `:Sqmeow use [name]` does it from the command line.
+
+A scratchpad overrides that. It is opened for one database and named after it, so it runs there
+whatever else is active, and the line above it says which database that is. Two scratchpads
+side by side therefore reach two databases without anything being switched between them.
+
+`:Sqmeow bind <name>` ties any other buffer to a connection the same way, and `:Sqmeow bind
+none` unties it. A buffer tied to a database that is not open refuses to run rather than
+falling back to the active one, because running `staging.sql` against production is the mistake
+worth being loud about.
 
 ------------------------------------------------------------------------------
                                                                 *sqmeow-history*
@@ -279,6 +297,7 @@ drawer
  y         Yank the qualified name
  s         Yank a SELECT for this relation
  R         Rename the connection or scratchpad under the cursor
+ u         Run queries against this connection
  A         Add a connection
  e         Edit the connection under the cursor
  d         Delete the scratchpad, or empty the query log
@@ -475,12 +494,35 @@ Parameters ~
 ------------------------------------------------------------------------------
                                                               *sqmeow.api.use()*
                              `sqmeow.api.use`({id})
-Make a connection the one queries run against.
+Make a connection the active one.
+
+The active connection is what a query runs on when the buffer it came from does not name one of
+its own. Changing it redraws everything that says which database is in play, because a switch
+nobody can see is the same as no switch at all.
 
 Parameters ~
 {id} `(integer)`
 Return ~
-`(boolean)` changed
+`(sqmeow.Connection|nil)` connection The one now active, or nil if there is no such id.
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.api.target()*
+                           `sqmeow.api.target`({buf})
+Which connection a query from this buffer belongs to.
+
+A scratchpad is opened for one database and named after it, so it runs there whatever else is
+active. Anything else runs on the active connection.
+
+A buffer bound to a database that is not open is an error rather than a reason to fall back:
+running `staging.sql` against production because staging happens to be closed is the mistake
+this whole idea exists to prevent.
+
+Parameters ~
+{buf} `(integer|nil)` Defaults to the current buffer.
+Return ~
+`(sqmeow.Connection|nil)` connection
+Return ~
+`(string|nil)` error Why there is none.
 
 ------------------------------------------------------------------------------
                                                           *sqmeow.api.execute()*

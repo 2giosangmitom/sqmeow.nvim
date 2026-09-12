@@ -388,7 +388,11 @@ function M.update_winbar(summary)
     return
   end
 
-  local connection = require('sqmeow.state').current_connection()
+  -- The connection the result came from, not the active one. They differ the moment someone
+  -- switches, and relabelling an old grid with a database it never touched is a lie.
+  local state = require('sqmeow.state')
+  local connection = summary and summary.conn_id and state.connections[summary.conn_id]
+    or state.current_connection()
   local label = connection and ('%s (%s)'):format(connection.name, connection.dialect or '?')
     or 'not connected'
 

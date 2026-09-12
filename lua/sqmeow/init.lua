@@ -30,6 +30,23 @@
 ---@tag sqmeow-connecting
 ---@toc_entry Making a connection
 
+--- Which database a query runs on ~
+---
+--- One connection is active, and it is the one whose name is highlighted in the drawer. `u` in the
+--- drawer makes the connection under the cursor active, `<CR>` does it as well as opening the row
+--- out, and `:Sqmeow use [name]` does it from the command line.
+---
+--- A scratchpad overrides that. It is opened for one database and named after it, so it runs there
+--- whatever else is active, and the line above it says which database that is. Two scratchpads
+--- side by side therefore reach two databases without anything being switched between them.
+---
+--- `:Sqmeow bind <name>` ties any other buffer to a connection the same way, and `:Sqmeow bind
+--- none` unties it. A buffer tied to a database that is not open refuses to run rather than
+--- falling back to the active one, because running `staging.sql` against production is the mistake
+--- worth being loud about.
+---@tag sqmeow-active
+---@toc_entry Which database a query runs on
+
 --- The query log ~
 ---
 --- Every finished query is written to a file of JSON lines under `stdpath('state')`, so the log is

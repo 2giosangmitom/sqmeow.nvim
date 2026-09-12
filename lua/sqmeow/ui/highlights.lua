@@ -43,6 +43,8 @@ M.links = {
   -- colourscheme without this plugin naming a colour.
   SqmeowConnected = 'DiagnosticOk',
   SqmeowDisconnected = 'DiagnosticError',
+  -- The name of the connection a query runs on when the buffer does not name its own.
+  SqmeowActive = 'Title',
   SqmeowIconFunction = 'Function',
   SqmeowIconProcedure = 'Macro',
   SqmeowIconPostgres = 'Constant',

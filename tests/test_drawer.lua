@@ -167,11 +167,12 @@ T['tree']['colours the marker apart from the icon'] = function()
   line_matching('main')
 
   -- `v o s scratch  sqlite`: the marker, the dot saying the connection is open, the dialect
-  -- icon, and the trailing note, each in its own group.
+  -- icon, the name in the group that marks the active connection, and the trailing note.
   eq(marks_on(1), {
     { group = 'SqmeowMarker', from = 0, to = 1 },
     { group = 'SqmeowConnected', from = 2, to = 3 },
     { group = 'SqmeowIconSqlite', from = 4, to = 5 },
+    { group = 'SqmeowActive', from = 6, to = 13 },
     { group = 'SqmeowNull', from = 13, to = 21 },
   })
 end
@@ -286,6 +287,60 @@ T['actions']['preview a relation into the result window'] = function()
   -- grid the engine draws as well as the markers the drawer draws.
   local grid = vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
   eq(grid[1], ' id | name | score')
+end
+
+T['the active connection'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      require('sqmeow.api').connect('sqlite::memory:', { name = 'other' })
+      vim.wait(TIMEOUT, function()
+        return require('sqmeow.state').connection_by_name('other') ~= nil
+      end, 10)
+      drawer.render()
+    end,
+    post_case = function()
+      local other = require('sqmeow.state').connection_by_name('other')
+      if other then
+        require('sqmeow.api').disconnect(other.id)
+      end
+      drawer.render()
+    end,
+  },
+})
+
+--- The group of the name on a connection row, which says whether it is the active one.
+local function name_group(pattern)
+  for _, span in ipairs(marks_on(line_matching(pattern))) do
+    if span.group == 'SqmeowActive' then
+      return span.group
+    end
+  end
+  return nil
+end
+
+T['the active connection']['is the only one marked'] = function()
+  require('sqmeow.api').use(state.connection_by_name('scratch').id)
+  drawer.render()
+
+  eq(name_group('scratch'), 'SqmeowActive')
+  eq(name_group('other'), nil)
+end
+
+T['the active connection']['moves when another is chosen'] = function()
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('other'), 0 })
+  drawer.actions.use()
+
+  eq(state.current, state.connection_by_name('other').id)
+  eq(name_group('other'), 'SqmeowActive')
+  eq(name_group('scratch'), nil)
+end
+
+T['the active connection']['is left alone from a row that is not a connection'] = function()
+  local before = state.current
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratchpads'), 0 })
+  drawer.actions.use()
+
+  eq(state.current, before)
 end
 
 T['saved connections'] = MiniTest.new_set({

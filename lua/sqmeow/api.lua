@@ -161,20 +161,58 @@ function M.disconnect(id)
   state.remove_connection(id)
 end
 
---- Make a connection the one queries run against.
+--- Make a connection the active one.
+---
+--- The active connection is what a query runs on when the buffer it came from does not name one of
+--- its own. Changing it redraws everything that says which database is in play, because a switch
+--- nobody can see is the same as no switch at all.
 ---
 ---@param id integer
----@return boolean changed
+---@return sqmeow.Connection|nil connection The one now active, or nil if there is no such id.
 function M.use(id)
   local state = require('sqmeow.state')
-  if not state.connections[id] then
+  local connection = state.connections[id]
+  if not connection then
     notify(('there is no connection %d'):format(id), vim.log.levels.ERROR)
-    return false
+    return nil
   end
 
   state.current = id
   require('sqmeow.ui.result').update_winbar(state.call)
-  return true
+  require('sqmeow.ui.editor').update_winbar()
+  require('sqmeow.ui.drawer').render()
+  return connection
+end
+
+--- Which connection a query from this buffer belongs to.
+---
+--- A scratchpad is opened for one database and named after it, so it runs there whatever else is
+--- active. Anything else runs on the active connection.
+---
+--- A buffer bound to a database that is not open is an error rather than a reason to fall back:
+--- running `staging.sql` against production because staging happens to be closed is the mistake
+--- this whole idea exists to prevent.
+---
+---@param buf integer|nil Defaults to the current buffer.
+---@return sqmeow.Connection|nil connection
+---@return string|nil error Why there is none.
+function M.target(buf)
+  local state = require('sqmeow.state')
+  local bound = vim.b[buf or 0].sqmeow_connection
+
+  if bound then
+    local connection = state.connection_by_name(bound)
+    if connection then
+      return connection
+    end
+    return nil, ('`%s` is not open'):format(bound)
+  end
+
+  local connection = state.current_connection()
+  if connection then
+    return connection
+  end
+  return nil, 'connect to a database first'
 end
 
 --- Run SQL on the current connection.
@@ -190,12 +228,11 @@ end
 function M.execute(sql, opts)
   opts = opts or {}
   local state = require('sqmeow.state')
-  local connection = state.current_connection()
+  local connection, reason = M.target(opts.source_buf)
 
   if not connection then
-    local message = 'connect to a database first'
-    notify(message, vim.log.levels.ERROR)
-    return nil, message
+    notify(reason, vim.log.levels.ERROR)
+    return nil, reason
   end
   if sql:match('^%s*$') then
     return nil, 'there is nothing to run'

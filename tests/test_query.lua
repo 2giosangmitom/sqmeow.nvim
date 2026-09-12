@@ -13,8 +13,8 @@ local TIMEOUT = 5000
 ---
 --- A connection that fails is dropped from the mirrored state, so "settled" means either the entry
 --- reports a final state or it is gone.
-local function connect(url)
-  local id = assert(api.connect(url), 'the engine should accept the connection')
+local function connect(url, name)
+  local id = assert(api.connect(url, { name = name }), 'the engine should accept the connection')
   local settled = vim.wait(TIMEOUT, function()
     local connection = state.connections[id]
     return connection == nil or connection.state ~= 'connecting'
@@ -62,11 +62,15 @@ local function lines()
   return vim.list_slice(grid(), 3)
 end
 
+-- The connection everything but the last group runs on, and the buffer the suite starts in.
+local primary, second, home
+
 local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
       require('sqmeow').setup({ ui = { result = { page_size = 4 } } })
-      connect('sqlite::memory:')
+      home = vim.api.nvim_get_current_buf()
+      primary = connect('sqlite::memory:', 'first')
       run('create table people (id integer primary key, name text, score real, avatar blob)')
       run([[insert into people (id, name, score, avatar) values
               (1, 'alice', 9.5, x'deadbeef'),
@@ -452,6 +456,80 @@ T['row detail']['refuses a row past the end'] = function()
   })
   eq(columns, nil)
   eq(err ~= nil, true)
+end
+
+T['choosing a connection'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      second = connect('sqlite::memory:', 'second')
+    end,
+    post_case = function()
+      api.disconnect(second)
+      state.current = primary
+      -- Back to a buffer that names no connection, so one case cannot decide where the next
+      -- one's query goes. Earlier cases may have wiped the one the suite started in.
+      if not vim.api.nvim_buf_is_valid(home) then
+        home = vim.api.nvim_create_buf(false, true)
+      end
+      vim.api.nvim_set_current_buf(home)
+    end,
+  },
+})
+
+--- Run SQL from a buffer tied to one connection by name.
+---@return table|nil summary
+local function run_bound(name, sql)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buf)
+  vim.b[buf].sqmeow_connection = name
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { sql })
+
+  local call_id = api.execute_buffer()
+  if not call_id then
+    return nil
+  end
+
+  vim.wait(TIMEOUT, function()
+    return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
+  end, 10)
+  return state.call
+end
+
+T['choosing a connection']['falls to the active one when the buffer names none'] = function()
+  api.use(second)
+  eq(api.target().id, second)
+
+  api.use(primary)
+  eq(api.target().id, primary)
+end
+
+T['choosing a connection']['prefers what the buffer names'] = function()
+  -- The active connection is the first one, and the query still goes to the second.
+  api.use(primary)
+  local summary = run_bound('second', 'select 1 as one')
+
+  eq(summary.state, 'done')
+  eq(summary.conn_id, second)
+end
+
+T['choosing a connection']['refuses a buffer tied to something that is not open'] = function()
+  local summary = run_bound('gone', 'select 1 as one')
+  eq(summary, nil)
+
+  local _, err = api.target()
+  eq(err, '`gone` is not open')
+end
+
+T['choosing a connection']['names the result after the connection it came from'] = function()
+  api.use(second)
+  run('select 1 as one')
+
+  -- Switching afterwards must not relabel a grid that came from somewhere else.
+  api.use(primary)
+  result.update_winbar(state.call)
+
+  local winbar = vim.wo[result.open()].winbar
+  eq(winbar:find('second', 1, true) ~= nil, true)
 end
 
 return T

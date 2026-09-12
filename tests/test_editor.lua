@@ -243,6 +243,78 @@ T['layout']['waits for the last window before restoring'] = function()
   require('sqmeow.ui.drawer').close()
 end
 
+T['knowing where a query goes'] = MiniTest.new_set({
+  hooks = {
+    post_case = function()
+      state.reset()
+      require('sqmeow.config').apply({})
+      vim.cmd('silent! %bwipeout!')
+    end,
+  },
+})
+
+--- The winbar of the window showing a buffer, or nil when it has none.
+---@return string|nil
+local function winbar(buf)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      return vim.wo[win].winbar
+    end
+  end
+  return nil
+end
+
+T['knowing where a query goes']['ties a scratchpad to the connection it is named after'] = function()
+  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
+
+  local buf = editor.open('orders')
+  eq(vim.b[buf].sqmeow_connection, 'orders')
+end
+
+T['knowing where a query goes']['leaves a file that names no connection alone'] = function()
+  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
+
+  vim.fn.mkdir(editor.directory(), 'p')
+  local path = vim.fs.joinpath(editor.directory(), 'notes.sql')
+  vim.fn.writefile({ 'select 1' }, path)
+  MiniTest.finally(function()
+    vim.fn.delete(path)
+  end)
+
+  local buf = editor.open_path(path)
+  eq(vim.b[buf].sqmeow_connection, nil)
+end
+
+T['knowing where a query goes']['says so above the scratchpad'] = function()
+  state.add_connection({
+    id = 1,
+    name = 'orders',
+    url = 'postgres://x/orders',
+    dialect = 'postgres',
+    state = 'connected',
+  })
+
+  local buf = editor.open('orders')
+  eq(winbar(buf):find('orders (postgres)', 1, true) ~= nil, true)
+end
+
+T['knowing where a query goes']['says what is wrong when the connection is closed'] = function()
+  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
+  local buf = editor.open('orders')
+  state.remove_connection(1)
+  editor.update_winbar()
+
+  eq(winbar(buf):find('`orders` is not open', 1, true) ~= nil, true)
+end
+
+T['knowing where a query goes']['draws no winbar when the option is off'] = function()
+  require('sqmeow.config').apply({ ui = { winbar = false } })
+  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
+
+  local buf = editor.open('orders')
+  eq(winbar(buf), '')
+end
+
 T['opening everything'] = MiniTest.new_set({
   hooks = {
     post_case = function()
