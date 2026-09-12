@@ -15,13 +15,13 @@ services:
       timeout: 3s
       retries: 30
 
+  # The tests connect as root: MySQL 8 keeps binary logging on, so creating a stored function
+  # needs SUPER, which an ordinary account does not have.
   mysql:
     image: mysql:8
     environment:
       MYSQL_ROOT_PASSWORD: sqmeow
       MYSQL_DATABASE: sqmeow
-      MYSQL_USER: sqmeow
-      MYSQL_PASSWORD: sqmeow
     ports:
       - "53306:3306"
     healthcheck:

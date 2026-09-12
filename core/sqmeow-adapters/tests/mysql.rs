@@ -310,6 +310,8 @@ async fn lists_tables_and_views() {
 
 #[tokio::test]
 async fn lists_functions_and_procedures_apart() {
+    // Creating a function needs SUPER while binary logging is on, which is why the test server
+    // hands out its root account.
     let backend = connect(&server!()).await;
     run(&backend, "drop function if exists listed_fn").await;
     run(&backend, "drop procedure if exists listed_proc").await;

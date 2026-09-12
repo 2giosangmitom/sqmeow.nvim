@@ -47,7 +47,7 @@ test-rust:
         export SQMEOW_TEST_POSTGRES_URL="postgres://sqmeow:sqmeow@127.0.0.1:55432/sqmeow"
     fi
     if [ -n "$(docker compose ps --status running --quiet mysql 2>/dev/null)" ]; then
-        export SQMEOW_TEST_MYSQL_URL="mysql://sqmeow:sqmeow@127.0.0.1:53306/sqmeow"
+        export SQMEOW_TEST_MYSQL_URL="mysql://root:sqmeow@127.0.0.1:53306/sqmeow"
     fi
     cargo test --all-features
 
@@ -74,7 +74,7 @@ test-lua: build-debug
         export SQMEOW_TEST_POSTGRES_URL="postgres://sqmeow:sqmeow@127.0.0.1:55432/sqmeow"
     fi
     if [ -n "$(docker compose ps --status running --quiet mysql 2>/dev/null)" ]; then
-        export SQMEOW_TEST_MYSQL_URL="mysql://sqmeow:sqmeow@127.0.0.1:53306/sqmeow"
+        export SQMEOW_TEST_MYSQL_URL="mysql://root:sqmeow@127.0.0.1:53306/sqmeow"
     fi
     nvim --headless -u tests/minimal_init.lua -c "lua require('mini.test').setup(); MiniTest.run()"
 

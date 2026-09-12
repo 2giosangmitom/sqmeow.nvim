@@ -12,7 +12,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   SQMEOW_TEST_POSTGRES_URL: postgres://sqmeow:sqmeow@127.0.0.1:5432/sqmeow
-  SQMEOW_TEST_MYSQL_URL: mysql://sqmeow:sqmeow@127.0.0.1:3306/sqmeow
+  SQMEOW_TEST_MYSQL_URL: mysql://root:sqmeow@127.0.0.1:3306/sqmeow
 
 jobs:
   rust:
@@ -33,13 +33,12 @@ jobs:
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30
+      # Root, because creating a stored function needs SUPER while binary logging is on.
       mysql:
         image: mysql:8
         env:
           MYSQL_ROOT_PASSWORD: sqmeow
           MYSQL_DATABASE: sqmeow
-          MYSQL_USER: sqmeow
-          MYSQL_PASSWORD: sqmeow
         ports: ["3306:3306"]
         options: >-
           --health-cmd "mysqladmin ping -psqmeow"
@@ -74,13 +73,12 @@ jobs:
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30
+      # Root, because creating a stored function needs SUPER while binary logging is on.
       mysql:
         image: mysql:8
         env:
           MYSQL_ROOT_PASSWORD: sqmeow
           MYSQL_DATABASE: sqmeow
-          MYSQL_USER: sqmeow
-          MYSQL_PASSWORD: sqmeow
         ports: ["3306:3306"]
         options: >-
           --health-cmd "mysqladmin ping -psqmeow"
