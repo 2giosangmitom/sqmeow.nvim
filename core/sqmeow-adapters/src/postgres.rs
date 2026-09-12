@@ -15,7 +15,7 @@ use sqlx::{
 };
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
-    ResultSet, SchemaNode,
+    ResultSet, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -156,6 +156,37 @@ impl Adapter for PostgresAdapter {
                     _ => RelationKind::Other,
                 };
                 Some(RelationNode { name, kind })
+            })
+            .collect())
+    }
+
+    async fn routines(&self, schema: &str) -> Result<Vec<RoutineNode>> {
+        // `prokind` is a "char", and reading it as text here rather than as a byte keeps the
+        // decoding in SQL where the catalog's own spelling of it is obvious. Aggregates and
+        // window functions are left out: neither is something a user calls the way these are.
+        //
+        // Grouped, because overloads share a name. Three signatures of `format_date` are three
+        // rows in the catalog and one line worth showing in a tree.
+        let rows = sqlx::query(
+            "select p.proname as name,
+                    case p.prokind when 'p' then 'procedure' else 'function' end as kind
+             from pg_catalog.pg_proc p
+             join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+             where n.nspname = $1 and p.prokind in ('f', 'p')
+             group by p.proname, p.prokind
+             order by p.proname",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let name = row.try_get::<String, _>("name").ok()?;
+                let kind = row.try_get::<String, _>("kind").ok()?;
+                Some(crate::routine_node(name, &kind))
             })
             .collect())
     }

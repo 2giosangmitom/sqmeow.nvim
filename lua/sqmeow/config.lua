@@ -79,6 +79,14 @@ M.defaults = {
     scratchpads = '󰉋',
     scratchpad = '󰈙',
     query = '󰐊',
+    ['function'] = '󰊕',
+    procedure = '󰡱',
+
+    -- The headings a schema is drawn as, each above the things it holds.
+    tables = '󰓫',
+    views = '󰈈',
+    functions = '󰊕',
+    procedures = '󰡱',
 
     -- One per dialect, so a drawer holding three of them tells them apart without reading a word.
     postgres = '',

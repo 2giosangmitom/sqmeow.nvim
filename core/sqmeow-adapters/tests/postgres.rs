@@ -5,7 +5,7 @@
 //! `cargo test` still works on a machine with no Docker.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Error, RelationKind, ResultSet};
+use sqmeow_db::{Cell, Error, RelationKind, ResultSet, RoutineKind};
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -301,6 +301,46 @@ async fn lists_tables_and_views() {
         named("listed_view").map(|r| r.kind),
         Some(RelationKind::View)
     );
+}
+
+#[tokio::test]
+async fn lists_functions_and_procedures_apart() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop function if exists listed_fn(int)").await;
+    run(&backend, "drop function if exists listed_fn(text)").await;
+    run(&backend, "drop procedure if exists listed_proc()").await;
+    run(
+        &backend,
+        "create function listed_fn(x int) returns int language sql as $$ select x $$",
+    )
+    .await;
+    // A second signature under the same name, which the catalogue holds as its own row. The tree
+    // shows one line for it either way.
+    run(
+        &backend,
+        "create function listed_fn(x text) returns text language sql as $$ select x $$",
+    )
+    .await;
+    run(
+        &backend,
+        "create procedure listed_proc() language sql as $$ select 1 $$",
+    )
+    .await;
+
+    let routines = backend
+        .routines(SCHEMA)
+        .await
+        .expect("routines should load");
+    let kinds = |name: &str| {
+        routines
+            .iter()
+            .filter(|routine| routine.name == name)
+            .map(|routine| routine.kind)
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(kinds("listed_fn"), vec![RoutineKind::Function]);
+    assert_eq!(kinds("listed_proc"), vec![RoutineKind::Procedure]);
 }
 
 #[tokio::test]

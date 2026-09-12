@@ -92,9 +92,28 @@ function M.invalidate(conn_id, path)
   end
 end
 
+--- Kinds whose name says nothing the row above it has not already said.
+---
+--- A table sits under `Tables` and a function under `Functions`, so repeating the kind on every
+--- row is noise. What survives is the kind a group does not imply: a materialised view among the
+--- views, or a foreign table among the tables.
+local implied = {
+  schema = true,
+  table = true,
+  view = true,
+  ['function'] = true,
+  procedure = true,
+}
+
 local function annotate(node)
+  -- A group heading carries how many things it holds, which is the whole reason to draw one
+  -- before it is opened.
+  if node.count then
+    return ('(%d)'):format(node.count)
+  end
+
   if node.kind ~= 'column' then
-    return node.kind == 'schema' and '' or node.kind
+    return implied[node.kind] and '' or node.kind
   end
 
   local parts = { node.type_name }
@@ -168,7 +187,9 @@ local function draw(lines, highlights, conn_id, path, depth)
   local marks = require('sqmeow.icons').markers()
 
   for _, node in ipairs(entry.nodes or {}) do
-    local child = vim.list_extend(vim.list_slice(path, 1, #path), { node.name })
+    -- The engine's own word for the node, which for a group heading is not what is drawn:
+    -- `Tables` is a label, `tables` is what the engine matches on.
+    local child = vim.list_extend(vim.list_slice(path, 1, #path), { node.key or node.name })
     local marker = marks.leaf
     if node.expandable then
       marker = M.is_expanded(conn_id, child) and marks.open or marks.closed
@@ -185,6 +206,9 @@ local function draw(lines, highlights, conn_id, path, depth)
         path = child,
         name = node.name,
         kind = node.kind,
+        -- Only a group heading has one, so it doubles as how an action tells a heading apart
+        -- from something the database actually holds.
+        count = node.count,
         expandable = node.expandable == true,
       },
     })
@@ -301,6 +325,26 @@ end
 --- Actions the drawer's keys are bound to.
 M.actions = {}
 
+--- The parts of a node's path that name something in SQL.
+---
+--- The tree has a level the database does not: a relation sits under `Tables`, which is a heading
+--- rather than something anything is named after. Dropping it is what keeps a yanked name
+--- `"public"."users"` instead of `"public"."tables"."users"`.
+---
+---@param path string[]
+---@return string[]
+local function sql_parts(path)
+  if #path < 2 then
+    return path
+  end
+  return vim.list_extend({ path[1] }, vim.list_slice(path, 3, #path))
+end
+
+--- Whether a node is something a `SELECT` can name.
+local function is_relation(kind)
+  return kind == 'table' or kind == 'view' or kind == 'materialized view' or kind == 'relation'
+end
+
 --- Act on the node under the cursor.
 ---
 --- One key, because what the primary action is depends on the thing rather than on the user: a
@@ -356,7 +400,7 @@ end
 --- Run a `SELECT` over the relation under the cursor.
 function M.actions.preview()
   local node = M.current_node()
-  if not node or not node.path or #node.path ~= 2 then
+  if not node or not is_relation(node.kind) then
     return
   end
 
@@ -365,7 +409,7 @@ function M.actions.preview()
   api.execute(
     require('sqmeow.sql').select_from(
       dialect_of(node.conn_id),
-      node.path,
+      sql_parts(node.path),
       require('sqmeow.config').get().ui.result.page_size
     )
   )
@@ -374,11 +418,12 @@ end
 --- Copy the qualified name of the node under the cursor.
 function M.actions.yank_name()
   local node = M.current_node()
-  if not node or not node.path or #node.path == 0 then
+  -- A group heading names nothing, so there is nothing to copy from one.
+  if not node or not node.path or #node.path == 0 or node.count then
     return
   end
 
-  local name = require('sqmeow.sql').qualify(dialect_of(node.conn_id), node.path)
+  local name = require('sqmeow.sql').qualify(dialect_of(node.conn_id), sql_parts(node.path))
   vim.fn.setreg(vim.v.register or '"', name)
   vim.notify('sqmeow: yanked ' .. name)
 end
@@ -386,13 +431,13 @@ end
 --- Copy a `SELECT` for the relation under the cursor.
 function M.actions.yank_select()
   local node = M.current_node()
-  if not node or not node.path or #node.path ~= 2 then
+  if not node or not is_relation(node.kind) then
     return
   end
 
   local statement = require('sqmeow.sql').select_from(
     dialect_of(node.conn_id),
-    node.path,
+    sql_parts(node.path),
     require('sqmeow.config').get().ui.result.page_size
   )
   vim.fn.setreg(vim.v.register or '"', statement)

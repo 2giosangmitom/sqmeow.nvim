@@ -9,7 +9,10 @@ pub mod postgres;
 pub mod sqlite;
 mod stream;
 
-use sqmeow_db::{Adapter, ColumnNode, Dialect, Error, RelationNode, Result, ResultSet, SchemaNode};
+use sqmeow_db::{
+    Adapter, ColumnNode, Dialect, Error, RelationNode, Result, ResultSet, RoutineKind, RoutineNode,
+    SchemaNode,
+};
 use tokio_util::sync::CancellationToken;
 
 /// How long to keep trying to open a connection before giving up.
@@ -18,6 +21,19 @@ pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 pub use mysql::MySqlAdapter;
 pub use postgres::PostgresAdapter;
 pub use sqlite::SqliteAdapter;
+
+/// Turn a routine's name and the database's own word for what it is into a node.
+///
+/// Every dialect that has stored routines at all says "procedure" or "function" somewhere in its
+/// catalog, so the mapping is the same one three times and lives here rather than in each adapter.
+pub(crate) fn routine_node(name: String, kind: &str) -> RoutineNode {
+    let kind = if kind.eq_ignore_ascii_case("procedure") {
+        RoutineKind::Procedure
+    } else {
+        RoutineKind::Function
+    };
+    RoutineNode { name, kind }
+}
 
 /// One live connection, whichever database it is.
 #[derive(Debug)]
@@ -87,6 +103,15 @@ impl Backend {
             Self::Sqlite(adapter) => adapter.relations(schema).await,
             Self::Postgres(adapter) => adapter.relations(schema).await,
             Self::MySql(adapter) => adapter.relations(schema).await,
+        }
+    }
+
+    /// The stored functions and procedures in one schema.
+    pub async fn routines(&self, schema: &str) -> Result<Vec<RoutineNode>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.routines(schema).await,
+            Self::Postgres(adapter) => adapter.routines(schema).await,
+            Self::MySql(adapter) => adapter.routines(schema).await,
         }
     }
 

@@ -14,7 +14,7 @@ use sqlx::{
 };
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
-    ResultSet, SchemaNode,
+    ResultSet, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -152,6 +152,28 @@ impl Adapter for MySqlAdapter {
                     _ => RelationKind::Other,
                 };
                 Some(RelationNode { name, kind })
+            })
+            .collect())
+    }
+
+    async fn routines(&self, schema: &str) -> Result<Vec<RoutineNode>> {
+        let rows = sqlx::query(
+            "select routine_name as name, lower(routine_type) as kind
+             from information_schema.routines
+             where routine_schema = ?
+             order by routine_name",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::driver)?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let name = row.try_get::<String, _>("name").ok()?;
+                let kind = row.try_get::<String, _>("kind").ok()?;
+                Some(crate::routine_node(name, &kind))
             })
             .collect())
     }

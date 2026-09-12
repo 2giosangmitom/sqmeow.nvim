@@ -14,7 +14,7 @@ use sqlx::{
 };
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
-    ResultSet, SchemaNode,
+    ResultSet, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -159,6 +159,12 @@ impl Adapter for SqliteAdapter {
                 Some(RelationNode { name, kind })
             })
             .collect())
+    }
+
+    async fn routines(&self, _schema: &str) -> Result<Vec<RoutineNode>> {
+        // SQLite has no stored functions or procedures. An empty list rather than an error, so
+        // the drawer shows the groups as empty instead of failing the whole schema.
+        Ok(Vec::new())
     }
 
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {

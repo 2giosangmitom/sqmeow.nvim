@@ -101,6 +101,12 @@ local T = MiniTest.new_set({
           scratchpads = '+',
           scratchpad = '*',
           query = '>',
+          ['function'] = 'f',
+          procedure = 'p',
+          tables = 'T',
+          views = 'V',
+          functions = 'F',
+          procedures = 'P',
           postgres = 'p',
           mysql = 'm',
           sqlite = 's',
@@ -127,6 +133,17 @@ local T = MiniTest.new_set({
     end,
   },
 })
+
+--- Open a schema and the group a relation sits under, then the relation itself.
+---
+--- Three levels rather than two, because the tree groups a schema into Tables, Views, Functions
+--- and Procedures the way every database's own tooling does.
+local function open_relation(group, name)
+  expand('scratch')
+  expand('main')
+  expand(group)
+  expand(name)
+end
 
 T['tree'] = MiniTest.new_set()
 
@@ -155,17 +172,45 @@ T['tree']['expands a connection into its schemas'] = function()
   eq(lines()[2], '  > @ main')
 end
 
-T['tree']['expands a schema into its tables and views'] = function()
+T['tree']['expands a schema into groups that count what they hold'] = function()
+  expand('scratch')
   expand('main')
+  line_matching('Procedures')
+
+  local text = table.concat(lines(), '\n')
+  eq(text:find('T Tables%s+%(1%)') ~= nil, true)
+  eq(text:find('V Views%s+%(1%)') ~= nil, true)
+  -- SQLite has no stored routines at all, which the count says without being opened.
+  eq(text:find('F Functions%s+%(0%)') ~= nil, true)
+  eq(text:find('P Procedures%s+%(0%)') ~= nil, true)
+end
+
+T['tree']['leaves an empty group closed, since it opens onto nothing'] = function()
+  expand('scratch')
+  expand('main')
+  local number = line_matching('Functions')
+
+  -- The marker column is blank, the same as a leaf's, rather than a chevron that does nothing.
+  eq(lines()[number]:match('^%s*(%S)'), 'F')
+end
+
+T['tree']['expands a group into the relations it holds'] = function()
+  expand('scratch')
+  expand('main')
+  expand('Tables')
+  line_matching('people')
+
+  expand('Views')
   line_matching('adults')
 
   local text = table.concat(lines(), '\n')
-  eq(text:find('people%s+table') ~= nil, true)
-  eq(text:find('adults%s+view') ~= nil, true)
+  -- No kind beside either name: the group above it already said so.
+  eq(text:find('= people') ~= nil, true)
+  eq(text:find('~ adults') ~= nil, true)
 end
 
 T['tree']['expands a relation into its columns'] = function()
-  expand('people')
+  open_relation('Tables', 'people')
   line_matching('score')
 
   local text = table.concat(lines(), '\n')
@@ -175,7 +220,7 @@ T['tree']['expands a relation into its columns'] = function()
 end
 
 T['tree']['leaves a blank marker unmarked'] = function()
-  expand('people')
+  open_relation('Tables', 'people')
   local number = line_matching('score')
 
   -- A leaf's marker is a space, and an extmark over nothing is one more thing to track on every
@@ -186,21 +231,24 @@ T['tree']['leaves a blank marker unmarked'] = function()
 end
 
 T['tree']['collapses again'] = function()
+  open_relation('Tables', 'people')
   local before = #lines()
   collapse('people')
   eq(#lines() < before, true)
-  eq(drawer.is_expanded(state.current, { 'main', 'people' }), false)
+  eq(drawer.is_expanded(state.current, { 'main', 'tables', 'people' }), false)
 end
 
 T['actions'] = MiniTest.new_set()
 
 T['actions']['yank a qualified name'] = function()
+  open_relation('Tables', 'people')
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('people'), 0 })
   drawer.actions.yank_name()
   eq(vim.fn.getreg('"'), '"main"."people"')
 end
 
 T['actions']['yank a select for a relation'] = function()
+  open_relation('Tables', 'people')
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('people'), 0 })
   drawer.actions.yank_select()
   eq(vim.fn.getreg('"'), 'select * from "main"."people" limit 100')
@@ -214,6 +262,7 @@ T['actions']['do nothing on a node that is not a relation'] = function()
 end
 
 T['actions']['preview a relation into the result window'] = function()
+  open_relation('Tables', 'people')
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('people'), 0 })
   drawer.actions.preview()
 

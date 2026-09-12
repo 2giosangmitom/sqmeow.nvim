@@ -66,9 +66,12 @@ counts as a statement has one answer rather than one per side.
 **`page`** takes either an absolute `offset` in rows or a `delta` in pages, never both. Paging past
 either end settles on the first or last page rather than emptying the view.
 
-**`introspect`** takes a path of at most two parts. An empty path asks for the connection's schemas,
-`[schema]` for its relations, and `[schema, relation]` for its columns. One level at a time, on
-demand.
+**`introspect`** takes a path of at most three parts, one level at a time and on demand. An empty
+path asks for the connection's schemas. `[schema]` answers with four group headings, `tables`,
+`views`, `functions` and `procedures`, each carrying how many things it holds. `[schema, group]`
+answers with what that group holds, and `[schema, group, relation]` with a relation's columns. The
+group is a heading rather than something the database names anything after, so it takes no part in
+a qualified name.
 
 **`catalog`** asks for every relation in every schema at once, which is what the relation picker
 searches. The engine holds the answer on the connection, so a second call is free; `refresh` reads
@@ -129,7 +132,9 @@ The same summary, sent once the buffer has been written.
 ### `schema:nodes`
 
 `conn_id`, `path`, `nodes`, and `error` when the level could not be read. Every node carries `name`,
-`kind` and `expandable`; a column also carries `type_name`, `nullable` and `primary_key`.
+`kind` and `expandable`. A group heading also carries `count` and a `key`, which is the word the
+path is built from rather than the label that is drawn: `Tables` is shown, `tables` is sent back. A
+column also carries `type_name`, `nullable` and `primary_key`.
 
 ### `schema:catalog`
 

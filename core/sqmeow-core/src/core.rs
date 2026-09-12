@@ -11,7 +11,8 @@ use std::time::Instant;
 use rmpv::Value;
 use sqmeow_adapters::Backend;
 use sqmeow_db::{
-    CatalogEntry, Cell, ColumnNode, Error as DbError, RelationNode, ResultSet, SchemaNode, sql,
+    CatalogEntry, Cell, ColumnNode, Error as DbError, RelationKind, RelationNode, ResultSet,
+    RoutineKind, RoutineNode, SchemaNode, sql,
 };
 use sqmeow_render::export::{Format, Rows};
 use sqmeow_render::{GridStylePatch, Layout, export};
@@ -320,8 +321,8 @@ impl Core {
         };
         // An empty path means the connection itself, whose children are its schemas.
         let path = args.opt_strings("path").unwrap_or_default();
-        if path.len() > 2 {
-            return reply.err("a schema path is at most [schema, relation]");
+        if path.len() > 3 {
+            return reply.err("a schema path is at most [schema, group, relation]");
         }
 
         let Some(connection) = self.session.connection(conn_id) else {
@@ -340,12 +341,10 @@ impl Core {
     async fn run_introspect(self: Arc<Self>, connection: Arc<Connection>, path: Vec<String>) {
         let nodes = match path.as_slice() {
             [] => connection.backend.schemas().await.map(schema_nodes),
-            [schema] => connection
-                .backend
-                .relations(schema)
-                .await
-                .map(relation_nodes),
-            [schema, relation] => connection
+            [schema] => group_nodes(&connection, schema).await,
+            [schema, group] => members(&connection, schema, group).await,
+            // The group a relation sits under says nothing about its columns, so it is skipped.
+            [schema, _group, relation] => connection
                 .backend
                 .columns(schema, relation)
                 .await
@@ -735,6 +734,106 @@ fn schema_nodes(schemas: Vec<SchemaNode>) -> Vec<Value> {
                 ("kind", Value::from("schema")),
                 ("expandable", Value::from(true)),
                 ("is_default", Value::from(schema.is_default)),
+            ])
+        })
+        .collect()
+}
+
+/// The four groups a schema is drawn as, each with how many things it holds.
+///
+/// The counts are what makes the groups worth having: `Functions (0)` answers the question without
+/// being opened, and a schema of three hundred tables says so before it is expanded into them.
+/// Reading them costs the two queries that expanding a group would have cost anyway.
+async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>, DbError> {
+    let relations = connection.backend.relations(schema).await?;
+    let routines = connection.backend.routines(schema).await?;
+
+    let tables = relations.iter().filter(|r| is_table(r.kind)).count();
+    let views = relations.len() - tables;
+    let procedures = routines
+        .iter()
+        .filter(|r| r.kind == RoutineKind::Procedure)
+        .count();
+    let functions = routines.len() - procedures;
+
+    Ok(vec![
+        group_node("tables", "Tables", tables),
+        group_node("views", "Views", views),
+        group_node("functions", "Functions", functions),
+        group_node("procedures", "Procedures", procedures),
+    ])
+}
+
+/// Whether a relation belongs under Tables rather than under Views.
+///
+/// Anything the server reports that is neither a table nor a view, such as a foreign table, goes
+/// with the tables: it is queried the same way, and a group of its own for one row would be noise.
+fn is_table(kind: RelationKind) -> bool {
+    !matches!(kind, RelationKind::View | RelationKind::MaterializedView)
+}
+
+/// What one group holds.
+async fn members(
+    connection: &Connection,
+    schema: &str,
+    group: &str,
+) -> Result<Vec<Value>, DbError> {
+    match group {
+        "tables" | "views" => {
+            let want_tables = group == "tables";
+            let relations = connection.backend.relations(schema).await?;
+            Ok(relation_nodes(
+                relations
+                    .into_iter()
+                    .filter(|relation| is_table(relation.kind) == want_tables)
+                    .collect(),
+            ))
+        }
+        "functions" | "procedures" => {
+            let want = if group == "procedures" {
+                RoutineKind::Procedure
+            } else {
+                RoutineKind::Function
+            };
+            let routines = connection.backend.routines(schema).await?;
+            Ok(routine_nodes(
+                routines
+                    .into_iter()
+                    .filter(|routine| routine.kind == want)
+                    .collect(),
+            ))
+        }
+        // Only reachable if the plugin invents a path, since every group it can ask for came
+        // from a node this engine emitted. An error line beats a group that opens onto nothing.
+        other => Err(DbError::driver(format!("no `{other}` group in a schema"))),
+    }
+}
+
+/// One group heading.
+///
+/// `key` is what the path is built from and `name` is what is drawn, so the engine matches on a
+/// stable word rather than on whatever the drawer happens to print. An empty group is not
+/// expandable: opening it would show nothing, and the count already says why.
+fn group_node(key: &str, name: &str, count: usize) -> Value {
+    map(vec![
+        ("key", Value::from(key)),
+        ("name", Value::from(name)),
+        ("kind", Value::from(key)),
+        ("expandable", Value::from(count > 0)),
+        ("count", Value::from(count as u64)),
+    ])
+}
+
+fn routine_nodes(routines: Vec<RoutineNode>) -> Vec<Value> {
+    routines
+        .into_iter()
+        .map(|routine| {
+            map(vec![
+                ("name", Value::from(routine.name)),
+                ("kind", Value::from(routine.kind.name())),
+                // A routine is a leaf. Its body and its arguments are not something the drawer
+                // shows, and pretending otherwise would open onto nothing.
+                ("expandable", Value::from(false)),
             ])
         })
         .collect()

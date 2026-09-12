@@ -4,7 +4,7 @@
 //! `SQMEOW_TEST_MYSQL_URL` these tests report that they were skipped rather than failing.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Error, RelationKind, ResultSet};
+use sqmeow_db::{Cell, Error, RelationKind, ResultSet, RoutineKind};
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -306,6 +306,33 @@ async fn lists_tables_and_views() {
         named("listed_view").map(|r| r.kind),
         Some(RelationKind::View)
     );
+}
+
+#[tokio::test]
+async fn lists_functions_and_procedures_apart() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop function if exists listed_fn").await;
+    run(&backend, "drop procedure if exists listed_proc").await;
+    run(
+        &backend,
+        "create function listed_fn(x int) returns int deterministic return x",
+    )
+    .await;
+    run(&backend, "create procedure listed_proc() select 1").await;
+
+    let routines = backend
+        .routines(SCHEMA)
+        .await
+        .expect("routines should load");
+    let kind = |name: &str| {
+        routines
+            .iter()
+            .find(|routine| routine.name == name)
+            .map(|routine| routine.kind)
+    };
+
+    assert_eq!(kind("listed_fn"), Some(RoutineKind::Function));
+    assert_eq!(kind("listed_proc"), Some(RoutineKind::Procedure));
 }
 
 #[tokio::test]

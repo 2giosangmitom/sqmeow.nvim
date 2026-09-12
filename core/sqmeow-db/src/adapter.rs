@@ -9,7 +9,7 @@ use std::future::Future;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::Result;
-use crate::node::{ColumnNode, RelationNode, SchemaNode};
+use crate::node::{ColumnNode, RelationNode, RoutineNode, SchemaNode};
 use crate::result::ResultSet;
 
 /// Which SQL dialect a connection speaks.
@@ -77,6 +77,12 @@ pub trait Adapter: Send + Sync {
 
     /// The tables and views in one schema.
     fn relations(&self, schema: &str) -> impl Future<Output = Result<Vec<RelationNode>>> + Send;
+
+    /// The stored functions and procedures in one schema.
+    ///
+    /// A database with no stored routines at all answers with an empty list rather than an error,
+    /// so the drawer can show the group as empty instead of broken.
+    fn routines(&self, schema: &str) -> impl Future<Output = Result<Vec<RoutineNode>>> + Send;
 
     /// The columns of one relation.
     ///

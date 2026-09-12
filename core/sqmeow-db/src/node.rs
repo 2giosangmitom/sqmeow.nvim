@@ -28,6 +28,34 @@ impl RelationKind {
     }
 }
 
+/// What kind of routine a schema holds.
+///
+/// A function returns a value and a procedure is called for its effect. Which of the two something
+/// is decides nothing the plugin does with it yet, but the drawer groups them apart because that
+/// is how every database's own tooling presents them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutineKind {
+    Function,
+    Procedure,
+}
+
+impl RoutineKind {
+    /// The name the editor uses for this kind.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Procedure => "procedure",
+        }
+    }
+}
+
+/// A stored function or procedure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutineNode {
+    pub name: String,
+    pub kind: RoutineKind,
+}
+
 /// A schema, or for MySQL a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaNode {

@@ -33,9 +33,25 @@ page through them, `K` opens the row under the cursor down the page so long valu
 full, `yc` and `yr` yank a cell or a row, and `q` closes the window. `:Sqmeow cancel` stops a query
 that is taking too long.
 
-`:Sqmeow toggle` opens the schema drawer: connections, then schemas, then tables and views, then
-columns with their types and keys. Each level loads when you expand it, so a database with ten
-thousand tables opens as fast as one with ten.
+`:Sqmeow toggle` opens the schema drawer. A connection holds schemas, a schema holds four headings,
+and each heading says how many things it holds before you open it:
+
+```
+v postgres-db
+  v broadcast
+    > Tables (13)
+    > Views (2)
+      Functions (0)
+      Procedures (0)
+  > company
+  > public
+```
+
+Under Tables and Views are the relations, and under a relation its columns with their types and
+keys. Functions and Procedures are the stored routines the schema holds, which SQLite has none of.
+An empty heading stays closed, because opening it would show nothing and the count already said so.
+Every level loads when you expand it, so a database with ten thousand tables opens as fast as one
+with ten.
 
 `:Sqmeow scratch` opens a scratchpad for the current connection, an ordinary `sql` file under
 `stdpath('data')` that survives a restart. In it, `<CR>` runs the statement the cursor is in and

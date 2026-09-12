@@ -300,6 +300,14 @@ async fn lists_tables_and_views_but_not_its_own_bookkeeping() {
 }
 
 #[tokio::test]
+async fn has_no_routines_to_list() {
+    let backend = database().await;
+    // SQLite has no stored functions or procedures, and saying so with an empty list is what lets
+    // the drawer draw the groups as empty rather than as broken.
+    assert_eq!(backend.routines("main").await.expect("no error"), vec![]);
+}
+
+#[tokio::test]
 async fn lists_columns_in_their_declared_order() {
     let backend = seeded().await;
     let columns = backend
