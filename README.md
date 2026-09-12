@@ -26,11 +26,9 @@ _sqmeow.nvim_ is a database client for Neovim: a Lua frontend over a Rust engine
 - ⌨️ No global keymaps. Every key is buffer-local, described, and yours to change.
 - 🧩 No dependency on any other plugin except nui.nvim, and that one is optional.
 
-<!-- ## 🎬 Preview -->
-<!---->
-<!-- <details open> -->
-<!-- <summary>Click to toggle preview</summary> -->
-<!-- </details> -->
+## 🎬 Preview
+
+![preview](./assets/preview.webp)
 
 ## 🚀 Installation
 
