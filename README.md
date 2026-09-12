@@ -40,6 +40,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 {
   '2giosangmitom/sqmeow.nvim',
   dependencies = { 'MunifTanjim/nui.nvim' },
+  version = "*", -- Use latest release instead of commit
   opts = {},
 }
 ```
