@@ -42,7 +42,7 @@ local function check_engine()
   if not path then
     local step = install.installing()
     if step then
-      vim.health.warn(('the engine is being installed right now (%s)'):format(step))
+      vim.health.warn('the engine is ' .. step)
       return
     end
 

@@ -117,14 +117,18 @@ end
 --- The engine cannot be started while this is true, so callers use it to tell a user who is
 --- waiting on a download from one who has no engine at all.
 ---
----@return string|nil step What it is doing, or nil when nothing is running.
+---@return string|nil step One of 'downloading', 'unpacking' or 'building', or nil when idle.
 function M.installing()
   return running and running.step or nil
 end
 
 --- The Rust target triple for this machine.
 ---
---- Reported the way `rustc` names it, because that is what the release archives are named after.
+--- Named the way the release archives are, since matching one of them is the only thing this is
+--- for. Linux is musl rather than gnu: the release workflow builds statically against musl so the
+--- binary is not tied to a distribution newer than the one running it, and a triple of `gnu` here
+--- would match nothing in the manifest and send every Linux user to a cargo build instead.
+---
 --- An unrecognised pair answers with nil rather than a guess: downloading the wrong binary fails
 --- in a much more confusing way than not downloading one at all.
 ---
@@ -141,7 +145,7 @@ function M.triple()
     aarch64 = 'aarch64',
   }
   local systems = {
-    Linux = 'unknown-linux-gnu',
+    Linux = 'unknown-linux-musl',
     Darwin = 'apple-darwin',
     Windows_NT = 'pc-windows-msvc',
   }
@@ -221,6 +225,12 @@ function M.fetch(url, destination, opts, callback)
     -- Reading stderr as it arrives is what turns curl's bar into a percentage, so it cannot also
     -- be collected into the result; the tail of it is kept by hand for the error message.
     local tail = {}
+
+    -- curl redraws its bar by returning to the start of the line, so a carriage return is what
+    -- ends one. A chunk can arrive split through the middle of a number, and reading that half
+    -- would show 5.9% in the middle of a download that is really at 65.9%, so an unfinished tail
+    -- is carried over to the next chunk instead of being matched.
+    local carry = ''
     local function on_stderr(_, data)
       if not data then
         return
@@ -229,11 +239,21 @@ function M.fetch(url, destination, opts, callback)
       if #tail > 4 then
         table.remove(tail, 1)
       end
+      if not opts.label then
+        return
+      end
 
-      local percent = data:match('(%d+%.%d)%%[^%%]*$')
-      if percent and opts.label then
+      carry = carry .. data
+      local latest
+      for bar in carry:gmatch('([^\r\n]*)[\r\n]') do
+        latest = bar:match('(%d+%.%d)%%%s*$') or latest
+      end
+      carry = carry:match('[^\r\n]*$') or ''
+
+      if latest then
         vim.schedule(function()
-          progress(('%s %s%%'):format(opts.label, percent))
+          -- Right-aligned, so the line does not jitter as the number grows.
+          progress(('%s %5s%%'):format(opts.label, latest))
         end)
       end
     end
@@ -330,9 +350,9 @@ function M.download(opts, callback)
   end
 
   if running then
-    running.step = 'looking up the release'
+    running.step = 'downloading'
   end
-  progress('looking up the engine for ' .. triple)
+  progress('downloading ' .. M.binary)
 
   M.manifest(opts.version, function(targets, manifest_err)
     if not targets then
@@ -347,13 +367,10 @@ function M.download(opts, callback)
     local directory = vim.fs.dirname(M.managed_path())
     vim.fn.mkdir(directory, 'p')
 
-    local name = vim.fs.basename(entry.url)
-    local archive = vim.fs.joinpath(directory, name)
-    if running then
-      running.step = 'downloading ' .. name
-    end
+    local archive = vim.fs.joinpath(directory, vim.fs.basename(entry.url))
+    local label = 'downloading ' .. M.binary
 
-    M.fetch(entry.url, archive, { label = 'downloading ' .. name }, function(ok, fetch_err)
+    M.fetch(entry.url, archive, { label = label }, function(ok, fetch_err)
       if not ok then
         return callback(nil, fetch_err)
       end
@@ -370,9 +387,9 @@ function M.download(opts, callback)
       end
 
       if running then
-        running.step = 'unpacking ' .. name
+        running.step = 'unpacking'
       end
-      progress('unpacking ' .. name)
+      progress('unpacking ' .. M.binary)
 
       M.unpack(archive, directory, function(unpacked, unpack_err)
         vim.fn.delete(archive)
@@ -401,9 +418,9 @@ function M.build(callback)
   end
 
   if running then
-    running.step = 'building with cargo'
+    running.step = 'building'
   end
-  progress('no prebuilt engine matched, so cargo is building one; this takes a few minutes')
+  progress(('building %s with cargo, which takes a few minutes'):format(M.binary))
 
   spawn({ 'cargo', 'build', '--release' }, { cwd = root, text = true }, function(result)
     if result.code ~= 0 then
@@ -437,21 +454,21 @@ function M.ensure(opts, callback)
   if running then
     return callback(nil, ('an engine is already being installed (%s)'):format(running.step))
   end
-  running = { step = 'starting' }
+  running = { step = 'downloading' }
 
   local function finish(path, err)
     running = nil
     progress(nil)
     if path then
-      notify('the engine is ready')
+      notify(M.binary .. ' installed')
     else
-      notify(err or 'the engine could not be installed', vim.log.levels.ERROR)
+      notify(err or ('%s could not be installed'):format(M.binary), vim.log.levels.ERROR)
     end
     callback(path, err)
   end
 
-  notify('the engine is missing, so it is being downloaded; the editor stays usable meanwhile')
-
+  -- Nothing is said at the start. The progress line is already saying what is happening, and a
+  -- notification as well would be the same thing twice in two places.
   M.download(opts, function(path, download_err)
     if path then
       return finish(path)

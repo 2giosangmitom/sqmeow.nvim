@@ -108,7 +108,7 @@ function M.start()
     -- there is one to try again with.
     local step = install.installing()
     if step then
-      return nil, ('the engine is still being installed (%s)'):format(step)
+      return nil, 'the engine is ' .. step
     end
 
     if not config.core.auto_install then
@@ -116,7 +116,7 @@ function M.start()
     end
 
     install.ensure()
-    return nil, 'the engine is being downloaded; try again once it is ready'
+    return nil, 'the engine is downloading'
   end
 
   local spawned = vim.fn.jobstart({ path }, {

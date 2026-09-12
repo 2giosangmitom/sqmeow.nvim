@@ -11,7 +11,9 @@ T['triple']['names this machine the way rustc does'] = function()
 
   local architecture, system = triple:match('^([^%-]+)%-(.+)$')
   eq(vim.tbl_contains({ 'x86_64', 'aarch64' }, architecture), true)
-  eq(vim.tbl_contains({ 'unknown-linux-gnu', 'apple-darwin', 'pc-windows-msvc' }, system), true)
+  -- These are the systems the release workflow builds for, and the manifest is keyed by them.
+  -- Linux is musl, not gnu: asking for gnu matches nothing and sends every Linux user to a build.
+  eq(vim.tbl_contains({ 'unknown-linux-musl', 'apple-darwin', 'pc-windows-msvc' }, system), true)
 end
 
 T['manifest_url'] = MiniTest.new_set()
@@ -144,7 +146,7 @@ T['ensure']['turns away a second install while one is running'] = function()
     err = e
   end)
 
-  eq(nested, 'an engine is already being installed (starting)')
+  eq(nested, 'an engine is already being installed (downloading)')
   release()
   eq(err, 'the download failed; no cargo')
 
@@ -169,7 +171,7 @@ T['installing']['names the step, so a caller can say what is holding it up'] = f
   end
 
   install.ensure({ force = true }, function() end)
-  eq(install.installing(), 'starting')
+  eq(install.installing(), 'downloading')
   release('/somewhere/sqmeow-core')
   eq(install.installing(), nil)
 end
