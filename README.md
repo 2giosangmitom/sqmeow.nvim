@@ -12,9 +12,31 @@ large result from stalling the editor.
 ## Requirements
 
 - Neovim 0.10 or newer
+- [nui.nvim](https://github.com/MunifTanjim/nui.nvim) for the connection dialog, optional
 - No database client tools, and no Rust toolchain once prebuilt engines ship
 
+```lua
+{ '2giosangmitom/sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
+```
+
 ## Trying it
+
+`:Sqmeow add` asks which database you are connecting to, then asks for the details one field at a
+time and writes the URL for you:
+
+```
+        ╭──────── New PostgreSQL connection ─────────╮
+        │  Host      db.internal                     │
+        │  Port      5432                            │
+        │  Database  shop                            │
+        │  User      app                             │
+        │  Password  *******                         │
+        │  Options   sslmode=require                 │
+        │  Name      shop@db.internal                │
+        ╰──── <CR> edit   <C-s> save   q cancel ─────╯
+```
+
+Or give a URL directly:
 
 ```vim
 :Sqmeow connect sqlite://./app.db
@@ -93,6 +115,7 @@ vim.keymap.set('n', '<leader>de', '<Plug>(sqmeow-execute)')
 vim.keymap.set('n', '<leader>dc', '<Plug>(sqmeow-cancel)')
 vim.keymap.set('n', '<leader>dr', '<Plug>(sqmeow-relations)')
 vim.keymap.set('n', '<leader>dh', '<Plug>(sqmeow-history)')
+vim.keymap.set('n', '<leader>da', '<Plug>(sqmeow-add-connection)')
 ```
 
 ## Pickers
@@ -212,10 +235,18 @@ pickers. Connecting to a URL you typed asks what to call it, offering the host a
 default, so the sidebar reads `production` rather than `app@db.internal`. `:Sqmeow connect <url>
 <name>` says it up front instead.
 
-`R` on a connection in the drawer renames it, and `:Sqmeow edit [name]` changes both the name and
-the URL of a saved one. A rename reaches the saved entry and the open connection together, since
-they are one connection to everyone but this plugin. A changed URL takes effect on the next
-connect, which the plugin says at the time rather than leaving you to wonder.
+`A` in the drawer opens the dialog, `e` opens the connection under the cursor for editing, and `R`
+is the quick version that changes only the name. `:Sqmeow edit [name]` opens the same dialog from
+the command line. A saved URL is taken apart into the same fields it was built from, so editing
+shows the connection as it stands rather than a string to pick through.
+
+A rename reaches the saved entry and the open connection together, since they are one connection to
+everyone but this plugin. A changed URL takes effect on the next connect, which the plugin says at
+the time rather than leaving you to wonder.
+
+The dialog needs nui.nvim. Without it the rest of the plugin works and connections are made with a
+URL, which is also what happens for a URL holding a template, since splitting one into fields would
+throw the template away.
 
 Passwords do not have to be written down. A URL may hold a directive that the engine expands when
 it connects, and never logs, echoes, or sends back to the editor:

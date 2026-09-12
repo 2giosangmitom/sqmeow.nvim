@@ -146,6 +146,15 @@ local function check_integrations()
   -- rather than claiming an answer. A wrong icon is visible the moment the drawer opens.
   vim.health.info('icons need a Nerd Font; set `icons` if boxes appear in the drawer')
 
+  if require('sqmeow.ui.form').available() then
+    vim.health.ok('nui.nvim: the connection dialog is available')
+  else
+    vim.health.warn(
+      'nui.nvim is not installed, so `:Sqmeow add` cannot open',
+      { 'install MunifTanjim/nui.nvim' }
+    )
+  end
+
   if pcall(require, 'lualine') then
     vim.health.ok("lualine: add `'sqmeow'` to a section")
   end
@@ -156,21 +165,12 @@ end
 
 --- Which dialect a URL scheme belongs to, or nil if none does.
 ---
---- Mirrors what the engine accepts. Kept here so the health check can answer offline, before the
---- engine has been started.
+--- Answered from the dialect list rather than by asking the engine, so the health check works
+--- before the engine has been started.
 ---@param scheme string
 ---@return string|nil
 function M.dialect_of(scheme)
-  local dialects = {
-    sqlite = 'sqlite',
-    sqlite3 = 'sqlite',
-    file = 'sqlite',
-    postgres = 'postgres',
-    postgresql = 'postgres',
-    mysql = 'mysql',
-    mariadb = 'mysql',
-  }
-  return dialects[scheme:lower()]
+  return require('sqmeow.dialects').from_scheme(scheme)
 end
 
 --- Entry point for `:checkhealth sqmeow`.

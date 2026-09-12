@@ -10,6 +10,27 @@
 --- Contents ~
 ---@toc
 
+--- Making a connection ~
+---
+--- `:Sqmeow add` opens a dialog: a menu of the databases the engine speaks, and then a form of
+--- named fields. The URL is assembled from the answers, so a password holding a `#` needs no
+--- escaping and nobody has to remember where the colon goes. A password is drawn as asterisks
+--- both while it is typed and afterwards.
+---
+--- The same dialog is on `A` in the drawer, and `e` there opens the connection under the cursor
+--- for editing. A saved URL is taken apart into the same fields, so what opens is the connection
+--- as it stands.
+---
+--- The dialog is built on nui.nvim, which is the plugin's one optional dependency. Without it
+--- everything else works and `:Sqmeow connect <url>` still takes a URL directly.
+---
+--- Leaving the name empty names the connection after its database and host, which is what the
+--- plugin would have called it anyway. >lua
+---   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
+--- <
+---@tag sqmeow-connecting
+---@toc_entry Making a connection
+
 local M = {}
 
 --- The configuration the user passed, kept unmerged for `:checkhealth`.

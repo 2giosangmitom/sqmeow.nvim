@@ -39,6 +39,8 @@ M.defaults = {
     -- `r` refreshes on every surface, so renaming takes the shifted key rather than the one a
     -- user has already learned means something harmless.
     { action = 'rename', lhs = 'R', desc = 'Rename the connection or scratchpad under the cursor' },
+    { action = 'add', lhs = 'A', desc = 'Add a connection' },
+    { action = 'edit', lhs = 'e', desc = 'Edit the connection under the cursor' },
     { action = 'delete', lhs = 'd', desc = 'Delete the scratchpad under the cursor' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the drawer' },
@@ -98,6 +100,12 @@ M.plug = {
     desc = 'Stop the running query',
     run = function()
       require('sqmeow.api').cancel()
+    end,
+  },
+  ['sqmeow-add-connection'] = {
+    desc = 'Add a connection',
+    run = function()
+      require('sqmeow.ui.connection').create()
     end,
   },
   ['sqmeow-connections'] = {

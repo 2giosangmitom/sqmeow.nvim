@@ -2,15 +2,21 @@
 
 default: lint test docs-check
 
-# Clone the test and documentation dependency.
+# Clone the plugins the tests and the documentation need.
 deps:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -d .deps/mini.nvim ]; then
-        git -C .deps/mini.nvim pull --quiet
-    else
-        git clone --filter=blob:none --depth 1 https://github.com/nvim-mini/mini.nvim .deps/mini.nvim
-    fi
+    clone() {
+        if [ -d ".deps/$2" ]; then
+            git -C ".deps/$2" pull --quiet
+        else
+            git clone --filter=blob:none --depth 1 "$1" ".deps/$2"
+        fi
+    }
+    # mini.nvim supplies the test harness and the documentation generator.
+    clone https://github.com/nvim-mini/mini.nvim mini.nvim
+    # nui.nvim is what the connection dialog is built on.
+    clone https://github.com/MunifTanjim/nui.nvim nui.nvim
 
 # Compile the engine in release mode, which is what the plugin prefers to load.
 build:

@@ -24,6 +24,12 @@ M.links = {
   SqmeowError = 'ErrorMsg',
   SqmeowMarker = 'Comment',
 
+  -- The connection dialog. The edit box follows `Visual` so it reads as the one field being
+  -- worked on, whatever the colourscheme.
+  SqmeowFormLabel = 'Label',
+  SqmeowFormValue = 'Normal',
+  SqmeowFormEdit = 'Visual',
+
   SqmeowIconConnection = 'Directory',
   SqmeowIconSchema = 'Directory',
   SqmeowIconTable = 'Type',

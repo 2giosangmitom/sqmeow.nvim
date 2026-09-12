@@ -111,6 +111,7 @@ jobs:
       # The suite drives a real engine over a real channel, so it needs one built first.
       - run: cargo build
       - run: git clone --filter=blob:none --depth 1 https://github.com/nvim-mini/mini.nvim .deps/mini.nvim
+      - run: git clone --filter=blob:none --depth 1 https://github.com/MunifTanjim/nui.nvim .deps/nui.nvim
       # A data directory of its own, because scratchpads live under `stdpath('data')`.
       - run: nvim --headless -u tests/minimal_init.lua -c "lua require('mini.test').setup(); MiniTest.run()"
         env:
@@ -129,6 +130,7 @@ jobs:
           version: stable
 
       - run: git clone --filter=blob:none --depth 1 https://github.com/nvim-mini/mini.nvim .deps/mini.nvim
+      - run: git clone --filter=blob:none --depth 1 https://github.com/MunifTanjim/nui.nvim .deps/nui.nvim
 
       # The help file is committed, because plugin managers do not run build steps and
       # `:help sqmeow` has to work on a fresh install. This is what keeps it current: a pull

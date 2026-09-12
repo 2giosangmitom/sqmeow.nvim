@@ -36,21 +36,10 @@ M.subcommands = {
         return void(api.connect_named(target))
       end
 
-      -- Nothing saved and nothing open leaves only one useful question to ask.
+      -- Nothing saved and nothing open means there is nothing to pick from, so the only useful
+      -- thing to offer is the dialog that makes one.
       if #api.available() == 0 and #api.connections() == 0 then
-        return vim.ui.input({ prompt = 'Database URL: ' }, function(entered)
-          if not entered or entered == '' then
-            return
-          end
-          -- Asked rather than derived, because `app@db.internal` is what the connection would
-          -- otherwise be called everywhere it appears, and a name is cheaper to read than a host.
-          vim.ui.input(
-            { prompt = 'Call it: ', default = require('sqmeow.url').label(entered) },
-            function(name)
-              void(api.connect(entered, { name = name ~= '' and name or nil }))
-            end
-          )
-        end)
+        return require('sqmeow.ui.connection').create()
       end
 
       require('sqmeow.pickers').connections({ prompt = 'Connect to' })
@@ -64,6 +53,13 @@ M.subcommands = {
       return vim.tbl_filter(function(name)
         return name:find(lead, 1, true) == 1
       end, names)
+    end,
+  },
+
+  add = {
+    desc = 'Add a connection, choosing the database and filling in a form',
+    run = function()
+      require('sqmeow.ui.connection').create()
     end,
   },
 
@@ -92,7 +88,13 @@ M.subcommands = {
   edit = {
     desc = 'Change a saved connection: what it is called, or where it points',
     run = function(args)
+      -- The form is the way in. The prompts stay for a URL it cannot take apart, such as one
+      -- holding a template, where fields would lose more than they gain.
       local function prompt(spec)
+        if require('sqmeow.ui.connection').edit(spec) then
+          return
+        end
+
         vim.ui.input({ prompt = 'Call it: ', default = spec.name }, function(name)
           if not name or name == '' then
             return

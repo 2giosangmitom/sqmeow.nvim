@@ -502,6 +502,39 @@ function M.actions.rename()
   end)
 end
 
+--- Add a connection.
+---
+--- The same dialog `:Sqmeow add` opens, put on a key because the drawer is where a person is
+--- looking when they notice the connection they want is not there.
+function M.actions.add()
+  require('sqmeow.ui.connection').create()
+end
+
+--- Edit the connection under the cursor.
+---
+--- Everything about it, unlike `rename`, which is the quick version of the same thing.
+function M.actions.edit()
+  local node = M.current_node()
+  if not node or node.kind == 'scratchpad' or not node.conn_id or #node.path > 0 then
+    return
+  end
+
+  local spec = require('sqmeow.sources').find(node.name)
+  if not spec then
+    return vim.notify(
+      ('sqmeow: `%s` is open but not saved, so there is nothing to edit'):format(node.name),
+      vim.log.levels.WARN
+    )
+  end
+
+  if not require('sqmeow.ui.connection').edit(spec) then
+    vim.notify(
+      ('sqmeow: `%s` holds a url the form cannot take apart'):format(node.name),
+      vim.log.levels.WARN
+    )
+  end
+end
+
 --- Delete the scratchpad under the cursor.
 ---
 --- Asked first, because a scratchpad is a file the user wrote and deleting one cannot be undone.
