@@ -12,8 +12,6 @@ local M = {}
 ---@field mask boolean|nil Drawn as asterisks, and never echoed anywhere else.
 ---@field optional boolean|nil Saving does not insist on a value.
 ---@field hint string|nil Shown in place of an empty value.
----@field suggest nil|fun(values: table<string, string>): string What to offer when it is empty and
---- the dialog reaches it.
 
 ---@class sqmeow.Dialect
 ---@field id string What the engine calls it.
@@ -97,10 +95,12 @@ function M.from_scheme(scheme)
   return aliases[scheme]
 end
 
---- The fields a dialect asks for, plus the name every connection carries.
+--- The fields a dialect asks for, with the name every connection carries at the top.
 ---
---- The name comes last because it is the one answer that is easier to give once the rest are
---- filled in, and because it is the only one the dialog can suggest for itself.
+--- The name is asked for first and is never filled in for the user. It is what the drawer, the
+--- statusline and every picker will call this database from now on, so it is theirs to choose, and
+--- offering something assembled out of the host and the database would put a piece of the
+--- connection string on screen.
 ---
 ---@param id string
 ---@return sqmeow.Field[]
@@ -110,9 +110,8 @@ function M.fields(id)
     return {}
   end
 
-  local fields = vim.deepcopy(dialect.fields)
-  table.insert(fields, { key = 'name', label = 'Name', optional = true })
-  return fields
+  local fields = { { key = 'name', label = 'Name' } }
+  return vim.list_extend(fields, vim.deepcopy(dialect.fields))
 end
 
 return M

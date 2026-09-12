@@ -63,6 +63,29 @@ T['create']['asks which database first'] = function()
   MiniTest.expect.no_equality(lines[3]:find('SQLite'), nil)
 end
 
+T['create']['asks for a name and offers none'] = function()
+  -- The name is what everything else will call this database, so it is the user's to choose. A
+  -- default assembled out of the host and the database would also be a piece of the URL the form
+  -- exists to keep off the screen.
+  require('sqmeow.ui.form').open({
+    title = 'New PostgreSQL connection',
+    fields = require('sqmeow.dialects').fields('postgres'),
+    on_submit = function() end,
+  })
+
+  eq(rows()[1], 'Name')
+end
+
+T['create']['refuses to save without a name'] = function()
+  connection.edit({ name = '', url = 'sqlite:app.db' })
+  press('<C-s>')
+  vim.wait(50)
+
+  -- Still open, because there is nothing to call the connection yet.
+  MiniTest.expect.no_equality(#rows(), 0)
+  eq(file.load({ path = scratch }), {})
+end
+
 T['edit'] = MiniTest.new_set()
 
 T['edit']['fills the form in from the saved url'] = function()
@@ -73,19 +96,19 @@ T['edit']['fills the form in from the saved url'] = function()
 
   eq(opened, true)
   eq(rows(), {
+    'Name shop',
     'Host db.internal',
     'Port 5432',
     'Database orders',
     'User app',
     'Password *******',
     'Options sslmode=require',
-    'Name shop',
   })
 end
 
 T['edit']['asks a SQLite connection for a file and nothing else'] = function()
   connection.edit({ name = 'local', url = 'sqlite:app.db' })
-  eq(rows(), { 'File app.db', 'Name local' })
+  eq(rows(), { 'Name local', 'File app.db' })
 end
 
 T['edit']['refuses a url holding a template'] = function()

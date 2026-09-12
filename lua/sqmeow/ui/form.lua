@@ -20,9 +20,6 @@ local M = {}
 ---@field on_submit fun(values: table<string, string>)
 ---@field on_cancel nil|fun()
 
---- Suggestion for a field, given what is filled in so far.
----@alias sqmeow.FormSuggest fun(values: table<string, string>): string
-
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow-form')
 
 --- nui's pieces, or nil when it is not installed.
@@ -181,11 +178,6 @@ function M.open(spec)
     end
     focus(index)
 
-    local default = values[field.key]
-    if default == '' and field.suggest then
-      default = field.suggest(values)
-    end
-
     local input = parts.Input({
       relative = { type = 'win', winid = popup.winid },
       position = { row = index - 1, col = column },
@@ -194,7 +186,7 @@ function M.open(spec)
       border = { style = 'none' },
       win_options = { winhighlight = 'Normal:SqmeowFormEdit' },
     }, {
-      default_value = default,
+      default_value = values[field.key],
       on_submit = function(value)
         values[field.key] = value
         render()

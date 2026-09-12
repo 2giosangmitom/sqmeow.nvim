@@ -9,29 +9,6 @@
 
 local M = {}
 
---- Fields for a dialect, with the name field taught to suggest something.
----
---- The suggestion is the label the plugin would have used anyway, so leaving the name empty gives
---- the same result as before while still showing what that result will be.
----
----@param dialect string
----@return sqmeow.Field[]
-local function fields_for(dialect)
-  local fields = require('sqmeow.dialects').fields(dialect)
-
-  for _, field in ipairs(fields) do
-    if field.key == 'name' then
-      field.hint = 'from the database and host'
-      field.suggest = function(values)
-        local url = require('sqmeow.url').build(dialect, values)
-        return url and require('sqmeow.url').label(url) or ''
-      end
-    end
-  end
-
-  return fields
-end
-
 --- What is wrong with the answers, if anything.
 ---
 ---@param dialect string
@@ -44,7 +21,7 @@ local function validator(dialect, existing)
       return err
     end
 
-    for _, field in ipairs(fields_for(dialect)) do
+    for _, field in ipairs(require('sqmeow.dialects').fields(dialect)) do
       if not field.optional and vim.trim(values[field.key] or '') == '' then
         return ('%s cannot be empty'):format(field.label)
       end
@@ -67,7 +44,7 @@ local function form(dialect, values, existing)
   local spec = require('sqmeow.dialects').get(dialect)
   local opened, err = require('sqmeow.ui.form').open({
     title = existing and ('Edit %s'):format(existing) or ('New %s connection'):format(spec.label),
-    fields = fields_for(dialect),
+    fields = require('sqmeow.dialects').fields(dialect),
     values = values,
     -- A new connection is a run of questions with no answers yet, so the dialog starts asking.
     -- An existing one is opened to be looked at, and jumping straight into a field would fight
@@ -76,10 +53,7 @@ local function form(dialect, values, existing)
     validate = validator(dialect, existing),
     on_submit = function(answers)
       local url = require('sqmeow.url').build(dialect, answers)
-      local name = vim.trim(answers.name or '')
-      if name == '' then
-        name = require('sqmeow.url').label(url)
-      end
+      local name = vim.trim(answers.name)
 
       local api = require('sqmeow.api')
       if existing then

@@ -24,8 +24,9 @@
 --- The dialog is built on nui.nvim, which is the plugin's one optional dependency. Without it
 --- everything else works and `:Sqmeow connect <url>` still takes a URL directly.
 ---
---- Leaving the name empty names the connection after its database and host, which is what the
---- plugin would have called it anyway. >lua
+--- The first thing it asks for is a name, and it suggests nothing: the name is what the drawer,
+--- the statusline and every picker will call this database, so it is yours to choose. The URL is
+--- never shown. >lua
 ---   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
 --- <
 ---@tag sqmeow-connecting

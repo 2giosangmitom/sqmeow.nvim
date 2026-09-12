@@ -26,15 +26,18 @@ time and writes the URL for you:
 
 ```
         ╭──────── New PostgreSQL connection ─────────╮
+        │  Name      production                      │
         │  Host      db.internal                     │
         │  Port      5432                            │
         │  Database  shop                            │
         │  User      app                             │
         │  Password  *******                         │
         │  Options   sslmode=require                 │
-        │  Name      shop@db.internal                │
         ╰──── <CR> edit   <C-s> save   q cancel ─────╯
 ```
+
+The name is the first thing it asks for and it suggests nothing. That name is what the drawer, the
+statusline and every picker will call the database from now on, and the URL itself never appears.
 
 Or give a URL directly:
 
@@ -231,9 +234,8 @@ with no argument offers everything the configured sources know about. Three sour
 plugin: inline connections from `setup()`, a JSON file, and a JSON environment variable.
 
 Every connection has a name, and the name is what appears in the drawer, the statusline and the
-pickers. Connecting to a URL you typed asks what to call it, offering the host and database as the
-default, so the sidebar reads `production` rather than `app@db.internal`. `:Sqmeow connect <url>
-<name>` says it up front instead.
+pickers, so the sidebar reads `production` rather than `app@db.internal`. The dialog asks for it
+first. `:Sqmeow connect <url> <name>` says it up front instead.
 
 `A` in the drawer opens the dialog, `e` opens the connection under the cursor for editing, and `R`
 is the quick version that changes only the name. `:Sqmeow edit [name]` opens the same dialog from
