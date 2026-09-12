@@ -222,6 +222,30 @@ T['tree']['expands a group into the relations it holds'] = function()
   eq(text:find('~ adults') ~= nil, true)
 end
 
+T['tree']['renews the count on a heading it refreshes'] = function()
+  expand('scratch')
+  expand('main')
+  expand('Tables')
+  line_matching('people')
+
+  run('create table late (id integer primary key)')
+  MiniTest.finally(function()
+    run('drop table late')
+    vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('Tables'), 0 })
+    drawer.actions.refresh()
+    line_matching('T Tables%s+%(1%)')
+  end)
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('Tables'), 0 })
+  drawer.actions.refresh()
+
+  -- The new table appearing is only half of it. The number beside the heading counts the same
+  -- tables, and it is drawn from the level above them, so a refresh that reloads one and not the
+  -- other leaves the drawer contradicting itself.
+  line_matching('= late')
+  line_matching('T Tables%s+%(2%)')
+end
+
 T['tree']['expands a relation into its columns'] = function()
   open_relation('Tables', 'people')
   line_matching('score')

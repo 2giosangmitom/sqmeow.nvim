@@ -55,15 +55,18 @@ end
 ---@param conn_id integer
 ---@param path string[]
 function M.load(conn_id, path)
-  local entry = cache[node_key(conn_id, path)]
+  local key = node_key(conn_id, path)
+  local entry = cache[key]
   if entry and entry.loading then
     return
   end
 
-  cache[node_key(conn_id, path)] = { loading = true }
+  -- What is already drawn is kept while the reply is on its way, so reloading a level someone is
+  -- looking at renews it in place rather than emptying it and filling it back in.
+  cache[key] = { loading = true, nodes = entry and entry.nodes }
   local _, err = require('sqmeow.rpc').request('introspect', { conn_id = conn_id, path = path })
   if err then
-    cache[node_key(conn_id, path)] = { error = err }
+    cache[key] = { error = err }
     M.render()
   end
 end
@@ -193,7 +196,7 @@ local function draw(lines, highlights, conn_id, path, depth)
 
   local indent = ('  '):rep(depth)
 
-  if entry.loading then
+  if entry.loading and not entry.nodes then
     table.insert(lines, indent .. '…')
     table.insert(rows, false)
     return
@@ -514,6 +517,13 @@ function M.actions.refresh()
   M.invalidate(node.conn_id, node.path)
   if M.is_expanded(node.conn_id, node.path) then
     M.load(node.conn_id, node.path)
+  end
+
+  -- A row is drawn from the level above it, so the count on `Tables (3)` belongs to the schema's
+  -- children and not to the tables themselves. Reloading only what sits under the node would
+  -- leave that number saying what it said before the refresh.
+  if node.path and #node.path > 0 then
+    M.load(node.conn_id, vim.list_slice(node.path, 1, #node.path - 1))
   end
   M.render()
 end
