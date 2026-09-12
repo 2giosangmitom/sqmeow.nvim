@@ -33,8 +33,9 @@
 --- Which database a query runs on ~
 ---
 --- One connection is active, and it is the one whose name is highlighted in the drawer. `u` in the
---- drawer makes the connection under the cursor active, `<CR>` does it as well as opening the row
---- out, and `:Sqmeow use [name]` does it from the command line.
+--- drawer makes the connection under the cursor active, and `:Sqmeow use [name]` does the same
+--- from the command line. `<CR>` only opens a row out, so reading a schema never changes where the
+--- next query goes.
 ---
 --- A scratchpad overrides that. It is opened for one database and named after it, so it runs there
 --- whatever else is active, and the line above it says which database that is. Two scratchpads

@@ -44,7 +44,7 @@ call the database from now on, and the URL itself never appears.
 
 Saving it puts it in the drawer, where every connection you have saved is listed with a dot beside
 it: green when it is open, red when it is not. `<CR>` on a red one opens it, and `<CR>` on a green
-one makes it the connection queries run against and shows its schemas.
+one shows its schemas.
 
 ```
 v ● production  postgres
@@ -179,8 +179,8 @@ the command line. A saved URL is taken apart into the same fields it was built f
 shows the connection as it stands rather than a string to pick through.
 
 One connection is **active**, and its name is highlighted in the drawer. `u` makes the connection
-under the cursor active, `<CR>` does the same while opening the row out, and `:Sqmeow use [name]`
-does it from the command line.
+under the cursor active and `:Sqmeow use [name]` does the same from the command line. `<CR>` only
+opens a row out, so browsing a schema never changes where the next query goes.
 
 A scratchpad overrides that. It is opened for one database and named after it, so it runs there
 whatever else is active, and the line above it says which database that is:

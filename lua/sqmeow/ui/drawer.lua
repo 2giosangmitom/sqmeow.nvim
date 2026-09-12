@@ -451,10 +451,11 @@ local function is_relation(kind)
   return kind == 'table' or kind == 'view' or kind == 'materialized view' or kind == 'relation'
 end
 
---- Act on the node under the cursor.
+--- Open the node under the cursor.
 ---
---- One key, because what the primary action is depends on the thing rather than on the user: a
---- branch opens, and a scratchpad, which is a leaf holding a file, opens the file.
+--- One key, because what opening means depends on the thing rather than on the user: a branch
+--- expands, a scratchpad opens its file, a past query goes back on screen, and a connection that
+--- is closed is opened so that there is something to expand.
 function M.actions.toggle()
   local node = M.current_node()
   if not node then
@@ -468,17 +469,10 @@ function M.actions.toggle()
     return require('sqmeow.ui.log').reopen(node.entry)
   end
 
-  if node.kind == 'connection' then
-    -- One key for the whole row. A connection that is not open, opens and becomes active; one that
-    -- is open becomes active, and its schemas appear.
-    if not node.conn_id then
-      local id = require('sqmeow.api').connect_named(node.name)
-      if id then
-        require('sqmeow.state').current = id
-      end
-      return
-    end
-    M.actions.use()
+  -- This key opens things and nothing else. Choosing which database queries run on is `use`, on a
+  -- key of its own, so neither can happen by accident while doing the other.
+  if node.kind == 'connection' and not node.conn_id then
+    return require('sqmeow.api').connect_named(node.name)
   end
 
   if not node.expandable then
@@ -612,8 +606,9 @@ end
 
 --- Run queries against the connection under the cursor.
 ---
---- Separate from `<CR>`, which activates a connection as well but opens it out at the same time. A
---- key that only switches is what you want when the tree is already arranged the way you like it.
+--- The only thing that changes the active connection from the drawer. Expanding a connection to
+--- read its schemas is a different intention from sending the next query to it, so it is a
+--- different key.
 function M.actions.use()
   local node = M.current_node()
   if not node or node.kind ~= 'connection' then

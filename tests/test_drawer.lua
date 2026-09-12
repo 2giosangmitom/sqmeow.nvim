@@ -335,6 +335,18 @@ T['the active connection']['moves when another is chosen'] = function()
   eq(name_group('scratch'), nil)
 end
 
+T['the active connection']['does not move when a row is only opened'] = function()
+  require('sqmeow.api').use(state.connection_by_name('scratch').id)
+  drawer.render()
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('other'), 0 })
+  drawer.actions.toggle()
+
+  -- Expanding a connection to read its schemas is a different intention from sending the next
+  -- query to it, so the key that does the first must not do the second.
+  eq(state.current, state.connection_by_name('scratch').id)
+end
+
 T['the active connection']['is left alone from a row that is not a connection'] = function()
   local before = state.current
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratchpads'), 0 })
