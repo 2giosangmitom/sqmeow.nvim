@@ -16,9 +16,6 @@ Contents ~
   Configuration .............................................. |sqmeow-config|
   Keymaps ................................................... |sqmeow-keymaps|
   Public interface .............................................. |sqmeow-api|
-  Pickers ................................................... |sqmeow-pickers|
-  Statusline ................................................. |sqmeow.status|
-  
 
 ------------------------------------------------------------------------------
                                                              *sqmeow-connecting*
@@ -33,12 +30,10 @@ The same dialog is on `A` in the drawer, and `e` there opens the connection unde
 for editing. A saved URL is taken apart into the same fields, so what opens is the connection
 as it stands.
 
-The dialog is built on nui.nvim, which is the plugin's one optional dependency. Without it
-everything else works and `:Sqmeow connect <url>` still takes a URL directly.
+The dialog is built on nui.nvim, which is the plugin's one optional dependency.
 
-The first thing it asks for is a name, and it suggests nothing: the name is what the drawer,
-the statusline and every picker will call this database, so it is yours to choose. The URL is
-never shown. >lua
+The first thing it asks for is a name, and it suggests nothing: the name is what the drawer
+will call this database from now on, so it is yours to choose. The URL is never shown. >lua
   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
 <
 
@@ -51,11 +46,11 @@ still there after a restart. It holds the statement, which connection it ran on,
 and how long it took. It does not hold the rows: a cached grid goes stale as soon as the table
 changes, and a statement you can see is cheap to run again.
 
-The drawer shows the ten most recent under `history`, and `:Sqmeow log` opens all of them in a
-picker. Choosing one puts its rows back on screen when the engine still has them, which is true
-for anything run since Neovim started. Otherwise the statement opens in a buffer of its own,
-ready to run, because a log holds deletes as readily as selects and picking a line out of a
-list is not the same as asking for it to happen again.
+The drawer shows the most recent under `history`, and `:Sqmeow log` opens that section.
+Choosing one puts its rows back on screen when the engine still has them, which is true for
+anything run since Neovim started. Otherwise the statement opens in a buffer of its own, ready
+to run, because a log holds deletes as readily as selects and picking a line out of a list is
+not the same as asking for it to happen again.
 
 The same statement run twenty times is one line, and the line is the most recent run of it.
 
@@ -157,14 +152,6 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       history_file = '',
     },
 
-    integrations = {
-      -- 'auto' picks the first of telescope, fzf-lua and snacks that is installed.
-      picker = 'auto',
-      -- Expose the lualine component. Adding it to a statusline stays the user's job.
-      lualine = true,
-      notify = true,
-    },
-
     -- Every character the plugin draws that is not text. The defaults are Nerd Font glyphs, so a
     -- terminal without one needs its own set here. Colours are not set here: redefine the matching
     -- `SqmeowIcon*` highlight group instead.
@@ -181,6 +168,11 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       scratchpad = '󰈙',
       query = '󰐊',
       history = '󰋚',
+
+      -- Beside a connection, saying whether it is open. One glyph in two colours: the difference is
+      -- `SqmeowConnected` and `SqmeowDisconnected`, not the character.
+      connected = '●',
+      disconnected = '●',
       ['function'] = '󰊕',
       procedure = '󰡱',
 
@@ -197,9 +189,6 @@ is built, so the documented defaults cannot drift from the ones the code uses.
 
       -- What sits before a drawer row: whether its children are showing, or that it has none.
       markers = { open = '', closed = '', leaf = ' ' },
-
-      -- Cycled while a query runs, one frame every 80 milliseconds. Any number of frames works.
-      spinner = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' },
 
       -- What the engine draws the result grid with. The three separators are ignored unless they
       -- are exactly one column wide, since a wider one would put the rule out of step with the
@@ -289,7 +278,6 @@ drawer
  r         Reload this subtree
  y         Yank the qualified name
  s         Yank a SELECT for this relation
- f         Find a relation from here
  R         Rename the connection or scratchpad under the cursor
  A         Add a connection
  e         Edit the connection under the cursor
@@ -307,7 +295,6 @@ result
  yr   Yank this row as CSV
  yp   Yank this page as CSV
  e    Write the result to a file
- f    Jump to a column
  ?    Show these mappings
  q    Close the result window
 
@@ -621,9 +608,20 @@ Show the schema drawer.
 Hide the schema drawer.
 
 ------------------------------------------------------------------------------
+                                                         *sqmeow.api.open_all()*
+                            `sqmeow.api.open_all`()
+Open every surface at once: the drawer, a scratchpad, and the result window.
+
+What `:Sqmeow` on its own does. A database client is three panes, and opening them one command
+at a time is work the user should not have to do to get started.
+
+The order is the layout: the drawer takes the left, the scratchpad the window beside it, and
+the result the strip along the bottom.
+
+------------------------------------------------------------------------------
                                                            *sqmeow.api.toggle()*
                              `sqmeow.api.toggle`()
-Show the drawer, or hide it if it is already showing.
+Show everything, or hide it all if any of it is showing.
 
 ------------------------------------------------------------------------------
                                                       *sqmeow.api.connections()*
@@ -631,192 +629,6 @@ Show the drawer, or hide it if it is already showing.
 Every open connection.
 Return ~
 `(sqmeow.Connection[])`
-
-------------------------------------------------------------------------------
-                                                           *sqmeow.api.status()*
-                             `sqmeow.api.status`()
-What the engine is doing, for a statusline.
-
-The same table |sqmeow.status| returns, which is where the shape is documented and where the
-lualine component reads it from.
-
-Return ~
-`(sqmeow.Status)`
-
-------------------------------------------------------------------------------
-                                                             *sqmeow.api.find()*
-                       `sqmeow.api.find`({name}, {opts})
-Show one of the plugin's lists.
-
-Parameters ~
-{name} `(string|nil)` One of 'connections', 'relations', 'history', 'scratchpads', 'columns'.
-Nil asks which.
-{opts} `(table|nil)` Passed to the picker.
-
-
-==============================================================================
-------------------------------------------------------------------------------
-                                                                *sqmeow-pickers*
-The lists the plugin offers.
-
-Every one of them goes through |sqmeow.integrations.picker|, so each is written once and shown
-with whichever of telescope, fzf-lua and snacks.picker the user has, or with `vim.ui.select`
-when they have none. Nothing here knows which picker it is talking to.
-
-
-------------------------------------------------------------------------------
-                                                  *sqmeow.pickers.connections()*
-                      `sqmeow.pickers.connections`({opts})
-Switch the current connection, or open one that is configured but not yet open.
-
-Open connections come first, since switching between them is the common case, and a configured
-one is offered below so a connection is never more than one list away.
-
-Parameters ~
-{opts} `(table|nil)` Passed through to the picker, plus `only = 'saved'` to leave out the open
-ones and `on_choice` to do something other than switch to what was chosen.
-
-------------------------------------------------------------------------------
-                                                    *sqmeow.pickers.relations()*
-                       `sqmeow.pickers.relations`({opts})
-Find a table or a view anywhere in the current connection.
-
-The list is read once per connection and then held, so the second time it opens instantly. A
-schema the user cannot read is left out rather than failing the list.
-
-Parameters ~
-{opts} `(table|nil)` `schema` limits the list to one schema; `refresh` re-reads it.
-
-------------------------------------------------------------------------------
-                                                      *sqmeow.pickers.history()*
-                        `sqmeow.pickers.history`({opts})
-Reopen a past result.
-
-Nothing is run again. The engine still holds the rows, so choosing an entry only asks it to
-paint them, which is what makes going back to an expensive query free.
-
-Parameters ~
-{opts} `(table|nil)`
-
-------------------------------------------------------------------------------
-                                                  *sqmeow.pickers.scratchpads()*
-                      `sqmeow.pickers.scratchpads`({opts})
-Open one of the saved scratchpads.
-
-Parameters ~
-{opts} `(table|nil)`
-
-------------------------------------------------------------------------------
-                                                      *sqmeow.pickers.columns()*
-                        `sqmeow.pickers.columns`({opts})
-Jump to a column of the current result.
-
-A wide result is the reason this exists: scrolling sideways to find a column is exactly the
-kind of thing a fuzzy list is better at.
-
-Parameters ~
-{opts} `(table|nil)`
-
-------------------------------------------------------------------------------
-                                                            *sqmeow.pickers.all*
-                              `sqmeow.pickers.all`
-Every picker, by the name `:Sqmeow find` and the telescope extension use.
-Type ~
-`(table<string, fun(opts: table|nil)>)`
-
-------------------------------------------------------------------------------
-                                                        *sqmeow.pickers.names()*
-                            `sqmeow.pickers.names`()
-The picker names, sorted, for completion.
-Return ~
-`(string[])`
-
-------------------------------------------------------------------------------
-                                                         *sqmeow.pickers.open()*
-                     `sqmeow.pickers.open`({name}, {opts})
-Show a picker by name, or ask which one.
-
-Parameters ~
-{name} `(string|nil)`
-{opts} `(table|nil)`
-
-
-==============================================================================
-------------------------------------------------------------------------------
-                                                                 *sqmeow.status*
-What the plugin is doing, as a plain table.
-
-Deliberately frontend-agnostic. lualine is one consumer, but heirline, mini.statusline and a
-hand-written `'statusline'` all want the same facts in different shapes, so what lives here is
-the facts. The lualine component is a thin wrapper, and the tests exercise this rather than
-lualine, so the component cannot break without a test noticing.
-
-------------------------------------------------------------------------------
-Class ~
-{sqmeow.Status}
-Fields ~
-{connection} `(string|nil)` The current connection's name.
-{dialect} `(string|nil)` 'postgres', 'mysql' or 'sqlite'.
-{state} '`(idle)`'|'executing'|'done'|'error'|'cancelled' What the last query is doing.
-{rows} `(integer|nil)` Rows in the current result.
-{page} `(integer|nil)` Which page is shown, counting from one.
-{pages} `(integer|nil)` How many pages there are.
-{elapsed_ms} `(integer|nil)` How long the last query took.
-{truncated} `(boolean|nil)` Whether the row cap was reached.
-
-------------------------------------------------------------------------------
-                                                        *sqmeow.status.frame_ms*
-                            `sqmeow.status.frame_ms`
-How long each frame of the spinner shown while a query runs is on screen.
-
-The spinner is advanced by the clock rather than by a timer, so nothing has to be started,
-stopped, or cleaned up: a statusline redraws often enough on its own that reading the time is
-all it takes. Its frames are `icons.spinner` in the configuration.
-
-------------------------------------------------------------------------------
-                                                         *sqmeow.status.frame()*
-                          `sqmeow.status.frame`({now})
-The current spinner frame.
-
-Parameters ~
-{now} `(integer|nil)` Milliseconds, for tests. Defaults to the clock.
-Return ~
-`(string)`
-
-------------------------------------------------------------------------------
-                                                           *sqmeow.status.get()*
-                             `sqmeow.status.get`()
-A snapshot of the session.
-
-Always the same shape. `state` is `'idle'` rather than nil when nothing has run, so a consumer
-can switch on it without checking for absence first.
-
-Return ~
-`(sqmeow.Status)`
-
-------------------------------------------------------------------------------
-                                                        *sqmeow.status.active()*
-                            `sqmeow.status.active`()
-Whether there is anything worth putting in a statusline.
-
-False before the first connection, which is what keeps the component invisible for users who
-have the plugin installed and are not using it right now.
-Return ~
-`(boolean)`
-
-------------------------------------------------------------------------------
-                                                        *sqmeow.status.render()*
-                        `sqmeow.status.render`({status})
-The one-line form, for a statusline that wants a string.
-
-Shows the connection, and then whatever the last query is doing: a spinner while it runs, the
-row count and how long it took once it is finished, and the page position when there is more
-than one page.
-
-Parameters ~
-{status} `(sqmeow.Status|nil)` Defaults to the current one.
-Return ~
-`(string)`
 
 
  vim:tw=78:ts=8:noet:ft=help:norl:

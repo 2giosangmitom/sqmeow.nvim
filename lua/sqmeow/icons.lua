@@ -32,6 +32,8 @@ M.highlights = {
   scratchpad = 'SqmeowIconScratchpad',
   query = 'SqmeowIconQuery',
   history = 'SqmeowIconHistory',
+  connected = 'SqmeowConnected',
+  disconnected = 'SqmeowDisconnected',
   ['function'] = 'SqmeowIconFunction',
   procedure = 'SqmeowIconProcedure',
   tables = 'SqmeowIconTable',
@@ -50,7 +52,7 @@ M.highlights = {
 ---@return string highlight
 function M.get(kind)
   local icon = configured()[kind]
-  -- `icons` also holds the marker, spinner and grid tables, and a caller asking for one of those
+  -- `icons` also holds the marker and grid tables, and a caller asking for one of those
   -- by mistake should get a space rather than a table where a line is being built.
   if type(icon) ~= 'string' then
     icon = ' '
@@ -62,30 +64,6 @@ end
 ---@return { open: string, closed: string, leaf: string }
 function M.markers()
   return configured().markers
-end
-
---- The frames of the spinner shown while a query runs.
----@return string[]
-function M.spinner()
-  return configured().spinner
-end
-
---- The mark for a dialect.
----
---- Its own icon where the plugin has one, and the dialect's own name for one it has never heard
---- of, which is every dialect a future adapter adds before this table catches up.
----
----@param dialect string|nil
----@return string icon
----@return string highlight
-function M.dialect(dialect)
-  if not dialect then
-    return '?', 'SqmeowNull'
-  end
-  if not M.highlights[dialect] then
-    return dialect, 'SqmeowText'
-  end
-  return M.get(dialect)
 end
 
 --- Which icon a connection shows.

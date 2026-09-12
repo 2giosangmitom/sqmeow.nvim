@@ -454,16 +454,4 @@ T['row detail']['refuses a row past the end'] = function()
   eq(err ~= nil, true)
 end
 
-T['status'] = MiniTest.new_set()
-
-T['status']['describes the session for a statusline'] = function()
-  run('select id from people')
-  local status = api.status()
-
-  eq(status.dialect, 'sqlite')
-  eq(status.state, 'done')
-  eq(status.rows, 3)
-  eq(type(status.connection), 'string')
-end
-
 return T

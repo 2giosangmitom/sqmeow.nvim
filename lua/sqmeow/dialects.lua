@@ -95,12 +95,22 @@ function M.from_scheme(scheme)
   return aliases[scheme]
 end
 
+--- Which dialect a URL is for, without taking the rest of it apart.
+---
+--- Enough to draw the right icon beside a saved connection nobody has opened yet.
+---
+---@param url string
+---@return string|nil id
+function M.of_url(url)
+  local scheme = url:match('^(%w[%w%+%-%.]*):')
+  return scheme and M.from_scheme(scheme) or nil
+end
+
 --- The fields a dialect asks for, with the name every connection carries at the top.
 ---
---- The name is asked for first and is never filled in for the user. It is what the drawer, the
---- statusline and every picker will call this database from now on, so it is theirs to choose, and
---- offering something assembled out of the host and the database would put a piece of the
---- connection string on screen.
+--- The name is asked for first and is never filled in for the user. It is what the drawer will
+--- call this database from now on, so it is theirs to choose, and offering something assembled out
+--- of the host and the database would put a piece of the connection string on screen.
 ---
 ---@param id string
 ---@return sqmeow.Field[]

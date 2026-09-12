@@ -77,8 +77,8 @@ end
 
 --- Open a scratchpad by its path.
 ---
---- Used by the drawer and the picker, both of which already know where the file is and should not
---- have to turn a name back into one.
+--- Used by the drawer, which already knows where the file is and should not have to turn a name
+--- back into one.
 ---
 --- The window is chosen rather than assumed. A plain `:edit` opens in the current window, and the
 --- current window when the drawer's `<CR>` fires is the drawer itself, which would put a SQL file

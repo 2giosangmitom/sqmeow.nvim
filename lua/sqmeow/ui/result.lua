@@ -23,7 +23,7 @@ end
 --- Whether the result window is still the result window.
 ---
 --- A valid handle is not enough. Something else can take a window over, which `:bdelete` on the
---- buffer it held, a session restore, and a picker opening a file all do, and the window would
+--- buffer it held, a session restore, and anything else opening a file all do, and the window would
 --- then still be valid while showing someone else's buffer. Treating that as closed means the
 --- next query opens a window of its own rather than painting into whatever moved in.
 local function valid_win()
@@ -214,7 +214,7 @@ end
 --- The values of one column, as the painted page shows them.
 ---
 --- Read back out of the grid rather than asked of the engine. These are for a preview beside a
---- picker, so what the user is already looking at is exactly the right answer, and it costs no
+--- list, so what the user is already looking at is exactly the right answer, and it costs no
 --- round trip.
 ---
 ---@param index integer One-based column.
@@ -323,11 +323,6 @@ function M.actions.detail()
     return
   end
   require('sqmeow.ui.detail').open(cell.row)
-end
-
---- Jump to a column, chosen from a list rather than scrolled to.
-function M.actions.find()
-  require('sqmeow.pickers').columns()
 end
 
 function M.actions.help()

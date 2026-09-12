@@ -47,7 +47,7 @@ function M.display(url)
   return url
 end
 
---- A short name for a URL, for a tab label or a picker row.
+--- A short name for a URL, for a tab label or a list row.
 ---
 --- Prefers the database name, because that is what a person calls the thing they connected to.
 ---

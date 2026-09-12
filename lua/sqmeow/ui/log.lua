@@ -51,7 +51,7 @@ local function outcome(entry)
   return 'no rows'
 end
 
---- Describe one entry for a picker row.
+--- Describe one entry as a single line.
 ---
 ---@param entry table
 ---@return string
@@ -86,12 +86,14 @@ function M.reopen(entry)
   vim.notify('sqmeow: the rows are long gone, so here is the query')
 end
 
---- Choose a past query and put its result back on screen.
+--- Show the log in the drawer.
 ---
---- The list itself is |sqmeow.pickers|`.history`, so it is shown with whichever fuzzy picker the
---- user has. What lives here is what an entry says, which is the part the picker does not know.
+--- The drawer is the one place the plugin lists things, so `:Sqmeow log` opens it there rather
+--- than in a window of its own: one tree holding connections, scratchpads and what has been run.
 function M.open()
-  require('sqmeow.pickers').history()
+  local drawer = require('sqmeow.ui.drawer')
+  drawer.open()
+  drawer.reveal_history()
 end
 
 return M

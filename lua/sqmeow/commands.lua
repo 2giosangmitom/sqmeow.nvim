@@ -7,7 +7,7 @@
 local M = {}
 
 local function notify(message, level)
-  require('sqmeow.integrations.notify').notify(message, level)
+  vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
 end
 
 --- Discard a return value, so `return api.execute(...)` stays a statement rather than making the
@@ -22,40 +22,6 @@ local function void(_) end
 --- Subcommands, each a description and what to run.
 ---@type table<string, sqmeow.Subcommand>
 M.subcommands = {
-  connect = {
-    desc = 'Connect to a saved connection, or to a URL',
-    run = function(args)
-      local api = require('sqmeow.api')
-      local target = args[1]
-
-      if target then
-        -- A URL has a scheme; anything else is the name of a configured connection.
-        if target:find(':', 1, true) then
-          return void(api.connect(target, { name = args[2] }))
-        end
-        return void(api.connect_named(target))
-      end
-
-      -- Nothing saved and nothing open means there is nothing to pick from, so the only useful
-      -- thing to offer is the dialog that makes one.
-      if #api.available() == 0 and #api.connections() == 0 then
-        return require('sqmeow.ui.connection').create()
-      end
-
-      require('sqmeow.pickers').connections({ prompt = 'Connect to' })
-    end,
-    complete = function(lead)
-      local names = vim.tbl_map(function(connection)
-        return connection.name
-      end, (require('sqmeow.api').available()))
-
-      table.sort(names)
-      return vim.tbl_filter(function(name)
-        return name:find(lead, 1, true) == 1
-      end, names)
-    end,
-  },
-
   add = {
     desc = 'Add a connection, choosing the database and filling in a form',
     run = function()
@@ -119,12 +85,25 @@ M.subcommands = {
         return prompt(spec)
       end
 
-      require('sqmeow.pickers').connections({
-        prompt = 'Edit',
-        -- Only the saved ones: an open connection that was never saved has no entry to change.
-        only = 'saved',
+      -- Only the saved ones: an open connection that was never saved has no entry to change.
+      local saved = require('sqmeow.sources').load()
+      if #saved == 0 then
+        return notify('there are no saved connections', vim.log.levels.WARN)
+      end
+
+      local items = vim.tbl_map(function(spec)
+        local icon, highlight = require('sqmeow.icons').get('connection')
+        return { label = spec.name, icon = icon, highlight = highlight, value = spec }
+      end, saved)
+
+      local opened, err = require('sqmeow.ui.form').menu({
+        title = 'Edit',
+        items = items,
         on_choice = prompt,
       })
+      if not opened then
+        notify(err, vim.log.levels.ERROR)
+      end
     end,
     complete = function(lead)
       local names = vim.tbl_map(function(connection)
@@ -148,10 +127,46 @@ M.subcommands = {
   use = {
     desc = 'Choose the connection queries run against',
     run = function(args)
+      local api = require('sqmeow.api')
+
       if args[1] then
-        return void(require('sqmeow.api').use(tonumber(args[1]) or -1))
+        for _, connection in ipairs(api.connections()) do
+          if connection.name == args[1] then
+            return api.use(connection.id)
+          end
+        end
+        return notify(('nothing open is called `%s`'):format(args[1]), vim.log.levels.WARN)
       end
-      require('sqmeow.pickers').connections()
+
+      local items = vim.tbl_map(function(connection)
+        local icon, highlight = require('sqmeow.icons').get('connected')
+        return { label = connection.name, icon = icon, highlight = highlight, value = connection.id }
+      end, api.connections())
+
+      if #items == 0 then
+        return notify('nothing is connected', vim.log.levels.WARN)
+      end
+
+      local opened, err = require('sqmeow.ui.form').menu({
+        title = 'Use',
+        items = items,
+        on_choice = function(id)
+          api.use(id)
+        end,
+      })
+      if not opened then
+        notify(err, vim.log.levels.ERROR)
+      end
+    end,
+    complete = function(lead)
+      local names = vim.tbl_map(function(connection)
+        return connection.name
+      end, require('sqmeow.api').connections())
+
+      table.sort(names)
+      return vim.tbl_filter(function(name)
+        return name:find(lead, 1, true) == 1
+      end, names)
     end,
   },
 
@@ -246,18 +261,6 @@ M.subcommands = {
     end,
   },
 
-  find = {
-    desc = "Open one of the plugin's pickers",
-    run = function(args)
-      require('sqmeow.pickers').open(args[1])
-    end,
-    complete = function(lead)
-      return vim.tbl_filter(function(name)
-        return name:find(lead, 1, true) == 1
-      end, require('sqmeow.pickers').names())
-    end,
-  },
-
   update = {
     desc = 'Download the engine this plugin needs',
     run = function(args)
@@ -291,7 +294,7 @@ M.subcommands = {
         require('sqmeow.ui.drawer').render()
         return notify('the query log is empty')
       end
-      require('sqmeow.pickers').history()
+      require('sqmeow.ui.log').open()
     end,
     complete = function(lead)
       return vim.tbl_filter(function(name)
@@ -354,7 +357,7 @@ local function run(opts)
   local name = table.remove(args, 1)
 
   if not name then
-    return require('sqmeow.api').toggle()
+    return require('sqmeow.api').open_all()
   end
 
   local subcommand = M.subcommands[name]

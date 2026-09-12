@@ -9,7 +9,7 @@
 local M = {}
 
 local function notify(message, level)
-  require('sqmeow.integrations.notify').notify(message, level)
+  vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
 end
 
 local function engine()
@@ -427,39 +427,45 @@ function M.close_drawer()
   require('sqmeow.ui.drawer').close()
 end
 
---- Show the drawer, or hide it if it is already showing.
-function M.toggle()
-  local drawer = require('sqmeow.ui.drawer')
-  if drawer.is_open() then
-    return drawer.close()
+--- Open every surface at once: the drawer, a scratchpad, and the result window.
+---
+--- What `:Sqmeow` on its own does. A database client is three panes, and opening them one command
+--- at a time is work the user should not have to do to get started.
+---
+--- The order is the layout: the drawer takes the left, the scratchpad the window beside it, and
+--- the result the strip along the bottom.
+function M.open_all()
+  require('sqmeow.events').ensure()
+
+  require('sqmeow.ui.drawer').open()
+  local buf = require('sqmeow.ui.editor').open()
+  require('sqmeow.ui.result').open()
+
+  -- Back to the scratchpad, since that is where the next thing a person does is typing.
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      vim.api.nvim_set_current_win(win)
+      break
+    end
   end
-  M.open_drawer()
+  return buf
+end
+
+--- Show everything, or hide it all if any of it is showing.
+function M.toggle()
+  local layout = require('sqmeow.ui.layout')
+  if layout.anything_open() then
+    require('sqmeow.ui.drawer').close()
+    require('sqmeow.ui.result').close()
+    return
+  end
+  M.open_all()
 end
 
 --- Every open connection.
 ---@return sqmeow.Connection[]
 function M.connections()
   return require('sqmeow.state').connection_list()
-end
-
---- What the engine is doing, for a statusline.
----
---- The same table |sqmeow.status| returns, which is where the shape is documented and where the
---- lualine component reads it from.
----
----@return sqmeow.Status
-function M.status()
-  return require('sqmeow.status').get()
-end
-
---- Show one of the plugin's lists.
----
----@param name string|nil One of 'connections', 'relations', 'history', 'scratchpads', 'columns'.
---- Nil asks which.
----@param opts table|nil Passed to the picker.
-function M.find(name, opts)
-  require('sqmeow.events').ensure()
-  require('sqmeow.pickers').open(name, opts)
 end
 
 return M

@@ -62,14 +62,6 @@ M.defaults = {
     history_file = '',
   },
 
-  integrations = {
-    -- 'auto' picks the first of telescope, fzf-lua and snacks that is installed.
-    picker = 'auto',
-    -- Expose the lualine component. Adding it to a statusline stays the user's job.
-    lualine = true,
-    notify = true,
-  },
-
   -- Every character the plugin draws that is not text. The defaults are Nerd Font glyphs, so a
   -- terminal without one needs its own set here. Colours are not set here: redefine the matching
   -- `SqmeowIcon*` highlight group instead.
@@ -86,6 +78,11 @@ M.defaults = {
     scratchpad = '󰈙',
     query = '󰐊',
     history = '󰋚',
+
+    -- Beside a connection, saying whether it is open. One glyph in two colours: the difference is
+    -- `SqmeowConnected` and `SqmeowDisconnected`, not the character.
+    connected = '●',
+    disconnected = '●',
     ['function'] = '󰊕',
     procedure = '󰡱',
 
@@ -102,9 +99,6 @@ M.defaults = {
 
     -- What sits before a drawer row: whether its children are showing, or that it has none.
     markers = { open = '', closed = '', leaf = ' ' },
-
-    -- Cycled while a query runs, one frame every 80 milliseconds. Any number of frames works.
-    spinner = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' },
 
     -- What the engine draws the result grid with. The three separators are ignored unless they
     -- are exactly one column wide, since a wider one would put the rule out of step with the

@@ -21,12 +21,10 @@
 --- for editing. A saved URL is taken apart into the same fields, so what opens is the connection
 --- as it stands.
 ---
---- The dialog is built on nui.nvim, which is the plugin's one optional dependency. Without it
---- everything else works and `:Sqmeow connect <url>` still takes a URL directly.
+--- The dialog is built on nui.nvim, which is the plugin's one optional dependency.
 ---
---- The first thing it asks for is a name, and it suggests nothing: the name is what the drawer,
---- the statusline and every picker will call this database, so it is yours to choose. The URL is
---- never shown. >lua
+--- The first thing it asks for is a name, and it suggests nothing: the name is what the drawer
+--- will call this database from now on, so it is yours to choose. The URL is never shown. >lua
 ---   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
 --- <
 ---@tag sqmeow-connecting
@@ -39,11 +37,11 @@
 --- and how long it took. It does not hold the rows: a cached grid goes stale as soon as the table
 --- changes, and a statement you can see is cheap to run again.
 ---
---- The drawer shows the ten most recent under `history`, and `:Sqmeow log` opens all of them in a
---- picker. Choosing one puts its rows back on screen when the engine still has them, which is true
---- for anything run since Neovim started. Otherwise the statement opens in a buffer of its own,
---- ready to run, because a log holds deletes as readily as selects and picking a line out of a
---- list is not the same as asking for it to happen again.
+--- The drawer shows the most recent under `history`, and `:Sqmeow log` opens that section.
+--- Choosing one puts its rows back on screen when the engine still has them, which is true for
+--- anything run since Neovim started. Otherwise the statement opens in a buffer of its own, ready
+--- to run, because a log holds deletes as readily as selects and picking a line out of a list is
+--- not the same as asking for it to happen again.
 ---
 --- The same statement run twenty times is one line, and the line is the most recent run of it.
 ---

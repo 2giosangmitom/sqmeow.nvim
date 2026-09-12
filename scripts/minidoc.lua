@@ -16,8 +16,6 @@ local input = {
   'lua/sqmeow/config.lua',
   'lua/sqmeow/keymap.lua',
   'lua/sqmeow/api.lua',
-  'lua/sqmeow/pickers.lua',
-  'lua/sqmeow/status.lua',
 }
 
 -- The name each file's `M` stands for, so `M.setup()` is tagged `sqmeow.setup()` rather than
@@ -27,8 +25,6 @@ local modules = {
   ['lua/sqmeow/config.lua'] = 'sqmeow.config',
   ['lua/sqmeow/keymap.lua'] = 'sqmeow.keymap',
   ['lua/sqmeow/api.lua'] = 'sqmeow.api',
-  ['lua/sqmeow/pickers.lua'] = 'sqmeow.pickers',
-  ['lua/sqmeow/status.lua'] = 'sqmeow.status',
 }
 
 --- The module a block was parsed out of, or nil when it did not come from a file.

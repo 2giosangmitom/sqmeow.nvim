@@ -47,7 +47,7 @@ M.calls = {}
 
 --- Every relation in every schema, per connection, once something has asked for it.
 ---
---- The engine caches it too. This mirror exists so a picker opens without a round trip at all
+--- The engine caches it too. This mirror exists so a list opens without a round trip at all
 --- once it has been read, since a fuzzy list that stutters on open is worse than no list.
 ---@type table<integer, { relations: table[], error: string|nil }>
 M.catalogs = {}

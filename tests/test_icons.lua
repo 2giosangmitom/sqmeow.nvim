@@ -74,7 +74,7 @@ end
 
 T['overrides']['work on a dialect too'] = function()
   set({ postgres = 'P' })
-  eq(icons.dialect('postgres'), 'P')
+  eq(icons.get(icons.connection_kind('postgres')), 'P')
 end
 
 T['overrides']['are refused when they name a kind that does not exist'] = function()
@@ -105,29 +105,23 @@ T['markers']['are refused when one is not a string'] = function()
   })
 end
 
-T['spinner'] = MiniTest.new_set()
+T['connections'] = MiniTest.new_set()
 
-T['spinner']['comes from the configuration'] = function()
-  eq(icons.spinner(), config.defaults.icons.spinner)
-end
-
-T['spinner']['is the users to change'] = function()
-  set({ spinner = { 'a', 'b' } })
-  eq(icons.spinner(), { 'a', 'b' })
-end
-
-T['dialect'] = MiniTest.new_set()
-
-T['dialect']['uses the glyph for the ones the engine supports'] = function()
+T['connections']['use the glyph of the dialect they speak'] = function()
   for _, dialect in ipairs({ 'postgres', 'mysql', 'sqlite' }) do
-    eq(icons.dialect(dialect), config.defaults.icons[dialect])
+    eq(icons.connection_kind(dialect), dialect)
   end
-  eq(select(2, icons.dialect('postgres')), 'SqmeowIconPostgres')
+  eq(select(2, icons.get('postgres')), 'SqmeowIconPostgres')
 end
 
-T['dialect']['shows an unknown one by name, and a missing one as a question'] = function()
-  eq(icons.dialect('duckdb'), 'duckdb')
-  eq(icons.dialect(nil), '?')
+T['connections']['fall back to a plain database for one nobody has heard of'] = function()
+  eq(icons.connection_kind('duckdb'), 'connection')
+  eq(icons.connection_kind(nil), 'connection')
+end
+
+T['connections']['have a dot in two colours to say whether they are open'] = function()
+  eq(select(2, icons.get('connected')), 'SqmeowConnected')
+  eq(select(2, icons.get('disconnected')), 'SqmeowDisconnected')
 end
 
 T['highlights'] = MiniTest.new_set()

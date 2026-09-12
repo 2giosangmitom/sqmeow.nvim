@@ -80,7 +80,7 @@ local function check_sources()
   end
 
   if #connections == 0 then
-    vim.health.info('no connections are configured; `:Sqmeow connect <url>` works without any')
+    vim.health.info('no connections are configured; `:Sqmeow add` makes one')
     return
   end
 
@@ -125,26 +125,9 @@ local function check_open()
   end
 end
 
-local function check_integrations()
-  vim.health.start('integrations')
-
-  local picker = require('sqmeow.integrations.picker')
-  local configured = require('sqmeow.config').get().integrations
-  local chosen = picker.resolve()
-
-  if configured.picker ~= 'auto' and configured.picker ~= chosen then
-    vim.health.warn(
-      ('the configured picker `%s` is not installed; using %s'):format(configured.picker, chosen)
-    )
-  elseif chosen == 'builtin' then
-    vim.health.info('pickers use `vim.ui.select`; install telescope, fzf-lua or snacks for more')
-  else
-    vim.health.ok('pickers: ' .. chosen)
-  end
-
-  -- There is no way to ask a terminal whether it can draw a glyph, so this says where to look
-  -- rather than claiming an answer. A wrong icon is visible the moment the drawer opens.
-  vim.health.info('icons need a Nerd Font; set `icons` if boxes appear in the drawer')
+--- The one plugin sqmeow can use, and does not need.
+local function check_dependencies()
+  vim.health.start('dependencies')
 
   if require('sqmeow.ui.form').available() then
     vim.health.ok('nui.nvim: the connection dialog is available')
@@ -155,12 +138,9 @@ local function check_integrations()
     )
   end
 
-  if pcall(require, 'lualine') then
-    vim.health.ok("lualine: add `'sqmeow'` to a section")
-  end
-  if not configured.notify then
-    vim.health.info('notifications are off; errors are still reported')
-  end
+  -- There is no way to ask a terminal whether it can draw a glyph, so this says where to look
+  -- rather than claiming an answer. A wrong icon is visible the moment the drawer opens.
+  vim.health.info('icons need a Nerd Font; set `icons` if boxes appear in the drawer')
 end
 
 --- Which dialect a URL scheme belongs to, or nil if none does.
@@ -179,7 +159,7 @@ function M.check()
   check_config()
   check_engine()
   check_sources()
-  check_integrations()
+  check_dependencies()
   check_open()
 end
 

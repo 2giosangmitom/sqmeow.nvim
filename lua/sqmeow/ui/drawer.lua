@@ -133,9 +133,20 @@ end
 ---
 ---@return string # The label, so a caller can measure where its own trailing note begins.
 local function emit(lines, highlights, node)
-  local icon, icon_group = require('sqmeow.icons').get(node.kind)
+  local icons = require('sqmeow.icons')
+  local icon, icon_group = icons.get(node.kind)
   local indent = node.indent or ''
   local prefix = ('%s%s '):format(indent, node.marker)
+
+  -- A badge sits between the marker and the icon: the marker says whether the row is open, the
+  -- badge says something about the thing itself, and the icon says what kind of thing it is.
+  local badge
+  if node.badge then
+    local text, group = icons.get(node.badge)
+    badge = { group = group, from = #prefix, to = #prefix + #text }
+    prefix = prefix .. text .. ' '
+  end
+
   local label = ('%s%s %s'):format(prefix, icon, node.name)
 
   local note = node.note or ''
@@ -152,6 +163,9 @@ local function emit(lines, highlights, node)
       from = #indent,
       to = #indent + #node.marker,
     })
+  end
+  if badge then
+    table.insert(highlights, { line = line, group = badge.group, from = badge.from, to = badge.to })
   end
   table.insert(
     highlights,
@@ -225,9 +239,8 @@ local SCRATCHPADS = 'scratchpads'
 
 --- Draw the saved scratchpads under a heading of their own.
 ---
---- Below the connections, because the tree is about databases first. They are here rather than
---- only in a picker so that reopening yesterday's query is something a user can see, not something
---- they have to remember exists.
+--- Below the connections, because the tree is about databases first. Reopening yesterday's query
+--- is something a user can see rather than something they have to remember exists.
 local function draw_scratchpads(lines, highlights, marks)
   local pads = require('sqmeow.ui.editor').list()
   local open = expanded[SCRATCHPADS] == true
@@ -259,9 +272,7 @@ end
 local HISTORY = 'history'
 
 --- How many queries the drawer offers before the section becomes a wall of text.
----
---- The picker has all of them, and is the right tool once there are more than a screenful.
-local HISTORY_SHOWN = 10
+local HISTORY_SHOWN = 20
 
 --- Draw what has been run under a heading of its own.
 local function draw_history(lines, highlights, marks)
@@ -294,30 +305,72 @@ local function draw_history(lines, highlights, marks)
   end
 end
 
+--- Every connection the drawer draws.
+---
+--- The open ones, and then the saved ones that are not open. A database client lists what you can
+--- connect to, not only what you have connected to, and the dot beside each says which is which.
+---
+--- Read on every draw rather than remembered, so a connection saved in another Neovim, or written
+--- straight into the file, is there without anyone asking for a refresh.
+---
+---@return table[]
+function M.connection_rows()
+  local drawn = {}
+  local open = {}
+
+  for _, connection in ipairs(require('sqmeow.state').connection_list()) do
+    open[connection.name] = true
+    table.insert(drawn, {
+      id = connection.id,
+      name = connection.name,
+      dialect = connection.dialect,
+      note = connection.state,
+      connected = connection.state == 'connected',
+    })
+  end
+
+  for _, spec in ipairs((require('sqmeow.sources').load())) do
+    if not open[spec.name] then
+      table.insert(drawn, {
+        name = spec.name,
+        url = spec.url,
+        dialect = require('sqmeow.dialects').of_url(spec.url),
+        note = 'saved',
+        connected = false,
+      })
+    end
+  end
+
+  return drawn
+end
+
 --- Redraw the tree.
 function M.render()
   if not valid_buf() then
     return
   end
 
-  local state = require('sqmeow.state')
   local marks = require('sqmeow.icons').markers()
   local lines, highlights = {}, {}
   rows = {}
 
-  for _, connection in ipairs(state.connection_list()) do
-    local open = M.is_expanded(connection.id, {})
+  for _, connection in ipairs(M.connection_rows()) do
+    local open = connection.id ~= nil and M.is_expanded(connection.id, {})
     emit(lines, highlights, {
       marker = open and marks.open or marks.closed,
+      badge = connection.connected and 'connected' or 'disconnected',
       kind = require('sqmeow.icons').connection_kind(connection.dialect),
       name = connection.name,
-      note = connection.dialect or connection.state,
+      note = connection.dialect or connection.note,
       row = {
         conn_id = connection.id,
         path = {},
         name = connection.name,
         kind = 'connection',
-        expandable = true,
+        url = connection.url,
+        -- A connection nobody has opened has nothing to show yet. Pressing the same key opens it,
+        -- and then it does.
+        expandable = connection.connected,
       },
     })
 
@@ -327,7 +380,7 @@ function M.render()
   end
 
   if #lines == 0 then
-    table.insert(lines, 'no connections, run :Sqmeow connect')
+    table.insert(lines, 'no connections, run :Sqmeow add')
     table.insert(rows, false)
   end
 
@@ -402,6 +455,16 @@ function M.actions.toggle()
   if node.kind == 'query' then
     return require('sqmeow.ui.log').reopen(node.entry)
   end
+
+  if node.kind == 'connection' then
+    -- One key for the whole row. A connection that is not open, opens; one that is open becomes
+    -- the connection queries run against, and its schemas appear.
+    if not node.conn_id then
+      return require('sqmeow.api').connect_named(node.name)
+    end
+    require('sqmeow.api').use(node.conn_id)
+  end
+
   if not node.expandable then
     return
   end
@@ -492,32 +555,13 @@ function M.actions.yank_select()
   vim.notify('sqmeow: yanked ' .. statement)
 end
 
---- Find a relation, narrowed to the schema the cursor is in.
----
---- Standing on a schema means the search is about that schema, and standing anywhere else means
---- it is about the whole connection. That is what makes one key useful at every level of the tree.
-function M.actions.find()
-  local node = M.current_node()
-  if node and node.kind == 'scratchpad' or node and node.kind == 'scratchpads' then
-    return require('sqmeow.pickers').scratchpads()
-  end
-
-  if node and node.conn_id then
-    require('sqmeow.api').use(node.conn_id)
-  end
-
-  require('sqmeow.pickers').relations({
-    schema = node and node.path and #node.path >= 1 and node.path[1] or nil,
-  })
-end
-
 --- Rename the connection or the scratchpad under the cursor.
 ---
 --- The current name is offered as the default, so the prompt is somewhere to edit rather than
 --- somewhere to retype, and leaving it alone changes nothing.
 function M.actions.rename()
   local node = M.current_node()
-  if node and node.kind ~= 'scratchpad' and node.conn_id and #node.path == 0 then
+  if node and node.kind == 'connection' then
     return vim.ui.input({ prompt = 'Call it: ', default = node.name }, function(name)
       if not name or name == '' or name == node.name then
         return
@@ -563,7 +607,7 @@ end
 --- Everything about it, unlike `rename`, which is the quick version of the same thing.
 function M.actions.edit()
   local node = M.current_node()
-  if not node or node.kind == 'scratchpad' or not node.conn_id or #node.path > 0 then
+  if not node or node.kind ~= 'connection' then
     return
   end
 
@@ -623,6 +667,22 @@ function M.actions.delete()
     vim.notify('sqmeow: deleted the scratchpad ' .. node.name)
     M.render()
   end)
+end
+
+--- Open the history section and put the cursor on it.
+---
+--- What `:Sqmeow log` does, so the command lands somewhere useful rather than only drawing the
+--- tree and leaving the section shut.
+function M.reveal_history()
+  expanded[HISTORY] = true
+  M.render()
+
+  for number, row in ipairs(rows) do
+    if row and row.kind == 'history' then
+      pcall(vim.api.nvim_win_set_cursor, M.open(), { number, 0 })
+      return
+    end
+  end
 end
 
 --- Show the drawer's mappings.

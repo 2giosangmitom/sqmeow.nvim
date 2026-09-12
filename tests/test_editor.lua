@@ -243,6 +243,33 @@ T['layout']['waits for the last window before restoring'] = function()
   require('sqmeow.ui.drawer').close()
 end
 
+T['opening everything'] = MiniTest.new_set({
+  hooks = {
+    post_case = function()
+      require('sqmeow.ui.result').close()
+      require('sqmeow.ui.drawer').close()
+      layout.forget()
+    end,
+  },
+})
+
+T['opening everything']['puts up all three surfaces'] = function()
+  require('sqmeow.api').open_all()
+
+  eq(require('sqmeow.ui.drawer').is_open(), true)
+  eq(require('sqmeow.ui.result').is_open(), true)
+  -- And the cursor is in the scratchpad, since that is where a person types next.
+  eq(require('sqmeow.ui.editor').is_scratchpad(), true)
+end
+
+T['opening everything']['closes it all again'] = function()
+  require('sqmeow.api').open_all()
+  require('sqmeow.api').toggle()
+
+  eq(require('sqmeow.ui.drawer').is_open(), false)
+  eq(require('sqmeow.ui.result').is_open(), false)
+end
+
 T['editing window'] = MiniTest.new_set({
   hooks = {
     post_case = function()

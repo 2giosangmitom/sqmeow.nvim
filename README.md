@@ -21,6 +21,9 @@ large result from stalling the editor.
 
 ## Trying it
 
+`:Sqmeow` opens the whole client: the drawer on the left, a scratchpad beside it, and the result
+window along the bottom. Run it again to put your windows back exactly as they were.
+
 `:Sqmeow add` asks which database you are connecting to, then asks for the details one field at a
 time and writes the URL for you:
 
@@ -36,21 +39,18 @@ time and writes the URL for you:
         ╰──── <CR> edit   <C-s> save   q cancel ─────╯
 ```
 
-The name is the first thing it asks for and it suggests nothing. That name is what the drawer, the
-statusline and every picker will call the database from now on, and the URL itself never appears.
+The name is the first thing it asks for and it suggests nothing. That name is what the drawer will
+call the database from now on, and the URL itself never appears.
 
-Or give a URL directly:
+Saving it puts it in the drawer, where every connection you have saved is listed with a dot beside
+it: green when it is open, red when it is not. `<CR>` on a red one opens it, and `<CR>` on a green
+one makes it the connection queries run against and shows its schemas.
 
-```vim
-:Sqmeow connect sqlite://./app.db
-:Sqmeow connect postgres://user@localhost/app
-:Sqmeow connect mysql://user@localhost/app
 ```
-
-Then open a `.sql` buffer and run it:
-
-```vim
-:Sqmeow execute
+v ● production  postgres
+  > public
+> ● staging  postgres
+> ● analytics  mysql
 ```
 
 Results land in a split below, one buffer holding the column names and the rows. `L` and `H`
@@ -58,8 +58,8 @@ page through them, `K` opens the row under the cursor down the page so long valu
 full, `yc` and `yr` yank a cell or a row, and `q` closes the window. `:Sqmeow cancel` stops a query
 that is taking too long.
 
-`:Sqmeow toggle` opens the schema drawer. A connection holds schemas, a schema holds four headings,
-and each heading says how many things it holds before you open it:
+A connection holds schemas, a schema holds four headings, and each heading says how many things it
+holds before you open it:
 
 ```
 v postgres-db
@@ -86,14 +86,11 @@ rather than a message that scrolls away.
 Every scratchpad you have written is listed in the drawer under its own heading, below the
 connections. `<CR>` on one opens it, in a real editing window rather than in the sidebar, `R`
 renames it, and `d` deletes it after asking. Both prompts start from the current name, so a stray
-keypress followed by `<Esc>` changes nothing. `:Sqmeow find scratchpads` is the same list as a
-fuzzy picker, and `:Sqmeow scratch <name>` opens or creates one under a name of your choosing.
+keypress followed by `<Esc>` changes nothing. `:Sqmeow scratch <name>` opens or creates one under a
+name of your choosing.
 
-`:Sqmeow export csv` writes the whole result to a file, and `:Sqmeow log` lists what has been run
-and puts any of it back on screen without running it again.
-
-`:Sqmeow find relations` fuzzy-finds a table anywhere in the connection, through whichever picker
-you already use.
+`:Sqmeow export csv` writes the whole result to a file, and `:Sqmeow log` opens the history section
+of the drawer, from which any past query goes back on screen without running again.
 
 ## Keys
 
@@ -116,72 +113,11 @@ bind a `<Plug>` mapping:
 vim.keymap.set('n', '<leader>dd', '<Plug>(sqmeow-toggle)')
 vim.keymap.set('n', '<leader>de', '<Plug>(sqmeow-execute)')
 vim.keymap.set('n', '<leader>dc', '<Plug>(sqmeow-cancel)')
-vim.keymap.set('n', '<leader>dr', '<Plug>(sqmeow-relations)')
-vim.keymap.set('n', '<leader>dh', '<Plug>(sqmeow-history)')
 vim.keymap.set('n', '<leader>da', '<Plug>(sqmeow-add-connection)')
+vim.keymap.set('n', '<leader>ds', '<Plug>(sqmeow-scratch)')
 ```
 
-## Pickers
-
-`:Sqmeow find` opens one of five lists, and each one is shown with whichever fuzzy picker you
-already have. telescope, fzf-lua and snacks.picker are all detected at the moment the list opens,
-so none of them is a dependency and having none of them still works through `vim.ui.select`.
-
-| List | What it does |
-| --- | --- |
-| `connections` | switch the current connection, or open a saved one |
-| `relations` | find a table or a view anywhere in the connection |
-| `history` | put a past result back on screen without running it again |
-| `scratchpads` | open a saved query buffer |
-| `columns` | jump to a column of the current result |
-
-`f` opens the relevant one from inside a plugin window: the relation list from the drawer, scoped
-to the schema you are standing in, and the column list from the result grid. telescope users also
-get `:Telescope sqmeow relations` once the extension is loaded:
-
-```lua
-require('telescope').load_extension('sqmeow')
-```
-
-The relation list is read once per connection and then held, so it opens instantly after the first
-time. A schema you cannot read is left out rather than emptying the list.
-
-## Statusline
-
-`require('sqmeow.status').get()` returns a plain table: the connection, its dialect, what the last
-query is doing, and how big its result was. Anything that renders a statusline can read it.
-
-For lualine there is a component built on top of it, named `sqmeow`:
-
-```lua
-require('lualine').setup({
-  sections = { lualine_x = { 'sqmeow' } },
-})
-```
-
-It shows nothing until you connect, spins while a query runs, and reports the row count and how
-long it took when one finishes.
-
-Name it as a string rather than calling `require`. A lazy.nvim spec is read before any plugin is
-on the runtime path, so `require('sqmeow.lualine')` inside an `opts` table runs too early and the
-component never arrives:
-
-```lua
-{
-  'nvim-lualine/lualine.nvim',
-  -- lualine looks the component up by name when it is configured, so this plugin has to be on
-  -- the runtime path by then. That is all the dependency is for.
-  dependencies = { '2giosangmitom/sqmeow.nvim' },
-  opts = {
-    sections = { lualine_x = { 'sqmeow' } },
-  },
-}
-```
-
-`require('sqmeow.lualine')` returns the same component for anyone configuring lualine somewhere a
-`require` is safe.
-
-## Icons and notifications
+## Icons
 
 Every character the plugin draws that is not text lives in one `icons` table, and all of it is
 yours to change. The defaults are Nerd Font glyphs, so a terminal without one is dressed by setting
@@ -194,10 +130,11 @@ require('sqmeow').setup({
     table = '',
     view = '',
     postgres = '',
+    -- Beside a connection, saying whether it is open. The colour is the difference.
+    connected = 'o',
+    disconnected = 'x',
     -- What sits before a drawer row, by whether its children are showing.
     markers = { open = 'v', closed = '>', leaf = ' ' },
-    -- Cycled while a query runs. Any number of frames works.
-    spinner = { '|', '/', '-', '\\' },
     -- What the engine draws the result grid with.
     grid = { vertical = '|', horizontal = '-', cross = '+', ellipsis = '~' },
   },
@@ -205,7 +142,8 @@ require('sqmeow').setup({
 ```
 
 The kinds are `connection`, `schema`, `table`, `view`, `materialized view`, `relation`, `column`,
-`scratchpads`, `scratchpad`, `query`, and the dialects `postgres`, `mysql` and `sqlite`. A
+`scratchpads`, `scratchpad`, `query`, `history`, `connected`, `disconnected`, and the dialects
+`postgres`, `mysql` and `sqlite`. A
 connection wears its own dialect's icon, so a drawer holding three databases tells them apart
 without reading a word. Naming a kind that does not exist is a configuration error rather than a
 setting that quietly does nothing.
@@ -223,19 +161,17 @@ vim.api.nvim_set_hl(0, 'SqmeowIconTable', { fg = '#7aa2f7' })
 vim.api.nvim_set_hl(0, 'SqmeowMarker', { link = 'NonText' })
 ```
 
-Long operations report through `vim.notify`, so nvim-notify, snacks.notifier and dressing.nvim all
-render them, and connecting rewrites its own message rather than stacking a second one. Set
-`integrations.notify = false` to keep everything but the errors quiet.
+The dot beside a connection follows `DiagnosticOk` and `DiagnosticError`, so it is green and red in
+every colourscheme without this plugin naming a colour.
 
 ## Connections
 
-`:Sqmeow save` writes a connection to a JSON file under `stdpath('data')`, and `:Sqmeow connect`
-with no argument offers everything the configured sources know about. Three sources ship with the
-plugin: inline connections from `setup()`, a JSON file, and a JSON environment variable.
+`:Sqmeow add` writes a connection to a JSON file under `stdpath('data')`, and everything the
+configured sources know about is listed in the drawer. Three sources ship with the plugin: inline
+connections from `setup()`, a JSON file, and a JSON environment variable.
 
-Every connection has a name, and the name is what appears in the drawer, the statusline and the
-pickers, so the sidebar reads `production` rather than `app@db.internal`. The dialog asks for it
-first. `:Sqmeow connect <url> <name>` says it up front instead.
+Every connection has a name, and the name is what appears everywhere, so the sidebar reads
+`production` rather than `app@db.internal`. The dialog asks for it first and suggests nothing.
 
 `A` in the drawer opens the dialog, `e` opens the connection under the cursor for editing, and `R`
 is the quick version that changes only the name. `:Sqmeow edit [name]` opens the same dialog from
@@ -246,9 +182,8 @@ A rename reaches the saved entry and the open connection together, since they ar
 everyone but this plugin. A changed URL takes effect on the next connect, which the plugin says at
 the time rather than leaving you to wonder.
 
-The dialog needs nui.nvim. Without it the rest of the plugin works and connections are made with a
-URL, which is also what happens for a URL holding a template, since splitting one into fields would
-throw the template away.
+The dialog needs nui.nvim. A URL holding a template falls back to two prompts, since splitting one
+into fields would throw the template away.
 
 Passwords do not have to be written down. A URL may hold a directive that the engine expands when
 it connects, and never logs, echoes, or sends back to the editor:
@@ -273,9 +208,9 @@ v history                          3
     > delete from sessions where …  2d ago
 ```
 
-`:Sqmeow log` opens the whole log in a picker and the drawer shows the ten most recent. Choosing
-one puts its rows back on screen if the engine still holds them, which is true for anything run
-since Neovim started. Otherwise the statement opens in a buffer ready to run, since a log holds
+The drawer shows the twenty most recent, and `:Sqmeow log` opens that section. Choosing one puts
+its rows back on screen if the engine still holds them, which is true for anything run since Neovim
+started. Otherwise the statement opens in a buffer ready to run, since a log holds
 deletes as readily as selects and picking a line is not the same as asking for it to happen again.
 
 The same statement run twenty times is one line, and that line is its most recent run.
@@ -300,7 +235,6 @@ require('sqmeow').setup({
 | PostgreSQL and MySQL | done |
 | Schema drawer and keymap system | done |
 | Editor and result grid | done |
-| Statusline and picker integrations | done |
 | Generated documentation and prebuilt releases | done |
 
 ## Documentation

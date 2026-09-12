@@ -105,6 +105,8 @@ local T = MiniTest.new_set({
           scratchpad = '*',
           query = '>',
           history = 'H',
+          connected = 'o',
+          disconnected = 'x',
           ['function'] = 'f',
           procedure = 'p',
           tables = 'T',
@@ -153,7 +155,7 @@ T['tree'] = MiniTest.new_set()
 
 T['tree']['starts with connections collapsed'] = function()
   local drawn = lines()
-  eq(vim.list_slice(drawn, 1, 2), { '> s scratch  sqlite', '> + scratchpads  none saved' })
+  eq(vim.list_slice(drawn, 1, 2), { '> o s scratch  sqlite', '> + scratchpads  none saved' })
   -- The log's own contents are this file's queries, and how many there are by now depends on
   -- which cases have run. What matters here is that the section is drawn and shut.
   eq(drawn[3]:find('> H history', 1, true), 1)
@@ -164,12 +166,13 @@ T['tree']['colours the marker apart from the icon'] = function()
   expand('scratch')
   line_matching('main')
 
-  -- `v s scratch  sqlite`: the marker, the connection's dialect icon, and the trailing note,
-  -- each in its own group.
+  -- `v o s scratch  sqlite`: the marker, the dot saying the connection is open, the dialect
+  -- icon, and the trailing note, each in its own group.
   eq(marks_on(1), {
     { group = 'SqmeowMarker', from = 0, to = 1 },
-    { group = 'SqmeowIconSqlite', from = 2, to = 3 },
-    { group = 'SqmeowNull', from = 11, to = 19 },
+    { group = 'SqmeowConnected', from = 2, to = 3 },
+    { group = 'SqmeowIconSqlite', from = 4, to = 5 },
+    { group = 'SqmeowNull', from = 13, to = 21 },
   })
 end
 
@@ -177,7 +180,7 @@ T['tree']['expands a connection into its schemas'] = function()
   expand('scratch')
   line_matching('main')
 
-  eq(lines()[1], 'v s scratch  sqlite')
+  eq(lines()[1], 'v o s scratch  sqlite')
   eq(lines()[2], '  > @ main')
 end
 
@@ -283,6 +286,46 @@ T['actions']['preview a relation into the result window'] = function()
   -- grid the engine draws as well as the markers the drawer draws.
   local grid = vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
   eq(grid[1], ' id | name | score')
+end
+
+T['saved connections'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      require('sqmeow.sources.file').add({ name = 'ledger', url = 'postgres://localhost/ledger' })
+      drawer.render()
+    end,
+    post_case = function()
+      vim.fn.delete(require('sqmeow.sources.file').default_path())
+      drawer.render()
+    end,
+  },
+})
+
+T['saved connections']['are listed even though nothing is open'] = function()
+  eq(lines()[line_matching('ledger')], '> x p ledger  postgres')
+end
+
+T['saved connections']['show a dot in the colour of their state'] = function()
+  local number = line_matching('ledger')
+  eq(marks_on(number)[2], { group = 'SqmeowDisconnected', from = 2, to = 3 })
+
+  -- The one that is open carries the other colour, on the same column.
+  eq(marks_on(line_matching('scratch'))[2], { group = 'SqmeowConnected', from = 2, to = 3 })
+end
+
+T['saved connections']['open when chosen'] = function()
+  local opened
+  local connect = require('sqmeow.api').connect_named
+  require('sqmeow.api').connect_named = function(name)
+    opened = name
+  end
+  MiniTest.finally(function()
+    require('sqmeow.api').connect_named = connect
+  end)
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('ledger'), 0 })
+  drawer.actions.toggle()
+  eq(opened, 'ledger')
 end
 
 T['history'] = MiniTest.new_set({

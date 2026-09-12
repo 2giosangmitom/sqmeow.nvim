@@ -9,7 +9,7 @@ local M = {}
 local wired = false
 
 local function notify(message, level)
-  require('sqmeow.integrations.notify').notify(message, level)
+  vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
 end
 
 --- Handle a connection changing state.
@@ -27,22 +27,13 @@ function M.on_connection(payload)
 
   require('sqmeow.ui.drawer').render()
 
-  -- Connecting and its outcome are one message that rewrites itself, where the notification
-  -- frontend allows it. Two lines for one event is noise.
-  local progress = require('sqmeow.integrations.notify').progress
-  local key = 'connect:' .. payload.id
-
-  if payload.state == 'connecting' then
-    progress(key, 'connecting to ' .. connection.name)
-  elseif payload.state == 'connected' then
-    progress(key, ('connected to %s (%s)'):format(connection.name, connection.dialect), {
-      done = true,
-    })
-  elseif payload.state == 'error' then
-    progress(key, ('could not connect to %s: %s'):format(connection.name, payload.error), {
-      level = vim.log.levels.ERROR,
-      done = true,
-    })
+  -- Connecting says nothing: the drawer already shows the dot beside the connection, and a line
+  -- in the message area for something visible on screen is noise.
+  if payload.state == 'error' then
+    notify(
+      ('could not connect to %s: %s'):format(connection.name, payload.error),
+      vim.log.levels.ERROR
+    )
     state.remove_connection(payload.id)
   elseif payload.state == 'closed' then
     state.remove_connection(payload.id)

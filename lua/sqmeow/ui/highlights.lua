@@ -38,6 +38,11 @@ M.links = {
   SqmeowIconScratchpad = 'String',
   SqmeowIconQuery = 'Function',
   SqmeowIconHistory = 'Statement',
+
+  -- The dot beside a connection. Standard diagnostic groups, so it is green and red in every
+  -- colourscheme without this plugin naming a colour.
+  SqmeowConnected = 'DiagnosticOk',
+  SqmeowDisconnected = 'DiagnosticError',
   SqmeowIconFunction = 'Function',
   SqmeowIconProcedure = 'Macro',
   SqmeowIconPostgres = 'Constant',
