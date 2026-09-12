@@ -1381,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-adapters"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "futures-util",
  "serde_json",
@@ -1394,7 +1394,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "rmpv",
  "sqmeow-adapters",
@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-db"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "thiserror",
  "tokio",
@@ -1419,7 +1419,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-render"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde_json",
  "sqmeow-db",
@@ -1428,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-rpc"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "rmpv",
  "thiserror",

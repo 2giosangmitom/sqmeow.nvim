@@ -11,7 +11,7 @@ members = [
 [workspace.package]
 # Bumped by release-please, which finds the line by the annotation rather than by its
 # position, so the comment is load-bearing.
-version = "1.0.0" # x-release-please-version
+version = "1.0.1" # x-release-please-version
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
