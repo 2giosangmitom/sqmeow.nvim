@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/2giosangmitom/sqmeow.nvim/compare/v1.0.1...v1.0.2) (2026-09-12)
+
+
+### Fixes
+
+* **install:** download musl binary for linux ([d392c95](https://github.com/2giosangmitom/sqmeow.nvim/commit/d392c95630833d3c67fc9aec79e0ee15b517f3b9))
+
 ## [1.0.1](https://github.com/2giosangmitom/sqmeow.nvim/compare/v1.0.0...v1.0.1) (2026-09-12)
 
 
