@@ -35,7 +35,7 @@ reports the outcome as an event, so the editor is never blocked on a socket.
 | --- | --- | --- |
 | `handshake` | `plugin_version` | `core_version`, `protocol_version`, `pid`, `adapters` |
 | `ping` | | `"pong"` |
-| `configure` | `max_rows`, `history_size`, `page_size`, `max_column_width`, `null_text`, `ascii` | the settings as applied |
+| `configure` | `max_rows`, `history_size`, `page_size`, `max_column_width`, `null_text`, `grid_vertical`, `grid_horizontal`, `grid_cross`, `grid_ellipsis` | the settings as applied |
 | `connect` | `id`, `url`, `name` | `id`; the outcome arrives as `conn:state` |
 | `disconnect` | `id` | whether there was a connection to close |
 | `connections` | | one map per open connection |

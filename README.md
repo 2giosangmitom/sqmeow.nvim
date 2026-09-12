@@ -122,31 +122,36 @@ long it took when one finishes.
 
 ## Icons and notifications
 
-The drawer draws a nerd font glyph for every kind of thing it shows, and a connection wears its own
-dialect's icon so a drawer holding three databases tells them apart without reading a word. Whether
-glyphs are used at all is decided by what is installed: mini.icons, then nvim-web-devicons, then a
-plain ASCII set that needs no patched font. Set `integrations.icons = 'ascii'` to force the last
-one, which also switches the result grid to ASCII rules.
-
-Any icon can be replaced, by kind:
+Every character the plugin draws that is not text lives in one `icons` table, and all of it is
+yours to change. The defaults are Nerd Font glyphs, so a terminal without one is dressed by setting
+them rather than by the plugin guessing at your font. No icon plugin is consulted: mini.icons and
+nvim-web-devicons map file types, and a materialised view is not a file.
 
 ```lua
 require('sqmeow').setup({
-  integrations = {
-    icon_overrides = {
-      table = '',
-      view = '',
-      postgres = '',
-    },
+  icons = {
+    table = '',
+    view = '',
+    postgres = '',
+    -- What sits before a drawer row, by whether its children are showing.
+    markers = { open = 'v', closed = '>', leaf = ' ' },
+    -- Cycled while a query runs. Any number of frames works.
+    spinner = { '|', '/', '-', '\\' },
+    -- What the engine draws the result grid with.
+    grid = { vertical = '|', horizontal = '-', cross = '+', ellipsis = '~' },
   },
 })
 ```
 
 The kinds are `connection`, `schema`, `table`, `view`, `materialized view`, `relation`, `column`,
-`scratchpads`, `scratchpad`, `query`, and the dialects `postgres`, `mysql` and `sqlite`. An override
-applies whether or not a patched font was detected, because writing one is a decision about what
-you want to see. A kind that does not exist is reported by `:checkhealth sqmeow` rather than
-silently ignored.
+`scratchpads`, `scratchpad`, `query`, and the dialects `postgres`, `mysql` and `sqlite`. A
+connection wears its own dialect's icon, so a drawer holding three databases tells them apart
+without reading a word. Naming a kind that does not exist is a configuration error rather than a
+setting that quietly does nothing.
+
+The three grid separators have to be one column wide. A wider one is ignored, because a rule drawn
+from it would no longer line up with the header above it. The ellipsis may be any width, since the
+column it truncates is measured against whatever it is.
 
 Colours are not set there. Every icon has a `SqmeowIcon*` highlight group, linked to a standard
 group so any colourscheme works, and redefining the group is how you recolour it:

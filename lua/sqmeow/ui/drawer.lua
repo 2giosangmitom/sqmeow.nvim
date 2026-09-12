@@ -42,13 +42,6 @@ local function valid_win()
     and vim.api.nvim_win_get_buf(win) == buf
 end
 
-local function markers()
-  if not require('sqmeow.integrations.icons').glyphs_available() then
-    return { open = 'v', closed = '>', leaf = ' ' }
-  end
-  return { open = '▾', closed = '▸', leaf = ' ' }
-end
-
 --- Whether the tree currently shows this node's children.
 ---@param conn_id integer
 ---@param path string[]
@@ -120,7 +113,7 @@ end
 ---
 ---@return string # The label, so a caller can measure where its own trailing note begins.
 local function emit(lines, highlights, node)
-  local icon, icon_group = require('sqmeow.integrations.icons').get(node.kind)
+  local icon, icon_group = require('sqmeow.icons').get(node.kind)
   local prefix = ('%s%s '):format(node.indent or '', node.marker)
   local label = ('%s%s %s'):format(prefix, icon, node.name)
 
@@ -160,7 +153,7 @@ local function draw(lines, highlights, conn_id, path, depth)
     return
   end
 
-  local marks = markers()
+  local marks = require('sqmeow.icons').markers()
 
   for _, node in ipairs(entry.nodes or {}) do
     local child = vim.list_extend(vim.list_slice(path, 1, #path), { node.name })
@@ -232,7 +225,7 @@ function M.render()
   end
 
   local state = require('sqmeow.state')
-  local marks = markers()
+  local marks = require('sqmeow.icons').markers()
   local lines, highlights = {}, {}
   rows = {}
 
@@ -240,7 +233,7 @@ function M.render()
     local open = M.is_expanded(connection.id, {})
     emit(lines, highlights, {
       marker = open and marks.open or marks.closed,
-      kind = require('sqmeow.integrations.icons').connection_kind(connection.dialect),
+      kind = require('sqmeow.icons').connection_kind(connection.dialect),
       name = connection.name,
       note = connection.dialect or connection.state,
       row = {

@@ -142,16 +142,9 @@ local function check_integrations()
     vim.health.ok('pickers: ' .. chosen)
   end
 
-  local icons = require('sqmeow.integrations.icons')
-  local provider = icons.provider()
-  if provider == 'ascii' then
-    vim.health.info('icons are plain ASCII; install mini.icons or nvim-web-devicons for glyphs')
-  else
-    vim.health.ok('icons: ' .. provider)
-  end
-  for _, problem in ipairs(icons.problems()) do
-    vim.health.error(problem)
-  end
+  -- There is no way to ask a terminal whether it can draw a glyph, so this says where to look
+  -- rather than claiming an answer. A wrong icon is visible the moment the drawer opens.
+  vim.health.info('icons need a Nerd Font; set `icons` if boxes appear in the drawer')
 
   if pcall(require, 'lualine') then
     vim.health.ok("lualine: add `require('sqmeow.lualine')` to a section")

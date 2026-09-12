@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use sqmeow_adapters::Backend;
 use sqmeow_db::{CatalogEntry, ResultSet};
-use sqmeow_render::{GridOptions, GridStyle, Layout};
+use sqmeow_render::{GridOptions, GridStylePatch, Layout};
 use tokio_util::sync::CancellationToken;
 
 /// Engine-side settings, mirrored from the plugin's configuration.
@@ -50,13 +50,7 @@ impl Options {
         if let Some(value) = other.null_text {
             self.grid.null_text = value;
         }
-        if let Some(ascii) = other.ascii {
-            self.grid.style = if ascii {
-                GridStyle::ASCII
-            } else {
-                GridStyle::UNICODE
-            };
-        }
+        self.grid.style.update(other.style);
     }
 }
 
@@ -68,7 +62,7 @@ pub struct OptionsPatch {
     pub page_size: Option<usize>,
     pub max_column_width: Option<usize>,
     pub null_text: Option<String>,
-    pub ascii: Option<bool>,
+    pub style: GridStylePatch,
 }
 
 /// One open connection.
@@ -399,6 +393,23 @@ mod tests {
         assert_eq!(options.grid.page_size, 25);
         assert_eq!(options.max_rows, 100_000);
         assert_eq!(options.grid.null_text, "NULL");
+    }
+
+    #[test]
+    fn configure_carries_the_grid_characters() {
+        let session = Session::default();
+        let options = session.configure(OptionsPatch {
+            style: GridStylePatch {
+                vertical: Some("!".to_owned()),
+                // Three columns wide, so it is dropped and the default rule survives.
+                cross: Some("-+-".to_owned()),
+                ..GridStylePatch::default()
+            },
+            ..OptionsPatch::default()
+        });
+
+        assert_eq!(options.grid.style.vertical, "!");
+        assert_eq!(options.grid.style.cross, "┼");
     }
 
     #[test]

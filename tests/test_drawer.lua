@@ -66,8 +66,27 @@ end
 local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
-      -- Pinned, so the tree looks the same whether or not an icon plugin is installed.
-      require('sqmeow').setup({ integrations = { icons = 'ascii' } })
+      -- Pinned to plain characters, so every assertion below can say what a line reads as
+      -- without the suite needing a Nerd Font. All of it is ordinary configuration.
+      require('sqmeow').setup({
+        icons = {
+          connection = '#',
+          schema = '@',
+          table = '=',
+          view = '~',
+          ['materialized view'] = '~',
+          relation = '=',
+          column = '-',
+          scratchpads = '+',
+          scratchpad = '*',
+          query = '>',
+          postgres = 'p',
+          mysql = 'm',
+          sqlite = 's',
+          markers = { open = 'v', closed = '>', leaf = ' ' },
+          grid = { vertical = '|', horizontal = '-', cross = '+', ellipsis = '~' },
+        },
+      })
 
       local id = assert(api.connect('sqlite::memory:', { name = 'scratch' }))
       assert(vim.wait(TIMEOUT, function()

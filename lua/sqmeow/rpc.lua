@@ -190,7 +190,12 @@ function M.configure()
     history_size = config.query.history_size,
     page_size = config.ui.result.page_size,
     max_column_width = config.ui.result.max_column_width,
-    ascii = config.integrations.icons == 'ascii',
+    -- The engine draws the grid, so the characters it draws it with have to travel with the rest
+    -- of the configuration rather than being read from Lua where the lines are never touched.
+    grid_vertical = config.icons.grid.vertical,
+    grid_horizontal = config.icons.grid.horizontal,
+    grid_cross = config.icons.grid.cross,
+    grid_ellipsis = config.icons.grid.ellipsis,
   })
 
   if not ok then

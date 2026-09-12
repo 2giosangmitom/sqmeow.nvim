@@ -148,13 +148,13 @@ mod tests {
     fn optional_readers_tolerate_absent_and_wrong_types() {
         let params = table(vec![
             ("offset", Value::from(5)),
-            ("ascii", Value::from(true)),
+            ("refresh", Value::from(true)),
         ]);
         let args = Args::from_params(&params).unwrap();
 
         assert_eq!(args.opt_integer("offset"), Some(5));
         assert_eq!(args.opt_usize("offset"), Some(5));
-        assert_eq!(args.opt_bool("ascii"), Some(true));
+        assert_eq!(args.opt_bool("refresh"), Some(true));
         assert_eq!(args.opt_integer("missing"), None);
         assert_eq!(args.opt_bool("offset"), None);
     }

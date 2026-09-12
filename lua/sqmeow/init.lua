@@ -35,9 +35,6 @@ function M.setup(opts)
   end
 
   require('sqmeow.ui.highlights').setup()
-  -- The icon provider is derived from the configuration and then cached, so a second `setup()`
-  -- has to invalidate it or the old answer outlives the setting that produced it.
-  require('sqmeow.integrations.icons').reset()
 
   -- A colourscheme change wipes every group, including ours.
   vim.api.nvim_create_autocmd('ColorScheme', {
@@ -45,9 +42,6 @@ function M.setup(opts)
     desc = 'Redefine sqmeow highlight groups',
     callback = function()
       require('sqmeow.ui.highlights').setup()
-      -- The icon provider is derived from the configuration and then cached, so a second `setup()`
-      -- has to invalidate it or the old answer outlives the setting that produced it.
-      require('sqmeow.integrations.icons').reset()
     end,
   })
 

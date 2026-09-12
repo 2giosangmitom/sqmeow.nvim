@@ -8,4 +8,4 @@ pub mod grid;
 pub mod width;
 
 pub use export::{Format, Rows};
-pub use grid::{GridOptions, GridStyle, Layout};
+pub use grid::{GridOptions, GridStyle, GridStylePatch, Layout};

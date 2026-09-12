@@ -21,16 +21,11 @@ local M = {}
 ---@field elapsed_ms integer|nil How long the last query took.
 ---@field truncated boolean|nil Whether the row cap was reached.
 
---- Frames of the spinner shown while a query runs.
+--- How long each frame of the spinner shown while a query runs is on screen.
 ---
---- Advanced by the clock rather than by a timer, so nothing has to be started, stopped, or cleaned
---- up: a statusline redraws often enough on its own that reading the time is all it takes.
-M.spinner = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' }
-
---- The ASCII spinner, for terminals without a patched font.
-M.ascii_spinner = { '|', '/', '-', '\\' }
-
---- How long each spinner frame is shown.
+--- The spinner is advanced by the clock rather than by a timer, so nothing has to be started,
+--- stopped, or cleaned up: a statusline redraws often enough on its own that reading the time is
+--- all it takes. Its frames are `icons.spinner` in the configuration.
 M.frame_ms = 80
 
 --- The current spinner frame.
@@ -39,8 +34,7 @@ M.frame_ms = 80
 ---@return string
 function M.frame(now)
   now = now or math.floor(vim.uv.now())
-  local frames = require('sqmeow.integrations.icons').glyphs_available() and M.spinner
-    or M.ascii_spinner
+  local frames = require('sqmeow.icons').spinner()
 
   return frames[math.floor(now / M.frame_ms) % #frames + 1]
 end
@@ -91,7 +85,7 @@ function M.render(status)
     return ''
   end
 
-  local icons = require('sqmeow.integrations.icons')
+  local icons = require('sqmeow.icons')
   local parts = { ('%s %s'):format(icons.dialect(status.dialect), status.connection) }
 
   if status.state == 'executing' then

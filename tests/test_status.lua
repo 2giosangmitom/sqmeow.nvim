@@ -2,21 +2,20 @@ local eq = MiniTest.expect.equality
 local status = require('sqmeow.status')
 local state = require('sqmeow.state')
 local config = require('sqmeow.config')
-local icons = require('sqmeow.integrations.icons')
+
+--- Pinned, so what a rendered statusline reads as does not depend on the font this suite happens
+--- to run under. Both of these are ordinary configuration, which is the point.
+local spinner = { '-', '\\', '|', '/' }
 
 local T = MiniTest.new_set({
   hooks = {
     pre_case = function()
       state.reset()
-      -- Pinned, so a spinner frame and a dialect mark do not depend on which icon plugin the
-      -- machine running the suite happens to have.
-      config.apply({ integrations = { icons = 'ascii' } })
-      icons.reset()
+      config.apply({ icons = { postgres = 'pg', spinner = spinner } })
     end,
     post_case = function()
       state.reset()
       config.apply({})
-      icons.reset()
     end,
   },
 })
@@ -111,7 +110,7 @@ T['render']['spins while a query runs'] = function()
 
   local rendered = status.render()
   eq(rendered:sub(1, 7), 'pg app ')
-  eq(vim.tbl_contains(status.ascii_spinner, rendered:sub(8)), true)
+  eq(vim.tbl_contains(spinner, rendered:sub(8)), true)
 end
 
 T['render']['counts the rows once the query is done'] = function()
@@ -151,9 +150,9 @@ T['frame'] = MiniTest.new_set()
 
 T['frame']['advances with the clock and wraps round'] = function()
   local first = status.frame(0)
-  eq(first, status.ascii_spinner[1])
-  eq(status.frame(status.frame_ms), status.ascii_spinner[2])
-  eq(status.frame(status.frame_ms * #status.ascii_spinner), first)
+  eq(first, spinner[1])
+  eq(status.frame(status.frame_ms), spinner[2])
+  eq(status.frame(status.frame_ms * #spinner), first)
 end
 
 T['lualine'] = MiniTest.new_set()

@@ -15,39 +15,65 @@ use crate::width;
 pub const MIN_COLUMN_WIDTH: usize = 3;
 
 /// The characters a grid is drawn with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Owned rather than borrowed, because every one of them is the plugin user's to choose. There is
+/// no fixed set of styles to pick from: the four characters arrive with the configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GridStyle {
     /// Between columns.
-    pub vertical: &'static str,
+    pub vertical: String,
     /// Along the rule under the header.
-    pub horizontal: &'static str,
+    pub horizontal: String,
     /// Where the rule meets a column separator.
-    pub cross: &'static str,
+    pub cross: String,
     /// Appended to a value that did not fit.
-    pub ellipsis: &'static str,
+    pub ellipsis: String,
+}
+
+/// The characters one `configure` call carries. Absent ones are left alone.
+#[derive(Debug, Clone, Default)]
+pub struct GridStylePatch {
+    pub vertical: Option<String>,
+    pub horizontal: Option<String>,
+    pub cross: Option<String>,
+    pub ellipsis: Option<String>,
+}
+
+/// Take a separator only if it is exactly one column wide.
+///
+/// A rule is drawn by repeating one of these under a column measured in columns, so a wide glyph
+/// or an empty string would put every rule out of step with the header above it. An unchanged
+/// separator is a much smaller surprise than a misaligned grid.
+fn set_separator(target: &mut String, value: Option<String>) {
+    match value {
+        Some(value) if width::width(&value) == 1 => *target = value,
+        _ => {}
+    }
 }
 
 impl GridStyle {
-    /// Box-drawing characters, the default.
-    pub const UNICODE: Self = Self {
-        vertical: "│",
-        horizontal: "─",
-        cross: "┼",
-        ellipsis: "…",
-    };
-
-    /// Plain ASCII, for terminals and fonts that mangle the above.
-    pub const ASCII: Self = Self {
-        vertical: "|",
-        horizontal: "-",
-        cross: "+",
-        ellipsis: "~",
-    };
+    /// Apply the characters the plugin sent, ignoring any that would misalign the grid.
+    pub fn update(&mut self, patch: GridStylePatch) {
+        set_separator(&mut self.vertical, patch.vertical);
+        set_separator(&mut self.horizontal, patch.horizontal);
+        set_separator(&mut self.cross, patch.cross);
+        // The ellipsis is free to be any width, because `truncate` measures whatever it is given
+        // and takes that out of the column's budget.
+        if let Some(value) = patch.ellipsis {
+            self.ellipsis = value;
+        }
+    }
 }
 
 impl Default for GridStyle {
+    /// Box-drawing characters, which is what the plugin sends unless its user changed them.
     fn default() -> Self {
-        Self::UNICODE
+        Self {
+            vertical: "│".to_owned(),
+            horizontal: "─".to_owned(),
+            cross: "┼".to_owned(),
+            ellipsis: "…".to_owned(),
+        }
     }
 }
 
@@ -210,7 +236,7 @@ impl Layout {
 
             let empty = String::new();
             let text = cells.get(index).unwrap_or(&empty);
-            let text = width::truncate(text, *target, options.style.ellipsis);
+            let text = width::truncate(text, *target, &options.style.ellipsis);
             let right = align && self.align_right.get(index).copied().unwrap_or(false);
 
             line.push_str(&width::pad(&text, *target, right));
@@ -229,7 +255,7 @@ impl Layout {
             cross = options.style.cross
         );
 
-        let mut line = String::from(options.style.horizontal);
+        let mut line = options.style.horizontal.clone();
         for (index, target) in self.widths.iter().enumerate() {
             if index > 0 {
                 line.push_str(&joint);
@@ -459,13 +485,40 @@ mod tests {
     }
 
     #[test]
-    fn the_ascii_style_uses_no_box_drawing() {
+    fn a_configured_style_replaces_the_box_drawing() {
+        let mut style = GridStyle::default();
+        style.update(GridStylePatch {
+            vertical: Some("|".to_owned()),
+            horizontal: Some("-".to_owned()),
+            cross: Some("+".to_owned()),
+            ellipsis: Some("~".to_owned()),
+        });
+
         let options = GridOptions {
-            style: GridStyle::ASCII,
+            style,
             ..GridOptions::default()
         };
         let lines = render(&people(), &options);
         assert_eq!(lines[0], " id | name");
         assert_eq!(lines[1], "----+------");
+    }
+
+    #[test]
+    fn a_separator_that_is_not_one_column_wide_is_ignored() {
+        let mut style = GridStyle::default();
+        style.update(GridStylePatch {
+            // Two columns, nothing at all, and a whole word: each would put the rule out of step
+            // with the header above it.
+            vertical: Some("██".to_owned()),
+            horizontal: Some(String::new()),
+            cross: Some("cross".to_owned()),
+            ellipsis: Some("...".to_owned()),
+        });
+
+        assert_eq!(style.vertical, "│");
+        assert_eq!(style.horizontal, "─");
+        assert_eq!(style.cross, "┼");
+        // The ellipsis has no alignment to keep, so a wider one is honoured.
+        assert_eq!(style.ellipsis, "...");
     }
 }

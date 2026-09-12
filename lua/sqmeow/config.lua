@@ -59,16 +59,42 @@ M.defaults = {
   integrations = {
     -- 'auto' picks the first of telescope, fzf-lua and snacks that is installed.
     picker = 'auto',
-    -- 'auto' prefers mini.icons, then nvim-web-devicons, then plain ASCII.
-    icons = 'auto',
-    -- Icons to use instead of the built-in ones, by kind: 'connection', 'schema', 'table',
-    -- 'view', 'materialized view', 'relation', 'column', 'scratchpads', 'scratchpad', 'query',
-    -- and the dialects 'postgres', 'mysql' and 'sqlite'. Colours are not set here: redefine the
-    -- matching `SqmeowIcon*` highlight group instead.
-    icon_overrides = {},
     -- Expose the lualine component. Adding it to a statusline stays the user's job.
     lualine = true,
     notify = true,
+  },
+
+  -- Every character the plugin draws that is not text. The defaults are Nerd Font glyphs, so a
+  -- terminal without one needs its own set here. Colours are not set here: redefine the matching
+  -- `SqmeowIcon*` highlight group instead.
+  icons = {
+    -- The kind of thing a drawer row names.
+    connection = '󰆼',
+    schema = '󰙅',
+    table = '󰓫',
+    view = '󰈈',
+    ['materialized view'] = '󰈈',
+    relation = '󰓫',
+    column = '󰠵',
+    scratchpads = '󰉋',
+    scratchpad = '󰈙',
+    query = '󰐊',
+
+    -- One per dialect, so a drawer holding three of them tells them apart without reading a word.
+    postgres = '',
+    mysql = '',
+    sqlite = '',
+
+    -- What sits before a drawer row: whether its children are showing, or that it has none.
+    markers = { open = '▾', closed = '▸', leaf = ' ' },
+
+    -- Cycled while a query runs, one frame every 80 milliseconds. Any number of frames works.
+    spinner = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' },
+
+    -- What the engine draws the result grid with. The three separators are ignored unless they
+    -- are exactly one column wide, since a wider one would put the rule out of step with the
+    -- header above it. The ellipsis may be any width.
+    grid = { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' },
   },
 
   -- Merged by action name over the built-in mappings. Set an action to `false` to drop it.
@@ -87,7 +113,6 @@ local freeform = {
   ['sources'] = true,
   ['connections'] = true,
   ['keymaps'] = true,
-  ['integrations.icon_overrides'] = true,
 }
 
 -- Options with no usable default to infer a type from.
@@ -137,17 +162,6 @@ end
 function M.validate(opts)
   local errors = {}
   validate(opts, M.defaults, '', errors)
-
-  -- Freeform tables are only checked for being tables, and this one's values have to be strings:
-  -- a table where an icon belongs would reach the drawer and break a line rather than a setting.
-  for kind, icon in pairs(vim.tbl_get(opts, 'integrations', 'icon_overrides') or {}) do
-    if type(icon) ~= 'string' then
-      table.insert(
-        errors,
-        ('`integrations.icon_overrides.%s` must be a string, got %s'):format(kind, type(icon))
-      )
-    end
-  end
 
   table.sort(errors)
   return errors

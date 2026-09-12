@@ -10,8 +10,8 @@ local M = {}
 ---
 --- The `SqmeowIcon*` groups are how a colourscheme reaches the drawer's icons. They are separate
 --- from the text beside them on purpose: an icon carries the kind of a thing, and colouring it is
---- most of what makes a tree readable at a glance. Icons themselves can be changed through
---- `integrations.icon_overrides`; their colours are changed here.
+--- most of what makes a tree readable at a glance. The icons themselves are set under `icons` in
+--- the configuration; their colours are set here.
 M.links = {
   SqmeowWinbar = 'Title',
   SqmeowHeader = 'Title',

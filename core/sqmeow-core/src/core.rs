@@ -14,7 +14,7 @@ use sqmeow_db::{
     CatalogEntry, Cell, ColumnNode, Error as DbError, RelationNode, ResultSet, SchemaNode, sql,
 };
 use sqmeow_render::export::{Format, Rows};
-use sqmeow_render::{Layout, export};
+use sqmeow_render::{GridStylePatch, Layout, export};
 use sqmeow_rpc::{ApiCall, Handler, Nvim, Reply};
 use tokio::sync::Notify;
 
@@ -76,7 +76,12 @@ impl Core {
             page_size: args.opt_usize("page_size"),
             max_column_width: args.opt_usize("max_column_width"),
             null_text: args.opt_string("null_text"),
-            ascii: args.opt_bool("ascii"),
+            style: GridStylePatch {
+                vertical: args.opt_string("grid_vertical"),
+                horizontal: args.opt_string("grid_horizontal"),
+                cross: args.opt_string("grid_cross"),
+                ellipsis: args.opt_string("grid_ellipsis"),
+            },
         });
 
         // Echo what was actually applied, since values are clamped rather than rejected.
@@ -89,6 +94,15 @@ impl Core {
                 Value::from(options.grid.max_column_width as u64),
             ),
             ("null_text", Value::from(options.grid.null_text)),
+            // Echoed back one by one, because a separator that was not one column wide was
+            // dropped rather than applied, and the plugin has no other way to learn that.
+            ("grid_vertical", Value::from(options.grid.style.vertical)),
+            (
+                "grid_horizontal",
+                Value::from(options.grid.style.horizontal),
+            ),
+            ("grid_cross", Value::from(options.grid.style.cross)),
+            ("grid_ellipsis", Value::from(options.grid.style.ellipsis)),
         ]))
     }
 
