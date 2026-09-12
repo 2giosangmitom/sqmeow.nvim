@@ -10,7 +10,9 @@ use std::time::Instant;
 
 use rmpv::Value;
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, ColumnNode, Error as DbError, RelationNode, ResultSet, SchemaNode, sql};
+use sqmeow_db::{
+    CatalogEntry, Cell, ColumnNode, Error as DbError, RelationNode, ResultSet, SchemaNode, sql,
+};
 use sqmeow_render::export::{Format, Rows};
 use sqmeow_render::{Layout, export};
 use sqmeow_rpc::{ApiCall, Handler, Nvim, Reply};
@@ -134,11 +136,8 @@ impl Core {
         match Backend::connect(&url).await {
             Ok(backend) => {
                 let dialect = backend.dialect().name();
-                self.session.insert_connection(Connection {
-                    id,
-                    name: name.clone(),
-                    backend,
-                });
+                self.session
+                    .insert_connection(Connection::new(id, name.clone(), backend));
                 self.emit_connection(
                     id,
                     "connected",
@@ -361,6 +360,78 @@ impl Core {
 
         if let Err(error) = self.nvim.emit("schema:nodes", map(payload)) {
             tracing::warn!(%error, "could not report schema nodes");
+        }
+    }
+
+    fn spawn_catalog(self: Arc<Self>, args: &Args, reply: Reply) {
+        let conn_id = match args.integer("conn_id") {
+            Ok(id) => id,
+            Err(error) => return reply.err(error),
+        };
+        let refresh = args.opt_bool("refresh").unwrap_or(false);
+
+        let Some(connection) = self.session.connection(conn_id) else {
+            return reply.err(format!("no connection with id {conn_id}"));
+        };
+        if refresh {
+            connection.forget_catalog();
+        }
+
+        reply.ok(Value::Boolean(true));
+        tokio::spawn(async move { self.run_catalog(connection).await });
+    }
+
+    /// Read every relation in every schema.
+    ///
+    /// This is what the relation picker searches, so it is one flat list rather than a tree, and
+    /// it is cached on the connection: the cost is one query per schema, which is worth paying
+    /// once and not again on every keystroke.
+    async fn run_catalog(self: Arc<Self>, connection: Arc<Connection>) {
+        let entries = match connection.cached_catalog() {
+            Some(cached) => cached,
+            None => match self.read_catalog(&connection).await {
+                Ok(entries) => connection.store_catalog(entries),
+                Err(error) => {
+                    return self.emit_catalog(connection.id, Err(error.to_string()));
+                }
+            },
+        };
+
+        self.emit_catalog(connection.id, Ok(&entries));
+    }
+
+    async fn read_catalog(&self, connection: &Connection) -> sqmeow_db::Result<Vec<CatalogEntry>> {
+        let mut entries = Vec::new();
+
+        for schema in connection.backend.schemas().await? {
+            // One unreadable schema, which permissions alone can cause, must not empty the whole
+            // catalog: skip it and keep the ones that did answer.
+            let Ok(relations) = connection.backend.relations(&schema.name).await else {
+                continue;
+            };
+            entries.extend(relations.into_iter().map(|relation| CatalogEntry {
+                schema: schema.name.clone(),
+                name: relation.name,
+                kind: relation.kind,
+            }));
+        }
+
+        Ok(entries)
+    }
+
+    fn emit_catalog(&self, conn_id: i64, entries: Result<&[CatalogEntry], String>) {
+        let mut payload = vec![("conn_id", Value::from(conn_id))];
+
+        match entries {
+            Ok(entries) => payload.push(("relations", Value::Array(catalog_entries(entries)))),
+            Err(error) => {
+                payload.push(("relations", Value::Array(vec![])));
+                payload.push(("error", Value::from(error)));
+            }
+        }
+
+        if let Err(error) = self.nvim.emit("schema:catalog", map(payload)) {
+            tracing::warn!(%error, "could not report the catalog");
         }
     }
 
@@ -732,6 +803,20 @@ fn column_nodes(columns: Vec<ColumnNode>) -> Vec<Value> {
         .collect()
 }
 
+/// The flat catalog the relation picker searches, one entry per relation.
+fn catalog_entries(entries: &[CatalogEntry]) -> Vec<Value> {
+    entries
+        .iter()
+        .map(|entry| {
+            map(vec![
+                ("schema", Value::from(entry.schema.clone())),
+                ("name", Value::from(entry.name.clone())),
+                ("kind", Value::from(entry.kind.name())),
+            ])
+        })
+        .collect()
+}
+
 /// What the editor needs to describe a result: its size, its position, and whether it is whole.
 fn summarize(call: &Call, page_size: usize) -> Vec<(&'static str, Value)> {
     let result = &call.result;
@@ -801,6 +886,7 @@ impl Handler for Core {
             "execute" => return self.spawn_execute(&args, reply),
             "page" => return self.spawn_page(&args, reply),
             "introspect" => return self.spawn_introspect(&args, reply),
+            "catalog" => return self.spawn_catalog(&args, reply),
             "export" => return self.spawn_export(&args, reply),
 
             other => Err(format!("unknown method `{other}`")),

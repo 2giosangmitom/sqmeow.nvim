@@ -125,4 +125,34 @@ T['buffer']['maps its keys buffer-locally, with descriptions'] = function()
   end
 end
 
+T['display columns'] = MiniTest.new_set()
+
+T['display columns']['cut a slice out of a grid line'] = function()
+  --      0123456789...
+  local line = ' id │ name  │ score'
+  eq(result.display_slice(line, 1, 2), 'id')
+  eq(result.display_slice(line, 6, 5), 'name')
+  eq(result.display_slice(line, 14, 5), 'score')
+end
+
+T['display columns']['count width, not bytes'] = function()
+  -- Each of these characters is two columns wide, so a byte offset would land mid-character.
+  local line = ' 名前 │ 東京都'
+  eq(result.display_slice(line, 1, 4), '名前')
+  eq(result.display_slice(line, 8, 6), '東京都')
+end
+
+T['display columns']['turn a display column into a byte offset'] = function()
+  local line = ' 名前 │ 東京都'
+  eq(result.byte_at(line, 0), 0)
+  eq(result.byte_at(line, 1), 1)
+  -- One space plus two three-byte characters.
+  eq(result.byte_at(line, 5), 7)
+end
+
+T['display columns']['stop at the end of a short line'] = function()
+  eq(result.display_slice(' id', 6, 5), '')
+  eq(result.byte_at(' id', 40), 3)
+end
+
 return T

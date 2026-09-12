@@ -45,6 +45,18 @@ pub struct RelationNode {
     pub kind: RelationKind,
 }
 
+/// A relation together with the schema holding it.
+///
+/// The drawer walks the tree one level at a time, but the relation picker searches a whole
+/// connection at once, so it needs the schema name alongside each relation rather than implied by
+/// where the node sits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogEntry {
+    pub schema: String,
+    pub name: String,
+    pub kind: RelationKind,
+}
+
 /// One column of a relation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnNode {

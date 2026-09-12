@@ -28,7 +28,7 @@ lint-rust:
 
 lint-lua:
     stylua --check .
-    selene lua plugin tests
+    selene lua plugin telescope tests
 
 fmt:
     cargo fmt --all

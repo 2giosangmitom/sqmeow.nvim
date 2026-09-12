@@ -7,7 +7,7 @@
 local M = {}
 
 local function notify(message, level)
-  vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
+  require('sqmeow.integrations.notify').notify(message, level)
 end
 
 --- Discard a return value, so `return api.execute(...)` stays a statement rather than making the
@@ -49,16 +49,15 @@ M.subcommands = {
         end)
       end
 
-      vim.ui.select(available, {
+      require('sqmeow.integrations.picker').pick(available, {
         prompt = 'Connect to',
-        format_item = function(connection)
+        format = function(connection)
           return ('%s  %s'):format(connection.name, require('sqmeow.url').display(connection.url))
         end,
-      }, function(chosen)
-        if chosen then
+        on_choice = function(chosen)
           void(api.connect(chosen.url, { name = chosen.name }))
-        end
-      end)
+        end,
+      })
     end,
     complete = function(lead)
       local names = vim.tbl_map(function(connection)
@@ -104,30 +103,10 @@ M.subcommands = {
   use = {
     desc = 'Choose the connection queries run against',
     run = function(args)
-      local api = require('sqmeow.api')
-      local connections = api.connections()
-
-      if #connections == 0 then
-        return notify('there are no connections', vim.log.levels.WARN)
-      end
       if args[1] then
-        return void(api.use(tonumber(args[1]) or -1))
+        return void(require('sqmeow.api').use(tonumber(args[1]) or -1))
       end
-
-      vim.ui.select(connections, {
-        prompt = 'Connection',
-        format_item = function(connection)
-          return ('%d  %s (%s)'):format(
-            connection.id,
-            connection.name,
-            connection.dialect or connection.state
-          )
-        end,
-      }, function(chosen)
-        if chosen then
-          api.use(chosen.id)
-        end
-      end)
+      require('sqmeow.pickers').connections()
     end,
   },
 
@@ -222,6 +201,18 @@ M.subcommands = {
     end,
   },
 
+  find = {
+    desc = "Open one of the plugin's pickers",
+    run = function(args)
+      require('sqmeow.pickers').open(args[1])
+    end,
+    complete = function(lead)
+      return vim.tbl_filter(function(name)
+        return name:find(lead, 1, true) == 1
+      end, require('sqmeow.pickers').names())
+    end,
+  },
+
   health = {
     desc = 'Run the health check',
     run = function()
@@ -232,7 +223,7 @@ M.subcommands = {
   log = {
     desc = 'Choose a past query and show its result again',
     run = function()
-      require('sqmeow.ui.log').open()
+      require('sqmeow.pickers').history()
     end,
   },
 

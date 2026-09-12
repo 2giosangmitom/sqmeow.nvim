@@ -28,6 +28,7 @@ M.defaults = {
     { action = 'refresh', lhs = 'r', desc = 'Reload this subtree' },
     { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified name' },
     { action = 'yank_select', lhs = 's', desc = 'Yank a SELECT for this relation' },
+    { action = 'find', lhs = 'f', desc = 'Find a relation from here' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the drawer' },
   },
@@ -42,6 +43,7 @@ M.defaults = {
     { action = 'yank_row', lhs = 'yr', desc = 'Yank this row as CSV' },
     { action = 'yank_page', lhs = 'yp', desc = 'Yank this page as CSV' },
     { action = 'export', lhs = 'e', desc = 'Write the result to a file' },
+    { action = 'find', lhs = 'f', desc = 'Jump to a column' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the result window' },
   },
@@ -85,6 +87,30 @@ M.plug = {
     desc = 'Stop the running query',
     run = function()
       require('sqmeow.api').cancel()
+    end,
+  },
+  ['sqmeow-connections'] = {
+    desc = 'Choose a connection',
+    run = function()
+      require('sqmeow.pickers').connections()
+    end,
+  },
+  ['sqmeow-relations'] = {
+    desc = 'Find a table or a view',
+    run = function()
+      require('sqmeow.pickers').relations()
+    end,
+  },
+  ['sqmeow-history'] = {
+    desc = 'Reopen a past result',
+    run = function()
+      require('sqmeow.pickers').history()
+    end,
+  },
+  ['sqmeow-scratchpads'] = {
+    desc = 'Open a saved scratchpad',
+    run = function()
+      require('sqmeow.pickers').scratchpads()
     end,
   },
 }

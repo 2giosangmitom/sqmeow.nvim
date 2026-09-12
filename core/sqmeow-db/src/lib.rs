@@ -14,7 +14,7 @@ pub mod value;
 
 pub use adapter::{Adapter, Dialect};
 pub use error::{Error, Result};
-pub use node::{ColumnNode, RelationKind, RelationNode, SchemaNode};
+pub use node::{CatalogEntry, ColumnNode, RelationKind, RelationNode, SchemaNode};
 pub use result::{Column, ResultSet};
 pub use sql::Statement;
 pub use value::Cell;

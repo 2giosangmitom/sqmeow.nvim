@@ -167,6 +167,96 @@ function M.current_cell()
   }
 end
 
+-- One UTF-8 character at a time. The grid is aligned by display width, so a byte offset means
+-- nothing on a line holding CJK text or an emoji, and walking characters is the only way to turn
+-- one into the other.
+local function characters(line)
+  return line:gmatch('[%z\1-\127\194-\244][\128-\191]*')
+end
+
+--- The part of a line that lies inside a display-column span.
+---
+---@param line string
+---@param from integer Display column the span starts at.
+---@param width integer How many display columns it covers.
+---@return string # Trimmed, since a grid cell is padded to its column's width.
+function M.display_slice(line, from, width)
+  local at = 0
+  local parts = {}
+
+  for char in characters(line) do
+    if at >= from + width then
+      break
+    end
+    if at >= from then
+      table.insert(parts, char)
+    end
+    at = at + vim.api.nvim_strwidth(char)
+  end
+
+  return vim.trim(table.concat(parts))
+end
+
+--- The byte offset of a display column on a line.
+---
+---@param line string
+---@param display integer
+---@return integer
+function M.byte_at(line, display)
+  local at, bytes = 0, 0
+
+  for char in characters(line) do
+    if at >= display then
+      break
+    end
+    at = at + vim.api.nvim_strwidth(char)
+    bytes = bytes + #char
+  end
+
+  return bytes
+end
+
+--- The values of one column, as the painted page shows them.
+---
+--- Read back out of the grid rather than asked of the engine. These are for a preview beside a
+--- picker, so what the user is already looking at is exactly the right answer, and it costs no
+--- round trip.
+---
+---@param index integer One-based column.
+---@param limit integer How many rows at most.
+---@return string[]
+function M.column_values(index, limit)
+  local call = require('sqmeow.state').call
+  local span = call and call.column_spans and call.column_spans[index]
+  if not (span and valid_buf()) then
+    return {}
+  end
+
+  return vim.tbl_map(function(line)
+    return M.display_slice(line, span.start, span.width)
+  end, vim.api.nvim_buf_get_lines(buf, 0, limit, false))
+end
+
+--- Put the cursor on a column, keeping the row it is already on.
+---
+---@param index integer One-based column.
+---@return boolean moved
+function M.goto_column(index)
+  local call = require('sqmeow.state').call
+  local span = call and call.column_spans and call.column_spans[index]
+  if not (span and valid_win()) then
+    return false
+  end
+
+  local row = vim.api.nvim_win_get_cursor(win)[1]
+  local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ''
+
+  vim.api.nvim_win_set_cursor(win, { row, M.byte_at(line, span.start) })
+  vim.api.nvim_set_current_win(win)
+  sync_header()
+  return true
+end
+
 local function engine_export(request)
   local call = require('sqmeow.state').call
   if not (call and call.call_id) then
@@ -235,6 +325,11 @@ function M.actions.detail()
     return
   end
   require('sqmeow.ui.detail').open(cell.row)
+end
+
+--- Jump to a column, chosen from a list rather than scrolled to.
+function M.actions.find()
+  require('sqmeow.pickers').columns()
 end
 
 function M.actions.help()

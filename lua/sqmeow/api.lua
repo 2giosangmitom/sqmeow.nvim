@@ -8,7 +8,7 @@
 local M = {}
 
 local function notify(message, level)
-  vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
+  require('sqmeow.integrations.notify').notify(message, level)
 end
 
 local function engine()
@@ -385,22 +385,22 @@ end
 
 --- What the engine is doing, for a statusline.
 ---
----@return table status Fields: `connection`, `dialect`, `state`, `rows`, `page`, `pages`,
---- `elapsed_ms`. Absent fields mean there is nothing to report yet.
+--- The same table |sqmeow.status| returns, which is where the shape is documented and where the
+--- lualine component reads it from.
+---
+---@return sqmeow.Status
 function M.status()
-  local state = require('sqmeow.state')
-  local connection = state.current_connection()
-  local call = state.call or {}
+  return require('sqmeow.status').get()
+end
 
-  return {
-    connection = connection and connection.name or nil,
-    dialect = connection and connection.dialect or nil,
-    state = call.state,
-    rows = call.rows,
-    page = call.page,
-    pages = call.pages,
-    elapsed_ms = call.elapsed_ms,
-  }
+--- Show one of the plugin's lists.
+---
+---@param name string|nil One of 'connections', 'relations', 'history', 'scratchpads', 'columns'.
+--- Nil asks which.
+---@param opts table|nil Passed to the picker.
+function M.find(name, opts)
+  require('sqmeow.events').ensure()
+  require('sqmeow.pickers').open(name, opts)
 end
 
 return M

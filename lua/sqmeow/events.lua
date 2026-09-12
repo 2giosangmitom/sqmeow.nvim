@@ -9,7 +9,7 @@ local M = {}
 local wired = false
 
 local function notify(message, level)
-  vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
+  require('sqmeow.integrations.notify').notify(message, level)
 end
 
 --- Handle a connection changing state.
@@ -27,13 +27,22 @@ function M.on_connection(payload)
 
   require('sqmeow.ui.drawer').render()
 
-  if payload.state == 'connected' then
-    notify(('connected to %s (%s)'):format(connection.name, connection.dialect))
+  -- Connecting and its outcome are one message that rewrites itself, where the notification
+  -- frontend allows it. Two lines for one event is noise.
+  local progress = require('sqmeow.integrations.notify').progress
+  local key = 'connect:' .. payload.id
+
+  if payload.state == 'connecting' then
+    progress(key, 'connecting to ' .. connection.name)
+  elseif payload.state == 'connected' then
+    progress(key, ('connected to %s (%s)'):format(connection.name, connection.dialect), {
+      done = true,
+    })
   elseif payload.state == 'error' then
-    notify(
-      ('could not connect to %s: %s'):format(connection.name, payload.error),
-      vim.log.levels.ERROR
-    )
+    progress(key, ('could not connect to %s: %s'):format(connection.name, payload.error), {
+      level = vim.log.levels.ERROR,
+      done = true,
+    })
     state.remove_connection(payload.id)
   elseif payload.state == 'closed' then
     state.remove_connection(payload.id)
@@ -102,6 +111,12 @@ function M.on_nodes(payload)
   require('sqmeow.ui.drawer').on_nodes(payload)
 end
 
+--- Handle a connection's catalog arriving.
+---@param payload table
+function M.on_catalog(payload)
+  require('sqmeow.state').set_catalog(payload.conn_id, payload.relations or {}, payload.error)
+end
+
 --- Subscribe to engine events. Safe to call repeatedly.
 function M.ensure()
   if wired then
@@ -114,6 +129,7 @@ function M.ensure()
   rpc.on('call:state', M.on_call)
   rpc.on('page:painted', M.on_page)
   rpc.on('schema:nodes', M.on_nodes)
+  rpc.on('schema:catalog', M.on_catalog)
   rpc.on('export:done', M.on_export)
 end
 

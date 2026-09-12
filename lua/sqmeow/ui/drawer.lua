@@ -35,7 +35,7 @@ local function valid_win()
 end
 
 local function markers()
-  if require('sqmeow.config').get().integrations.icons == 'ascii' then
+  if not require('sqmeow.integrations.icons').glyphs_available() then
     return { open = 'v', closed = '>', leaf = ' ' }
   end
   return { open = '▾', closed = '▸', leaf = ' ' }
@@ -134,7 +134,8 @@ local function draw(lines, highlights, conn_id, path, depth)
       marker = M.is_expanded(conn_id, child) and marks.open or marks.closed
     end
 
-    local label = ('%s%s %s'):format(indent, marker, node.name)
+    local icon = require('sqmeow.integrations.icons').get(node.kind)
+    local label = ('%s%s %s %s'):format(indent, marker, icon, node.name)
     local note = annotate(node)
 
     table.insert(lines, note == '' and label or ('%s  %s'):format(label, note))
@@ -169,7 +170,8 @@ function M.render()
 
   for _, connection in ipairs(state.connection_list()) do
     local open = M.is_expanded(connection.id, {})
-    local label = ('%s %s'):format(open and marks.open or marks.closed, connection.name)
+    local icon = require('sqmeow.integrations.icons').get('connection')
+    local label = ('%s %s %s'):format(open and marks.open or marks.closed, icon, connection.name)
     local note = connection.dialect or connection.state
 
     table.insert(lines, ('%s  %s'):format(label, note))
@@ -301,6 +303,21 @@ function M.actions.yank_select()
   )
   vim.fn.setreg(vim.v.register or '"', statement)
   vim.notify('sqmeow: yanked ' .. statement)
+end
+
+--- Find a relation, narrowed to the schema the cursor is in.
+---
+--- Standing on a schema means the search is about that schema, and standing anywhere else means
+--- it is about the whole connection. That is what makes one key useful at every level of the tree.
+function M.actions.find()
+  local node = M.current_node()
+  if node then
+    require('sqmeow.api').use(node.conn_id)
+  end
+
+  require('sqmeow.pickers').relations({
+    schema = node and #node.path >= 1 and node.path[1] or nil,
+  })
 end
 
 --- Show the drawer's mappings.

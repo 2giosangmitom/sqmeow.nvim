@@ -125,6 +125,38 @@ local function check_open()
   end
 end
 
+local function check_integrations()
+  vim.health.start('integrations')
+
+  local picker = require('sqmeow.integrations.picker')
+  local configured = require('sqmeow.config').get().integrations
+  local chosen = picker.resolve()
+
+  if configured.picker ~= 'auto' and configured.picker ~= chosen then
+    vim.health.warn(
+      ('the configured picker `%s` is not installed; using %s'):format(configured.picker, chosen)
+    )
+  elseif chosen == 'builtin' then
+    vim.health.info('pickers use `vim.ui.select`; install telescope, fzf-lua or snacks for more')
+  else
+    vim.health.ok('pickers: ' .. chosen)
+  end
+
+  local icons = require('sqmeow.integrations.icons').provider()
+  if icons == 'ascii' then
+    vim.health.info('icons are plain ASCII; install mini.icons or nvim-web-devicons for glyphs')
+  else
+    vim.health.ok('icons: ' .. icons)
+  end
+
+  if pcall(require, 'lualine') then
+    vim.health.ok("lualine: add `require('sqmeow.lualine')` to a section")
+  end
+  if not configured.notify then
+    vim.health.info('notifications are off; errors are still reported')
+  end
+end
+
 --- Which dialect a URL scheme belongs to, or nil if none does.
 ---
 --- Mirrors what the engine accepts. Kept here so the health check can answer offline, before the
@@ -150,6 +182,7 @@ function M.check()
   check_config()
   check_engine()
   check_sources()
+  check_integrations()
   check_open()
 end
 

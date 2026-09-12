@@ -45,6 +45,63 @@ M.call = nil
 ---@type sqmeow.CallSummary[]
 M.calls = {}
 
+--- Every relation in every schema, per connection, once something has asked for it.
+---
+--- The engine caches it too. This mirror exists so a picker opens without a round trip at all
+--- once it has been read, since a fuzzy list that stutters on open is worse than no list.
+---@type table<integer, { relations: table[], error: string|nil }>
+M.catalogs = {}
+
+-- Callers waiting for a catalog that is still being read, keyed by connection.
+local awaiting = {}
+
+--- Run something once a connection's catalog is available, reading it if it is not.
+---
+--- The callback receives the relations, which is an empty list when the read failed. It runs at
+--- most once per call.
+---
+---@param conn_id integer
+---@param callback fun(relations: table[], error: string|nil)
+function M.await_catalog(conn_id, callback)
+  local cached = M.catalogs[conn_id]
+  if cached then
+    return callback(cached.relations, cached.error)
+  end
+
+  awaiting[conn_id] = awaiting[conn_id] or {}
+  table.insert(awaiting[conn_id], callback)
+
+  if #awaiting[conn_id] == 1 then
+    -- A refused request would otherwise leave every waiter hanging, since the event that releases
+    -- them is never going to arrive.
+    local _, err = require('sqmeow.rpc').request('catalog', { conn_id = conn_id })
+    if err then
+      M.set_catalog(conn_id, {}, err)
+    end
+  end
+end
+
+--- Record a catalog and release anything waiting for it.
+---
+---@param conn_id integer
+---@param relations table[]
+---@param err string|nil
+function M.set_catalog(conn_id, relations, err)
+  M.catalogs[conn_id] = { relations = relations, error = err }
+
+  local waiting = awaiting[conn_id] or {}
+  awaiting[conn_id] = nil
+  for _, callback in ipairs(waiting) do
+    callback(relations, err)
+  end
+end
+
+--- Forget a connection's catalog, so the next read goes back to the engine.
+---@param conn_id integer
+function M.forget_catalog(conn_id)
+  M.catalogs[conn_id] = nil
+end
+
 local next_id = 0
 
 --- Reserve a connection id.
@@ -74,6 +131,7 @@ end
 ---@param id integer
 function M.remove_connection(id)
   M.connections[id] = nil
+  M.catalogs[id] = nil
   if M.current ~= id then
     return
   end
@@ -122,6 +180,8 @@ function M.reset()
   M.current = nil
   M.call = nil
   M.calls = {}
+  M.catalogs = {}
+  awaiting = {}
   next_id = 0
 end
 

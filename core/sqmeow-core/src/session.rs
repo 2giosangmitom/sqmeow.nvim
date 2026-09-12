@@ -6,11 +6,11 @@
 //! cap pushes them out.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::ResultSet;
+use sqmeow_db::{CatalogEntry, ResultSet};
 use sqmeow_render::{GridOptions, GridStyle, Layout};
 use tokio_util::sync::CancellationToken;
 
@@ -77,6 +77,41 @@ pub struct Connection {
     pub id: i64,
     pub name: String,
     pub backend: Backend,
+    /// Every relation in every schema, once something has asked for it.
+    ///
+    /// The drawer reads one level at a time, but the relation picker searches the whole
+    /// connection, and building that list costs one query per schema. Holding it here means the
+    /// picker is instant every time after the first, and an explicit refresh is what re-reads it.
+    catalog: Mutex<Option<Arc<Vec<CatalogEntry>>>>,
+}
+
+impl Connection {
+    /// Record an open connection, with nothing introspected yet.
+    pub fn new(id: i64, name: String, backend: Backend) -> Self {
+        Self {
+            id,
+            name,
+            backend,
+            catalog: Mutex::new(None),
+        }
+    }
+
+    /// The catalog, if it has already been read.
+    pub fn cached_catalog(&self) -> Option<Arc<Vec<CatalogEntry>>> {
+        self.catalog.lock().expect("catalog lock").clone()
+    }
+
+    /// Remember a catalog, replacing any earlier one.
+    pub fn store_catalog(&self, entries: Vec<CatalogEntry>) -> Arc<Vec<CatalogEntry>> {
+        let entries = Arc::new(entries);
+        *self.catalog.lock().expect("catalog lock") = Some(Arc::clone(&entries));
+        entries
+    }
+
+    /// Drop the cached catalog, so the next read goes back to the server.
+    pub fn forget_catalog(&self) {
+        *self.catalog.lock().expect("catalog lock") = None;
+    }
 }
 
 /// A finished result, kept so it can be paged and reopened.
@@ -115,7 +150,7 @@ impl Call {
 /// The state one editor session owns.
 #[derive(Default)]
 pub struct Session {
-    connections: Mutex<HashMap<i64, std::sync::Arc<Connection>>>,
+    connections: Mutex<HashMap<i64, Arc<Connection>>>,
     calls: Mutex<History>,
     running: Mutex<HashMap<u64, CancellationToken>>,
     options: Mutex<Options>,
@@ -147,11 +182,11 @@ impl Session {
         self.connections
             .lock()
             .expect("connections poisoned")
-            .insert(connection.id, std::sync::Arc::new(connection));
+            .insert(connection.id, Arc::new(connection));
     }
 
     /// Look up a connection.
-    pub fn connection(&self, id: i64) -> Option<std::sync::Arc<Connection>> {
+    pub fn connection(&self, id: i64) -> Option<Arc<Connection>> {
         self.connections
             .lock()
             .expect("connections poisoned")
@@ -160,7 +195,7 @@ impl Session {
     }
 
     /// Forget a connection, returning it so the caller can close its pool.
-    pub fn remove_connection(&self, id: i64) -> Option<std::sync::Arc<Connection>> {
+    pub fn remove_connection(&self, id: i64) -> Option<Arc<Connection>> {
         self.connections
             .lock()
             .expect("connections poisoned")
@@ -169,7 +204,7 @@ impl Session {
 
     /// Every open connection, by ascending id, as the editor sees them.
     pub fn describe_connections(&self) -> Vec<rmpv::Value> {
-        let mut connections: Vec<std::sync::Arc<Connection>> = self
+        let mut connections: Vec<Arc<Connection>> = self
             .connections
             .lock()
             .expect("connections poisoned")
@@ -287,6 +322,56 @@ mod tests {
             layout,
             offset: 0,
         }
+    }
+
+    async fn connection() -> Connection {
+        let backend = Backend::connect("sqlite::memory:")
+            .await
+            .expect("an in-memory database should open");
+        Connection::new(1, "scratch".into(), backend)
+    }
+
+    fn entry(name: &str) -> CatalogEntry {
+        CatalogEntry {
+            schema: "main".into(),
+            name: name.into(),
+            kind: sqmeow_db::RelationKind::Table,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_connection_starts_with_no_catalog() {
+        assert!(connection().await.cached_catalog().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_catalog_is_remembered_once_it_has_been_read() {
+        let connection = connection().await;
+        connection.store_catalog(vec![entry("people")]);
+
+        let cached = connection
+            .cached_catalog()
+            .expect("the catalog should be held");
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].name, "people");
+    }
+
+    #[tokio::test]
+    async fn storing_a_catalog_replaces_the_one_before_it() {
+        let connection = connection().await;
+        connection.store_catalog(vec![entry("people")]);
+        connection.store_catalog(vec![entry("people"), entry("orders")]);
+
+        assert_eq!(connection.cached_catalog().expect("held").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn forgetting_a_catalog_sends_the_next_read_back_to_the_server() {
+        let connection = connection().await;
+        connection.store_catalog(vec![entry("people")]);
+        connection.forget_catalog();
+
+        assert!(connection.cached_catalog().is_none());
     }
 
     #[test]

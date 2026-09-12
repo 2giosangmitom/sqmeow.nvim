@@ -45,6 +45,9 @@ rather than a message that scrolls away.
 `:Sqmeow export csv` writes the whole result to a file, and `:Sqmeow log` lists what has been run
 and puts any of it back on screen without running it again.
 
+`:Sqmeow find relations` fuzzy-finds a table anywhere in the connection, through whichever picker
+you already use.
+
 ## Keys
 
 The plugin sets no global mappings. Every key it binds is buffer-local to one of its own windows,
@@ -66,7 +69,58 @@ bind a `<Plug>` mapping:
 vim.keymap.set('n', '<leader>dd', '<Plug>(sqmeow-toggle)')
 vim.keymap.set('n', '<leader>de', '<Plug>(sqmeow-execute)')
 vim.keymap.set('n', '<leader>dc', '<Plug>(sqmeow-cancel)')
+vim.keymap.set('n', '<leader>dr', '<Plug>(sqmeow-relations)')
+vim.keymap.set('n', '<leader>dh', '<Plug>(sqmeow-history)')
 ```
+
+## Pickers
+
+`:Sqmeow find` opens one of five lists, and each one is shown with whichever fuzzy picker you
+already have. telescope, fzf-lua and snacks.picker are all detected at the moment the list opens,
+so none of them is a dependency and having none of them still works through `vim.ui.select`.
+
+| List | What it does |
+| --- | --- |
+| `connections` | switch the current connection, or open a saved one |
+| `relations` | find a table or a view anywhere in the connection |
+| `history` | put a past result back on screen without running it again |
+| `scratchpads` | open a saved query buffer |
+| `columns` | jump to a column of the current result |
+
+`f` opens the relevant one from inside a plugin window: the relation list from the drawer, scoped
+to the schema you are standing in, and the column list from the result grid. telescope users also
+get `:Telescope sqmeow relations` once the extension is loaded:
+
+```lua
+require('telescope').load_extension('sqmeow')
+```
+
+The relation list is read once per connection and then held, so it opens instantly after the first
+time. A schema you cannot read is left out rather than emptying the list.
+
+## Statusline
+
+`require('sqmeow.status').get()` returns a plain table: the connection, its dialect, what the last
+query is doing, and how big its result was. Anything that renders a statusline can read it.
+
+For lualine there is a component built on top of it:
+
+```lua
+require('lualine').setup({
+  sections = { lualine_x = { require('sqmeow.lualine') } },
+})
+```
+
+It shows nothing until you connect, spins while a query runs, and reports the row count and how
+long it took when one finishes.
+
+## Icons and notifications
+
+Icons come from mini.icons, then nvim-web-devicons, then a plain ASCII set that needs no patched
+font. Set `integrations.icons = 'ascii'` to force the last one, which also switches the result grid
+to ASCII rules. Long operations report through `vim.notify`, so nvim-notify, snacks.notifier and
+dressing.nvim all render them, and connecting rewrites its own message rather than stacking a
+second one. Set `integrations.notify = false` to keep everything but the errors quiet.
 
 ## Connections
 
@@ -93,8 +147,8 @@ Everywhere a URL is displayed, the password is masked. Set `redact_urls = false`
 | PostgreSQL and MySQL | done |
 | Schema drawer and keymap system | done |
 | Editor and result grid | done |
-| Statusline and picker integrations | next |
-| Generated documentation and prebuilt releases | planned |
+| Statusline and picker integrations | done |
+| Generated documentation and prebuilt releases | next |
 
 ## Development
 

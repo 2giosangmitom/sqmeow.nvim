@@ -39,21 +39,11 @@ function M.entries()
 end
 
 --- Choose a past query and put its result back on screen.
+---
+--- The list itself is |sqmeow.pickers|`.history`, so it is shown with whichever fuzzy picker the
+--- user has. What lives here is what an entry says, which is the part the picker does not know.
 function M.open()
-  local entries = M.entries()
-  if #entries == 0 then
-    vim.notify('sqmeow: nothing has been run yet')
-    return
-  end
-
-  vim.ui.select(entries, {
-    prompt = 'Query log',
-    format_item = M.describe,
-  }, function(chosen)
-    if chosen then
-      require('sqmeow.api').reopen(chosen.call_id)
-    end
-  end)
+  require('sqmeow.pickers').history()
 end
 
 return M

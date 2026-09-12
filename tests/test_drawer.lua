@@ -52,7 +52,8 @@ end
 local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
-      require('sqmeow').setup({})
+      -- Pinned, so the tree looks the same whether or not an icon plugin is installed.
+      require('sqmeow').setup({ integrations = { icons = 'ascii' } })
 
       local id = assert(api.connect('sqlite::memory:', { name = 'scratch' }))
       assert(vim.wait(TIMEOUT, function()
@@ -76,15 +77,15 @@ local T = MiniTest.new_set({
 T['tree'] = MiniTest.new_set()
 
 T['tree']['starts with connections collapsed'] = function()
-  eq(lines(), { '▸ scratch  sqlite' })
+  eq(lines(), { '> # scratch  sqlite' })
 end
 
 T['tree']['expands a connection into its schemas'] = function()
   expand('scratch')
   line_matching('main')
 
-  eq(lines()[1], '▾ scratch  sqlite')
-  eq(lines()[2], '  ▸ main')
+  eq(lines()[1], 'v # scratch  sqlite')
+  eq(lines()[2], '  > @ main')
 end
 
 T['tree']['expands a schema into its tables and views'] = function()
@@ -142,9 +143,11 @@ T['actions']['preview a relation into the result window'] = function()
     return state.call ~= nil and state.call.state == 'done'
   end, 10))
 
+  -- ASCII rules, because this file asked for the ASCII icon set and that setting reaches the
+  -- grid the engine draws as well as the markers the drawer draws.
   local header =
     vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').header_buffer(), 0, -1, false)
-  eq(header[1], ' id │ name │ score')
+  eq(header[1], ' id | name | score')
 end
 
 T['window'] = MiniTest.new_set()
