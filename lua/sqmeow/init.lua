@@ -31,6 +31,27 @@
 ---@tag sqmeow-connecting
 ---@toc_entry Making a connection
 
+--- The query log ~
+---
+--- Every finished query is written to a file of JSON lines under `stdpath('state')`, so the log is
+--- still there after a restart. It holds the statement, which connection it ran on, how it went
+--- and how long it took. It does not hold the rows: a cached grid goes stale as soon as the table
+--- changes, and a statement you can see is cheap to run again.
+---
+--- The drawer shows the ten most recent under `history`, and `:Sqmeow log` opens all of them in a
+--- picker. Choosing one puts its rows back on screen when the engine still has them, which is true
+--- for anything run since Neovim started. Otherwise the statement opens in a buffer of its own,
+--- ready to run, because a log holds deletes as readily as selects and picking a line out of a
+--- list is not the same as asking for it to happen again.
+---
+--- The same statement run twenty times is one line, and the line is the most recent run of it.
+---
+--- `:Sqmeow log clear` empties the log, and so does `d` on the section in the drawer. Set
+--- `query.persist_history` to false to keep the log to the session, and `query.history_file` to
+--- put it somewhere else.
+---@tag sqmeow-history
+---@toc_entry The query log
+
 local M = {}
 
 --- The configuration the user passed, kept unmerged for `:checkhealth`.

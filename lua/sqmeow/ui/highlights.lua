@@ -37,6 +37,7 @@ M.links = {
   SqmeowIconColumn = 'Identifier',
   SqmeowIconScratchpad = 'String',
   SqmeowIconQuery = 'Function',
+  SqmeowIconHistory = 'Statement',
   SqmeowIconFunction = 'Function',
   SqmeowIconProcedure = 'Macro',
   SqmeowIconPostgres = 'Constant',

@@ -96,6 +96,27 @@ function M.open_path(path)
   return buf
 end
 
+--- Show a statement in a buffer of its own.
+---
+--- Used for a query out of the log whose rows the engine no longer holds. A scratch buffer rather
+--- than the connection's scratchpad, so nothing anyone wrote is overwritten, and it carries the
+--- scratchpad's keys so running it again is `<CR>`.
+---
+---@param statement string
+---@return integer buf
+function M.open_statement(statement)
+  require('sqmeow.ui.layout').editing_window()
+
+  local buf = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(statement, '\n', { plain = true }))
+  vim.bo[buf].filetype = 'sql'
+  vim.bo[buf].bufhidden = 'wipe'
+
+  vim.api.nvim_win_set_buf(0, buf)
+  M.attach(buf)
+  return buf
+end
+
 --- Rename a scratchpad.
 ---
 --- The new name goes through the same slug as every other one, so a name typed with a slash or a

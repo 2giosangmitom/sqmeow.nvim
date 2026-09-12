@@ -90,6 +90,9 @@ local T = MiniTest.new_set({
       -- Pinned to plain characters, so every assertion below can say what a line reads as
       -- without the suite needing a Nerd Font. All of it is ordinary configuration.
       require('sqmeow').setup({
+        -- A log of its own, so the drawer's history section holds what this file put there and
+        -- not whatever the machine running the suite has run before.
+        query = { history_file = vim.fs.joinpath(vim.fn.tempname(), 'history.jsonl') },
         icons = {
           connection = '#',
           schema = '@',
@@ -101,6 +104,7 @@ local T = MiniTest.new_set({
           scratchpads = '+',
           scratchpad = '*',
           query = '>',
+          history = 'H',
           ['function'] = 'f',
           procedure = 'p',
           tables = 'T',
@@ -148,7 +152,12 @@ end
 T['tree'] = MiniTest.new_set()
 
 T['tree']['starts with connections collapsed'] = function()
-  eq(lines(), { '> s scratch  sqlite', '> + scratchpads  none saved' })
+  local drawn = lines()
+  eq(vim.list_slice(drawn, 1, 2), { '> s scratch  sqlite', '> + scratchpads  none saved' })
+  -- The log's own contents are this file's queries, and how many there are by now depends on
+  -- which cases have run. What matters here is that the section is drawn and shut.
+  eq(drawn[3]:find('> H history', 1, true), 1)
+  eq(#drawn, 3)
 end
 
 T['tree']['colours the marker apart from the icon'] = function()
@@ -274,6 +283,63 @@ T['actions']['preview a relation into the result window'] = function()
   -- grid the engine draws as well as the markers the drawer draws.
   local grid = vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
   eq(grid[1], ' id | name | score')
+end
+
+T['history'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      require('sqmeow.history').clear()
+      drawer.render()
+    end,
+    post_case = function()
+      require('sqmeow.history').clear()
+      drawer.render()
+    end,
+  },
+})
+
+T['history']['counts what has been run'] = function()
+  run('select 1 as one')
+  drawer.render()
+  eq(lines()[line_matching('history')], '> H history  1')
+end
+
+T['history']['expands into the statements themselves'] = function()
+  run('select 2 as two')
+  drawer.render()
+  expand('history')
+  eq(lines()[line_matching('select 2')], '    > select 2 as two  just now')
+end
+
+T['history']['puts a query back on screen when chosen'] = function()
+  local summary = run('select 3 as three')
+  drawer.render()
+  expand('history')
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('select 3'), 0 })
+  drawer.actions.toggle()
+
+  eq(require('sqmeow.state').call.call_id, summary.call_id)
+end
+
+T['history']['empties on request'] = function()
+  run('select 4 as four')
+  drawer.render()
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('history'), 0 })
+  local answered = false
+  local select = vim.ui.select
+  vim.ui.select = function(_, _, on_choice)
+    answered = true
+    on_choice('yes')
+  end
+  MiniTest.finally(function()
+    vim.ui.select = select
+  end)
+
+  drawer.actions.delete()
+  eq(answered, true)
+  eq(require('sqmeow.history').entries(), {})
 end
 
 T['scratchpads'] = MiniTest.new_set({

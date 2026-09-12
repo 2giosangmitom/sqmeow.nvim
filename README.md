@@ -258,6 +258,37 @@ postgres://app:{{ exec "pass show db/prod" }}@db.internal/app
 
 Everywhere a URL is displayed, the password is masked. Set `redact_urls = false` to turn that off.
 
+## Query log
+
+Every finished query is written to a file of JSON lines under `stdpath('state')`, so the log
+outlives the session. It records the statement, the connection, the outcome and the duration, and
+not the rows, because a cached grid goes stale the moment the table changes.
+
+```
+v history                          3
+    > select * from orders  2m ago
+    > select count(*) from people  1h ago
+    > delete from sessions where …  2d ago
+```
+
+`:Sqmeow log` opens the whole log in a picker and the drawer shows the ten most recent. Choosing
+one puts its rows back on screen if the engine still holds them, which is true for anything run
+since Neovim started. Otherwise the statement opens in a buffer ready to run, since a log holds
+deletes as readily as selects and picking a line is not the same as asking for it to happen again.
+
+The same statement run twenty times is one line, and that line is its most recent run.
+`:Sqmeow log clear` empties the log, and so does `d` on the section in the drawer.
+
+```lua
+require('sqmeow').setup({
+  query = {
+    persist_history = true,   -- false keeps the log to this session
+    history_limit = 500,      -- queries kept on disk
+    history_file = '',        -- empty means stdpath('state')/sqmeow/history.jsonl
+  },
+})
+```
+
 ## Status
 
 | Milestone | State |

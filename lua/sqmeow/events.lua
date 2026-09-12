@@ -78,6 +78,9 @@ function M.on_call(payload)
 
   if payload.state ~= 'executing' then
     state.record_call(state.call)
+    -- Separate from the registry above: that one mirrors what the engine still holds, and this one
+    -- outlives both the engine and the editor.
+    require('sqmeow.history').append(state.call)
   end
 end
 

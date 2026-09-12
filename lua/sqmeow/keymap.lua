@@ -41,7 +41,7 @@ M.defaults = {
     { action = 'rename', lhs = 'R', desc = 'Rename the connection or scratchpad under the cursor' },
     { action = 'add', lhs = 'A', desc = 'Add a connection' },
     { action = 'edit', lhs = 'e', desc = 'Edit the connection under the cursor' },
-    { action = 'delete', lhs = 'd', desc = 'Delete the scratchpad under the cursor' },
+    { action = 'delete', lhs = 'd', desc = 'Delete the scratchpad, or empty the query log' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the drawer' },
   },

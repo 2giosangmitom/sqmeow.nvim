@@ -145,15 +145,15 @@ T['query log'] = MiniTest.new_set({
 })
 
 T['query log']['starts empty'] = function()
-  eq(log.entries(), {})
+  eq(state.calls, {})
 end
 
 T['query log']['keeps the newest first'] = function()
   state.record_call({ call_id = 1, state = 'done', rows = 1 })
   state.record_call({ call_id = 2, state = 'done', rows = 2 })
 
-  eq(log.entries()[1].call_id, 2)
-  eq(log.entries()[2].call_id, 1)
+  eq(state.calls[1].call_id, 2)
+  eq(state.calls[2].call_id, 1)
 end
 
 T['query log']['forgets more than the engine holds'] = function()
@@ -162,8 +162,8 @@ T['query log']['forgets more than the engine holds'] = function()
     state.record_call({ call_id = id, state = 'done', rows = 0 })
   end
 
-  eq(#log.entries(), 2)
-  eq(log.entries()[1].call_id, 5)
+  eq(#state.calls, 2)
+  eq(state.calls[1].call_id, 5)
   require('sqmeow.config').apply({})
 end
 

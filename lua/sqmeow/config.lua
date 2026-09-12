@@ -54,6 +54,12 @@ M.defaults = {
     timeout_ms = 0,
     -- Results kept for reopening from the call log.
     history_size = 32,
+    -- Write finished queries to a file, so the log survives a restart.
+    persist_history = true,
+    -- Queries kept in the log. The oldest are dropped once there are twice as many.
+    history_limit = 500,
+    -- Where the log is written. Empty means `stdpath('state')/sqmeow/history.jsonl`.
+    history_file = '',
   },
 
   integrations = {
@@ -79,6 +85,7 @@ M.defaults = {
     scratchpads = '󰉋',
     scratchpad = '󰈙',
     query = '󰐊',
+    history = '󰋚',
     ['function'] = '󰊕',
     procedure = '󰡱',
 

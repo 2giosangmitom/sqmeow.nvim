@@ -31,6 +31,7 @@ M.highlights = {
   scratchpads = 'SqmeowIconScratchpad',
   scratchpad = 'SqmeowIconScratchpad',
   query = 'SqmeowIconQuery',
+  history = 'SqmeowIconHistory',
   ['function'] = 'SqmeowIconFunction',
   procedure = 'SqmeowIconProcedure',
   tables = 'SqmeowIconTable',

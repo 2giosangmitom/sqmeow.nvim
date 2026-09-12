@@ -152,7 +152,7 @@ function M.history(opts)
   opts = opts or {}
   local log = require('sqmeow.ui.log')
 
-  pick(log.entries(), {
+  pick(log.entries({ connection = opts.connection, limit = opts.limit }), {
     prompt = opts.prompt or 'Query log',
     empty = 'nothing has been run yet',
     filetype = 'sql',
@@ -164,7 +164,7 @@ function M.history(opts)
       return lines
     end,
     on_choice = function(summary)
-      require('sqmeow.api').reopen(summary.call_id)
+      log.reopen(summary)
     end,
   })
 end

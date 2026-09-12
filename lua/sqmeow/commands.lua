@@ -284,9 +284,19 @@ M.subcommands = {
   },
 
   log = {
-    desc = 'Choose a past query and show its result again',
-    run = function()
+    desc = 'Choose a past query and show its result again, or `clear` to forget them',
+    run = function(args)
+      if args[1] == 'clear' then
+        require('sqmeow.history').clear()
+        require('sqmeow.ui.drawer').render()
+        return notify('the query log is empty')
+      end
       require('sqmeow.pickers').history()
+    end,
+    complete = function(lead)
+      return vim.tbl_filter(function(name)
+        return name:find(lead, 1, true) == 1
+      end, { 'clear' })
     end,
   },
 

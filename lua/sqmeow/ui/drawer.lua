@@ -254,6 +254,46 @@ local function draw_scratchpads(lines, highlights, marks)
   end
 end
 
+-- Keyed on this for the same reason as the scratchpads: the log belongs to the plugin rather than
+-- to any one connection, and it outlives every connection in the tree.
+local HISTORY = 'history'
+
+--- How many queries the drawer offers before the section becomes a wall of text.
+---
+--- The picker has all of them, and is the right tool once there are more than a screenful.
+local HISTORY_SHOWN = 10
+
+--- Draw what has been run under a heading of its own.
+local function draw_history(lines, highlights, marks)
+  local entries = require('sqmeow.ui.log').entries({ limit = HISTORY_SHOWN })
+  local open = expanded[HISTORY] == true
+
+  emit(lines, highlights, {
+    marker = open and marks.open or marks.closed,
+    kind = 'history',
+    name = 'history',
+    note = #entries == 0 and 'nothing yet' or tostring(#entries),
+    row = { kind = 'history', name = 'history', expandable = true },
+  })
+  if not open then
+    return
+  end
+
+  for _, entry in ipairs(entries) do
+    -- One line, however it was written. A statement spread over six lines would otherwise take
+    -- six rows of the tree and say no more than its first clause does.
+    local statement = (entry.statement:gsub('%s+', ' '):gsub('^%s', ''))
+    emit(lines, highlights, {
+      indent = '  ',
+      marker = marks.leaf,
+      kind = 'query',
+      name = statement,
+      note = require('sqmeow.ui.log').ago(entry.at),
+      row = { kind = 'query', name = statement, entry = entry, expandable = false },
+    })
+  end
+end
+
 --- Redraw the tree.
 function M.render()
   if not valid_buf() then
@@ -292,6 +332,7 @@ function M.render()
   end
 
   draw_scratchpads(lines, highlights, marks)
+  draw_history(lines, highlights, marks)
 
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -358,12 +399,19 @@ function M.actions.toggle()
   if node.kind == 'scratchpad' then
     return require('sqmeow.ui.editor').open_path(node.file)
   end
+  if node.kind == 'query' then
+    return require('sqmeow.ui.log').reopen(node.entry)
+  end
   if not node.expandable then
     return
   end
 
   if node.kind == 'scratchpads' then
     expanded[SCRATCHPADS] = not expanded[SCRATCHPADS] or nil
+    return M.render()
+  end
+  if node.kind == 'history' then
+    expanded[HISTORY] = not expanded[HISTORY] or nil
     return M.render()
   end
 
@@ -535,12 +583,27 @@ function M.actions.edit()
   end
 end
 
---- Delete the scratchpad under the cursor.
+--- Delete the scratchpad under the cursor, or empty the query log.
 ---
 --- Asked first, because a scratchpad is a file the user wrote and deleting one cannot be undone.
 --- `no` is the first choice, so a `<CR>` meant for something else does nothing.
 function M.actions.delete()
   local node = M.current_node()
+  if node and (node.kind == 'history' or node.kind == 'query') then
+    return vim.ui.select(
+      { 'no', 'yes' },
+      { prompt = 'Forget every query in the log?' },
+      function(answer)
+        if answer ~= 'yes' then
+          return
+        end
+        require('sqmeow.history').clear()
+        vim.notify('sqmeow: the query log is empty')
+        M.render()
+      end
+    )
+  end
+
   if not node or node.kind ~= 'scratchpad' then
     return
   end
