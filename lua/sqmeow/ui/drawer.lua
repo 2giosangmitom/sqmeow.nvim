@@ -413,6 +413,31 @@ function M.actions.find()
   })
 end
 
+--- Rename the scratchpad under the cursor.
+---
+--- The current name is offered as the default, so the prompt is somewhere to edit rather than
+--- somewhere to retype, and leaving it alone changes nothing.
+function M.actions.rename()
+  local node = M.current_node()
+  if not node or node.kind ~= 'scratchpad' then
+    return
+  end
+
+  vim.ui.input({ prompt = 'Rename the scratchpad to: ', default = node.name }, function(name)
+    if not name or name == '' or name == node.name then
+      return
+    end
+
+    local renamed, err = require('sqmeow.ui.editor').rename(node.file, name)
+    if not renamed then
+      return vim.notify('sqmeow: ' .. err, vim.log.levels.ERROR)
+    end
+
+    vim.notify(('sqmeow: renamed %s to %s'):format(node.name, vim.fn.fnamemodify(renamed, ':t:r')))
+    M.render()
+  end)
+end
+
 --- Delete the scratchpad under the cursor.
 ---
 --- Asked first, because a scratchpad is a file the user wrote and deleting one cannot be undone.

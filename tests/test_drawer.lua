@@ -221,6 +221,74 @@ T['scratchpads']['open somewhere other than the drawer'] = function()
   drawer.open()
 end
 
+T['scratchpads']['are renamed once a new name is given'] = function()
+  local editor = require('sqmeow.ui.editor')
+  local input = vim.ui.input
+  vim.ui.input = function(_, on_confirm)
+    on_confirm('renamed')
+  end
+  MiniTest.finally(function()
+    vim.ui.input = input
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'renamed.sql'))
+  end)
+
+  expand('scratchpads')
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  drawer.actions.rename()
+
+  eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'notes.sql')), nil)
+  eq(lines()[line_matching('renamed')], '    * renamed')
+end
+
+T['scratchpads']['offer the current name to edit'] = function()
+  local offered = nil
+  local input = vim.ui.input
+  vim.ui.input = function(opts)
+    offered = opts.default
+  end
+  MiniTest.finally(function()
+    vim.ui.input = input
+  end)
+
+  expand('scratchpads')
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  drawer.actions.rename()
+
+  eq(offered, 'notes')
+end
+
+T['scratchpads']['are left alone when the rename is abandoned'] = function()
+  local editor = require('sqmeow.ui.editor')
+  local input = vim.ui.input
+  vim.ui.input = function(_, on_confirm)
+    on_confirm(nil)
+  end
+  MiniTest.finally(function()
+    vim.ui.input = input
+  end)
+
+  expand('scratchpads')
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  drawer.actions.rename()
+
+  eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'notes.sql')) ~= nil, true)
+end
+
+T['scratchpads']['are not renamed from a row that is not one'] = function()
+  local called = false
+  local input = vim.ui.input
+  vim.ui.input = function()
+    called = true
+  end
+  MiniTest.finally(function()
+    vim.ui.input = input
+  end)
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
+  drawer.actions.rename()
+  eq(called, false)
+end
+
 T['scratchpads']['are deleted once the question is answered'] = function()
   local editor = require('sqmeow.ui.editor')
   local answer = 'yes'

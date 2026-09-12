@@ -375,6 +375,109 @@ T['surfaces']['open a window of their own rather than taking one back'] = functi
   vim.api.nvim_win_close(taken, true)
 end
 
+T['rename'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      vim.fn.mkdir(editor.directory(), 'p')
+    end,
+  },
+})
+
+--- Write a scratchpad and clean it up whatever the case does to it.
+local function scratchpad(name, contents)
+  local path = vim.fs.joinpath(editor.directory(), name .. '.sql')
+  vim.fn.writefile(contents or { 'select 1' }, path)
+  MiniTest.finally(function()
+    vim.fn.delete(path)
+  end)
+  return path
+end
+
+T['rename']['moves the file'] = function()
+  local path = scratchpad('before')
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'after.sql'))
+  end)
+
+  local renamed = editor.rename(path, 'after')
+  eq(vim.fs.basename(renamed), 'after.sql')
+  eq(vim.uv.fs_stat(path), nil)
+  eq(vim.fn.readfile(renamed), { 'select 1' })
+end
+
+T['rename']['slugs a name that would not make a file'] = function()
+  local path = scratchpad('before')
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'my-notes.sql'))
+  end)
+
+  eq(vim.fs.basename(editor.rename(path, 'my notes')), 'my-notes.sql')
+end
+
+T['rename']['cannot write outside the scratchpad directory'] = function()
+  local path = scratchpad('before')
+
+  -- The separators become dashes, so this names a file in the directory rather than above it.
+  local renamed = editor.rename(path, '../../escaped')
+  MiniTest.finally(function()
+    vim.fn.delete(renamed)
+  end)
+
+  eq(vim.fs.dirname(renamed), vim.fs.normalize(editor.directory()))
+end
+
+T['rename']['refuses a name already taken'] = function()
+  local path = scratchpad('before')
+  scratchpad('taken')
+
+  local renamed, err = editor.rename(path, 'taken')
+  eq(renamed, nil)
+  eq(err:find('already a scratchpad') ~= nil, true)
+  eq(vim.uv.fs_stat(path) ~= nil, true)
+end
+
+T['rename']['does nothing when the name has not changed'] = function()
+  local path = scratchpad('before')
+
+  eq(editor.rename(path, 'before'), vim.fs.normalize(path))
+  eq(vim.uv.fs_stat(path) ~= nil, true)
+end
+
+T['rename']['refuses a path outside the scratchpad directory'] = function()
+  local elsewhere = vim.fn.tempname()
+  vim.fn.writefile({ 'important' }, elsewhere)
+  MiniTest.finally(function()
+    vim.fn.delete(elsewhere)
+  end)
+
+  local renamed, err = editor.rename(elsewhere, 'mine')
+  eq(renamed, nil)
+  eq(err:find('is not a scratchpad') ~= nil, true)
+  eq(vim.uv.fs_stat(elsewhere) ~= nil, true)
+end
+
+T['rename']['says so when there is nothing there'] = function()
+  local renamed, err = editor.rename(vim.fs.joinpath(editor.directory(), 'absent.sql'), 'other')
+  eq(renamed, nil)
+  eq(err:find('there is no scratchpad') ~= nil, true)
+end
+
+T['rename']['carries an open buffer over to the new name'] = function()
+  local path = scratchpad('opened')
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'moved.sql'))
+  end)
+
+  local buf = editor.open_path(path)
+  local renamed = editor.rename(path, 'moved')
+
+  -- The buffer must follow the file. Left on the old name it would write the scratchpad back
+  -- under it on the next `:w`, which is a confusing way to learn a rename did not stick.
+  eq(vim.fs.normalize(vim.api.nvim_buf_get_name(buf)), renamed)
+  eq(vim.bo[buf].modified, false)
+  eq(#editor.buffers_for(vim.fs.normalize(path)), 0)
+end
+
 T['remove'] = MiniTest.new_set({
   hooks = {
     pre_case = function()

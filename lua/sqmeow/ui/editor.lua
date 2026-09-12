@@ -33,6 +33,17 @@ function M.path(name)
   return vim.fs.joinpath(M.directory(), M.slug(name) .. '.sql')
 end
 
+--- Every loaded buffer holding one file.
+---
+---@param path string Already normalised.
+---@return integer[]
+function M.buffers_for(path)
+  return vim.tbl_filter(function(handle)
+    return vim.api.nvim_buf_is_valid(handle)
+      and vim.fs.normalize(vim.api.nvim_buf_get_name(handle)) == path
+  end, vim.api.nvim_list_bufs())
+end
+
 --- Every scratchpad that has been saved.
 ---
 --- Read from the directory each time rather than remembered, so one written in another Neovim, or
@@ -85,6 +96,65 @@ function M.open_path(path)
   return buf
 end
 
+--- Rename a scratchpad.
+---
+--- The new name goes through the same slug as every other one, so a name typed with a slash or a
+--- space cannot land outside the scratchpad directory or produce a file nobody can open again.
+---
+---@param path string
+---@param name string The new name, without the extension.
+---@return string|nil renamed Where the scratchpad now is.
+---@return string|nil error
+function M.rename(path, name)
+  path = vim.fs.normalize(path)
+  local directory = vim.fs.normalize(M.directory())
+
+  if vim.fs.dirname(path) ~= directory then
+    return nil, ('%s is not a scratchpad'):format(path)
+  end
+  if not vim.uv.fs_stat(path) then
+    return nil, ('there is no scratchpad at %s'):format(path)
+  end
+
+  local slug = M.slug(name)
+  local target = vim.fs.normalize(vim.fs.joinpath(directory, slug .. '.sql'))
+
+  if target == path then
+    return target
+  end
+  -- The slug should make this impossible. Checked anyway, because the cost of being wrong is
+  -- writing over a file somewhere else on the disk.
+  if vim.fs.dirname(target) ~= directory then
+    return nil, ('`%s` is not a usable scratchpad name'):format(name)
+  end
+  if vim.uv.fs_stat(target) then
+    return nil, ('there is already a scratchpad called %s'):format(slug)
+  end
+
+  local ok, err = vim.uv.fs_rename(path, target)
+  if not ok then
+    return nil, ('could not rename %s: %s'):format(path, err)
+  end
+
+  for _, handle in ipairs(M.buffers_for(path)) do
+    -- A buffer still holding the old path would write the scratchpad back under its old name on
+    -- the next `:w`. Renaming it and writing once settles it: the file is already there, so an
+    -- ordinary write would refuse, and the contents are what was just renamed.
+    vim.api.nvim_buf_set_name(handle, target)
+    vim.api.nvim_buf_call(handle, function()
+      vim.cmd('silent! write!')
+    end)
+  end
+
+  -- Renaming a buffer leaves an unlisted one behind under the old name, which would put the old
+  -- scratchpad back if anything ever wrote it.
+  for _, stale in ipairs(M.buffers_for(path)) do
+    pcall(vim.api.nvim_buf_delete, stale, { force = true })
+  end
+
+  return target
+end
+
 --- Delete a scratchpad.
 ---
 --- The buffer goes with the file. Leaving it loaded would write the scratchpad back on the next
@@ -105,13 +175,8 @@ function M.remove(path)
     return false, ('there is no scratchpad at %s'):format(path)
   end
 
-  for _, handle in ipairs(vim.api.nvim_list_bufs()) do
-    if
-      vim.api.nvim_buf_is_valid(handle)
-      and vim.fs.normalize(vim.api.nvim_buf_get_name(handle)) == path
-    then
-      vim.api.nvim_buf_delete(handle, { force = true })
-    end
+  for _, handle in ipairs(M.buffers_for(path)) do
+    vim.api.nvim_buf_delete(handle, { force = true })
   end
 
   if vim.fn.delete(path) ~= 0 then
