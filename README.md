@@ -218,13 +218,29 @@ The plugin finds an engine in three places, in this order: `core.path` from your
 managed copy under `stdpath('data')`, and a local `cargo build` inside the plugin directory. The
 last one means a checkout works with no install step.
 
-When there is none, the first call that needs an engine downloads one. Tagging a release
-cross-compiles for Linux, macOS and Windows on both x86-64 and ARM, and publishes a manifest naming
-each archive and its SHA-256, which is what the download verifies against. If no prebuilt target
+When there is none, the first call that needs an engine downloads one. A release cross-compiles
+for Linux, macOS and Windows on both x86-64 and ARM, and publishes a manifest naming each archive
+and its SHA-256, which is what the download verifies against. If no prebuilt target
 matches, and only then, it falls back to `cargo build --release`. `:Sqmeow update` does the same
 thing on demand, and `core.auto_install = false` turns the automatic path off.
 
 Run `:checkhealth sqmeow` to see which engine is in use and whether it matches this plugin.
+
+## Releases
+
+Versions are cut from the commit log by
+[release-please](https://github.com/googleapis/release-please), so commit messages are the release
+notes. Write them as [conventional commits](https://www.conventionalcommits.org): `feat:` for
+anything a user would notice, `fix:` for a repair, and a `!` or a `BREAKING CHANGE:` trailer for
+something that changes how the plugin is used.
+
+Every merge to `master` updates a standing pull request holding the next version number and the
+changelog it would ship. Nothing is released until that pull request is merged. Merging it tags the
+commit, writes `CHANGELOG.md`, and starts the cross-compilation, so the archives and the manifest
+land on the release the changelog describes.
+
+The version appears in three places, and all three move together: the Rust workspace, the plugin
+version sent at handshake, and the lockfile. Do not edit them by hand.
 
 ## License
 

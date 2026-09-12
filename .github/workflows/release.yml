@@ -1,6 +1,14 @@
 name: release
 
 on:
+  # Called by the release-please workflow once merging its pull request has tagged the commit.
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to build and attach the archives to
+        required: true
+        type: string
+  # Either half of a release can be redone by hand: push a tag, or name one already pushed.
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -8,6 +16,7 @@ on:
       tag:
         description: Tag to build and attach the archives to
         required: true
+        type: string
 
 permissions:
   contents: write
@@ -41,6 +50,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -98,6 +109,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -109,7 +122,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="${{ inputs.tag || github.ref_name }}"
           base="https://github.com/${{ github.repository }}/releases/download/$tag"
 
           python3 - "$tag" "$base" <<'PY'
@@ -146,6 +159,8 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: dist/*
-          generate_release_notes: true
+          # release-please has already written the release and its notes from the changelog.
+          # Generating notes here would replace them with GitHub's own list of commits.
+          generate_release_notes: ${{ !inputs.tag }}

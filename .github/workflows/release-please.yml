@@ -1,0 +1,67 @@
+name: release-please
+
+# Releases are cut from the commit log rather than by hand. Every merge to master is looked at,
+# and a release pull request is kept open holding the next version and the changelog it would
+# ship. Merging that pull request is the act of releasing.
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+
+    outputs:
+      released: ${{ steps.release.outputs.releases_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # release-please bumps the version in `Cargo.toml`, but the copy cargo keeps in `Cargo.lock`
+      # is generated, so it cannot carry the annotation the bump is driven by. Without this the
+      # release build fails `--locked`, and every checkout after a release shows a dirty lockfile.
+      - uses: actions/checkout@v4
+        if: steps.release.outputs.pr != ''
+        with:
+          ref: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.release.outputs.pr != ''
+
+      - name: Sync Cargo.lock
+        if: steps.release.outputs.pr != ''
+        run: |
+          set -euo pipefail
+          # Only the workspace members, so a release never quietly moves a third-party dependency.
+          cargo update --workspace --quiet
+          if git diff --quiet -- Cargo.lock; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: sync Cargo.lock with the released version' -- Cargo.lock
+          git push
+
+  # Merging the release pull request tags the commit, and that tag is what the archives are built
+  # from. It cannot be a `push: tags` trigger: a tag pushed by a workflow token starts no workflow,
+  # so the build is called from here instead.
+  release:
+    name: release
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}
