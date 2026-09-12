@@ -28,7 +28,7 @@ Then open a `.sql` buffer and run it:
 :Sqmeow execute
 ```
 
-Results land in a split below, under a header that stays put while the rows scroll. `L` and `H`
+Results land in a split below, one buffer holding the column names and the rows. `L` and `H`
 page through them, `K` opens the row under the cursor down the page so long values are readable in
 full, `yc` and `yr` yank a cell or a row, and `q` closes the window. `:Sqmeow cancel` stops a query
 that is taking too long.

@@ -244,7 +244,8 @@ end
 T['columns']['puts the cursor on the chosen column'] = function()
   run('select id, name, score from people order by id')
   local result = require('sqmeow.ui.result')
-  vim.api.nvim_win_set_cursor(result.open(), { 1, 0 })
+  -- Line three is the first row: the grid begins with the names and the rule.
+  vim.api.nvim_win_set_cursor(result.open(), { 3, 0 })
 
   pickers.columns()
   choose('^name')

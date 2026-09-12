@@ -47,14 +47,19 @@ local function page(action)
   return state.call
 end
 
---- The data rows. The header lives in a window of its own, so it is not in this buffer.
-local function lines()
+--- Everything the grid buffer holds: the column names, the rule, and the rows.
+local function grid()
   return vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false)
 end
 
---- The column names and the rule under them.
+--- The column names and the rule under them, which the grid begins with.
 local function header()
-  return vim.api.nvim_buf_get_lines(result.header_buffer(), 0, -1, false)
+  return vim.list_slice(grid(), 1, 2)
+end
+
+--- The data rows, with the header dropped.
+local function lines()
+  return vim.list_slice(grid(), 3)
 end
 
 local T = MiniTest.new_set({
@@ -108,10 +113,19 @@ T['querying']['writes an aligned grid into the buffer'] = function()
   eq(lines(), { '  1 │ alice', '  2 │ bob', '  3 │ NULL' })
 end
 
-T['querying']['keeps the header out of the scrolling buffer'] = function()
+T['querying']['puts the header and the rows in one buffer'] = function()
   run('select id, name from people order by id')
-  -- The header is a separate window, which is what lets it stay put while the rows scroll.
-  eq(lines()[1], '  1 │ alice')
+
+  -- One window, one buffer, the way nvim-dbee does it. The engine says how many lines come
+  -- before the first row, so nothing downstream has to count them.
+  eq(grid(), {
+    ' id │ name',
+    '────┼──────',
+    '  1 │ alice',
+    '  2 │ bob',
+    '  3 │ NULL',
+  })
+  eq(state.call.header_lines, 2)
 end
 
 T['querying']['right-aligns numbers and left-aligns text'] = function()
@@ -129,7 +143,7 @@ T['querying']['keeps the header when nothing matches'] = function()
   eq(summary.rows, 0)
   -- The columns still show, which is what makes "no rows" different from "something broke".
   eq(header(), { ' id │ name', '────┼─────' })
-  eq(lines(), { '' })
+  eq(lines(), {})
 end
 
 T['querying']['counts rows a statement changed'] = function()
@@ -272,7 +286,7 @@ local function statement_at(line)
   assert(vim.wait(TIMEOUT, function()
     return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
   end, 10))
-  return vim.api.nvim_buf_get_lines(result.header_buffer(), 0, -1, false)[1]
+  return header()[1]
 end
 
 T['statement under the cursor']['runs the one the cursor is in'] = function()
@@ -353,15 +367,24 @@ local function exported()
 end
 
 T['exporting']['yanks one cell exactly as it is'] = function()
-  vim.api.nvim_win_set_cursor(result.open(), { 1, 6 })
+  -- Line three, because the grid opens with the column names and the rule under them.
+  vim.api.nvim_win_set_cursor(result.open(), { 3, 6 })
   result.actions.yank_cell()
   eq(exported(), 'alice')
 end
 
 T['exporting']['yanks a row as csv'] = function()
-  vim.api.nvim_win_set_cursor(result.open(), { 1, 0 })
+  vim.api.nvim_win_set_cursor(result.open(), { 3, 0 })
   result.actions.yank_row()
   eq(exported(), 'id,name\n1,alice\n')
+end
+
+T['exporting']['yanks nothing when the cursor is on the header'] = function()
+  vim.api.nvim_win_set_cursor(result.open(), { 1, 0 })
+  eq(result.current_cell(), nil)
+
+  result.actions.yank_cell()
+  eq(vim.fn.getreg('"'), 'untouched')
 end
 
 T['exporting']['yanks the page as csv'] = function()

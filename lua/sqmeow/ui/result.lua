@@ -1,20 +1,16 @@
 --- The result grid.
 ---
---- The lines are written by the engine, not from here. This module decides that the windows
---- exist, where they are, and what the winbar says.
+--- The lines are written by the engine, not from here. This module decides that the window
+--- exists, where it is, and what the winbar says.
 ---
---- The header lives in a two-line window of its own above the grid. That is what keeps the column
---- names visible while the rows scroll: Neovim has no way to pin a line inside a buffer, so the
---- header has to be a separate window whose horizontal scroll is kept in step.
+--- One window and one buffer hold the whole grid: the column names, the rule under them, and the
+--- rows. The engine reports how many lines come before the first row, so a cursor position still
+--- maps to a cell without the plugin knowing how the grid was laid out.
 
 local M = {}
 
 local buf = nil
-local header_buf = nil
 local win = nil
-local header_win = nil
-
-local augroup = vim.api.nvim_create_augroup('sqmeow.result', { clear = true })
 
 local function valid(handle, check)
   return handle ~= nil and check(handle)
@@ -28,8 +24,14 @@ local function valid_win()
   return valid(win, vim.api.nvim_win_is_valid)
 end
 
-local function valid_header_win()
-  return valid(header_win, vim.api.nvim_win_is_valid)
+--- How many lines of the buffer are header rather than data.
+---
+--- Taken from the page the engine painted rather than assumed, so a change to what a header is
+--- does not need a matching change here.
+---@return integer
+local function header_lines()
+  local call = require('sqmeow.state').call
+  return call and call.header_lines or 0
 end
 
 --- Round a duration for display, keeping it short without lying about the magnitude.
@@ -101,7 +103,7 @@ local function scratch(name, filetype)
   return handle
 end
 
---- The buffer the rows are written into.
+--- The buffer the grid is written into.
 ---@return integer
 function M.buffer()
   if not valid_buf() then
@@ -111,34 +113,14 @@ function M.buffer()
   return buf
 end
 
---- The buffer the column names are written into.
----@return integer
-function M.header_buffer()
-  if not valid(header_buf, vim.api.nvim_buf_is_valid) then
-    header_buf = scratch('sqmeow://result-header', 'sqmeow-result-header')
-  end
-  return header_buf
-end
-
---- Keep the header scrolled to the same column as the grid.
-local function sync_header()
-  if not (valid_win() and valid_header_win()) then
-    return
-  end
-
-  local view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
-  vim.api.nvim_win_call(header_win, function()
-    vim.fn.winrestview({ leftcol = view.leftcol })
-  end)
-end
-
 --- Where the cursor is in the result, as a row and a column of the data.
 ---
---- The row is the cursor line offset by the page, which is simple because the header is not in
---- this buffer. The column comes from the display spans the engine sent with the page: a cursor
---- byte position means nothing on a line of CJK text, but its display width does.
+--- The row is the cursor line, less the header the grid begins with, plus the page's offset. The
+--- column comes from the display spans the engine sent with the page: a cursor byte position
+--- means nothing on a line of CJK text, but its display width does.
 ---
----@return { row: integer, column: integer, name: string }|nil
+---@return { row: integer, column: integer, name: string }|nil # Nil when the cursor is on the
+--- header rather than on a row.
 function M.current_cell()
   local call = require('sqmeow.state').call
   if not (valid_win() and call and call.column_spans) then
@@ -146,6 +128,11 @@ function M.current_cell()
   end
 
   local cursor = vim.api.nvim_win_get_cursor(win)
+  local row = cursor[1] - 1 - header_lines()
+  if row < 0 then
+    return nil
+  end
+
   local line = vim.api.nvim_buf_get_lines(M.buffer(), cursor[1] - 1, cursor[1], false)[1]
   if not line then
     return nil
@@ -161,7 +148,7 @@ function M.current_cell()
   end
 
   return {
-    row = (call.offset or 0) + cursor[1] - 1,
+    row = (call.offset or 0) + row,
     column = found - 1,
     name = call.column_spans[found] and call.column_spans[found].name or '',
   }
@@ -232,9 +219,13 @@ function M.column_values(index, limit)
     return {}
   end
 
+  -- Skipped, because a preview of a column's values should not open with the column's own name
+  -- and the rule under it.
+  local first = header_lines()
+
   return vim.tbl_map(function(line)
     return M.display_slice(line, span.start, span.width)
-  end, vim.api.nvim_buf_get_lines(buf, 0, limit, false))
+  end, vim.api.nvim_buf_get_lines(buf, first, first + limit, false))
 end
 
 --- Put the cursor on a column, keeping the row it is already on.
@@ -253,7 +244,6 @@ function M.goto_column(index)
 
   vim.api.nvim_win_set_cursor(win, { row, M.byte_at(line, span.start) })
   vim.api.nvim_set_current_win(win)
-  sync_header()
   return true
 end
 
@@ -340,8 +330,8 @@ function M.actions.close()
   M.close()
 end
 
---- Show the result windows, creating them if needed.
----@return integer win The window the rows are in.
+--- Show the result window, creating it if needed.
+---@return integer win
 function M.open()
   if valid_win() then
     return win
@@ -355,36 +345,13 @@ function M.open()
   win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(win, M.buffer())
 
-  for _, target in ipairs({ win }) do
-    vim.wo[target].number = false
-    vim.wo[target].relativenumber = false
-    vim.wo[target].signcolumn = 'no'
-    vim.wo[target].wrap = false
-    vim.wo[target].cursorline = true
-    -- Other splits must not squash the grid, which would silently hide columns.
-    vim.wo[target].winfixheight = true
-  end
-
-  -- Two lines above the grid, holding the column names and the rule under them.
-  vim.cmd('aboveleft 2split')
-  header_win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(header_win, M.header_buffer())
-  vim.api.nvim_win_set_height(header_win, 2)
-
-  vim.wo[header_win].number = false
-  vim.wo[header_win].relativenumber = false
-  vim.wo[header_win].signcolumn = 'no'
-  vim.wo[header_win].wrap = false
-  vim.wo[header_win].cursorline = false
-  vim.wo[header_win].winfixheight = true
-
-  vim.api.nvim_clear_autocmds({ group = augroup })
-  vim.api.nvim_create_autocmd({ 'WinScrolled', 'CursorMoved' }, {
-    group = augroup,
-    buffer = M.buffer(),
-    desc = 'Keep the sqmeow result header scrolled with the grid',
-    callback = sync_header,
-  })
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+  vim.wo[win].signcolumn = 'no'
+  vim.wo[win].wrap = false
+  vim.wo[win].cursorline = true
+  -- Other splits must not squash the grid, which would silently hide columns.
+  vim.wo[win].winfixheight = true
 
   -- Opening a result should not steal the cursor from the query being written.
   if vim.api.nvim_win_is_valid(previous) then
@@ -393,14 +360,12 @@ function M.open()
   return win
 end
 
---- Hide the result windows, keeping their contents.
+--- Hide the result window, keeping what it holds.
 function M.close()
-  for _, handle in ipairs({ header_win, win }) do
-    if handle and vim.api.nvim_win_is_valid(handle) then
-      vim.api.nvim_win_close(handle, true)
-    end
+  if valid_win() then
+    vim.api.nvim_win_close(win, true)
   end
-  win, header_win = nil, nil
+  win = nil
 
   require('sqmeow.ui.detail').close()
   require('sqmeow.ui.layout').restore()
@@ -416,7 +381,7 @@ end
 ---
 ---@param summary sqmeow.CallSummary|nil
 function M.update_winbar(summary)
-  if not valid_header_win() or not require('sqmeow.config').get().ui.winbar then
+  if not valid_win() or not require('sqmeow.config').get().ui.winbar then
     return
   end
 
@@ -424,7 +389,7 @@ function M.update_winbar(summary)
   local label = connection and ('%s (%s)'):format(connection.name, connection.dialect or '?')
     or 'not connected'
 
-  vim.wo[header_win].winbar = ('%%#SqmeowWinbar# %s  %%*%s'):format(label, M.describe(summary))
+  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s'):format(label, M.describe(summary))
 end
 
 return M

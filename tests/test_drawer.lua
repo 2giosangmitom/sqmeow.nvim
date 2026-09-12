@@ -145,9 +145,8 @@ T['actions']['preview a relation into the result window'] = function()
 
   -- ASCII rules, because this file asked for the ASCII icon set and that setting reaches the
   -- grid the engine draws as well as the markers the drawer draws.
-  local header =
-    vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').header_buffer(), 0, -1, false)
-  eq(header[1], ' id | name | score')
+  local grid = vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
+  eq(grid[1], ' id | name | score')
 end
 
 T['window'] = MiniTest.new_set()

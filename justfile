@@ -41,8 +41,12 @@ test: test-rust test-lua
 test-rust:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Each server is checked on its own: one of them being down should skip its own cases, not
+    # point the other dialect's tests at a port with nothing behind it.
     if [ -n "$(docker compose ps --status running --quiet postgres 2>/dev/null)" ]; then
         export SQMEOW_TEST_POSTGRES_URL="postgres://sqmeow:sqmeow@127.0.0.1:55432/sqmeow"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet mysql 2>/dev/null)" ]; then
         export SQMEOW_TEST_MYSQL_URL="mysql://sqmeow:sqmeow@127.0.0.1:53306/sqmeow"
     fi
     cargo test --all-features
@@ -59,8 +63,12 @@ db-down:
 test-lua: build-debug
     #!/usr/bin/env bash
     set -euo pipefail
+    # Each server is checked on its own: one of them being down should skip its own cases, not
+    # point the other dialect's tests at a port with nothing behind it.
     if [ -n "$(docker compose ps --status running --quiet postgres 2>/dev/null)" ]; then
         export SQMEOW_TEST_POSTGRES_URL="postgres://sqmeow:sqmeow@127.0.0.1:55432/sqmeow"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet mysql 2>/dev/null)" ]; then
         export SQMEOW_TEST_MYSQL_URL="mysql://sqmeow:sqmeow@127.0.0.1:53306/sqmeow"
     fi
     nvim --headless -u tests/minimal_init.lua -c "lua require('mini.test').setup(); MiniTest.run()"

@@ -39,9 +39,9 @@ reports the outcome as an event, so the editor is never blocked on a socket.
 | `connect` | `id`, `url`, `name` | `id`; the outcome arrives as `conn:state` |
 | `disconnect` | `id` | whether there was a connection to close |
 | `connections` | | one map per open connection |
-| `execute` | `conn_id`, `sql`, `buf`, `header_buf`, `line` | `call_id`; the outcome arrives as `call:state` |
+| `execute` | `conn_id`, `sql`, `buf`, `line` | `call_id`; the outcome arrives as `call:state` |
 | `cancel` | `call_id` | whether a query was running |
-| `page` | `call_id`, `buf`, `header_buf`, `offset`, `delta` | `call_id`; the page arrives as `page:painted` |
+| `page` | `call_id`, `buf`, `offset`, `delta` | `call_id`; the page arrives as `page:painted` |
 | `row` | `call_id`, `row` | one map per column of that row |
 | `introspect` | `conn_id`, `path` | `true`; the children arrive as `schema:nodes` |
 | `catalog` | `conn_id`, `refresh` | `true`; the list arrives as `schema:catalog` |
@@ -116,6 +116,7 @@ The result summary, shared with `page:painted`:
 | `offset` | the row the current page starts at |
 | `page`, `pages`, `page_size` | where the page sits |
 | `column_spans` | one map per column: `name`, `type_name`, `start`, `width` |
+| `header_lines` | how many lines of the buffer come before the first row |
 
 `start` and `width` are in **display columns**, not bytes, because a byte offset means nothing on a
 line holding CJK text. They are what lets the editor tell which cell the cursor is on without
@@ -146,3 +147,7 @@ The engine writes result grids into Neovim buffers itself. The plugin allocates 
 passes the handle; the engine batches the modifiable toggle and every `nvim_buf_set_lines` for one
 page into a single `nvim_call_atomic`. One round trip paints a page, and no row of data is ever
 formatted in Lua.
+
+The column names, the rule under them, and the rows are one block in one buffer. `header_lines` in
+the summary is what turns a cursor line into a row of the result, so the editor never has to know
+how the grid was laid out.

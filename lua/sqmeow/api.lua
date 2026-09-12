@@ -147,7 +147,6 @@ function M.execute(sql, opts)
     conn_id = connection.id,
     sql = sql,
     buf = result.buffer(),
-    header_buf = result.header_buffer(),
     line = opts.line,
   })
   if not call_id then
@@ -235,7 +234,6 @@ local function turn_page(opts)
   local request = {
     call_id = state.call.call_id,
     buf = result.buffer(),
-    header_buf = result.header_buffer(),
   }
   request.offset = opts.offset
   request.delta = opts.delta
@@ -303,7 +301,6 @@ function M.reopen(call_id)
   local _, err = engine().request('page', {
     call_id = call_id,
     buf = result.buffer(),
-    header_buf = result.header_buffer(),
     offset = 0,
   })
   if err then

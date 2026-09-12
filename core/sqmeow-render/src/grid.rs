@@ -150,6 +150,12 @@ impl Layout {
     }
 
     /// The header line and the rule beneath it.
+    /// How many lines `header` produces: the column names, and the rule under them.
+    ///
+    /// The editor is told this with every page, because it is what turns a cursor line into a row
+    /// of the result now that the header shares the grid's buffer.
+    pub const HEADER_LINES: usize = 2;
+
     pub fn header(&self, result: &ResultSet, options: &GridOptions) -> Vec<String> {
         let names: Vec<String> = result
             .columns()

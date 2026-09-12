@@ -35,12 +35,16 @@ local function run(sql)
   return state.call
 end
 
-local function lines()
+local function grid()
   return vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false)
 end
 
 local function header()
-  return vim.api.nvim_buf_get_lines(result.header_buffer(), 0, -1, false)
+  return vim.list_slice(grid(), 1, 2)
+end
+
+local function lines()
+  return vim.list_slice(grid(), 3)
 end
 
 local T = MiniTest.new_set({

@@ -188,8 +188,6 @@ impl Core {
             Ok(buf) => buf,
             Err(error) => return reply.err(error),
         };
-        let header_buf = args.opt_integer("header_buf");
-
         let Some(connection) = self.session.connection(conn_id) else {
             return reply.err(format!("no connection with id {conn_id}"));
         };
@@ -213,10 +211,7 @@ impl Core {
         let call_id = self.session.next_call_id();
         reply.ok(Value::from(call_id));
 
-        tokio::spawn(async move {
-            self.run_call(call_id, connection, statements, buf, header_buf)
-                .await
-        });
+        tokio::spawn(async move { self.run_call(call_id, connection, statements, buf).await });
     }
 
     async fn run_call(
@@ -225,7 +220,6 @@ impl Core {
         connection: Arc<Connection>,
         statements: Vec<sql::Statement>,
         buf: i64,
-        header_buf: Option<i64>,
     ) {
         let conn_id = connection.id;
         let options = self.session.options();
@@ -299,7 +293,7 @@ impl Core {
         let mut payload = summarize(&call, options.grid.page_size);
         payload.extend(elapsed(started));
 
-        self.paint(buf, header_buf, header, rows).await;
+        self.paint(buf, header, rows).await;
         self.session.store_call(call);
         self.session.end_call(call_id);
         self.emit_call(call_id, conn_id, "done", payload);
@@ -620,7 +614,6 @@ impl Core {
             Ok(buf) => buf,
             Err(error) => return reply.err(error),
         };
-        let header_buf = args.opt_integer("header_buf");
         let offset = args.opt_usize("offset");
         let delta = args.opt_integer("delta").unwrap_or(0);
 
@@ -629,17 +622,10 @@ impl Core {
         }
 
         reply.ok(Value::from(call_id));
-        tokio::spawn(async move { self.run_page(call_id, buf, header_buf, offset, delta).await });
+        tokio::spawn(async move { self.run_page(call_id, buf, offset, delta).await });
     }
 
-    async fn run_page(
-        self: Arc<Self>,
-        call_id: u64,
-        buf: i64,
-        header_buf: Option<i64>,
-        offset: Option<usize>,
-        delta: i64,
-    ) {
+    async fn run_page(self: Arc<Self>, call_id: u64, buf: i64, offset: Option<usize>, delta: i64) {
         let options = self.session.options();
         let page_size = options.grid.page_size;
 
@@ -669,7 +655,7 @@ impl Core {
             return;
         };
 
-        self.paint(buf, header_buf, header, rows).await;
+        self.paint(buf, header, rows).await;
         if let Err(error) = self.nvim.emit("page:painted", map(payload)) {
             tracing::warn!(%error, "could not report a painted page");
         }
@@ -679,55 +665,22 @@ impl Core {
 
     /// Write a page into the editor in one round trip.
     ///
-    /// When the editor supplies a header buffer, the column names and the rule go there and only
-    /// data rows go to `buf`. That is what lets the header stay put while the grid scrolls: it is
-    /// in a window of its own. Without one, everything goes to `buf` as a single block.
+    /// The column names, the rule under them, and the rows are one block in one buffer. The
+    /// editor knows how many lines come before the first row, from `header_lines` in the summary,
+    /// which is all it needs to turn a cursor position into a row of the result.
     ///
-    /// Both buffers are left unmodifiable, so the option is lifted and restored around the write.
+    /// The buffer is left unmodifiable, so the option is lifted and restored around the write.
     /// Every call travels together, because a separate message per call would leave the user with
     /// a briefly editable buffer to fall into.
-    async fn paint(
-        &self,
-        buf: i64,
-        header_buf: Option<i64>,
-        header: Vec<String>,
-        rows: Vec<String>,
-    ) {
-        let mut calls = Vec::with_capacity(8);
+    async fn paint(&self, buf: i64, header: Vec<String>, rows: Vec<String>) {
+        let mut lines = header;
+        lines.extend(rows);
 
-        let body = match header_buf {
-            Some(target) => {
-                calls.push(ApiCall::buf_set_option(
-                    target,
-                    "modifiable",
-                    Value::Boolean(true),
-                ));
-                calls.push(ApiCall::buf_set_lines(target, 0, -1, header));
-                calls.push(ApiCall::buf_set_option(
-                    target,
-                    "modifiable",
-                    Value::Boolean(false),
-                ));
-                rows
-            }
-            None => {
-                let mut lines = header;
-                lines.extend(rows);
-                lines
-            }
-        };
-
-        calls.push(ApiCall::buf_set_option(
-            buf,
-            "modifiable",
-            Value::Boolean(true),
-        ));
-        calls.push(ApiCall::buf_set_lines(buf, 0, -1, body));
-        calls.push(ApiCall::buf_set_option(
-            buf,
-            "modifiable",
-            Value::Boolean(false),
-        ));
+        let calls = vec![
+            ApiCall::buf_set_option(buf, "modifiable", Value::Boolean(true)),
+            ApiCall::buf_set_lines(buf, 0, -1, lines),
+            ApiCall::buf_set_option(buf, "modifiable", Value::Boolean(false)),
+        ];
 
         if let Err(error) = self.nvim.call_atomic(calls).await {
             tracing::warn!(%error, buf, "could not paint a result buffer");
@@ -840,6 +793,8 @@ fn summarize(call: &Call, page_size: usize) -> Vec<(&'static str, Value)> {
 
     vec![
         ("column_spans", Value::Array(columns)),
+        // What the editor has to skip to reach the first row of data.
+        ("header_lines", Value::from(Layout::HEADER_LINES as u64)),
         ("call_id", Value::from(call.id)),
         ("conn_id", Value::from(call.conn_id)),
         ("rows", Value::from(result.row_count() as u64)),
