@@ -31,22 +31,22 @@ change the version. Removing or renaming anything, or changing what a field mean
 Every method answers immediately. A method that touches a database answers with an identifier and
 reports the outcome as an event, so the editor is never blocked on a socket.
 
-| Method | Arguments | Answers with |
-| --- | --- | --- |
-| `handshake` | `plugin_version` | `core_version`, `protocol_version`, `pid`, `adapters` |
-| `ping` | | `"pong"` |
-| `configure` | `max_rows`, `history_size`, `page_size`, `max_column_width`, `null_text`, `grid_vertical`, `grid_horizontal`, `grid_cross`, `grid_ellipsis` | the settings as applied |
-| `connect` | `id`, `url`, `name` | `id`; the outcome arrives as `conn:state` |
-| `disconnect` | `id` | whether there was a connection to close |
-| `connections` | | one map per open connection |
-| `execute` | `conn_id`, `sql`, `buf`, `line` | `call_id`; the outcome arrives as `call:state` |
-| `cancel` | `call_id` | whether a query was running |
-| `page` | `call_id`, `buf`, `offset`, `delta` | `call_id`; the page arrives as `page:painted` |
-| `row` | `call_id`, `row` | one map per column of that row |
-| `introspect` | `conn_id`, `path` | `true`; the children arrive as `schema:nodes` |
-| `catalog` | `conn_id`, `refresh` | `true`; the list arrives as `schema:catalog` |
-| `export` | `call_id`, `format`, `scope`, `row`, `column`, `register`, `path` | `call_id`; the outcome arrives as `export:done` |
-| `shutdown` | | nil, and the engine exits |
+| Method        | Arguments                                                                                                                                   | Answers with                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `handshake`   | `plugin_version`                                                                                                                            | `core_version`, `protocol_version`, `pid`, `adapters` |
+| `ping`        |                                                                                                                                             | `"pong"`                                              |
+| `configure`   | `max_rows`, `history_size`, `page_size`, `max_column_width`, `null_text`, `grid_vertical`, `grid_horizontal`, `grid_cross`, `grid_ellipsis` | the settings as applied                               |
+| `connect`     | `id`, `url`, `name`                                                                                                                         | `id`; the outcome arrives as `conn:state`             |
+| `disconnect`  | `id`                                                                                                                                        | whether there was a connection to close               |
+| `connections` |                                                                                                                                             | one map per open connection                           |
+| `execute`     | `conn_id`, `sql`, `buf`, `line`                                                                                                             | `call_id`; the outcome arrives as `call:state`        |
+| `cancel`      | `call_id`                                                                                                                                   | whether a query was running                           |
+| `page`        | `call_id`, `buf`, `offset`, `delta`                                                                                                         | `call_id`; the page arrives as `page:painted`         |
+| `row`         | `call_id`, `row`                                                                                                                            | one map per column of that row                        |
+| `introspect`  | `conn_id`, `path`                                                                                                                           | `true`; the children arrive as `schema:nodes`         |
+| `catalog`     | `conn_id`, `refresh`                                                                                                                        | `true`; the list arrives as `schema:catalog`          |
+| `export`      | `call_id`, `format`, `scope`, `row`, `column`, `register`, `path`                                                                           | `call_id`; the outcome arrives as `export:done`       |
+| `shutdown`    |                                                                                                                                             | nil, and the engine exits                             |
 
 Notes on the ones with sharp edges:
 
@@ -90,36 +90,36 @@ Sent as notifications, never as requests, so the engine is never blocked on the 
 
 `id`, `state`, `name`, and then whatever the state carries.
 
-| `state` | Also carries |
-| --- | --- |
-| `connecting` | |
-| `connected` | `dialect` |
-| `error` | `error` |
-| `closed` | |
+| `state`      | Also carries |
+| ------------ | ------------ |
+| `connecting` |              |
+| `connected`  | `dialect`    |
+| `error`      | `error`      |
+| `closed`     |              |
 
 ### `call:state`
 
 `call_id`, `conn_id`, `state`.
 
-| `state` | Also carries |
-| --- | --- |
-| `executing` | `statements`, and `start_line` and `end_line` covering what will run |
-| `done` | the result summary below, and `elapsed_ms` |
-| `error` | `error`, and `start_line` and `end_line` when the failing statement is known |
-| `cancelled` | `elapsed_ms` |
+| `state`     | Also carries                                                                 |
+| ----------- | ---------------------------------------------------------------------------- |
+| `executing` | `statements`, and `start_line` and `end_line` covering what will run         |
+| `done`      | the result summary below, and `elapsed_ms`                                   |
+| `error`     | `error`, and `start_line` and `end_line` when the failing statement is known |
+| `cancelled` | `elapsed_ms`                                                                 |
 
 The result summary, shared with `page:painted`:
 
-| Field | Meaning |
-| --- | --- |
-| `rows` | rows held |
-| `columns` | column count |
-| `affected` | rows a statement changed, when it returned none |
-| `truncated` | whether the row cap was reached |
-| `offset` | the row the current page starts at |
-| `page`, `pages`, `page_size` | where the page sits |
-| `column_spans` | one map per column: `name`, `type_name`, `start`, `width` |
-| `header_lines` | how many lines of the buffer come before the first row |
+| Field                        | Meaning                                                   |
+| ---------------------------- | --------------------------------------------------------- |
+| `rows`                       | rows held                                                 |
+| `columns`                    | column count                                              |
+| `affected`                   | rows a statement changed, when it returned none           |
+| `truncated`                  | whether the row cap was reached                           |
+| `offset`                     | the row the current page starts at                        |
+| `page`, `pages`, `page_size` | where the page sits                                       |
+| `column_spans`               | one map per column: `name`, `type_name`, `start`, `width` |
+| `header_lines`               | how many lines of the buffer come before the first row    |
 
 `start` and `width` are in **display columns**, not bytes, because a byte offset means nothing on a
 line holding CJK text. They are what lets the editor tell which cell the cursor is on without

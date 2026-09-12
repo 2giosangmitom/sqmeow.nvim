@@ -1,11 +1,11 @@
 [workspace]
 resolver = "3"
 members = [
-    "core/sqmeow-rpc",
-    "core/sqmeow-db",
-    "core/sqmeow-adapters",
-    "core/sqmeow-render",
-    "core/sqmeow-core",
+  "core/sqmeow-rpc",
+  "core/sqmeow-db",
+  "core/sqmeow-adapters",
+  "core/sqmeow-render",
+  "core/sqmeow-core",
 ]
 
 [workspace.package]
@@ -30,16 +30,16 @@ tokio-util = "0.7"
 unicode-width = "0.2"
 futures-util = { version = "0.3", default-features = false }
 sqlx = { version = "0.9", default-features = false, features = [
-    "runtime-tokio",
-    # Native roots rather than a bundled set: people connect to company servers whose certificate
-    # chains are trusted by the machine and by nothing else.
-    "tls-rustls-ring-native-roots",
-    # Without these, a NUMERIC, a UUID, a JSON column or a timestamp cannot be decoded at all,
-    # which are exactly the columns real schemas are full of.
-    "bigdecimal",
-    "chrono",
-    "json",
-    "uuid",
+  "runtime-tokio",
+  # Native roots rather than a bundled set: people connect to company servers whose certificate
+  # chains are trusted by the machine and by nothing else.
+  "tls-rustls-ring-native-roots",
+  # Without these, a NUMERIC, a UUID, a JSON column or a timestamp cannot be decoded at all,
+  # which are exactly the columns real schemas are full of.
+  "bigdecimal",
+  "chrono",
+  "json",
+  "uuid",
 ] }
 serde_json = "1"
 tracing = "0.1"
