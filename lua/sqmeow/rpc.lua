@@ -13,7 +13,7 @@ local M = {}
 ---
 --- It also names the release |sqmeow.install| downloads an engine from, so it has to move
 --- with the tag. release-please bumps it, finding the line by the annotation.
-M.version = '0.1.0' -- x-release-please-version
+M.version = '1.0.0' -- x-release-please-version
 
 --- Protocol revision this plugin speaks. An engine reporting anything else is refused.
 M.protocol_version = 1
