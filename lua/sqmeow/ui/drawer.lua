@@ -266,7 +266,9 @@ local function schema_nodes(conn_id, path)
       -- what it holds is that connection's tree.
       local opened = require('sqmeow.state').child_connection(conn_id, node.name)
       if opened and opened.state == 'connected' then
-        children = schema_nodes(opened.id, {})
+        -- A MongoDB database is its own only schema, so a schema row would repeat the database's
+        -- name one level down. Its groups are drawn in that row's place.
+        children = schema_nodes(opened.id, opened.dialect == 'mongodb' and { node.name } or {})
       elseif opened then
         children = {
           parts.Tree.Node({
@@ -561,6 +563,10 @@ local function toggle_database(node)
   -- Marked open, the way a connection someone expanded is, so a refresh reloads what it holds.
   if id then
     expanded[node_key(id, {})] = true
+    -- The level drawn in place of a MongoDB database's schema row, open for the same reason.
+    if parent.dialect == 'mongodb' then
+      expanded[node_key(id, { node.name })] = true
+    end
   end
   M.render()
 end
@@ -657,6 +663,51 @@ function M.actions.toggle()
   M.render()
 end
 
+--- Drop and reload everything at or under one level of one connection's tree.
+---
+---@param conn_id integer
+---@param path string[]
+local function reload(conn_id, path)
+  local prefix = node_key(conn_id, path)
+
+  -- Everything at or under the node is dropped, so everything at or under it has to be asked for
+  -- again. Reloading only the node itself would leave every level someone has open below it with
+  -- no cache entry and nothing on its way, which draws as a level that has quietly lost its
+  -- children rather than as one being refreshed.
+  M.invalidate(conn_id, path)
+
+  local levels = {}
+  for key, open in pairs(expanded) do
+    if open == true and under(key, prefix) then
+      table.insert(levels, key)
+    end
+  end
+  -- Shallowest first, so a level arrives before the levels drawn inside it.
+  table.sort(levels, function(left, right)
+    return #left < #right
+  end)
+
+  for _, key in ipairs(levels) do
+    local owner, level = key_parts(key)
+    if owner then
+      M.load(owner, level)
+    end
+  end
+
+  -- A row is drawn from the level above it, so the count on `Tables (3)` belongs to the schema's
+  -- children and not to the tables themselves. Reloading only what sits under the node would
+  -- leave that number saying what it said before the refresh.
+  if #path > 0 then
+    M.load(conn_id, vim.list_slice(path, 1, #path - 1))
+  end
+
+  -- The relation picker searches a list the engine holds for the whole connection, and a refresh
+  -- that renewed the tree but not that list would have the two disagreeing about what exists.
+  if #path == 0 then
+    require('sqmeow.rpc').request('catalog', { conn_id = conn_id, refresh = true })
+  end
+end
+
 --- Reload the node under the cursor.
 function M.actions.refresh()
   local node = M.current_node()
@@ -677,45 +728,17 @@ function M.actions.refresh()
   end
 
   local path = node.path or {}
-  local prefix = node_key(node.conn_id, path)
+  reload(node.conn_id, path)
 
-  -- Everything at or under the node is dropped, so everything at or under it has to be asked for
-  -- again. Reloading only the node itself would leave every level someone has open below it with
-  -- no cache entry and nothing on its way, which draws as a level that has quietly lost its
-  -- children rather than as one being refreshed.
-  M.invalidate(node.conn_id, path)
-
-  local reload = {}
-  for key, open in pairs(expanded) do
-    if open == true and under(key, prefix) then
-      table.insert(reload, key)
-    end
-  end
-  -- Shallowest first, so a level arrives before the levels drawn inside it.
-  table.sort(reload, function(left, right)
-    return #left < #right
-  end)
-
-  for _, key in ipairs(reload) do
-    local conn_id, level = key_parts(key)
-    if conn_id then
-      M.load(conn_id, level)
-    end
-  end
-
-  -- A row is drawn from the level above it, so the count on `Tables (3)` belongs to the schema's
-  -- children and not to the tables themselves. Reloading only what sits under the node would
-  -- leave that number saying what it said before the refresh.
-  if #path > 0 then
-    M.load(node.conn_id, vim.list_slice(path, 1, #path - 1))
-  end
-
-  -- The relation picker searches a list the engine holds for the whole connection, and a refresh
-  -- that renewed the tree but not that list would have the two disagreeing about what exists.
+  -- The databases opened from a server are connections of their own, drawn inside this one, so
+  -- their trees are cached under their own ids and a refresh of the server has to reach them too.
   if #path == 0 then
-    require('sqmeow.rpc').request('catalog', { conn_id = node.conn_id, refresh = true })
+    for _, connection in pairs(require('sqmeow.state').connections) do
+      if connection.parent == node.conn_id then
+        reload(connection.id, {})
+      end
+    end
   end
-
   M.render()
 end
 

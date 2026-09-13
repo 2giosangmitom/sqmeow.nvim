@@ -25,7 +25,8 @@ end
 ---@return string
 function M.qualify(dialect, parts)
   -- A Redis key is not qualified by its database, which `SELECT` chooses, so the key is the name.
-  if dialect == 'redis' then
+  -- A MongoDB collection is named the same way: the database is `use` or `$db`, never a prefix.
+  if dialect == 'redis' or dialect == 'mongodb' then
     return parts[#parts]
   end
   return table.concat(
@@ -46,6 +47,16 @@ end
 ---@param limit integer
 ---@return string
 function M.select_from(dialect, parts, limit)
+  if dialect == 'mongodb' then
+    -- Written by hand rather than encoded from a table: the command name must be the first key,
+    -- and a Lua table has no order. `$db` reads the collection's database without switching the
+    -- one the scratchpad is on.
+    return ('{"find": %s, "limit": %d, "$db": %s}'):format(
+      vim.json.encode(parts[#parts]),
+      limit,
+      vim.json.encode(parts[1])
+    )
+  end
   return ('select * from %s limit %d'):format(M.qualify(dialect, parts), limit)
 end
 

@@ -74,6 +74,7 @@ M.links = {
   SqmeowIconMysql = 'Constant',
   SqmeowIconSqlite = 'Constant',
   SqmeowIconRedis = 'Constant',
+  SqmeowIconMongodb = 'String',
   SqmeowIconKey = 'Identifier',
 }
 

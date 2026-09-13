@@ -4,6 +4,7 @@
 //! adding a database makes the compiler point at every place that must handle it, instead of
 //! leaving a gap to discover at runtime.
 
+pub mod mongodb;
 pub mod mysql;
 pub mod postgres;
 pub mod redis;
@@ -51,6 +52,8 @@ where
     }
 }
 
+// `self::` for the same reason as `redis` below.
+pub use self::mongodb::MongoAdapter;
 pub use mysql::MySqlAdapter;
 pub use postgres::PostgresAdapter;
 // `self::`, because a bare `redis` here would also name the driver crate.
@@ -77,6 +80,7 @@ pub enum Backend {
     Postgres(PostgresAdapter),
     MySql(MySqlAdapter),
     Redis(RedisAdapter),
+    MongoDb(MongoAdapter),
 }
 
 impl Backend {
@@ -87,8 +91,8 @@ impl Backend {
 
     /// Open a connection to one database of the server the URL points at.
     ///
-    /// Only PostgreSQL uses `database`: it is the one dialect whose cluster lists databases that
-    /// need a connection of their own to be read.
+    /// PostgreSQL and MongoDB use `database`: a URL that names none reaches a whole server, whose
+    /// databases are each read through a connection of their own.
     pub async fn connect_to(url: &str, database: Option<&str>) -> Result<Self> {
         let dialect =
             Dialect::from_url(url).ok_or_else(|| Error::UnsupportedUrl(url.to_owned()))?;
@@ -100,6 +104,7 @@ impl Backend {
             )),
             Dialect::MySql => Ok(Self::MySql(MySqlAdapter::connect(url).await?)),
             Dialect::Redis => Ok(Self::Redis(RedisAdapter::connect(url).await?)),
+            Dialect::MongoDb => Ok(Self::MongoDb(MongoAdapter::connect(url, database).await?)),
         }
     }
 
@@ -110,6 +115,7 @@ impl Backend {
             Self::Postgres(adapter) => adapter.dialect(),
             Self::MySql(adapter) => adapter.dialect(),
             Self::Redis(adapter) => adapter.dialect(),
+            Self::MongoDb(adapter) => adapter.dialect(),
         }
     }
 
@@ -120,6 +126,7 @@ impl Backend {
             Self::Postgres(adapter) => adapter.quote_ident(name),
             Self::MySql(adapter) => adapter.quote_ident(name),
             Self::Redis(adapter) => adapter.quote_ident(name),
+            Self::MongoDb(adapter) => adapter.quote_ident(name),
         }
     }
 
@@ -135,34 +142,49 @@ impl Backend {
             Self::Postgres(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::MySql(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::Redis(adapter) => adapter.execute(statement, max_rows, cancel).await,
+            Self::MongoDb(adapter) => adapter.execute(statement, max_rows, cancel).await,
         }
     }
 
-    /// The databases of a PostgreSQL cluster, when the URL named none, and `None` otherwise.
+    /// The databases of a PostgreSQL cluster or a MongoDB server, when the URL named none, and
+    /// `None` otherwise.
     pub async fn databases(&self) -> Option<Result<Vec<String>>> {
         match self {
             Self::Postgres(adapter) => adapter.databases().await,
+            Self::MongoDb(adapter) => adapter.databases().await,
             _ => None,
         }
     }
 
-    /// The schemas, or for MySQL and Redis the databases, this connection can see.
+    /// The database commands run on, for the one dialect where that changes under a connection's
+    /// name: MongoDB, through `use`. `None` for the others, whose connection names its database.
+    pub fn database(&self) -> Option<String> {
+        match self {
+            Self::MongoDb(adapter) => Some(adapter.database()),
+            _ => None,
+        }
+    }
+
+    /// The schemas, or for MySQL, Redis and MongoDB the databases, this connection can see.
     pub async fn schemas(&self) -> Result<Vec<SchemaNode>> {
         match self {
             Self::Sqlite(adapter) => adapter.schemas().await,
             Self::Postgres(adapter) => adapter.schemas().await,
             Self::MySql(adapter) => adapter.schemas().await,
             Self::Redis(adapter) => adapter.schemas().await,
+            Self::MongoDb(adapter) => adapter.schemas().await,
         }
     }
 
-    /// The tables and views in one schema, or the keys in a Redis database.
+    /// The tables and views in one schema, the keys in a Redis database, or a MongoDB database's
+    /// collections.
     pub async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
         match self {
             Self::Sqlite(adapter) => adapter.relations(schema).await,
             Self::Postgres(adapter) => adapter.relations(schema).await,
             Self::MySql(adapter) => adapter.relations(schema).await,
             Self::Redis(adapter) => adapter.relations(schema).await,
+            Self::MongoDb(adapter) => adapter.relations(schema).await,
         }
     }
 
@@ -173,6 +195,7 @@ impl Backend {
             Self::Postgres(adapter) => adapter.routines(schema).await,
             Self::MySql(adapter) => adapter.routines(schema).await,
             Self::Redis(adapter) => adapter.routines(schema).await,
+            Self::MongoDb(adapter) => adapter.routines(schema).await,
         }
     }
 
@@ -183,6 +206,7 @@ impl Backend {
             Self::Postgres(adapter) => adapter.columns(schema, relation).await,
             Self::MySql(adapter) => adapter.columns(schema, relation).await,
             Self::Redis(adapter) => adapter.columns(schema, relation).await,
+            Self::MongoDb(adapter) => adapter.columns(schema, relation).await,
         }
     }
 
@@ -193,6 +217,7 @@ impl Backend {
             Self::Postgres(adapter) => adapter.close().await,
             Self::MySql(adapter) => adapter.close().await,
             Self::Redis(adapter) => adapter.close().await,
+            Self::MongoDb(adapter) => adapter.close().await,
         }
     }
 }
@@ -204,6 +229,7 @@ pub fn supported() -> Vec<&'static str> {
         Dialect::Postgres.name(),
         Dialect::MySql.name(),
         Dialect::Redis.name(),
+        Dialect::MongoDb.name(),
     ]
 }
 

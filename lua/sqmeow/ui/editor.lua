@@ -2,7 +2,8 @@
 ---
 --- Files under `core.path`, created only when asked for: `a` in the drawer, `:Sqmeow scratch`, or
 --- `<Plug>(sqmeow-scratch)`. Each lives in a folder named after its connection, which is what ties
---- it to that database, and has the extension of what the connection speaks: `.sql`, or `.redis`.
+--- it to that database, and has the extension of what the connection speaks: `.sql`, `.redis`, or
+--- `.json` for MongoDB.
 --- Real files rather than scratch buffers, so they survive a restart, `:w` does what `:w` always
 --- does, and every SQL plugin the user already has keeps working in them.
 ---
@@ -12,7 +13,10 @@
 local M = {}
 
 --- The filetype for each extension a scratchpad can have.
-local filetypes = { sql = 'sql', redis = 'redis' }
+local filetypes = { sql = 'sql', redis = 'redis', json = 'json' }
+
+--- The extension for each dialect that does not speak SQL.
+local extensions = { redis = 'redis', mongodb = 'json' }
 
 --- Where scratchpads are kept.
 ---@return string
@@ -58,7 +62,7 @@ end
 ---@param name string Scratchpad name, without an extension.
 ---@return string
 function M.path(connection, name)
-  local extension = dialect_of(connection) == 'redis' and 'redis' or 'sql'
+  local extension = extensions[dialect_of(connection) or ''] or 'sql'
   return vim.fs.joinpath(M.directory(), M.slug(connection), M.slug(name) .. '.' .. extension)
 end
 
@@ -344,8 +348,7 @@ function M.update_winbar()
     -- Scratchpads, and any other buffer someone has tied to a connection with `:Sqmeow bind`.
     if M.is_scratchpad(buf) or vim.b[buf].sqmeow_connection then
       local connection, reason = require('sqmeow.api').target(buf)
-      local label = connection and ('%s (%s)'):format(connection.name, connection.dialect or '?')
-        or reason
+      local label = connection and require('sqmeow.state').label(connection) or reason
 
       vim.wo[win].winbar = ('%%#SqmeowWinbar# %s %%*'):format(label)
     end

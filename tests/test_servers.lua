@@ -298,4 +298,129 @@ T['postgres cluster']['opens a database from the drawer as its own connection'] 
   eq(state.child_connection(cluster.id, database), nil)
 end
 
+-- MongoDB speaks no SQL either: a statement is a command document in Extended JSON.
+T['mongodb'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      if not vim.env.SQMEOW_TEST_MONGODB_URL then
+        MiniTest.skip('set SQMEOW_TEST_MONGODB_URL, or run `just db-up`')
+      end
+      connect(vim.env.SQMEOW_TEST_MONGODB_URL)
+    end,
+    post_case = function()
+      api.disconnect()
+    end,
+  },
+})
+
+T['mongodb']['connects and reports its dialect'] = function()
+  eq(state.current_connection().dialect, 'mongodb')
+end
+
+T['mongodb']['runs a script of documents spanning lines'] = function()
+  local summary = run(table.concat({
+    '{"delete": "lua_script", "deletes": [{"q": {}, "limit": 0}]}',
+    '{"insert": "lua_script",',
+    '  "documents": [{"_id": 1, "colour": "teal"}]}',
+    '{"find": "lua_script"}',
+  }, '\n'))
+  eq(summary.state, 'done')
+  eq(lines()[1]:find('teal', 1, true) ~= nil, true)
+end
+
+T['mongodb']['lists collections and previews one'] = function()
+  run('{"delete": "lua_preview", "deletes": [{"q": {}, "limit": 0}]}')
+  run('{"insert": "lua_preview", "documents": [{"colour": "plum"}]}')
+
+  eq(named(introspect({}), 'sqmeow') ~= nil, true)
+  local collections = named(introspect({ 'sqmeow' }), 'tables')
+  eq(collections.name, 'Collections')
+  eq(collections.count >= 1, true)
+
+  local summary = run(require('sqmeow.sql').select_from('mongodb', { 'sqmeow', 'lua_preview' }, 10))
+  eq(summary.state, 'done')
+  eq(summary.rows, 1)
+  eq(lines()[1]:find('plum', 1, true) ~= nil, true)
+end
+
+T['mongodb']['lists every database when the url names none'] = function()
+  api.disconnect()
+  connect((vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')))
+  -- Rows the drawer opens as connections of their own, which is what `u` chooses between.
+  eq(named(introspect({}), 'sqmeow').kind, 'database')
+end
+
+T['mongodb']['refreshing the server reloads the databases opened under it'] = function()
+  local drawer = require('sqmeow.ui.drawer')
+  api.disconnect()
+  connect((vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')))
+  run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
+  run('{"insert": "first", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}')
+  MiniTest.finally(function()
+    run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
+  end)
+
+  local function drawn()
+    return vim.api.nvim_buf_get_lines(drawer.buffer(), 0, -1, false)
+  end
+  --- The number of the last line matching `pattern`, once one is drawn.
+  local function line(pattern, timeout)
+    local found
+    vim.wait(timeout or TIMEOUT, function()
+      for number, text in ipairs(drawn()) do
+        if text:find(pattern) then
+          found = number
+        end
+      end
+      return found ~= nil
+    end, 20)
+    return found
+  end
+  local function press(pattern, action)
+    local number = line(pattern)
+    assert(number, ('no line matching %q:\n%s'):format(pattern, table.concat(drawn(), '\n')))
+    vim.api.nvim_win_set_cursor(drawer.open(), { number, 0 })
+    drawer.actions[action]()
+  end
+
+  drawer.render()
+  press('mongodb://', 'toggle')
+  -- A database opened from the server is a connection of its own, with its tree cached under it.
+  press('sqmeow_refresh', 'toggle')
+  press('Collections', 'toggle')
+  assert(line('first'), 'the collection should be listed')
+  -- Named once: its groups sit straight under the database, with no schema row repeating it.
+  local repeated = vim.tbl_filter(function(text)
+    return text:find('sqmeow_refresh', 1, true) ~= nil
+  end, drawn())
+  eq(#repeated, 1)
+
+  run('{"insert": "second", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}')
+  press('mongodb://', 'refresh')
+  assert(
+    line('second'),
+    'refreshing the server should list the new collection:\n' .. table.concat(drawn(), '\n')
+  )
+end
+
+T['mongodb']['a find that matches nothing says so'] = function()
+  run('{"delete": "lua_empty", "deletes": [{"q": {}, "limit": 0}]}')
+  local summary = run('{"find": "lua_empty"}')
+  eq(summary.state, 'done')
+  -- Neither rows nor a count. The count is left out rather than sent as a nil the winbar would
+  -- try to print as a number.
+  eq(summary.affected, nil)
+  eq(result.describe(summary):find('no rows', 1, true) ~= nil, true)
+end
+
+T['mongodb']['names the database it runs on, following use'] = function()
+  local connection = state.current_connection()
+  eq(connection.current_database, 'sqmeow')
+
+  run('use sqmeow_other')
+  eq(connection.current_database, 'sqmeow_other')
+  -- The winbar is what tells someone which database their next query reaches.
+  eq(state.label(connection):find('› sqmeow_other (mongodb)', 1, true) ~= nil, true)
+end
+
 return T

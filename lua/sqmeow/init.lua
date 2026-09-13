@@ -48,7 +48,8 @@
 --- drawer or `:Sqmeow scratch [name]`, and kept in a folder named after it, so it runs there
 --- whatever else is active, and the line above it says which database that is. Two scratchpads
 --- side by side therefore reach two databases without anything being switched between them. One
---- for Redis is a `.redis` file rather than a `.sql` one, and opens with that filetype.
+--- for Redis is a `.redis` file rather than a `.sql` one, one for MongoDB a `.json` file, and each
+--- opens with that filetype.
 ---
 --- `:Sqmeow bind <name>` ties any other buffer to a connection the same way, and `:Sqmeow bind
 --- none` unties it. A buffer tied to a database that is not open refuses to run rather than

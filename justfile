@@ -26,7 +26,7 @@ fmt:
 
 test: test-rust test-lua
 
-# Rust tests. The PostgreSQL, MySQL, Redis and Dragonfly tests report themselves skipped unless `just db-up` has
+# Rust tests. The PostgreSQL, MySQL, Redis, Dragonfly and MongoDB tests report themselves skipped unless `just db-up` has
 # started the servers they need.
 test-rust:
     #!/usr/bin/env bash
@@ -45,9 +45,12 @@ test-rust:
     if [ -n "$(docker compose ps --status running --quiet dragonfly 2>/dev/null)" ]; then
         export SQMEOW_TEST_DRAGONFLY_URL="redis://127.0.0.1:56380/0"
     fi
+    if [ -n "$(docker compose ps --status running --quiet mongodb 2>/dev/null)" ]; then
+        export SQMEOW_TEST_MONGODB_URL="mongodb://127.0.0.1:57017/sqmeow"
+    fi
     cargo test --all-features
 
-# Start the PostgreSQL, MySQL, Redis and Dragonfly servers the integration tests use.
+# Start the PostgreSQL, MySQL, Redis, Dragonfly and MongoDB servers the integration tests use.
 db-up:
     docker compose up -d --wait
 
@@ -74,6 +77,9 @@ test-lua: build-debug
     fi
     if [ -n "$(docker compose ps --status running --quiet dragonfly 2>/dev/null)" ]; then
         export SQMEOW_TEST_DRAGONFLY_URL="redis://127.0.0.1:56380/0"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet mongodb 2>/dev/null)" ]; then
+        export SQMEOW_TEST_MONGODB_URL="mongodb://127.0.0.1:57017/sqmeow"
     fi
     nvim -l tests/minit.lua
 

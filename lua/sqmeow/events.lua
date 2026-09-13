@@ -23,6 +23,7 @@ function M.on_connection(payload)
 
   connection.state = payload.state
   connection.dialect = payload.dialect or connection.dialect
+  connection.current_database = payload.current_database or connection.current_database
   connection.error = payload.error
 
   -- Forgotten before the drawer is drawn. Drawn first, a failed connection stays on screen with
@@ -36,7 +37,12 @@ function M.on_connection(payload)
   -- away. Scheduled, so the request is not made from inside the engine's own event.
   if payload.state == 'connected' and connection.parent then
     vim.schedule(function()
-      require('sqmeow.ui.drawer').load(payload.id, {})
+      local drawer = require('sqmeow.ui.drawer')
+      drawer.load(payload.id, {})
+      -- A MongoDB database is drawn with its groups where its only schema row would be.
+      if connection.dialect == 'mongodb' and connection.database then
+        drawer.load(payload.id, { connection.database })
+      end
     end)
   end
 
@@ -76,6 +82,14 @@ function M.on_call(payload)
     diagnostics.clear(state.call.source_buf)
   elseif payload.state == 'cancelled' then
     notify('query cancelled', vim.log.levels.WARN)
+  end
+
+  -- A `use` moves a MongoDB connection to another database, and both winbars say which one the
+  -- next query goes to. Settled before drawing, or the result's winbar names the old one.
+  local connection = state.connections[payload.conn_id]
+  if connection and payload.current_database then
+    connection.current_database = payload.current_database
+    require('sqmeow.ui.editor').update_winbar()
   end
 
   -- Drawing comes after the state above is settled, because the grid reads it: the rows it asks
