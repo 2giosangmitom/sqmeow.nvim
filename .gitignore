@@ -4,4 +4,4 @@
 *.dylib
 *.dll
 .luarc.json
-/.deps
+/.tests

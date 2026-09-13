@@ -317,14 +317,13 @@ Contributions are welcome, whether they fix a bug, teach the engine a dialect or
 
 ```sh
 mise install     # rust, just, stylua, selene
-just deps        # clone mini.nvim and nui.nvim
 just db-up       # PostgreSQL and MySQL for the integration tests
 just             # lint and test, the same way CI does
 just build       # release engine, which the plugin prefers to load
 just docs        # regenerate doc/sqmeow.txt
 ```
 
-The PostgreSQL and MySQL tests report themselves skipped when those servers are not running, so `just test` works without Docker. It just covers less. `doc/sqmeow.txt` is generated, so change the annotation and run `just docs` rather than editing it by hand. CI fails a pull request that does not.
+The Lua suite and the help file run through `tests/minit.lua`, which installs mini.nvim and nui.nvim with [lazy.nvim's minit](https://lazy.folke.io/developers) under `.tests`, so there is nothing to clone first. The PostgreSQL and MySQL tests report themselves skipped when those servers are not running, so `just test` works without Docker. It just covers less. `doc/sqmeow.txt` is generated, so change the annotation and run `just docs` rather than editing it by hand. CI fails a pull request that does not.
 
 ### The result grid
 
