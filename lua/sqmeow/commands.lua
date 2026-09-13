@@ -332,7 +332,7 @@ M.subcommands = {
             return
           end
 
-          -- The old one is still running and still speaking the old protocol, so it has to go.
+          -- The old engine is still running, and the new one cannot start until it has gone.
           require('sqmeow.rpc').stop()
           require('sqmeow.state').reset()
           require('sqmeow.ui.drawer').reset()

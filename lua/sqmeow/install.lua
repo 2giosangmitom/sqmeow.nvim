@@ -178,9 +178,9 @@ end
 
 --- Where the manifest for a release lives.
 ---
---- The release asked for is the plugin's own version, which lives in |sqmeow.rpc| next to the
---- protocol version. A plugin manager may have checked out a commit that is not a tag at all, so
---- it is written down rather than read from the checkout.
+--- The release asked for is the plugin's own version, which lives in |sqmeow.rpc|. A plugin
+--- manager may have checked out a commit that is not a tag at all, so it is written down rather
+--- than read from the checkout.
 ---
 ---@param version string|nil Defaults to this plugin's version.
 ---@return string

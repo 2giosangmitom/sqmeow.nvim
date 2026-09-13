@@ -75,6 +75,8 @@ function M.on_call(payload)
     -- Separate from the registry above: that one mirrors what the engine still holds, and this one
     -- outlives both the engine and the editor.
     require('sqmeow.history').append(state.call)
+    -- The drawer lists the log, so a finished query shows up there without anyone asking.
+    require('sqmeow.ui.drawer').render()
   end
 end
 

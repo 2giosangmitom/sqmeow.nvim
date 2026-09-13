@@ -500,9 +500,8 @@ T['history'] = MiniTest.new_set({
   },
 })
 
-T['history']['counts what has been run'] = function()
+T['history']['counts what has been run, without being asked to redraw'] = function()
   run('select 1 as one')
-  drawer.render()
   eq(lines()[line_matching('history')], '> H history  1')
 end
 
