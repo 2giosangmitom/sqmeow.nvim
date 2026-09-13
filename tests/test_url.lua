@@ -115,7 +115,7 @@ T['parse']['decodes an escaped password'] = function()
 end
 
 T['parse']['finds the port past an ipv6 host'] = function()
-  local fields = url.parse('postgres://[::1]:5433/app')
+  local fields = assert(url.parse('postgres://[::1]:5433/app'))
   eq(fields.host, '[::1]')
   eq(fields.port, '5433')
 end
@@ -163,7 +163,7 @@ end
 
 T['build']['escapes a password so the url still parses'] = function()
   local built =
-    url.build('postgres', { host = 'h', user = 'me', password = 'se#cret', database = 'd' })
+    assert(url.build('postgres', { host = 'h', user = 'me', password = 'se#cret', database = 'd' }))
   eq(built, 'postgres://me:se%23cret@h/d')
   eq(url.parse(built).password, 'se#cret')
 end
@@ -215,7 +215,7 @@ T['build']['round trips everything parse produces'] = function()
     'sqlite:app.db',
     'rediss://:secret@cache.internal:6380/2',
   }) do
-    local fields = url.parse(original)
+    local fields = assert(url.parse(original))
     eq(url.build(fields.dialect, fields), original)
   end
 end

@@ -584,7 +584,7 @@ T['rename']['moves the file'] = function()
     vim.fn.delete(vim.fs.joinpath(editor.directory(), 'after.sql'))
   end)
 
-  local renamed = editor.rename(path, 'after')
+  local renamed = assert(editor.rename(path, 'after'))
   eq(vim.fs.basename(renamed), 'after.sql')
   eq(vim.uv.fs_stat(path), nil)
   eq(vim.fn.readfile(renamed), { 'select 1' })
@@ -603,7 +603,7 @@ T['rename']['cannot write outside the scratchpad directory'] = function()
   local path = scratchpad('before')
 
   -- The separators become dashes, so this names a file in the directory rather than above it.
-  local renamed = editor.rename(path, '../../escaped')
+  local renamed = assert(editor.rename(path, '../../escaped'))
   MiniTest.finally(function()
     vim.fn.delete(renamed)
   end)
@@ -617,7 +617,7 @@ T['rename']['refuses a name already taken'] = function()
 
   local renamed, err = editor.rename(path, 'taken')
   eq(renamed, nil)
-  eq(err:find('already a scratchpad') ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('already a scratchpad') ~= nil, true)
   eq(vim.uv.fs_stat(path) ~= nil, true)
 end
 
@@ -637,14 +637,14 @@ T['rename']['refuses a path outside the scratchpad directory'] = function()
 
   local renamed, err = editor.rename(elsewhere, 'mine')
   eq(renamed, nil)
-  eq(err:find('is not a scratchpad') ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('is not a scratchpad') ~= nil, true)
   eq(vim.uv.fs_stat(elsewhere) ~= nil, true)
 end
 
 T['rename']['says so when there is nothing there'] = function()
   local renamed, err = editor.rename(vim.fs.joinpath(editor.directory(), 'absent.sql'), 'other')
   eq(renamed, nil)
-  eq(err:find('there is no scratchpad') ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('there is no scratchpad') ~= nil, true)
 end
 
 T['rename']['carries an open buffer over to the new name'] = function()
@@ -697,14 +697,14 @@ T['remove']['refuses a path outside the scratchpad directory'] = function()
 
   local removed, err = editor.remove(elsewhere)
   eq(removed, false)
-  eq(err:find('is not a scratchpad') ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('is not a scratchpad') ~= nil, true)
   eq(vim.uv.fs_stat(elsewhere) ~= nil, true)
 end
 
 T['remove']['says so when there is nothing there'] = function()
   local removed, err = editor.remove(vim.fs.joinpath(editor.directory(), 'absent.sql'))
   eq(removed, false)
-  eq(err:find('there is no scratchpad') ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('there is no scratchpad') ~= nil, true)
 end
 
 T['list'] = MiniTest.new_set()

@@ -33,7 +33,7 @@ local expected_exit = {}
 M.log_limit = 200
 
 local function warn(message)
-  vim.notify('sqmeow: ' .. message, vim.log.levels.WARN)
+  require('sqmeow.utils').notify(message, vim.log.levels.WARN)
 end
 
 local function record(line)

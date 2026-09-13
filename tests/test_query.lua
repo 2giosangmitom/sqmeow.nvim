@@ -120,7 +120,7 @@ local T = MiniTest.new_set({
 T['connecting'] = MiniTest.new_set()
 
 T['connecting']['reports the dialect it found'] = function()
-  local connection = state.current_connection()
+  local connection = assert(state.current_connection())
   eq(connection.state, 'connected')
   eq(connection.dialect, 'sqlite')
 end
@@ -138,7 +138,7 @@ end
 T['querying'] = MiniTest.new_set()
 
 T['querying']['returns rows'] = function()
-  local summary = run('select id, name from people order by id')
+  local summary = assert(run('select id, name from people order by id'))
   eq(summary.state, 'done')
   eq(summary.rows, 3)
   eq(#summary.columns, 2)
@@ -174,7 +174,7 @@ T['querying']['shows a blob as hexadecimal'] = function()
 end
 
 T['querying']['keeps the header when nothing matches'] = function()
-  local summary = run('select id, name from people where 0')
+  local summary = assert(run('select id, name from people where 0'))
   eq(summary.rows, 0)
   -- The columns still show, which is what makes "no rows" different from "something broke".
   eq(header()[1], ' id │ name')
@@ -182,19 +182,19 @@ T['querying']['keeps the header when nothing matches'] = function()
 end
 
 T['querying']['counts rows a statement changed'] = function()
-  local summary = run('update people set score = score where id in (1, 2)')
+  local summary = assert(run('update people set score = score where id in (1, 2)'))
   eq(summary.rows, 0)
   eq(summary.affected, 2)
 end
 
 T['querying']['runs several statements and shows the last'] = function()
-  local summary = run('select 1 as first; select 2 as second')
+  local summary = assert(run('select 1 as first; select 2 as second'))
   eq(summary.rows, 1)
   eq(header()[1], ' second')
 end
 
 T['querying']['does not split on a semicolon inside a string'] = function()
-  local summary = run([[select 'a;b' as v]])
+  local summary = assert(run([[select 'a;b' as v]]))
   eq(summary.rows, 1)
   eq(lines()[1], ' a;b')
 end
@@ -212,13 +212,13 @@ end
 T['errors'] = MiniTest.new_set()
 
 T['errors']['report the database message'] = function()
-  local summary = run('select nope from people')
+  local summary = assert(run('select nope from people'))
   eq(summary.state, 'error')
   eq(summary.error:find('nope', 1, true) ~= nil, true)
 end
 
 T['errors']['carry the line the statement started on'] = function()
-  local summary = run('select 1;\nselect nope from people')
+  local summary = assert(run('select 1;\nselect nope from people'))
   eq(summary.state, 'error')
   eq(summary.start_line, 1)
 end
@@ -286,8 +286,9 @@ T['limits'] = MiniTest.new_set()
 T['limits']['stop at the row cap and say so'] = function()
   setup({ query = { max_rows = 5 } })
 
-  local summary = run([[with recursive n(x) as (select 1 union all select x + 1 from n where x < 50)
-                        select x from n]])
+  local summary =
+    assert(run([[with recursive n(x) as (select 1 union all select x + 1 from n where x < 50)
+                        select x from n]]))
   eq(summary.rows, 5)
   eq(summary.truncated, true)
 
@@ -739,7 +740,7 @@ end
 T['choosing a connection']['prefers what the buffer names'] = function()
   -- The active connection is the first one, and the query still goes to the second.
   api.use(primary)
-  local summary = run_bound('second', 'select 1 as one')
+  local summary = assert(run_bound('second', 'select 1 as one'))
 
   eq(summary.state, 'done')
   eq(summary.conn_id, second)

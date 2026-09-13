@@ -6,33 +6,25 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Mutex;
-use std::time::Instant;
 
 use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
-use sqlx::{
-    AssertSqlSafe, Column as _, Decode, Executor, MySql, Row, SqlSafeStr, Statement as _, Type,
-    TypeInfo, ValueRef, types,
-};
+use sqlx::{Decode, MySql, Row, Statement as _, Type, TypeInfo, ValueRef, types};
 use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
-    RelationNode, Result, ResultSet, RoutineNode, SchemaNode,
+    Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
+    ResultSet, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::stream::drain;
+use crate::stream::{
+    self, TableKeys, foreign_key, origins, prepare, result_columns, text_or_bytes,
+};
 
 /// A pool against one MySQL or MariaDB database.
 #[derive(Debug)]
 pub struct MySqlAdapter {
     pool: MySqlPool,
-    /// Which columns of a table are keys, by table name and then column name.
-    ///
-    /// Whole tables at a time: asking `information_schema` about one column costs the same as
-    /// asking about all of them, and the next query on that table is then free. A table present
-    /// here has been read, even if it turned out to have no keys at all, which is what stops a
-    /// table with none from being looked up again on every execution.
-    keys: Mutex<HashMap<String, HashMap<String, KeyKind>>>,
+    /// Which columns of a table are keys, read from `information_schema` a whole table at a time.
+    keys: TableKeys,
 }
 
 impl MySqlAdapter {
@@ -55,96 +47,36 @@ impl MySqlAdapter {
 
         Ok(Self {
             pool,
-            keys: Mutex::default(),
+            keys: TableKeys::default(),
         })
     }
 
+    /// What a statement's result looks like, with the columns that are keys marked.
     async fn columns(&self, statement: &str) -> Vec<Column> {
-        let sql = AssertSqlSafe(statement.to_owned()).into_sql_str();
-
-        let prepared = match self.pool.prepare(sql).await {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                tracing::debug!(%error, "could not prepare a statement to read its columns");
-                return Vec::new();
-            }
+        let Some(prepared) = prepare(&self.pool, statement).await else {
+            return Vec::new();
         };
-
-        let mut columns: Vec<Column> = prepared
-            .columns()
-            .iter()
-            .map(|column| Column::new(column.name(), column.type_info().name()))
-            .collect();
-
+        let mut columns = result_columns(prepared.columns());
         // MySQL reports the table and column a result column really came from in the column
-        // definition it sends with every result, so this costs nothing to read.
-        let sources: Vec<Option<(String, String)>> = prepared
-            .columns()
-            .iter()
-            .map(|column| {
-                let origin = column.origin();
-                let origin = origin.table_column()?;
-                Some((origin.table.to_string(), origin.name.to_string()))
+        // definitions it sends with every result, so the source costs nothing to read.
+        self.keys
+            .mark(&origins(prepared.columns()), &mut columns, |table| {
+                self.read_keys(table)
             })
-            .collect();
-
-        self.mark_keys(&sources, &mut columns).await;
+            .await;
         columns
-    }
-
-    /// Mark the result columns that are keys in the table they came from.
-    ///
-    /// MySQL reports the table and column a result column really came from in the definitions it
-    /// sends with every result, so the source costs nothing to read. A column that is an expression
-    /// has none and is left unmarked: `count(*)` is nobody's primary key.
-    async fn mark_keys(&self, sources: &[Option<(String, String)>], columns: &mut [Column]) {
-        let missing: Vec<String> = {
-            let Ok(known) = self.keys.lock() else {
-                return;
-            };
-            let mut missing: Vec<String> = sources
-                .iter()
-                .flatten()
-                .map(|(table, _)| table.clone())
-                .filter(|table| !known.contains_key(table))
-                .collect();
-            missing.sort_unstable();
-            missing.dedup();
-            missing
-        };
-
-        for table in missing {
-            let found = self.read_keys(&table).await;
-            if let Ok(mut known) = self.keys.lock() {
-                // A table that answered with nothing is still recorded as read, so one without any
-                // keys is not asked about again on every execution.
-                known.insert(table, found);
-            }
-        }
-
-        let Ok(known) = self.keys.lock() else {
-            return;
-        };
-        for (column, source) in columns.iter_mut().zip(sources) {
-            if let Some(kind) = source
-                .as_ref()
-                .and_then(|(table, name)| known.get(table)?.get(name))
-            {
-                column.key = *kind;
-            }
-        }
     }
 
     /// Ask `information_schema` which columns of one table are keys.
     ///
     /// A failure answers with nothing rather than an error: an icon is worth one query, and it is
     /// not worth failing the result the user actually asked for.
-    async fn read_keys(&self, origin: &str) -> HashMap<String, KeyKind> {
+    async fn read_keys(&self, origin: String) -> HashMap<String, KeyKind> {
         // MySQL qualifies the table with its schema when it knows one, so a cross-database join is
         // resolved against the right database rather than against a same-named table here.
         let (schema, table) = match origin.rsplit_once('.') {
             Some((schema, table)) => (Some(schema), table),
-            None => (None, origin),
+            None => (None, origin.as_str()),
         };
 
         let rows = sqlx::query(
@@ -170,7 +102,7 @@ impl MySqlAdapter {
         let rows = match rows {
             Ok(rows) => rows,
             Err(error) => {
-                tracing::debug!(%error, origin, "could not read which result columns are keys");
+                tracing::debug!(%error, %origin, "could not read which result columns are keys");
                 return HashMap::new();
             }
         };
@@ -182,18 +114,6 @@ impl MySqlAdapter {
             })
             .collect()
     }
-}
-
-/// What a drawer column's foreign key points at, if it has one.
-fn foreign_key(row: &MySqlRow) -> Option<ForeignKey> {
-    Some(ForeignKey {
-        table: row
-            .try_get::<Option<String>, _>("references_table")
-            .ok()??,
-        column: row
-            .try_get::<Option<String>, _>("references_column")
-            .ok()??,
-    })
 }
 
 /// Which key an `information_schema` row says a column is.
@@ -228,25 +148,17 @@ impl Adapter for MySqlAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let started = Instant::now();
         let columns = self.columns(statement).await;
-        let width = columns.len();
-        let mut result = ResultSet::new(statement, columns);
-
-        let stream = sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(&self.pool);
-
-        drain(
-            stream,
-            &mut result,
+        stream::execute(
+            &self.pool,
+            statement,
+            columns,
             max_rows,
             &cancel,
             |outcome| outcome.rows_affected(),
-            |row| decode_row(row, width),
+            decode_cell,
         )
-        .await?;
-
-        result.set_elapsed(started.elapsed());
-        Ok(result)
+        .await
     }
 
     /// MySQL has no schemas within a database, so its databases fill that level of the tree.
@@ -379,11 +291,6 @@ impl Adapter for MySqlAdapter {
     }
 }
 
-fn decode_row(row: &MySqlRow, width: usize) -> Vec<Cell> {
-    let width = width.max(row.len());
-    (0..width).map(|index| decode_cell(row, index)).collect()
-}
-
 fn decode_cell(row: &MySqlRow, index: usize) -> Cell {
     let Ok(raw) = row.try_get_raw(index) else {
         return Cell::Null;
@@ -442,7 +349,7 @@ fn decode_cell(row: &MySqlRow, index: usize) -> Cell {
         "YEAR" => scalar(row, index, &type_name, |value: u16| Cell::Int(value.into())),
         "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" | "BINARY" | "VARBINARY" | "BIT"
         | "GEOMETRY" => scalar(row, index, &type_name, |value: Vec<u8>| Cell::bytes(&value)),
-        _ => fallback(row, index, &type_name),
+        _ => text_or_bytes(row, index, &type_name),
     }
 }
 
@@ -456,7 +363,7 @@ fn decode_unsigned(row: &MySqlRow, index: usize, base: &str, type_name: &str) ->
         "BIGINT" => scalar(row, index, type_name, |value: u64| {
             i64::try_from(value).map_or_else(|_| Cell::Decimal(value.to_string()), Cell::Int)
         }),
-        _ => fallback(row, index, type_name),
+        _ => text_or_bytes(row, index, type_name),
     }
 }
 
@@ -465,19 +372,5 @@ where
     T: for<'r> Decode<'r, MySql> + Type<MySql>,
 {
     row.try_get::<T, _>(index)
-        .map_or_else(|_| fallback(row, index, type_name), wrap)
-}
-
-/// Last resort for a type nothing above claims.
-fn fallback(row: &MySqlRow, index: usize, type_name: &str) -> Cell {
-    if let Ok(text) = row.try_get::<String, _>(index) {
-        return Cell::Text(text);
-    }
-    if let Ok(bytes) = row.try_get::<Vec<u8>, _>(index) {
-        return Cell::bytes(&bytes);
-    }
-    Cell::Unsupported {
-        type_name: type_name.to_owned(),
-        raw: String::new(),
-    }
+        .map_or_else(|_| text_or_bytes(row, index, type_name), wrap)
 }

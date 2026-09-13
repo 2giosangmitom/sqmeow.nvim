@@ -1,19 +1,111 @@
-//! Draining a query's rows, the same way for every database.
+//! What the sqlx adapters share.
 //!
-//! The cancel check, the row cap and the split between "rows came back" and "rows were changed"
-//! are identical whichever driver produced the stream, and they are the parts that must be right.
-//! Keeping one copy means a fix reaches every adapter.
+//! Running a statement, reading a row and remembering which columns are keys are the same for
+//! SQLite, MySQL and PostgreSQL once the driver's types are named. The cancel check, the row cap
+//! and the split between "rows came back" and "rows were changed" are the parts that must be right,
+//! and keeping one copy means a fix reaches every adapter.
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::Mutex;
+use std::time::Instant;
 
 use futures_util::{Stream, StreamExt};
-use sqlx::Either;
-use sqmeow_db::{Cell, Error, Result, ResultSet};
+use sqlx::{
+    AssertSqlSafe, ColumnIndex, Database, Decode, Either, Executor, Pool, Row, SqlSafeStr, Type,
+    TypeInfo,
+};
+use sqmeow_db::{Cell, Column, Error, ForeignKey, KeyKind, Result, ResultSet};
 use tokio_util::sync::CancellationToken;
 
-/// Read a query's output into a result set.
+/// Where a result column came from: its table, and its name in that table.
+pub(crate) type Origin = Option<(String, String)>;
+
+/// Prepare a statement to learn what its result looks like, before running it.
 ///
-/// `affected` reads a row count off the driver's own query-result type, and `decode` turns one of
-/// its rows into cells. Everything else is shared.
-pub(crate) async fn drain<S, Q, R>(
+/// This is what lets a query returning no rows still show its header, which is the difference
+/// between "no rows" and "something went wrong" at a glance. Preparing is a convenience: a statement
+/// that will not prepare may still run, and if it cannot, running it reports the real error. So a
+/// failure here answers with nothing.
+pub(crate) async fn prepare<DB>(pool: &Pool<DB>, statement: &str) -> Option<DB::Statement>
+where
+    DB: Database,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+{
+    let sql = AssertSqlSafe(statement.to_owned()).into_sql_str();
+    match pool.prepare(sql).await {
+        Ok(prepared) => Some(prepared),
+        Err(error) => {
+            tracing::debug!(%error, "could not prepare a statement to read its columns");
+            None
+        }
+    }
+}
+
+/// A prepared statement's result columns, classified by the type the driver names.
+pub(crate) fn result_columns<C: sqlx::Column>(prepared: &[C]) -> Vec<Column> {
+    prepared
+        .iter()
+        .map(|column| Column::new(column.name(), column.type_info().name()))
+        .collect()
+}
+
+/// The table column each result column came from, for a driver that says.
+///
+/// SQLite and MySQL both name it with the prepared statement, so reading it costs no query. A
+/// column that is an expression has none.
+pub(crate) fn origins<C: sqlx::Column>(prepared: &[C]) -> Vec<Origin> {
+    prepared
+        .iter()
+        .map(|column| {
+            let origin = column.origin();
+            let origin = origin.table_column()?;
+            Some((origin.table.to_string(), origin.name.to_string()))
+        })
+        .collect()
+}
+
+/// Run one statement and read what it produced into a result set.
+///
+/// `columns` is what preparing the statement said the result looks like, `affected` reads the
+/// driver's own row count, and `decode` turns one value into a cell.
+pub(crate) async fn execute<DB>(
+    pool: &Pool<DB>,
+    statement: &str,
+    columns: Vec<Column>,
+    max_rows: usize,
+    cancel: &CancellationToken,
+    affected: impl Fn(&DB::QueryResult) -> u64,
+    decode: impl Fn(&DB::Row, usize) -> Cell,
+) -> Result<ResultSet>
+where
+    DB: Database,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+{
+    let started = Instant::now();
+    let width = columns.len();
+    let mut result = ResultSet::new(statement, columns);
+
+    // The SQL is whatever the user typed into their own editor, against their own database. There
+    // is no untrusted input to escape here, and refusing to run it would defeat the point of the
+    // plugin.
+    let stream = sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(pool);
+
+    drain(stream, &mut result, max_rows, cancel, affected, |row| {
+        // A row can be wider than preparing predicted, so take whichever is larger and let the
+        // result set trim or pad. Losing a column silently would be worse than showing an extra one.
+        (0..width.max(row.len()))
+            .map(|index| decode(row, index))
+            .collect()
+    })
+    .await?;
+
+    result.set_elapsed(started.elapsed());
+    Ok(result)
+}
+
+/// Read a query's output into a result set.
+async fn drain<S, Q, R>(
     mut stream: S,
     result: &mut ResultSet,
     max_rows: usize,
@@ -45,6 +137,103 @@ where
                     result.push_row(decode(&row));
                 }
             },
+        }
+    }
+}
+
+/// Last resort for a value no decoder claimed: its text, else its bytes, else its type's name.
+///
+/// SQLite will happily store text in an integer column, and MySQL has types nothing decodes, so a
+/// failed decode is a normal event rather than a bug, and the value itself is still worth showing.
+pub(crate) fn text_or_bytes<'r, R>(row: &'r R, index: usize, type_name: &str) -> Cell
+where
+    R: Row,
+    usize: ColumnIndex<R>,
+    String: Decode<'r, R::Database> + Type<R::Database>,
+    Vec<u8>: Decode<'r, R::Database> + Type<R::Database>,
+{
+    if let Ok(text) = row.try_get::<String, _>(index) {
+        return Cell::Text(text);
+    }
+    if let Ok(bytes) = row.try_get::<Vec<u8>, _>(index) {
+        return Cell::bytes(&bytes);
+    }
+    Cell::Unsupported {
+        type_name: type_name.to_owned(),
+        raw: String::new(),
+    }
+}
+
+/// What a drawer column's foreign key points at, read from `references_table` and
+/// `references_column`, if it has one.
+pub(crate) fn foreign_key<'r, R>(row: &'r R) -> Option<ForeignKey>
+where
+    R: Row,
+    &'static str: ColumnIndex<R>,
+    String: Decode<'r, R::Database> + Type<R::Database>,
+{
+    Some(ForeignKey {
+        table: row
+            .try_get::<Option<String>, _>("references_table")
+            .ok()??,
+        column: row
+            .try_get::<Option<String>, _>("references_column")
+            .ok()??,
+    })
+}
+
+/// Which columns of each table are keys, by table name and then column name.
+///
+/// Whole tables at a time, because asking about one column costs the same as asking about all of
+/// them, and the next query on that table is then free. A table present here has been read, even
+/// if it turned out to have no keys, which is what stops one without any from being asked about
+/// again on every execution.
+#[derive(Debug, Default)]
+pub(crate) struct TableKeys(Mutex<HashMap<String, HashMap<String, KeyKind>>>);
+
+impl TableKeys {
+    /// Mark the result columns that are keys in the table they came from, reading each table not
+    /// seen before with `read`.
+    ///
+    /// A column that is an expression has no origin and is left unmarked: `count(*)` is nobody's
+    /// primary key.
+    pub(crate) async fn mark<F, Fut>(&self, origins: &[Origin], columns: &mut [Column], read: F)
+    where
+        F: Fn(String) -> Fut,
+        Fut: Future<Output = HashMap<String, KeyKind>>,
+    {
+        let missing: Vec<String> = {
+            let Ok(known) = self.0.lock() else {
+                return;
+            };
+            let mut missing: Vec<String> = origins
+                .iter()
+                .flatten()
+                .map(|(table, _)| table.clone())
+                .filter(|table| !known.contains_key(table))
+                .collect();
+            missing.sort_unstable();
+            missing.dedup();
+            missing
+        };
+
+        for table in missing {
+            let found = read(table.clone()).await;
+            if let Ok(mut known) = self.0.lock() {
+                known.insert(table, found);
+            }
+        }
+
+        let Ok(known) = self.0.lock() else {
+            return;
+        };
+        for (column, origin) in columns.iter_mut().zip(origins) {
+            if let Some(kind) = origin
+                .as_ref()
+                .and_then(|(table, name)| known.get(table)?.get(name))
+            {
+                column.key = *kind;
+            }
         }
     }
 }

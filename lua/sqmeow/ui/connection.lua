@@ -9,6 +9,8 @@
 
 local M = {}
 
+local utils = require('sqmeow.utils')
+
 --- What is wrong with the answers, if anything.
 ---
 ---@param dialect string
@@ -69,7 +71,7 @@ local function form(dialect, values, existing)
   })
 
   if not opened then
-    vim.notify(err or 'sqmeow: the dialog could not open', vim.log.levels.ERROR)
+    utils.notify(err or 'the dialog could not open', vim.log.levels.ERROR)
   end
 end
 
@@ -111,7 +113,7 @@ function M.from_url(values)
   })
 
   if not opened then
-    vim.notify(err or 'sqmeow: the dialog could not open', vim.log.levels.ERROR)
+    utils.notify(err or 'the dialog could not open', vim.log.levels.ERROR)
   end
 end
 
@@ -144,7 +146,7 @@ function M.create()
   })
 
   if not opened then
-    vim.notify(err or 'sqmeow: the dialog could not open', vim.log.levels.ERROR)
+    utils.notify(err or 'the dialog could not open', vim.log.levels.ERROR)
   end
 end
 

@@ -17,7 +17,7 @@ T['engine']['starts and answers a handshake'] = function()
   eq(err, nil)
   eq(type(channel), 'number')
 
-  local info = rpc.info()
+  local info = assert(rpc.info())
   eq(type(info.core_version), 'string')
   eq(type(info.pid), 'number')
 end
@@ -38,7 +38,7 @@ T['engine']['reports an unknown method without dying'] = function()
   local result, err = rpc.request('no_such_method')
   eq(result, nil)
   eq(err ~= nil, true)
-  eq(err:find('no_such_method', 1, true) ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('no_such_method', 1, true) ~= nil, true)
   -- The channel survives a rejected call.
   eq(rpc.request('ping'), 'pong')
 end

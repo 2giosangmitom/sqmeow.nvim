@@ -100,7 +100,7 @@ function M.setup(opts)
 
   local _, errors = require('sqmeow.config').apply(M.user_config)
   for _, err in ipairs(errors) do
-    vim.notify('sqmeow: ' .. err, vim.log.levels.ERROR)
+    require('sqmeow.utils').notify(err, vim.log.levels.ERROR)
   end
 
   require('sqmeow.ui.highlights').setup()

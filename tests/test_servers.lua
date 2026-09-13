@@ -5,6 +5,7 @@ local MiniTest = require('mini.test')
 -- URLs in, so a machine with no Docker still runs the rest of the suite.
 
 local eq = MiniTest.expect.equality
+local helpers = dofile('tests/helpers.lua')
 local api = require('sqmeow.api')
 local rpc = require('sqmeow.rpc')
 local state = require('sqmeow.state')
@@ -33,7 +34,7 @@ local function run(sql)
     return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
   end, 20)
   assert(settled, 'the query should settle: ' .. sql)
-  return state.call
+  return assert(state.call, 'the query should leave a result')
 end
 
 local function grid()
@@ -149,16 +150,17 @@ local redis_servers = {
 --- One level of the drawer, as the engine reports it.
 local function introspect(path)
   local drawer = require('sqmeow.ui.drawer')
-  local original = drawer.on_nodes
   local reply
-  drawer.on_nodes = function(payload)
+  -- Put back as soon as the level arrives rather than when the case ends, so the drawer the case
+  -- goes on to use is the real one.
+  local original = helpers.swap(drawer, 'on_nodes', function(payload)
     reply = payload
-  end
+  end)
   rpc.request('introspect', { conn_id = state.current_connection().id, path = path })
   local settled = vim.wait(TIMEOUT, function()
     return reply ~= nil
   end, 20)
-  drawer.on_nodes = original
+  helpers.swap(drawer, 'on_nodes', original)
 
   assert(settled, 'the drawer level should arrive')
   eq(reply.error, nil)
@@ -287,7 +289,7 @@ T['postgres cluster']['opens a database from the drawer as its own connection'] 
   -- The schemas are the child connection's, read once it has connected.
   toggle(' public$')
 
-  local child = state.child_connection(cluster.id, database)
+  local child = assert(state.child_connection(cluster.id, database))
   eq(child.name, 'cluster/' .. database)
   eq(child.state, 'connected')
   for _, line in ipairs(drawn()) do
@@ -414,7 +416,7 @@ T['mongodb']['a find that matches nothing says so'] = function()
 end
 
 T['mongodb']['names the database it runs on, following use'] = function()
-  local connection = state.current_connection()
+  local connection = assert(state.current_connection())
   eq(connection.current_database, 'sqmeow')
 
   run('use sqmeow_other')

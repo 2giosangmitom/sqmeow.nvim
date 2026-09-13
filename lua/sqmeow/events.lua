@@ -8,9 +8,7 @@ local M = {}
 
 local wired = false
 
-local function notify(message, level)
-  vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
-end
+local notify = require('sqmeow.utils').notify
 
 --- Handle a connection changing state.
 ---@param payload table

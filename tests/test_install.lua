@@ -1,5 +1,6 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
+local helpers = dofile('tests/helpers.lua')
 local install = require('sqmeow.install')
 
 local T = MiniTest.new_set()
@@ -75,7 +76,7 @@ end
 T['resolve']['finds the checkout build, so a clone needs no install step'] = function()
   local path, source = install.resolve()
   eq(source, 'dev')
-  eq(path:find('target/', 1, true) ~= nil, true)
+  eq(assert(path, 'the checkout build should be found'):find('target/', 1, true) ~= nil, true)
 end
 
 T['managed_path'] = MiniTest.new_set()
@@ -89,17 +90,12 @@ end
 T['download'] = MiniTest.new_set()
 
 T['download']['answers through the callback instead of waiting'] = function()
-  local fetch = install.fetch
-  MiniTest.finally(function()
-    install.fetch = fetch
-  end)
-
-  install.fetch = function(_, _, _, callback)
+  helpers.stub(install, 'fetch', function(_, _, _, callback)
     -- Answering later is what a real download does, and is the whole point of the callback.
     vim.defer_fn(function()
       callback(false, 'no network')
     end, 10)
-  end
+  end)
 
   local answered, path, err = false, nil, nil
   install.download(nil, function(p, e)
@@ -119,20 +115,16 @@ end
 T['install'] = MiniTest.new_set()
 
 T['install']['builds with cargo when asked for it'] = function()
-  local build, download, notify = install.build, install.download, vim.notify
-  MiniTest.finally(function()
-    install.build, install.download, vim.notify = build, download, notify
-  end)
-  vim.notify = function() end
+  helpers.stub(vim, 'notify', function() end)
 
   local downloaded = false
-  install.download = function(_, callback)
+  helpers.stub(install, 'download', function(_, callback)
     downloaded = true
     callback(nil, 'should not have been asked')
-  end
-  install.build = function(callback)
+  end)
+  helpers.stub(install, 'build', function(callback)
     callback('/somewhere/sqmeow-core')
-  end
+  end)
 
   local ok, err = install.install('cargo')
   eq(ok, true)
@@ -143,20 +135,16 @@ T['install']['builds with cargo when asked for it'] = function()
 end
 
 T['install']['falls back to cargo only when no method was named'] = function()
-  local build, download, notify = install.build, install.download, vim.notify
-  MiniTest.finally(function()
-    install.build, install.download, vim.notify = build, download, notify
-  end)
-  vim.notify = function() end
+  helpers.stub(vim, 'notify', function() end)
 
   local built = false
-  install.download = function(_, callback)
+  helpers.stub(install, 'download', function(_, callback)
     callback(nil, 'no release for this target')
-  end
-  install.build = function(callback)
+  end)
+  helpers.stub(install, 'build', function(callback)
     built = true
     callback('/somewhere/sqmeow-core')
-  end
+  end)
 
   eq(install.install(), true)
   eq(built, true)
@@ -170,30 +158,22 @@ T['install']['falls back to cargo only when no method was named'] = function()
 end
 
 T['install']['refuses a method it does not have'] = function()
-  local notify = vim.notify
-  MiniTest.finally(function()
-    vim.notify = notify
-  end)
-  vim.notify = function() end
+  helpers.stub(vim, 'notify', function() end)
 
   local ok, err = install.install('bitsadmin')
   eq(ok, false)
-  eq(err:find('bitsadmin', 1, true) ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('bitsadmin', 1, true) ~= nil, true)
   -- The message lists what it does take, since the point of naming one is that detection was wrong.
-  eq(err:find('cargo', 1, true) ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('cargo', 1, true) ~= nil, true)
 end
 
 T['install']['answers through a callback without waiting'] = function()
-  local download, notify = install.download, vim.notify
-  MiniTest.finally(function()
-    install.download, vim.notify = download, notify
-  end)
-  vim.notify = function() end
+  helpers.stub(vim, 'notify', function() end)
 
   local release
-  install.download = function(_, callback)
+  helpers.stub(install, 'download', function(_, callback)
     release = callback
-  end
+  end)
 
   local answered
   local returned = install.install({
@@ -213,14 +193,10 @@ T['install']['answers through a callback without waiting'] = function()
 end
 
 T['install']['turns away a second install while one is running'] = function()
-  local download, build, notify = install.download, install.build, vim.notify
-  MiniTest.finally(function()
-    install.download, install.build, vim.notify = download, build, notify
-  end)
-  vim.notify = function() end
+  helpers.stub(vim, 'notify', function() end)
 
   local nested, release
-  install.download = function(_, callback)
+  helpers.stub(install, 'download', function(_, callback)
     install.install({
       callback = function(_, e)
         nested = e
@@ -229,10 +205,10 @@ T['install']['turns away a second install while one is running'] = function()
     release = function()
       callback(nil, 'the download failed')
     end
-  end
-  install.build = function(callback)
+  end)
+  helpers.stub(install, 'build', function(callback)
     callback(nil, 'no cargo')
-  end
+  end)
 
   local err
   install.install({
@@ -250,18 +226,14 @@ T['install']['turns away a second install while one is running'] = function()
 end
 
 T['install']['gives up rather than waiting for ever'] = function()
-  local download, notify = install.download, vim.notify
-  MiniTest.finally(function()
-    install.download, vim.notify = download, notify
-  end)
-  vim.notify = function() end
+  helpers.stub(vim, 'notify', function() end)
 
   -- A download that never answers, which is what a hung connection looks like from here.
-  install.download = function() end
+  helpers.stub(install, 'download', function() end)
 
   local ok, err = install.install({ timeout = 50 })
   eq(ok, false)
-  eq(err:find('timed out', 1, true) ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('timed out', 1, true) ~= nil, true)
   -- The guard must come back down, or a timeout would cost the user their session: every later
   -- install would be turned away as a duplicate of one that is never going to finish.
   eq(install.installing(), nil)
@@ -270,18 +242,13 @@ end
 T['installing'] = MiniTest.new_set()
 
 T['installing']['names the step, so a caller can say what is holding it up'] = function()
-  local download, notify = install.download, vim.notify
-  MiniTest.finally(function()
-    install.download, vim.notify = download, notify
-  end)
-
-  vim.notify = function() end
+  helpers.stub(vim, 'notify', function() end)
   eq(install.installing(), nil)
 
   local release
-  install.download = function(_, callback)
+  helpers.stub(install, 'download', function(_, callback)
     release = callback
-  end
+  end)
 
   install.install({ callback = function() end })
   eq(install.installing(), 'downloading')

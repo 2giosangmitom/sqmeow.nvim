@@ -6,9 +6,7 @@
 
 local M = {}
 
-local function notify(message, level)
-  vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
-end
+local notify = require('sqmeow.utils').notify
 
 --- Discard a return value, so `return api.execute(...)` stays a statement rather than making the
 --- command handler answer with a call id nobody reads.
@@ -102,7 +100,7 @@ M.subcommands = {
         on_choice = prompt,
       })
       if not opened then
-        notify(err, vim.log.levels.ERROR)
+        notify(err or 'the menu could not be opened', vim.log.levels.ERROR)
       end
     end,
     complete = function(lead)
@@ -160,7 +158,7 @@ M.subcommands = {
         on_choice = activate,
       })
       if not opened then
-        notify(err, vim.log.levels.ERROR)
+        notify(err or 'the menu could not be opened', vim.log.levels.ERROR)
       end
     end,
     complete = function(lead)
@@ -382,7 +380,7 @@ M.subcommands = {
       local rpc = require('sqmeow.rpc')
       local channel, err = rpc.start()
       if not channel then
-        return notify(err, vim.log.levels.ERROR)
+        return notify(err or 'the engine could not be started', vim.log.levels.ERROR)
       end
       local info = assert(rpc.info(), 'a started engine has answered its handshake')
       notify(('engine %s running (pid %d)'):format(info.core_version, info.pid))
@@ -409,7 +407,7 @@ M.subcommands = {
       if channel then
         return notify('engine restarted')
       end
-      notify(err, vim.log.levels.ERROR)
+      notify(err or 'the engine could not be restarted', vim.log.levels.ERROR)
     end,
   },
 }

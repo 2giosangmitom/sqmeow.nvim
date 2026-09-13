@@ -54,9 +54,7 @@ local root = vim.fs.normalize(
   vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2))))
 )
 
-local function notify(message, level)
-  vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
-end
+local notify = require('sqmeow.utils').notify
 
 --- Show how far the install has got, on the message line rather than in the notification history.
 ---

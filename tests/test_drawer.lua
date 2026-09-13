@@ -2,6 +2,7 @@ local MiniTest = require('mini.test')
 -- The schema drawer, against a real SQLite database, through the real engine.
 
 local eq = MiniTest.expect.equality
+local helpers = dofile('tests/helpers.lua')
 local api = require('sqmeow.api')
 local rpc = require('sqmeow.rpc')
 local state = require('sqmeow.state')
@@ -82,7 +83,7 @@ local function run(sql)
     end, 10),
     'the query should settle: ' .. sql
   )
-  return state.call
+  return assert(state.call, 'the query should leave a result')
 end
 
 local T = MiniTest.new_set({
@@ -451,12 +452,8 @@ end
 
 T['saved connections']['open when chosen'] = function()
   local opened
-  local connect = require('sqmeow.api').connect_named
-  require('sqmeow.api').connect_named = function(name)
+  helpers.stub(require('sqmeow.api'), 'connect_named', function(name)
     opened = name
-  end
-  MiniTest.finally(function()
-    require('sqmeow.api').connect_named = connect
   end)
 
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('ledger'), 0 })
@@ -500,12 +497,8 @@ T['saved connections']['can be tried again after failing to open'] = function()
   eq(marks_on(number)[2].group, 'SqmeowConnectionError')
 
   local opened
-  local connect = require('sqmeow.api').connect_named
-  require('sqmeow.api').connect_named = function(name)
+  helpers.stub(require('sqmeow.api'), 'connect_named', function(name)
     opened = name
-  end
-  MiniTest.finally(function()
-    require('sqmeow.api').connect_named = connect
   end)
 
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('broken'), 0 })
@@ -546,7 +539,7 @@ T['history']['puts a query back on screen when chosen'] = function()
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('select 3'), 0 })
   drawer.actions.toggle()
 
-  eq(require('sqmeow.state').call.call_id, summary.call_id)
+  eq(assert(require('sqmeow.state').call).call_id, summary.call_id)
 end
 
 T['history']['shows a saved result once the engine no longer holds it'] = function()
@@ -574,7 +567,9 @@ T['history']['shows a saved result once the engine no longer holds it'] = functi
 
   assert(
     vim.wait(TIMEOUT, function()
-      return state.call.call_id ~= summary.call_id and state.call.state == 'done'
+      return state.call ~= nil
+        and state.call.call_id ~= summary.call_id
+        and state.call.state == 'done'
     end, 10),
     'the saved result should be read back'
   )
@@ -626,13 +621,9 @@ T['history']['empties on request'] = function()
 
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('history'), 0 })
   local answered = false
-  local select = vim.ui.select
-  vim.ui.select = function(_, _, on_choice)
+  helpers.stub(vim.ui, 'select', function(_, _, on_choice)
     answered = true
     on_choice('yes')
-  end
-  MiniTest.finally(function()
-    vim.ui.select = select
   end)
 
   drawer.actions.delete()
@@ -700,12 +691,10 @@ end
 
 T['scratchpads']['are renamed once a new name is given'] = function()
   local editor = require('sqmeow.ui.editor')
-  local input = vim.ui.input
-  vim.ui.input = function(_, on_confirm)
+  helpers.stub(vim.ui, 'input', function(_, on_confirm)
     on_confirm('renamed')
-  end
+  end)
   MiniTest.finally(function()
-    vim.ui.input = input
     vim.fn.delete(vim.fs.joinpath(editor.directory(), 'renamed.sql'))
   end)
 
@@ -719,12 +708,8 @@ end
 
 T['scratchpads']['offer the current name to edit'] = function()
   local offered = nil
-  local input = vim.ui.input
-  vim.ui.input = function(opts)
+  helpers.stub(vim.ui, 'input', function(opts)
     offered = opts.default
-  end
-  MiniTest.finally(function()
-    vim.ui.input = input
   end)
 
   expand('scratchpads')
@@ -736,12 +721,8 @@ end
 
 T['scratchpads']['are left alone when the rename is abandoned'] = function()
   local editor = require('sqmeow.ui.editor')
-  local input = vim.ui.input
-  vim.ui.input = function(_, on_confirm)
+  helpers.stub(vim.ui, 'input', function(_, on_confirm)
     on_confirm(nil)
-  end
-  MiniTest.finally(function()
-    vim.ui.input = input
   end)
 
   expand('scratchpads')
@@ -753,12 +734,8 @@ end
 
 T['scratchpads']['are not renamed from a row that is not one'] = function()
   local called = false
-  local input = vim.ui.input
-  vim.ui.input = function()
+  helpers.stub(vim.ui, 'input', function()
     called = true
-  end
-  MiniTest.finally(function()
-    vim.ui.input = input
   end)
 
   -- A schema is neither a scratchpad nor a connection, so there is no name of its own to change.
@@ -771,14 +748,12 @@ end
 T['connections'] = MiniTest.new_set()
 
 T['connections']['are renamed from the row that shows them'] = function()
-  local input = vim.ui.input
-  vim.ui.input = function(opts, on_confirm)
+  helpers.stub(vim.ui, 'input', function(opts, on_confirm)
     -- The current name is the default, so the prompt is somewhere to edit rather than to retype.
     eq(opts.default, 'scratch')
     on_confirm('local sqlite')
-  end
+  end)
   MiniTest.finally(function()
-    vim.ui.input = input
     api.rename(state.current, 'scratch')
     drawer.render()
   end)
@@ -791,12 +766,8 @@ T['connections']['are renamed from the row that shows them'] = function()
 end
 
 T['connections']['keep their name when the prompt is dismissed'] = function()
-  local input = vim.ui.input
-  vim.ui.input = function(_, on_confirm)
+  helpers.stub(vim.ui, 'input', function(_, on_confirm)
     on_confirm(nil)
-  end
-  MiniTest.finally(function()
-    vim.ui.input = input
   end)
 
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
@@ -807,12 +778,8 @@ end
 T['scratchpads']['are deleted once the question is answered'] = function()
   local editor = require('sqmeow.ui.editor')
   local answer = 'yes'
-  local select = vim.ui.select
-  vim.ui.select = function(_, _, on_choice)
+  helpers.stub(vim.ui, 'select', function(_, _, on_choice)
     on_choice(answer)
-  end
-  MiniTest.finally(function()
-    vim.ui.select = select
   end)
 
   expand('scratchpads')
@@ -825,12 +792,8 @@ end
 
 T['scratchpads']['are left alone when the question is declined'] = function()
   local editor = require('sqmeow.ui.editor')
-  local select = vim.ui.select
-  vim.ui.select = function(_, _, on_choice)
+  helpers.stub(vim.ui, 'select', function(_, _, on_choice)
     on_choice('no')
-  end
-  MiniTest.finally(function()
-    vim.ui.select = select
   end)
 
   expand('scratchpads')
@@ -842,12 +805,8 @@ end
 
 T['scratchpads']['are not deleted from a row that is not one'] = function()
   local called = false
-  local select = vim.ui.select
-  vim.ui.select = function()
+  helpers.stub(vim.ui, 'select', function()
     called = true
-  end
-  MiniTest.finally(function()
-    vim.ui.select = select
   end)
 
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
@@ -857,13 +816,11 @@ end
 
 T['scratchpads']['are created for the connection under the cursor'] = function()
   local editor = require('sqmeow.ui.editor')
-  local input = vim.ui.input
-  vim.ui.input = function(opts, on_confirm)
+  helpers.stub(vim.ui, 'input', function(opts, on_confirm)
     eq(opts.prompt:find('scratch', 1, true) ~= nil, true)
     on_confirm('report')
-  end
+  end)
   MiniTest.finally(function()
-    vim.ui.input = input
     vim.cmd('silent! bwipeout!')
     vim.fn.delete(vim.fs.joinpath(editor.directory(), 'scratch'), 'rf')
     drawer.open()
@@ -884,12 +841,8 @@ end
 
 T['scratchpads']['are not created from a row outside every connection'] = function()
   local called = false
-  local input = vim.ui.input
-  vim.ui.input = function()
+  helpers.stub(vim.ui, 'input', function()
     called = true
-  end
-  MiniTest.finally(function()
-    vim.ui.input = input
   end)
 
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratchpads'), 0 })
