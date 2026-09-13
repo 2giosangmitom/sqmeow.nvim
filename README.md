@@ -9,8 +9,6 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 ![Repo size](https://img.shields.io/github/repo-size/2giosangmitom/sqmeow.nvim?color=%23DDB6F2&label=SIZE&logo=codesandbox&style=for-the-badge&logoColor=D9E0EE&labelColor=302D41)
 ![LICENSE](https://img.shields.io/github/license/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=alpinedotjs&color=ee999f&logoColor=D9E0EE&labelColor=302D41)
 
-> Early development. Every database under [Supported databases](#supported-databases) works end to end.
-
 ## ✨ Features
 
 - 🐘 Several connections open at once, each to a different database if you like.
@@ -98,18 +96,18 @@ Subcommands complete with `<Tab>`. See `:h sqmeow` for the rest.
 
 **Drawer**
 
-| Key         | Action                                |
-| ----------- | ------------------------------------- |
-| `<CR>`, `o` | Expand or collapse                    |
-| `u`         | Run queries against this connection   |
-| `p`         | Preview the relation                  |
-| `r`         | Reload the subtree                    |
-| `y` / `s`   | Yank the qualified name / a `SELECT`  |
+| Key         | Action                                 |
+| ----------- | -------------------------------------- |
+| `<CR>`, `o` | Expand or collapse                     |
+| `u`         | Run queries against this connection    |
+| `p`         | Preview the relation                   |
+| `r`         | Reload the subtree                     |
+| `y` / `s`   | Yank the qualified name / a `SELECT`   |
 | `a`         | Create a scratchpad for the connection |
-| `A` / `e`   | Add / edit a connection               |
-| `R`         | Rename a connection or scratchpad     |
-| `d`         | Delete a scratchpad, or empty the log |
-| `q`         | Close                                 |
+| `A` / `e`   | Add / edit a connection                |
+| `R`         | Rename a connection or scratchpad      |
+| `d`         | Delete a scratchpad, or empty the log  |
+| `q`         | Close                                  |
 
 **Result**
 
