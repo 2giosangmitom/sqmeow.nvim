@@ -13,12 +13,55 @@ T['scratchpad'] = MiniTest.new_set({
   hooks = {
     post_case = function()
       state.reset()
+      vim.cmd('silent! %bwipeout!')
+      vim.fn.delete(editor.directory(), 'rf')
     end,
   },
 })
 
-T['scratchpad']['names a file after the connection'] = function()
-  eq(vim.fs.basename(editor.path('dev')), 'dev.sql')
+T['scratchpad']['keeps a file in a folder named after its connection'] = function()
+  eq(
+    editor.path('dev db', 'monthly report'),
+    vim.fs.joinpath(editor.directory(), 'dev-db', 'monthly-report.sql')
+  )
+end
+
+T['scratchpad']['gives a redis connection a redis file'] = function()
+  state.add_connection({ id = 1, name = 'cache', url = 'redis://h/0', state = 'connected' })
+  eq(vim.fs.basename(editor.path('cache', 'keys')), 'keys.redis')
+end
+
+T['scratchpad']['opens with the filetype its connection speaks'] = function()
+  state.add_connection({ id = 1, name = 'cache', url = 'redis://h/0', state = 'connected' })
+  state.add_connection({ id = 2, name = 'shop', url = 'sqlite://x.db', state = 'connected' })
+
+  local redis = assert(editor.create('cache', 'keys'))
+  eq(vim.bo[redis].filetype, 'redis')
+  local sql = assert(editor.create('shop', 'orders'))
+  eq(vim.bo[sql].filetype, 'sql')
+end
+
+T['scratchpad']['is written as soon as it is created, so it is listed'] = function()
+  state.add_connection({ id = 1, name = 'shop', url = 'sqlite://x.db', state = 'connected' })
+  editor.create('shop', 'orders')
+
+  local pads = editor.list()
+  eq(#pads, 1)
+  eq({ pads[1].name, pads[1].folder }, { 'orders', 'shop' })
+end
+
+T['scratchpad']['refuses to be created without a name'] = function()
+  local buf, err = editor.create('shop', '  ')
+  eq(buf, nil)
+  eq(err, 'a scratchpad needs a name')
+end
+
+T['scratchpad']['keeps its folder and extension when renamed'] = function()
+  state.add_connection({ id = 1, name = 'cache', url = 'redis://h/0', state = 'connected' })
+  editor.create('cache', 'keys')
+
+  local renamed = editor.rename(editor.path('cache', 'keys'), 'sessions')
+  eq(renamed, vim.fs.normalize(vim.fs.joinpath(editor.directory(), 'cache', 'sessions.redis')))
 end
 
 T['scratchpad']['makes a connection name safe to use as a file name'] = function()
@@ -33,12 +76,7 @@ T['scratchpad']['falls back to a name when there is nothing usable left'] = func
 end
 
 T['scratchpad']['lives under core.path'] = function()
-  eq(vim.fs.dirname(editor.path('dev')), require('sqmeow.paths').scratch())
-end
-
-T['scratchpad']['uses the current connection when given no name'] = function()
-  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
-  eq(vim.fs.basename(editor.path()), 'orders.sql')
+  eq(vim.fs.dirname(vim.fs.dirname(editor.path('dev', 'x'))), require('sqmeow.paths').scratch())
 end
 
 T['scratchpad']['marks the buffers it attaches to'] = function()
@@ -250,6 +288,8 @@ T['knowing where a query goes'] = MiniTest.new_set({
       state.reset()
       require('sqmeow.config').apply({})
       vim.cmd('silent! %bwipeout!')
+      -- Scratchpads written here must not be left for the drawer's cases to count.
+      vim.fn.delete(editor.directory(), 'rf')
     end,
   },
 })
@@ -265,10 +305,21 @@ local function winbar(buf)
   return nil
 end
 
-T['knowing where a query goes']['ties a scratchpad to the connection it is named after'] = function()
+T['knowing where a query goes']['ties a scratchpad to the connection whose folder it is in'] = function()
   state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
 
-  local buf = editor.open('orders')
+  local buf = editor.create('orders', 'monthly')
+  eq(vim.b[buf].sqmeow_connection, 'orders')
+end
+
+T['knowing where a query goes']['still ties a file from before folders by its name'] = function()
+  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
+
+  vim.fn.mkdir(editor.directory(), 'p')
+  local path = vim.fs.joinpath(editor.directory(), 'orders.sql')
+  vim.fn.writefile({ 'select 1' }, path)
+
+  local buf = editor.open_path(path)
   eq(vim.b[buf].sqmeow_connection, 'orders')
 end
 
@@ -295,13 +346,13 @@ T['knowing where a query goes']['says so above the scratchpad'] = function()
     state = 'connected',
   })
 
-  local buf = editor.open('orders')
+  local buf = editor.create('orders', 'monthly')
   eq(winbar(buf):find('orders (postgres)', 1, true) ~= nil, true)
 end
 
 T['knowing where a query goes']['says what is wrong when the connection is closed'] = function()
   state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
-  local buf = editor.open('orders')
+  local buf = editor.create('orders', 'monthly')
   state.remove_connection(1)
   editor.update_winbar()
 
@@ -312,7 +363,7 @@ T['knowing where a query goes']['draws no winbar when the option is off'] = func
   require('sqmeow.config').apply({ ui = { winbar = false } })
   state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
 
-  local buf = editor.open('orders')
+  local buf = editor.create('orders', 'monthly')
   eq(winbar(buf), '')
 end
 
@@ -326,13 +377,15 @@ T['opening everything'] = MiniTest.new_set({
   },
 })
 
-T['opening everything']['puts up all three surfaces'] = function()
+T['opening everything']['puts up the drawer and the result, and creates no scratchpad'] = function()
+  local before = #editor.list()
   require('sqmeow.api').open_all()
 
   eq(require('sqmeow.ui.drawer').is_open(), true)
   eq(require('sqmeow.ui.result').is_open(), true)
-  -- And the cursor is in the scratchpad, since that is where a person types next.
-  eq(require('sqmeow.ui.editor').is_scratchpad(), true)
+  -- Scratchpads are made when someone asks for one, never as a side effect of opening the client.
+  eq(editor.is_scratchpad(), false)
+  eq(#editor.list(), before)
 end
 
 T['opening everything']['closes it all again'] = function()

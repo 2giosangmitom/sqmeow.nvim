@@ -29,3 +29,22 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Dragonfly speaks the Redis protocol, and the Redis cases run against it as well. It locks its
+  # memory on start, which Docker's default limit refuses. The image brings its own healthcheck.
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2
+    ulimits:
+      memlock: -1
+    ports:
+      - "56380:6379"

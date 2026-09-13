@@ -9,20 +9,27 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 ![Repo size](https://img.shields.io/github/repo-size/2giosangmitom/sqmeow.nvim?color=%23DDB6F2&label=SIZE&logo=codesandbox&style=for-the-badge&logoColor=D9E0EE&labelColor=302D41)
 ![LICENSE](https://img.shields.io/github/license/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=alpinedotjs&color=ee999f&logoColor=D9E0EE&labelColor=302D41)
 
-> Early development. SQLite, PostgreSQL and MySQL work end to end.
-
 ## ✨ Features
 
-- 🐘 SQLite, PostgreSQL and MySQL, with several connections open at once.
-- 🖥️ One command opens the whole client: schema drawer, scratchpad and result grid.
+- 🐘 Several connections open at once, each to a different database if you like.
+- 🖥️ One command opens the client: schema drawer and result grid.
 - 📝 A connection form with real fields, so nobody types a URL by hand. The password stays hidden behind asterisks.
 - 🌲 A schema drawer with tables, views, functions, procedures and columns with their types and keys, loaded as you expand.
 - ▶️ Run the statement under the cursor, a selection or the whole buffer. Errors show up as diagnostics on their own lines.
-- 📄 Scratchpads that survive a restart, each tied to its own connection, so two of them can query two databases side by side.
+- 📄 Scratchpads you create and name from the drawer, as many per connection as you like. They survive a restart and stay tied to their connection, so two of them can query two databases side by side.
 - 🕘 A query log that keeps every result, so you can look at yesterday's answer without running the query again.
 - ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Yank as CSV or export to CSV and JSON.
 - 🔐 Passwords can come from `{{ env "VAR" }}` or `{{ exec "cmd" }}`, and are masked wherever a URL is shown.
 - ⌨️ No global keymaps. Every key is buffer-local and configurable, with `<Plug>` mappings for your own bindings.
+
+<a id="supported-databases"></a>
+
+## 🗄️ Supported databases
+
+- SQLite
+- PostgreSQL
+- MySQL, MariaDB
+- Redis, Valkey, Dragonfly
 
 ## 🎬 Preview
 
@@ -51,10 +58,10 @@ To track the latest commit instead of a release, drop `version` and use `install
 
 ## ⚡ Usage
 
-1. `:Sqmeow` opens the drawer, a scratchpad and the result window. Run it again to restore your layout.
+1. `:Sqmeow` opens the drawer and the result window. Run it again to restore your layout.
 2. `:Sqmeow add` (or `A` in the drawer) opens a form to add a connection.
-3. `<CR>` on a connection in the drawer opens it. `u` makes it the one queries run against.
-4. Write SQL in the scratchpad and press `<CR>` to run the statement under the cursor, or a visual selection. Errors show as diagnostics.
+3. `<CR>` on a connection in the drawer opens it. `u` makes it the one queries run against, and `a` creates a scratchpad for it.
+4. Write SQL in the scratchpad and press `<CR>` to run the statement under the cursor, or a visual selection. Errors show as diagnostics. On a Redis connection, write one command per line; the drawer lists keys by type.
 
 Press `?` in the drawer or result window to list its keys.
 
@@ -75,7 +82,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 | `:Sqmeow use [name]`         | Choose the connection queries run against           |
 | `:Sqmeow bind <name\|none>`  | Tie the current buffer to a connection, or untie it |
 | `:Sqmeow disconnect`         | Close the current connection                        |
-| `:Sqmeow scratch [name]`     | Open the scratchpad for a connection                |
+| `:Sqmeow scratch [name]`     | Create a scratchpad for a connection                |
 | `:Sqmeow execute [sql]`      | Run the buffer, the selection, or the given SQL     |
 | `:Sqmeow cancel`             | Stop the running query                              |
 | `:Sqmeow export <csv\|json>` | Write the result to a file                          |
@@ -89,17 +96,18 @@ Subcommands complete with `<Tab>`. See `:h sqmeow` for the rest.
 
 **Drawer**
 
-| Key         | Action                                |
-| ----------- | ------------------------------------- |
-| `<CR>`, `o` | Expand or collapse                    |
-| `u`         | Run queries against this connection   |
-| `p`         | Preview the relation                  |
-| `r`         | Reload the subtree                    |
-| `y` / `s`   | Yank the qualified name / a `SELECT`  |
-| `A` / `e`   | Add / edit a connection               |
-| `R`         | Rename a connection or scratchpad     |
-| `d`         | Delete a scratchpad, or empty the log |
-| `q`         | Close                                 |
+| Key         | Action                                 |
+| ----------- | -------------------------------------- |
+| `<CR>`, `o` | Expand or collapse                     |
+| `u`         | Run queries against this connection    |
+| `p`         | Preview the relation                   |
+| `r`         | Reload the subtree                     |
+| `y` / `s`   | Yank the qualified name / a `SELECT`   |
+| `a`         | Create a scratchpad for the connection |
+| `A` / `e`   | Add / edit a connection                |
+| `R`         | Rename a connection or scratchpad      |
+| `d`         | Delete a scratchpad, or empty the log  |
+| `q`         | Close                                  |
 
 **Result**
 
@@ -172,7 +180,7 @@ Contributions are welcome. The toolchain is pinned with [mise](https://mise.jdx.
 
 ```sh
 mise install   # rust, just, stylua, selene
-just db-up     # PostgreSQL and MySQL for integration tests
+just db-up     # PostgreSQL, MySQL, Redis and Dragonfly for integration tests
 just           # lint and test, as CI does
 just docs      # regenerate doc/sqmeow.txt
 ```

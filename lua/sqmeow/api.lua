@@ -486,13 +486,40 @@ function M.export(opts)
   }, write)
 end
 
---- Open the scratchpad for a connection.
+--- Create a scratchpad for a connection, asking what to call it.
 ---
----@param name string|nil Defaults to the current connection.
----@return integer buf
-function M.scratchpad(name)
+--- Asked rather than named for the user: a connection can have any number of scratchpads, and only
+--- the person about to write in one knows what it is for.
+---
+---@param connection string|nil Connection name. Defaults to the current connection.
+function M.scratchpad(connection)
   require('sqmeow.events').ensure()
-  return require('sqmeow.ui.editor').open(name)
+  local state = require('sqmeow.state')
+
+  if not connection then
+    local current = state.current_connection()
+    if not current then
+      return notify('connect to a database first, or name one', vim.log.levels.WARN)
+    end
+    connection = current.name
+  end
+  -- A folder for a name nobody has saved would hold scratchpads tied to nothing.
+  if
+    not state.connection_by_name(connection) and not require('sqmeow.sources').find(connection)
+  then
+    return notify(('there is no connection named `%s`'):format(connection), vim.log.levels.ERROR)
+  end
+
+  vim.ui.input({ prompt = ('New scratchpad for %s: '):format(connection) }, function(name)
+    if not name or vim.trim(name) == '' then
+      return
+    end
+    local _, err = require('sqmeow.ui.editor').create(connection, name)
+    if err then
+      return notify(err, vim.log.levels.ERROR)
+    end
+    require('sqmeow.ui.drawer').render()
+  end)
 end
 
 --- Show the schema drawer.
@@ -506,28 +533,16 @@ function M.close_drawer()
   require('sqmeow.ui.drawer').close()
 end
 
---- Open every surface at once: the drawer, a scratchpad, and the result window.
+--- Open the drawer and the result window.
 ---
---- What `:Sqmeow` on its own does. A database client is three panes, and opening them one command
---- at a time is work the user should not have to do to get started.
----
---- The order is the layout: the drawer takes the left, the scratchpad the window beside it, and
---- the result the strip along the bottom.
+--- What `:Sqmeow` on its own does. No scratchpad is opened: scratchpads are created when someone
+--- asks for one, and the window beside the drawer keeps whatever it was showing. The drawer takes
+--- the left and the result the strip along the bottom.
 function M.open_all()
   require('sqmeow.events').ensure()
 
   require('sqmeow.ui.drawer').open()
-  local buf = require('sqmeow.ui.editor').open()
   require('sqmeow.ui.result').open()
-
-  -- Back to the scratchpad, since that is where the next thing a person does is typing.
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if vim.api.nvim_win_get_buf(win) == buf then
-      vim.api.nvim_set_current_win(win)
-      break
-    end
-  end
-  return buf
 end
 
 --- Show everything, or hide it all if any of it is showing.

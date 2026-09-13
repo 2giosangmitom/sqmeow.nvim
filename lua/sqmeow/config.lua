@@ -90,17 +90,21 @@ M.defaults = {
     disconnected = '●',
     ['function'] = '󰊕',
     procedure = '󰡱',
+    key = '',
 
     -- The headings a schema is drawn as, each above the things it holds.
     tables = '󰓫',
     views = '󰈈',
     functions = '󰊕',
     procedures = '󰡱',
+    -- A Redis database's groups, one per type of value, all drawn with the same glyph.
+    keys = '',
 
-    -- One per dialect, so a drawer holding three of them tells them apart without reading a word.
+    -- One per dialect, so a drawer holding several of them tells them apart without reading a word.
     postgres = '',
     mysql = '',
     sqlite = '',
+    redis = '',
 
     -- What sits before a drawer row: whether its children are showing, or that it has none.
     markers = { open = '', closed = '', leaf = ' ' },

@@ -67,6 +67,8 @@ M.links = {
   SqmeowIconPostgres = 'Constant',
   SqmeowIconMysql = 'Constant',
   SqmeowIconSqlite = 'Constant',
+  SqmeowIconRedis = 'Constant',
+  SqmeowIconKey = 'Identifier',
 }
 
 --- Define the groups, leaving any the user has already defined alone.

@@ -50,6 +50,24 @@ M.list = {
     fields = server_fields(3306),
   },
   {
+    id = 'redis',
+    -- Valkey and Dragonfly speak the same protocol over the same URLs, so they are one choice.
+    label = 'Redis, Valkey or Dragonfly',
+    scheme = 'redis',
+    port = 6379,
+    -- Not the server questions: a database is a number every server has a 0 of, a user exists only
+    -- once ACLs are set up, and there are no options to pass. TLS is asked instead, because for
+    -- Redis it is a scheme of its own rather than an option.
+    fields = {
+      { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
+      { key = 'port', label = 'Port', optional = true, hint = '6379' },
+      { key = 'database', label = 'Database', optional = true, hint = '0' },
+      { key = 'user', label = 'User', optional = true, hint = 'default' },
+      { key = 'password', label = 'Password', mask = true, optional = true },
+      { key = 'tls', label = 'TLS', optional = true, hint = 'no' },
+    },
+  },
+  {
     id = 'sqlite',
     label = 'SQLite',
     scheme = 'sqlite',
@@ -62,6 +80,9 @@ M.list = {
 local aliases = {
   postgresql = 'postgres',
   mariadb = 'mysql',
+  rediss = 'redis',
+  valkey = 'redis',
+  valkeys = 'redis',
   sqlite3 = 'sqlite',
   file = 'sqlite',
 }

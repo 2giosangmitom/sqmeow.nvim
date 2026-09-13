@@ -141,7 +141,7 @@ function M.parse(url)
   local user, password, address = credentials(authority)
   local host, port = host_and_port(address)
 
-  return {
+  local fields = {
     dialect = dialect,
     host = host,
     port = port,
@@ -150,6 +150,13 @@ function M.parse(url)
     database = (tail:match('^/([^%?#]*)') or ''),
     options = (tail:match('%?([^#]*)') or ''),
   }
+  -- Redis spells TLS as a scheme, so it is carried as a field for the form to show. Dropping it
+  -- would have an edited connection quietly write itself back unencrypted.
+  if dialect == 'redis' then
+    local secure = scheme:lower() == 'rediss' or scheme:lower() == 'valkeys'
+    fields.tls = secure and 'yes' or 'no'
+  end
+  return fields
 end
 
 --- Write the fields back out as a URL.
@@ -189,7 +196,9 @@ function M.build(dialect, values)
     authority = ('%s:%s'):format(host, value('port'))
   end
 
-  if value('user') ~= '' then
+  -- A password with no user is written too, as `:secret@host`. That is how Redis without ACLs is
+  -- reached, and leaving it out would save a connection that cannot log in.
+  if value('user') ~= '' or value('password') ~= '' then
     local login = vim.uri_encode(value('user'), 'rfc2396')
     if value('password') ~= '' then
       login = ('%s:%s'):format(login, vim.uri_encode(value('password'), 'rfc2396'))
@@ -197,7 +206,14 @@ function M.build(dialect, values)
     authority = ('%s@%s'):format(login, authority)
   end
 
-  local url = ('%s://%s/%s'):format(spec.scheme, authority, value('database'))
+  local scheme = spec.scheme
+  if
+    dialect == 'redis' and vim.tbl_contains({ 'yes', 'true', 'on', '1' }, value('tls'):lower())
+  then
+    scheme = 'rediss'
+  end
+
+  local url = ('%s://%s/%s'):format(scheme, authority, value('database'))
   if value('options') ~= '' then
     url = ('%s?%s'):format(url, (value('options'):gsub('^%?', '')))
   end

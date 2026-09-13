@@ -19,7 +19,8 @@ pub use adapter::{Adapter, Dialect};
 pub use error::{Error, Result};
 pub use export::{Format, Rows};
 pub use node::{
-    CatalogEntry, ColumnNode, RelationKind, RelationNode, RoutineKind, RoutineNode, SchemaNode,
+    CatalogEntry, ColumnNode, KeyType, RelationKind, RelationNode, RoutineKind, RoutineNode,
+    SchemaNode,
 };
 pub use result::{Column, ResultSet};
 pub use sql::Statement;

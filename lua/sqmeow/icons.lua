@@ -40,9 +40,12 @@ M.highlights = {
   views = 'SqmeowIconView',
   functions = 'SqmeowIconFunction',
   procedures = 'SqmeowIconProcedure',
+  keys = 'SqmeowIconKey',
+  key = 'SqmeowIconKey',
   postgres = 'SqmeowIconPostgres',
   mysql = 'SqmeowIconMysql',
   sqlite = 'SqmeowIconSqlite',
+  redis = 'SqmeowIconRedis',
 
   -- What a column holds, or the key it is. The engine puts these in the grid header itself; the
   -- drawer draws them from here, so a column reads the same in both places.

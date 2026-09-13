@@ -11,6 +11,7 @@ repository.workspace = true
 sqmeow-db.workspace = true
 
 futures-util.workspace = true
+redis.workspace = true
 serde_json.workspace = true
 sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }
 tokio = { workspace = true, features = ["sync", "macros"] }

@@ -132,6 +132,7 @@ local implied = {
   view = true,
   ['function'] = true,
   procedure = true,
+  key = true,
 }
 
 local function annotate(node)
@@ -302,9 +303,12 @@ local function scratchpad_node()
   local children = {}
   for index, pad in ipairs(pads) do
     children[index] = parts.Tree.Node({
-      id = 'pad:' .. pad.name,
+      -- By path, since two connections can each have a scratchpad of the same name.
+      id = 'pad:' .. pad.path,
       kind = 'scratchpad',
       name = pad.name,
+      -- The connection folder it is in, so `report` for one database reads apart from another's.
+      note = pad.folder,
       file = pad.path,
       expandable = false,
     })
@@ -527,9 +531,26 @@ local function sql_parts(path)
   return vim.list_extend({ path[1] }, vim.list_slice(path, 3, #path))
 end
 
---- Whether a node is something a `SELECT` can name.
+--- Whether a node is something a `SELECT` can name, or a Redis key that can be read the same way.
 local function is_relation(kind)
-  return kind == 'table' or kind == 'view' or kind == 'materialized view' or kind == 'relation'
+  return kind == 'table'
+    or kind == 'view'
+    or kind == 'materialized view'
+    or kind == 'relation'
+    or kind == 'key'
+end
+
+--- The statement that shows what a relation holds.
+---
+--- For a Redis key that depends on its type, which is the group the key sits under.
+local function preview_statement(node)
+  local sql = require('sqmeow.sql')
+  local dialect = dialect_of(node.conn_id)
+  local limit = require('sqmeow.config').get().ui.result.page_size
+  if dialect == 'redis' then
+    return sql.read_key(node.path[2], node.path[#node.path], limit)
+  end
+  return sql.select_from(dialect, sql_parts(node.path), limit)
 end
 
 --- Open the node under the cursor.
@@ -645,11 +666,7 @@ function M.actions.preview()
   local api = require('sqmeow.api')
   api.use(node.conn_id)
   api.execute(
-    require('sqmeow.sql').select_from(
-      dialect_of(node.conn_id),
-      sql_parts(node.path),
-      require('sqmeow.config').get().ui.result.page_size
-    ),
+    preview_statement(node),
     -- Written by the plugin, not by anyone at the keyboard, so it stays out of the query log.
     { history = false }
   )
@@ -675,11 +692,7 @@ function M.actions.yank_select()
     return
   end
 
-  local statement = require('sqmeow.sql').select_from(
-    dialect_of(node.conn_id),
-    sql_parts(node.path),
-    require('sqmeow.config').get().ui.result.page_size
-  )
+  local statement = preview_statement(node)
   vim.fn.setreg(vim.v.register or '"', statement)
   vim.notify('sqmeow: yanked ' .. statement)
 end
@@ -750,6 +763,28 @@ end
 --- looking when they notice the connection they want is not there.
 function M.actions.add()
   require('sqmeow.ui.connection').create()
+end
+
+--- Create a scratchpad for the connection under the cursor.
+---
+--- Anywhere inside a connection counts, so a user reading a table does not have to climb back up
+--- to the connection's own row first. The name is asked for, and nothing is created if none is
+--- given.
+function M.actions.new_scratchpad()
+  local node = M.current_node()
+  local name = node and node.kind == 'connection' and node.name or nil
+  if node and not name and node.conn_id then
+    local connection = require('sqmeow.state').connections[node.conn_id]
+    name = connection and connection.name
+  end
+
+  if not name then
+    return vim.notify(
+      'sqmeow: put the cursor on a connection to create a scratchpad for it',
+      vim.log.levels.WARN
+    )
+  end
+  require('sqmeow.api').scratchpad(name)
 end
 
 --- Edit the connection under the cursor.
