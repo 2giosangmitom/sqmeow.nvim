@@ -196,7 +196,6 @@ function M.use(id)
   state.current = id
   require('sqmeow.ui.result').update_winbar(state.call)
   require('sqmeow.ui.editor').update_winbar()
-  require('sqmeow.ui.drawer').render()
   return connection
 end
 

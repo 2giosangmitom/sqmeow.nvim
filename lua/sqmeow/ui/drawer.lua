@@ -219,7 +219,7 @@ local function prepare_node(node)
   local icon, icon_group = icons.get(node.icon_kind or node.kind)
   line:append(parts.Text(icon, icon_group))
   line:append(' ')
-  line:append(parts.Text(node.name, node.name_group))
+  line:append(node.name)
 
   if node.note and node.note ~= '' then
     line:append('  ')
@@ -445,7 +445,6 @@ function M.render()
   end
 
   local icons = require('sqmeow.icons')
-  local active = require('sqmeow.state').current
   local nodes = {}
 
   for _, connection in ipairs(M.connection_rows()) do
@@ -459,9 +458,6 @@ function M.render()
       kind = 'connection',
       icon_kind = icons.connection_kind(connection.dialect),
       badge = connection.connected and 'connected' or 'disconnected',
-      -- The active one is the database a query runs on unless the buffer names another, so it is
-      -- the one row in the tree worth telling apart from its neighbours.
-      name_group = connection.id == active and 'SqmeowActive' or nil,
       note = connection.dialect or connection.note,
       url = connection.url,
       -- A connection nobody has opened has nothing to show yet. Pressing the same key opens it,

@@ -36,7 +36,7 @@
 
 --- Which database a query runs on ~
 ---
---- One connection is active, and it is the one whose name is highlighted in the drawer. `u` in the
+--- One connection is active, and the result window's winbar names it. `u` in the
 --- drawer makes the connection under the cursor active, and `:Sqmeow use [name]` does the same
 --- from the command line. `<CR>` only opens a row out, so reading a schema never changes where the
 --- next query goes.

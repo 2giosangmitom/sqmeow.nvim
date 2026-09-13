@@ -186,13 +186,12 @@ T['tree']['colours the marker apart from the icon'] = function()
   line_matching('main')
 
   -- `v o s scratch  sqlite`: the marker, the dot saying the connection is open, the dialect
-  -- icon, the name in the group that marks the active connection, and the trailing note. The note
-  -- starts after the two spaces separating it, which are part of neither it nor the name.
+  -- icon, the plain name, and the trailing note. The note starts after the two spaces separating
+  -- it, which are part of neither it nor the name.
   eq(marks_on(1), {
     { group = 'SqmeowMarker', from = 0, to = 1 },
     { group = 'SqmeowConnected', from = 2, to = 3 },
     { group = 'SqmeowIconSqlite', from = 4, to = 5 },
-    { group = 'SqmeowActive', from = 6, to = 13 },
     { group = 'SqmeowNull', from = 15, to = 21 },
   })
 end
@@ -400,31 +399,11 @@ T['the active connection'] = MiniTest.new_set({
   },
 })
 
---- The group of the name on a connection row, which says whether it is the active one.
-local function name_group(pattern)
-  for _, span in ipairs(marks_on(line_matching(pattern))) do
-    if span.group == 'SqmeowActive' then
-      return span.group
-    end
-  end
-  return nil
-end
-
-T['the active connection']['is the only one marked'] = function()
-  require('sqmeow.api').use(state.connection_by_name('scratch').id)
-  drawer.render()
-
-  eq(name_group('scratch'), 'SqmeowActive')
-  eq(name_group('other'), nil)
-end
-
 T['the active connection']['moves when another is chosen'] = function()
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('other'), 0 })
   drawer.actions.use()
 
   eq(state.current, state.connection_by_name('other').id)
-  eq(name_group('other'), 'SqmeowActive')
-  eq(name_group('scratch'), nil)
 end
 
 T['the active connection']['does not move when a row is only opened'] = function()
