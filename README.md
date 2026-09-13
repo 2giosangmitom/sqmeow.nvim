@@ -182,7 +182,7 @@ Contributions are welcome. The toolchain is pinned with [mise](https://mise.jdx.
 
 ```sh
 mise install   # rust, just, stylua, selene
-just db-up     # PostgreSQL, MySQL and Redis for integration tests
+just db-up     # PostgreSQL, MySQL, Redis and Dragonfly for integration tests
 just           # lint and test, as CI does
 just docs      # regenerate doc/sqmeow.txt
 ```

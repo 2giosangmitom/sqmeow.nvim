@@ -140,7 +140,11 @@ for dialect, url in pairs(servers) do
 end
 
 -- Redis speaks no SQL, so it gets cases of its own rather than a turn through the loop above.
-local redis_url = vim.env.SQMEOW_TEST_REDIS_URL
+-- Dragonfly speaks the same protocol, so the same cases run against it too.
+local redis_servers = {
+  redis = vim.env.SQMEOW_TEST_REDIS_URL,
+  dragonfly = vim.env.SQMEOW_TEST_DRAGONFLY_URL,
+}
 
 --- One level of the drawer, as the engine reports it.
 local function introspect(path)
@@ -169,53 +173,69 @@ local function named(nodes, name)
   end
 end
 
-T['redis'] = MiniTest.new_set({
-  hooks = {
-    pre_case = function()
-      if not redis_url then
-        MiniTest.skip('set SQMEOW_TEST_REDIS_URL, or run `just db-up`')
-      end
-      connect(redis_url)
-    end,
-    post_case = function()
-      api.disconnect()
-    end,
-  },
-})
+for server, url in pairs(redis_servers) do
+  T[server] = MiniTest.new_set({
+    hooks = {
+      pre_case = function()
+        if not url then
+          MiniTest.skip(('set SQMEOW_TEST_%s_URL, or run `just db-up`'):format(server:upper()))
+        end
+        connect(url)
+      end,
+      post_case = function()
+        api.disconnect()
+      end,
+    },
+  })
 
-T['redis']['connects and reports its dialect'] = function()
-  eq(state.current_connection().dialect, 'redis')
-end
+  T[server]['connects and reports its dialect'] = function()
+    eq(state.current_connection().dialect, 'redis')
+  end
 
-T['redis']['runs a script one command per line'] = function()
-  -- Read as one statement, these would be a `SET` with three words too many and fail.
-  local summary = run('SET test:lua:visits 41\nINCR test:lua:visits')
-  eq(summary.state, 'done')
-  eq(vim.trim(lines()[1]), '42')
-end
+  T[server]['runs a script one command per line'] = function()
+    -- Read as one statement, these would be a `SET` with three words too many and fail.
+    local summary = run('SET test:lua:visits 41\nINCR test:lua:visits')
+    eq(summary.state, 'done')
+    eq(vim.trim(lines()[1]), '42')
+  end
 
-T['redis']['lists keys under the group for their type'] = function()
-  run('DEL test:lua:hash')
-  run('HSET test:lua:hash field value')
+  T[server]['lists keys under the group for their type'] = function()
+    run('DEL test:lua:hash')
+    run('HSET test:lua:hash field value')
 
-  local db = introspect({})[1].name
-  local hashes = named(introspect({ db }), 'hashes')
-  eq(hashes.kind, 'keys')
-  eq(hashes.count >= 1, true)
+    local db = introspect({})[1].name
+    local hashes = named(introspect({ db }), 'hashes')
+    eq(hashes.kind, 'keys')
+    eq(hashes.count >= 1, true)
 
-  local key = named(introspect({ db, 'hashes' }), 'test:lua:hash')
-  eq(key.kind, 'key')
-  eq(key.expandable, false)
-end
+    local key = named(introspect({ db, 'hashes' }), 'test:lua:hash')
+    eq(key.kind, 'key')
+    eq(key.expandable, false)
+  end
 
-T['redis']['previews a key with the read for its type'] = function()
-  run('DEL test:lua:preview')
-  run('HSET test:lua:preview colour teal')
+  T[server]['previews a key with the read for its type'] = function()
+    run('DEL test:lua:preview')
+    run('HSET test:lua:preview colour teal')
 
-  local summary = run(require('sqmeow.sql').read_key('hashes', 'test:lua:preview', 10))
-  eq(summary.state, 'done')
-  eq(summary.rows, 1)
-  eq(lines()[1]:find('colour', 1, true) ~= nil and lines()[1]:find('teal', 1, true) ~= nil, true)
+    local summary = run(require('sqmeow.sql').read_key('hashes', 'test:lua:preview', 10))
+    eq(summary.state, 'done')
+    eq(summary.rows, 1)
+    eq(lines()[1]:find('colour', 1, true) ~= nil and lines()[1]:find('teal', 1, true) ~= nil, true)
+  end
+
+  T[server]['lists and previews a JSON document'] = function()
+    run('DEL test:lua:doc')
+    run([[JSON.SET test:lua:doc $ '{"colour":"teal"}']])
+
+    -- Both servers answer `ReJSON-RL` for a document, which once kept it out of the drawer.
+    local db = introspect({})[1].name
+    eq(named(introspect({ db }), 'json').count >= 1, true)
+    eq(named(introspect({ db, 'json' }), 'test:lua:doc').kind, 'key')
+
+    local summary = run(require('sqmeow.sql').read_key('json', 'test:lua:doc', 10))
+    eq(summary.state, 'done')
+    eq(lines()[1]:find('teal', 1, true) ~= nil, true)
+  end
 end
 
 return T

@@ -24,6 +24,7 @@ T['read_key']['reads each type with its own command'] = function()
   eq(sql.read_key('sets', 'tags', 100), 'SMEMBERS "tags"')
   eq(sql.read_key('sorted_sets', 'board', 100), 'ZRANGE "board" 0 99 WITHSCORES')
   eq(sql.read_key('streams', 'events', 100), 'XRANGE "events" - + COUNT 100')
+  eq(sql.read_key('json', 'profile', 100), 'JSON.GET "profile"')
 end
 
 T['read_key']['escapes a key so it stays one word'] = function()

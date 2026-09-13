@@ -97,7 +97,8 @@ impl Adapter for RedisAdapter {
 
         // Dropping the request leaves the connection usable: the multiplexer throws the reply away
         // when it comes. ponytail: a blocking command such as `BLPOP` still holds the session on
-        // the server until it returns; send `CLIENT UNBLOCK` from a second connection if that bites.
+        // the server until it returns. `CLIENT UNBLOCK` from a second connection would free it on
+        // Redis and Valkey if that bites, but Dragonfly has no such command.
         let reply = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(Error::Cancelled),
@@ -168,8 +169,8 @@ impl Adapter for RedisAdapter {
             .into_iter()
             .zip(types)
             .filter_map(|(name, kind)| {
-                // A key that expired since the scan answers `none`, and a module's own type such as
-                // `ReJSON-RL` has no group to go under.
+                // A key that expired since the scan answers `none`, and a type nothing reads back
+                // yet, such as a Bloom filter's `MBbloom--`, has no group to go under.
                 let kind = KeyType::from_redis(&kind)?;
                 Some(RelationNode {
                     name: String::from_utf8_lossy(&name).into_owned(),

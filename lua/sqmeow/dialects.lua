@@ -51,7 +51,8 @@ M.list = {
   },
   {
     id = 'redis',
-    label = 'Redis or Valkey',
+    -- Valkey and Dragonfly speak the same protocol over the same URLs, so they are one choice.
+    label = 'Redis, Valkey or Dragonfly',
     scheme = 'redis',
     port = 6379,
     -- Not the server questions: a database is a number every server has a 0 of, a user exists only

@@ -70,6 +70,7 @@ function M.read_key(group, key, limit)
     sets = ('SMEMBERS %s'):format(quoted),
     sorted_sets = ('ZRANGE %s 0 %d WITHSCORES'):format(quoted, limit - 1),
     streams = ('XRANGE %s - + COUNT %d'):format(quoted, limit),
+    json = ('JSON.GET %s'):format(quoted),
   }
   return commands[group]
 end

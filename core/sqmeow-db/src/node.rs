@@ -45,22 +45,26 @@ pub enum KeyType {
     Set,
     SortedSet,
     Stream,
+    /// A JSON document, which Redis 8 and Dragonfly both have built in.
+    Json,
 }
 
 impl KeyType {
     /// Every type, in the order the drawer lists their groups.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::String,
         Self::Hash,
         Self::List,
         Self::Set,
         Self::SortedSet,
         Self::Stream,
+        Self::Json,
     ];
 
     /// Read the answer `TYPE` gives.
     ///
-    /// `none`, for a key that has gone, and a module's own type such as `ReJSON-RL` answer nothing.
+    /// `none`, for a key that has gone, and a type nothing reads back yet, such as a Bloom filter's
+    /// `MBbloom--`, answer nothing.
     pub fn from_redis(name: &str) -> Option<Self> {
         match name {
             "string" => Some(Self::String),
@@ -69,6 +73,8 @@ impl KeyType {
             "set" => Some(Self::Set),
             "zset" => Some(Self::SortedSet),
             "stream" => Some(Self::Stream),
+            // The name the RedisJSON module gave it, which Redis 8 and Dragonfly both kept.
+            "ReJSON-RL" => Some(Self::Json),
             _ => None,
         }
     }
@@ -82,6 +88,7 @@ impl KeyType {
             Self::Set => ("sets", "Sets"),
             Self::SortedSet => ("sorted_sets", "Sorted sets"),
             Self::Stream => ("streams", "Streams"),
+            Self::Json => ("json", "JSON"),
         }
     }
 }
@@ -230,7 +237,8 @@ mod tests {
     fn redis_types_are_read_and_grouped() {
         assert_eq!(KeyType::from_redis("zset"), Some(KeyType::SortedSet));
         assert_eq!(KeyType::from_redis("none"), None);
-        assert_eq!(KeyType::from_redis("ReJSON-RL"), None);
+        assert_eq!(KeyType::from_redis("ReJSON-RL"), Some(KeyType::Json));
+        assert_eq!(KeyType::from_redis("MBbloom--"), None);
 
         let mut groups: Vec<&str> = KeyType::ALL.iter().map(|kind| kind.group().0).collect();
         groups.dedup();
