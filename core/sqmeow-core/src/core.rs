@@ -132,16 +132,18 @@ impl Core {
         match Backend::connect_to(&url, database.as_deref()).await {
             Ok(backend) => {
                 let dialect = backend.dialect().name();
+                let mut payload = vec![
+                    ("name", Value::from(name.clone())),
+                    ("dialect", Value::from(dialect)),
+                ];
+                // Which database a MongoDB connection starts on, for the winbar: a URL naming none
+                // runs on `test`, and nothing else on screen would say so.
+                if let Some(database) = backend.database() {
+                    payload.push(("current_database", Value::from(database)));
+                }
                 self.session
-                    .insert_connection(Connection::new(id, name.clone(), backend));
-                self.emit_connection(
-                    id,
-                    "connected",
-                    vec![
-                        ("name", Value::from(name)),
-                        ("dialect", Value::from(dialect)),
-                    ],
-                );
+                    .insert_connection(Connection::new(id, name, backend));
+                self.emit_connection(id, "connected", payload);
             }
             Err(error) => self.emit_connection(
                 id,
@@ -184,11 +186,12 @@ impl Core {
             return reply.err(format!("no connection with id {conn_id}"));
         };
 
-        // A Redis command ends with its line, where a SQL statement ends with a semicolon.
-        let mut statements = if connection.backend.dialect() == Dialect::Redis {
-            sql::split_lines(&source)
-        } else {
-            sql::split(&source)
+        // A Redis command ends with its line, a MongoDB command with its document, and a SQL
+        // statement with a semicolon.
+        let mut statements = match connection.backend.dialect() {
+            Dialect::Redis => sql::split_lines(&source),
+            Dialect::MongoDb => sql::split_documents(&source),
+            _ => sql::split(&source),
         };
         if statements.is_empty() {
             return reply.err("there is no statement to run");
@@ -293,6 +296,10 @@ impl Core {
         };
         let mut payload = summarize(&call);
         payload.extend(elapsed(started));
+        // After the statements rather than before, so a `use` among them is what the winbar shows.
+        if let Some(database) = connection.backend.database() {
+            payload.push(("current_database", Value::from(database)));
+        }
 
         let call = self.session.store_call(call);
         self.session.end_call(call_id);
@@ -737,10 +744,18 @@ async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>
             .collect());
     }
 
-    let routines = connection.backend.routines(schema).await?;
-
     let tables = relations.iter().filter(|r| is_table(r.kind)).count();
     let views = relations.len() - tables;
+
+    // MongoDB calls its tables collections, and has no stored routines to group.
+    if connection.backend.dialect() == Dialect::MongoDb {
+        return Ok(vec![
+            group_node("tables", "Collections", "tables", tables),
+            group_node("views", "Views", "views", views),
+        ]);
+    }
+
+    let routines = connection.backend.routines(schema).await?;
     let procedures = routines
         .iter()
         .filter(|r| r.kind == RoutineKind::Procedure)
@@ -968,14 +983,20 @@ fn summarize(call: &Call) -> Vec<(&'static str, Value)> {
         })
         .collect();
 
-    vec![
+    let mut pairs = vec![
         ("columns", Value::Array(columns)),
         ("call_id", Value::from(call.id)),
         ("conn_id", Value::from(call.conn_id)),
         ("rows", Value::from(result.row_count() as u64)),
         ("truncated", Value::from(result.is_truncated())),
-        ("affected", optional(result.affected().map(Value::from))),
-    ]
+    ];
+    // Left out rather than sent as nil when nothing was written, for the reason `key` is above: a
+    // MongoDB `find` that matches nothing has neither rows nor a count, and a nil here would reach
+    // the winbar as a number to print.
+    if let Some(affected) = result.affected() {
+        pairs.push(("affected", Value::from(affected)));
+    }
+    pairs
 }
 
 /// Save a finished result where the plugin asked, for its query log to show again later.

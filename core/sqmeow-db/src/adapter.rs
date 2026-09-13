@@ -23,6 +23,9 @@ pub enum Dialect {
     MySql,
     /// Not SQL at all: one command per line, and keys where the others have tables.
     Redis,
+    /// Database commands written as Extended JSON documents, and collections where others have
+    /// tables.
+    MongoDb,
 }
 
 impl Dialect {
@@ -33,6 +36,7 @@ impl Dialect {
             Self::Postgres => "postgres",
             Self::MySql => "mysql",
             Self::Redis => "redis",
+            Self::MongoDb => "mongodb",
         }
     }
 
@@ -52,6 +56,8 @@ impl Dialect {
             "mysql" | "mariadb" => Some(Self::MySql),
             // The trailing `s` is TLS, which is the driver's business and not a different dialect.
             "redis" | "rediss" | "valkey" | "valkeys" => Some(Self::Redis),
+            // `+srv` finds the hosts through DNS, which is the driver's business too.
+            "mongodb" | "mongodb+srv" => Some(Self::MongoDb),
             _ => None,
         }
     }
@@ -131,6 +137,9 @@ mod tests {
         for url in ["redis://h/0", "rediss://h/0", "valkey://h", "valkeys://h"] {
             assert_eq!(Dialect::from_url(url), Some(Dialect::Redis), "{url}");
         }
+        for url in ["mongodb://h/app", "mongodb+srv://cluster.example.net/app"] {
+            assert_eq!(Dialect::from_url(url), Some(Dialect::MongoDb), "{url}");
+        }
     }
 
     #[test]
@@ -143,7 +152,7 @@ mod tests {
 
     #[test]
     fn an_unknown_scheme_is_rejected() {
-        assert_eq!(Dialect::from_url("mongodb://localhost"), None);
+        assert_eq!(Dialect::from_url("cassandra://localhost"), None);
         assert_eq!(Dialect::from_url("not a url"), None);
         assert_eq!(Dialect::from_url(""), None);
     }

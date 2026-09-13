@@ -220,4 +220,31 @@ T['build']['round trips everything parse produces'] = function()
   end
 end
 
+T['parse']['reads srv off a mongodb scheme'] = function()
+  eq(url.parse('mongodb+srv://cluster.example.net/app').srv, 'yes')
+  eq(url.parse('mongodb+srv://cluster.example.net/app').dialect, 'mongodb')
+  eq(url.parse('mongodb://h:27017/app').srv, 'no')
+end
+
+T['build']['writes mongodb srv as the mongodb+srv scheme'] = function()
+  eq(
+    url.build('mongodb', { host = 'cluster.example.net', database = 'app', srv = 'yes' }),
+    'mongodb+srv://cluster.example.net/app'
+  )
+  eq(
+    url.build(
+      'mongodb',
+      { host = 'h', port = '27017', database = 'app', srv = 'no', options = 'authSource=admin' }
+    ),
+    'mongodb://h:27017/app?authSource=admin'
+  )
+end
+
+T['build']['refuses a port on a mongodb srv address'] = function()
+  local built, err =
+    url.build('mongodb', { host = 'cluster.example.net', port = '27017', srv = 'yes' })
+  eq(built, nil)
+  eq(err, 'a MongoDB SRV address takes no port')
+end
+
 return T

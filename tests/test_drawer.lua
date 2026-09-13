@@ -483,7 +483,7 @@ T['saved connections']['say they are connecting while they do'] = function()
 end
 
 T['saved connections']['can be tried again after failing to open'] = function()
-  require('sqmeow.sources.file').add({ name = 'broken', url = 'mongodb://localhost/broken' })
+  require('sqmeow.sources.file').add({ name = 'broken', url = 'cassandra://localhost/broken' })
   drawer.render()
 
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('broken'), 0 })

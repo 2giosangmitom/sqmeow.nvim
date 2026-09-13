@@ -67,6 +67,77 @@ pub fn split_lines(input: &str) -> Vec<Statement> {
         .collect()
 }
 
+/// Split a buffer of MongoDB commands into statements.
+///
+/// A statement is one JSON document, which may span as many lines as it likes, or one line that is
+/// not a document, such as `use shop`. A document ends on the line where its brackets close,
+/// counted outside strings, so a `}` inside a value does not end it early. Blank lines are dropped,
+/// and so are lines starting with `//` or `#` between statements.
+pub fn split_documents(input: &str) -> Vec<Statement> {
+    let mut statements = Vec::new();
+    let mut current: Option<(usize, String)> = None;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (line, text) in input.lines().enumerate() {
+        let (_, sql) = match &mut current {
+            Some(open) => {
+                open.1.push('\n');
+                open
+            }
+            None => {
+                let trimmed = text.trim();
+                if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
+                    continue;
+                }
+                current.insert((line, String::new()))
+            }
+        };
+        sql.push_str(text);
+
+        for character in text.chars() {
+            if in_string {
+                match character {
+                    _ if escaped => escaped = false,
+                    '\\' => escaped = true,
+                    '"' => in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match character {
+                '"' => in_string = true,
+                '{' | '[' => depth += 1,
+                '}' | ']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+
+        if depth == 0
+            && !in_string
+            && let Some((start_line, sql)) = current.take()
+        {
+            statements.push(Statement {
+                sql: sql.trim().to_owned(),
+                start_line,
+                end_line: line,
+            });
+        }
+    }
+
+    // A document left open runs to the end of the buffer, so the parse error lands on it rather
+    // than on nothing.
+    if let Some((start_line, sql)) = current {
+        statements.push(Statement {
+            sql: sql.trim().to_owned(),
+            start_line,
+            end_line: input.lines().count().saturating_sub(1),
+        });
+    }
+    statements
+}
+
 /// Split a buffer of SQL into its statements.
 ///
 /// Whitespace-only and comment-only fragments are dropped, so a trailing semicolon or a trailing
@@ -307,6 +378,31 @@ mod tests {
         assert_eq!((statements[1].start_line, statements[1].end_line), (4, 4));
         // The cursor on the comment runs the command above it, as with SQL.
         assert_eq!(statement_at(&statements, 2).unwrap().sql, "SET k \"a;b\"");
+    }
+
+    #[test]
+    fn mongodb_documents_span_lines_and_use_stands_alone() {
+        let input = "// orders\n{\"find\": \"orders\",\n  \"filter\": {\"note\": \"a } b\\\" {\"}}\n\nuse shop\n{\"ping\": 1}\n";
+        let statements = split_documents(input);
+        let sql: Vec<&str> = statements.iter().map(|s| s.sql.as_str()).collect();
+        assert_eq!(
+            sql,
+            vec![
+                "{\"find\": \"orders\",\n  \"filter\": {\"note\": \"a } b\\\" {\"}}",
+                "use shop",
+                "{\"ping\": 1}"
+            ]
+        );
+        assert_eq!((statements[0].start_line, statements[0].end_line), (1, 2));
+        assert_eq!(statement_at(&statements, 2).unwrap().sql, sql[0]);
+        assert_eq!(statement_at(&statements, 4).unwrap().sql, "use shop");
+    }
+
+    #[test]
+    fn an_unclosed_mongodb_document_runs_to_the_end() {
+        let statements = split_documents("{\"find\": \"a\",\n\n");
+        assert_eq!(statements.len(), 1);
+        assert_eq!((statements[0].start_line, statements[0].end_line), (0, 1));
     }
 
     #[test]

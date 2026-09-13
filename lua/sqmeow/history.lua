@@ -93,7 +93,8 @@ local function read(path)
   local entries = {}
   for _, line in ipairs(lines) do
     if line ~= '' then
-      local decoded, entry = pcall(vim.json.decode, line)
+      local decoded, entry =
+        pcall(vim.json.decode, line, { luanil = { object = true, array = true } })
       if decoded and type(entry) == 'table' and type(entry.statement) == 'string' then
         table.insert(entries, entry)
       end

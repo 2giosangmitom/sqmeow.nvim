@@ -74,6 +74,24 @@ M.list = {
     },
   },
   {
+    id = 'mongodb',
+    label = 'MongoDB',
+    scheme = 'mongodb',
+    port = 27017,
+    -- The server questions with an optional user, since a local server often has no auth at all.
+    -- SRV is asked rather than left to the options because, like Redis TLS, it is a scheme of its own.
+    fields = {
+      { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
+      { key = 'port', label = 'Port', optional = true, hint = '27017' },
+      -- Left empty, the drawer lists every database on the server, as for PostgreSQL.
+      { key = 'database', label = 'Database', optional = true, hint = 'all' },
+      { key = 'user', label = 'User', optional = true },
+      { key = 'password', label = 'Password', mask = true, optional = true },
+      { key = 'options', label = 'Options', optional = true, hint = 'authSource=admin' },
+      { key = 'srv', label = 'SRV', checkbox = true },
+    },
+  },
+  {
     id = 'sqlite',
     label = 'SQLite',
     scheme = 'sqlite',
@@ -89,6 +107,7 @@ local aliases = {
   rediss = 'redis',
   valkey = 'redis',
   valkeys = 'redis',
+  ['mongodb+srv'] = 'mongodb',
   sqlite3 = 'sqlite',
   file = 'sqlite',
 }

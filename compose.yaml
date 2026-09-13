@@ -48,3 +48,13 @@ services:
       memlock: -1
     ports:
       - "56380:6379"
+
+  mongodb:
+    image: mongo:8
+    ports:
+      - "57017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

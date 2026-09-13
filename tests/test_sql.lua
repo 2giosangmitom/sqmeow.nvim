@@ -35,4 +35,18 @@ T['read_key']['has nothing for a group that is not a type'] = function()
   eq(sql.read_key('tables', 'users', 1), nil)
 end
 
+T['qualify']['names a mongodb collection by itself'] = function()
+  eq(sql.qualify('mongodb', { 'shop', 'orders' }), 'orders')
+end
+
+T['select_from'] = MiniTest.new_set()
+
+T['select_from']['finds in a mongodb collection on its own database'] = function()
+  -- The command name has to be the first key, and `$db` keeps the scratchpad's database as it is.
+  eq(
+    sql.select_from('mongodb', { 'shop', 'orders' }, 50),
+    '{"find": "orders", "limit": 50, "$db": "shop"}'
+  )
+end
+
 return T

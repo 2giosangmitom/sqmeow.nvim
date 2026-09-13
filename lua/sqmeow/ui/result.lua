@@ -763,8 +763,7 @@ function M.update_winbar(summary)
     connection = { name = summary.connection, dialect = summary.dialect }
   end
   connection = connection or state.current_connection()
-  local label = connection and ('%s (%s)'):format(connection.name, connection.dialect or '?')
-    or 'not connected'
+  local label = connection and state.label(connection) or 'not connected'
 
   vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s'):format(label, M.describe(summary, true))
 end

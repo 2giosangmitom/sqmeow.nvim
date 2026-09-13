@@ -85,13 +85,14 @@ impl TypeClass {
         // Ordered, and the order is load-bearing. `JSONB` holds text, `TIMESTAMP` does not hold a
         // stamp, and `VARBINARY` is not a variable. Each arm is reached only once the arms that
         // would wrongly claim its names have already declined it.
-        if has("JSON") {
+        // `OBJECT`, `ARRAY`, `OBJECTID`, `BINDATA` and `LONG` are how MongoDB names its BSON types.
+        if has("JSON") || matches!(name.as_str(), "OBJECT" | "ARRAY") {
             Self::Json
-        } else if has("UUID") || name == "UNIQUEIDENTIFIER" {
+        } else if has("UUID") || matches!(name.as_str(), "UNIQUEIDENTIFIER" | "OBJECTID") {
             Self::Uuid
         } else if has("BOOL") {
             Self::Boolean
-        } else if has("BLOB") || has("BYTEA") || has("BINARY") {
+        } else if has("BLOB") || has("BYTEA") || has("BINARY") || name == "BINDATA" {
             Self::Binary
         } else if has("TIMESTAMP")
             || has("DATETIME")
@@ -109,7 +110,7 @@ impl TypeClass {
             || has("REAL")
             || has("SERIAL")
             || has("MONEY")
-            || matches!(name.as_str(), "NUMBER" | "BIT" | "OID")
+            || matches!(name.as_str(), "NUMBER" | "BIT" | "OID" | "LONG")
         {
             Self::Number
         } else if has("CHAR")
@@ -310,6 +311,17 @@ mod tests {
         assert_class(TypeClass::Boolean, &["BOOLEAN"]);
         // A SQLite column may be declared with no type at all, which the adapter reports as "any".
         assert_class(TypeClass::Unknown, &["any", "", "NULL"]);
+    }
+
+    #[test]
+    fn mongodb_names_classify() {
+        assert_class(TypeClass::Number, &["int", "long", "double", "decimal"]);
+        assert_class(TypeClass::Text, &["string"]);
+        assert_class(TypeClass::Boolean, &["bool"]);
+        assert_class(TypeClass::Temporal, &["date", "timestamp"]);
+        assert_class(TypeClass::Json, &["object", "array"]);
+        assert_class(TypeClass::Uuid, &["objectId"]);
+        assert_class(TypeClass::Binary, &["binData"]);
     }
 
     #[test]

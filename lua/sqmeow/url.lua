@@ -156,6 +156,10 @@ function M.parse(url)
     local secure = scheme:lower() == 'rediss' or scheme:lower() == 'valkeys'
     fields.tls = secure and 'yes' or 'no'
   end
+  -- The same for MongoDB's SRV lookup, which an edited connection would otherwise lose.
+  if dialect == 'mongodb' then
+    fields.srv = scheme:lower() == 'mongodb+srv' and 'yes' or 'no'
+  end
   return fields
 end
 
@@ -211,6 +215,12 @@ function M.build(dialect, values)
     dialect == 'redis' and vim.tbl_contains({ 'yes', 'true', 'on', '1' }, value('tls'):lower())
   then
     scheme = 'rediss'
+  elseif dialect == 'mongodb' and value('srv') == 'yes' then
+    -- The port comes from the DNS record, and the driver refuses an SRV address that names one.
+    if value('port') ~= '' then
+      return nil, 'a MongoDB SRV address takes no port'
+    end
+    scheme = 'mongodb+srv'
   end
 
   local url = ('%s://%s/%s'):format(scheme, authority, value('database'))

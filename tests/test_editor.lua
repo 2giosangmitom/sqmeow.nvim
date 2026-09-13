@@ -26,6 +26,12 @@ T['scratchpad']['keeps a file in a folder named after its connection'] = functio
   )
 end
 
+T['scratchpad']['gives a mongodb connection a json file'] = function()
+  state.add_connection({ id = 1, name = 'docs', url = 'mongodb://h/app', state = 'connected' })
+  eq(vim.fs.basename(editor.path('docs', 'orders')), 'orders.json')
+  eq(vim.bo[assert(editor.create('docs', 'orders'))].filetype, 'json')
+end
+
 T['scratchpad']['gives a redis connection a redis file'] = function()
   state.add_connection({ id = 1, name = 'cache', url = 'redis://h/0', state = 'connected' })
   eq(vim.fs.basename(editor.path('cache', 'keys')), 'keys.redis')

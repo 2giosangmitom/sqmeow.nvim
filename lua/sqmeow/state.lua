@@ -14,6 +14,7 @@ local M = {}
 ---@field error string|nil
 ---@field parent integer|nil For one database of a cluster, the connection that listed it.
 ---@field database string|nil For one database of a cluster, which one.
+---@field current_database string|nil For MongoDB, the database commands run on, which `use` changes.
 
 ---@class sqmeow.CallSummary
 ---@field call_id integer|nil Absent for an entry from the log that has no rows to read.
@@ -240,6 +241,22 @@ function M.reset()
   M.catalogs = {}
   awaiting = {}
   next_id = 0
+end
+
+--- How a winbar names a connection: its name and dialect.
+---
+--- For MongoDB, also the database commands run on when the name does not already say it. A server
+--- connection runs on `test` until a `use`, and a label without it leaves someone reading the grid
+--- of one database while believing they queried another.
+---
+---@param connection { name: string, dialect: string|nil, database: string|nil, current_database: string|nil }
+---@return string
+function M.label(connection)
+  local name = connection.name
+  if connection.current_database and connection.current_database ~= connection.database then
+    name = ('%s › %s'):format(name, connection.current_database)
+  end
+  return ('%s (%s)'):format(name, connection.dialect or '?')
 end
 
 return M
