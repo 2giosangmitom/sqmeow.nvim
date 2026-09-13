@@ -422,11 +422,20 @@ fn decode_cell(row: &MySqlRow, index: usize) -> Cell {
         "TIME" => scalar(row, index, &type_name, |value: types::chrono::NaiveTime| {
             Cell::Time(value.to_string())
         }),
-        "DATETIME" | "TIMESTAMP" => scalar(
+        "DATETIME" => scalar(
             row,
             index,
             &type_name,
             |value: types::chrono::NaiveDateTime| Cell::Timestamp(value.to_string()),
+        ),
+        // sqlx refuses to read a TIMESTAMP as a naive date and time, only as a zoned one. It is a
+        // zoned one: MySQL stores it as UTC and converts to the session's zone, which sqlx sets to
+        // `+00:00` on connect, so it is shown with its zone the way a Postgres `timestamptz` is.
+        "TIMESTAMP" => scalar(
+            row,
+            index,
+            &type_name,
+            |value: types::chrono::DateTime<types::chrono::Utc>| Cell::Timestamp(value.to_string()),
         ),
         "YEAR" => scalar(row, index, &type_name, |value: u16| Cell::Int(value.into())),
         "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" | "BINARY" | "VARBINARY" | "BIT"

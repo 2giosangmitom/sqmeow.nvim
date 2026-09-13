@@ -88,7 +88,7 @@ async fn decodes_the_types_a_real_schema_holds() {
             single float, wide double, exact decimal(30, 3),
             tag varchar(10), words text, choice enum('a', 'b'),
             doc json,
-            day date, clock time, stamp datetime, year_only year,
+            day date, clock time, stamp datetime, moment timestamp, year_only year,
             blob_value blob
         )",
     )
@@ -101,7 +101,7 @@ async fn decodes_the_types_a_real_schema_holds() {
             1.5, 2.5, 1234567890123456789.123,
             'tag', 'words', 'b',
             '{\"a\": 1}',
-            '2026-01-02', '15:04:05', '2026-01-02 15:04:05', 2026,
+            '2026-01-02', '15:04:05', '2026-01-02 15:04:05', '2026-01-02 15:04:05', 2026,
             x'deadbeef'
         )",
     )
@@ -125,6 +125,8 @@ async fn decodes_the_types_a_real_schema_holds() {
         Cell::Date("2026-01-02".into()),
         Cell::Time("15:04:05".into()),
         Cell::Timestamp("2026-01-02 15:04:05".into()),
+        // A TIMESTAMP is stored as UTC, and the session is in UTC, so it reads back unchanged.
+        Cell::Timestamp("2026-01-02 15:04:05 UTC".into()),
         Cell::Int(2026),
         Cell::bytes(&[0xde, 0xad, 0xbe, 0xef]),
     ];
