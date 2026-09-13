@@ -21,6 +21,8 @@ pub enum Dialect {
     Sqlite,
     Postgres,
     MySql,
+    /// Not SQL at all: one command per line, and keys where the others have tables.
+    Redis,
 }
 
 impl Dialect {
@@ -30,6 +32,7 @@ impl Dialect {
             Self::Sqlite => "sqlite",
             Self::Postgres => "postgres",
             Self::MySql => "mysql",
+            Self::Redis => "redis",
         }
     }
 
@@ -47,6 +50,8 @@ impl Dialect {
             "sqlite" | "sqlite3" | "file" => Some(Self::Sqlite),
             "postgres" | "postgresql" => Some(Self::Postgres),
             "mysql" | "mariadb" => Some(Self::MySql),
+            // The trailing `s` is TLS, which is the driver's business and not a different dialect.
+            "redis" | "rediss" | "valkey" | "valkeys" => Some(Self::Redis),
             _ => None,
         }
     }
@@ -123,6 +128,9 @@ mod tests {
             Dialect::from_url("mariadb://localhost/x"),
             Some(Dialect::MySql)
         );
+        for url in ["redis://h/0", "rediss://h/0", "valkey://h", "valkeys://h"] {
+            assert_eq!(Dialect::from_url(url), Some(Dialect::Redis), "{url}");
+        }
     }
 
     #[test]

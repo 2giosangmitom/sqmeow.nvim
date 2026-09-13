@@ -13,6 +13,7 @@ env:
   CARGO_TERM_COLOR: always
   SQMEOW_TEST_POSTGRES_URL: postgres://sqmeow:sqmeow@127.0.0.1:5432/sqmeow
   SQMEOW_TEST_MYSQL_URL: mysql://root:sqmeow@127.0.0.1:3306/sqmeow
+  SQMEOW_TEST_REDIS_URL: redis://127.0.0.1:6379/0
 
 jobs:
   rust:
@@ -42,6 +43,14 @@ jobs:
         ports: ["3306:3306"]
         options: >-
           --health-cmd "mysqladmin ping -psqmeow"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30
@@ -82,6 +91,14 @@ jobs:
         ports: ["3306:3306"]
         options: >-
           --health-cmd "mysqladmin ping -psqmeow"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30

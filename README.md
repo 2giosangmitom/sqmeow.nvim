@@ -9,11 +9,11 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 ![Repo size](https://img.shields.io/github/repo-size/2giosangmitom/sqmeow.nvim?color=%23DDB6F2&label=SIZE&logo=codesandbox&style=for-the-badge&logoColor=D9E0EE&labelColor=302D41)
 ![LICENSE](https://img.shields.io/github/license/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=alpinedotjs&color=ee999f&logoColor=D9E0EE&labelColor=302D41)
 
-> Early development. SQLite, PostgreSQL and MySQL work end to end.
+> Early development. SQLite, PostgreSQL, MySQL and Redis work end to end.
 
 ## ✨ Features
 
-- 🐘 SQLite, PostgreSQL and MySQL, with several connections open at once.
+- 🐘 SQLite, PostgreSQL, MySQL and Redis, with several connections open at once.
 - 🖥️ One command opens the whole client: schema drawer, scratchpad and result grid.
 - 📝 A connection form with real fields, so nobody types a URL by hand. The password stays hidden behind asterisks.
 - 🌲 A schema drawer with tables, views, functions, procedures and columns with their types and keys, loaded as you expand.
@@ -54,7 +54,7 @@ To track the latest commit instead of a release, drop `version` and use `install
 1. `:Sqmeow` opens the drawer, a scratchpad and the result window. Run it again to restore your layout.
 2. `:Sqmeow add` (or `A` in the drawer) opens a form to add a connection.
 3. `<CR>` on a connection in the drawer opens it. `u` makes it the one queries run against.
-4. Write SQL in the scratchpad and press `<CR>` to run the statement under the cursor, or a visual selection. Errors show as diagnostics.
+4. Write SQL in the scratchpad and press `<CR>` to run the statement under the cursor, or a visual selection. Errors show as diagnostics. On a Redis connection, write one command per line; the drawer lists keys by type.
 
 Press `?` in the drawer or result window to list its keys.
 
@@ -172,7 +172,7 @@ Contributions are welcome. The toolchain is pinned with [mise](https://mise.jdx.
 
 ```sh
 mise install   # rust, just, stylua, selene
-just db-up     # PostgreSQL and MySQL for integration tests
+just db-up     # PostgreSQL, MySQL and Redis for integration tests
 just           # lint and test, as CI does
 just docs      # regenerate doc/sqmeow.txt
 ```

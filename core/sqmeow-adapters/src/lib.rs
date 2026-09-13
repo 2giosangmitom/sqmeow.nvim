@@ -6,6 +6,7 @@
 
 pub mod mysql;
 pub mod postgres;
+pub mod redis;
 pub mod sqlite;
 mod stream;
 
@@ -20,6 +21,8 @@ pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 
 pub use mysql::MySqlAdapter;
 pub use postgres::PostgresAdapter;
+// `self::`, because a bare `redis` here would also name the driver crate.
+pub use self::redis::RedisAdapter;
 pub use sqlite::SqliteAdapter;
 
 /// Turn a routine's name and the database's own word for what it is into a node.
@@ -41,6 +44,7 @@ pub enum Backend {
     Sqlite(SqliteAdapter),
     Postgres(PostgresAdapter),
     MySql(MySqlAdapter),
+    Redis(RedisAdapter),
 }
 
 impl Backend {
@@ -53,6 +57,7 @@ impl Backend {
             Dialect::Sqlite => Ok(Self::Sqlite(SqliteAdapter::connect(url).await?)),
             Dialect::Postgres => Ok(Self::Postgres(PostgresAdapter::connect(url).await?)),
             Dialect::MySql => Ok(Self::MySql(MySqlAdapter::connect(url).await?)),
+            Dialect::Redis => Ok(Self::Redis(RedisAdapter::connect(url).await?)),
         }
     }
 
@@ -62,6 +67,7 @@ impl Backend {
             Self::Sqlite(adapter) => adapter.dialect(),
             Self::Postgres(adapter) => adapter.dialect(),
             Self::MySql(adapter) => adapter.dialect(),
+            Self::Redis(adapter) => adapter.dialect(),
         }
     }
 
@@ -71,6 +77,7 @@ impl Backend {
             Self::Sqlite(adapter) => adapter.quote_ident(name),
             Self::Postgres(adapter) => adapter.quote_ident(name),
             Self::MySql(adapter) => adapter.quote_ident(name),
+            Self::Redis(adapter) => adapter.quote_ident(name),
         }
     }
 
@@ -85,24 +92,27 @@ impl Backend {
             Self::Sqlite(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::Postgres(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::MySql(adapter) => adapter.execute(statement, max_rows, cancel).await,
+            Self::Redis(adapter) => adapter.execute(statement, max_rows, cancel).await,
         }
     }
 
-    /// The schemas, or for MySQL the databases, this connection can see.
+    /// The schemas, or for MySQL and Redis the databases, this connection can see.
     pub async fn schemas(&self) -> Result<Vec<SchemaNode>> {
         match self {
             Self::Sqlite(adapter) => adapter.schemas().await,
             Self::Postgres(adapter) => adapter.schemas().await,
             Self::MySql(adapter) => adapter.schemas().await,
+            Self::Redis(adapter) => adapter.schemas().await,
         }
     }
 
-    /// The tables and views in one schema.
+    /// The tables and views in one schema, or the keys in a Redis database.
     pub async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
         match self {
             Self::Sqlite(adapter) => adapter.relations(schema).await,
             Self::Postgres(adapter) => adapter.relations(schema).await,
             Self::MySql(adapter) => adapter.relations(schema).await,
+            Self::Redis(adapter) => adapter.relations(schema).await,
         }
     }
 
@@ -112,6 +122,7 @@ impl Backend {
             Self::Sqlite(adapter) => adapter.routines(schema).await,
             Self::Postgres(adapter) => adapter.routines(schema).await,
             Self::MySql(adapter) => adapter.routines(schema).await,
+            Self::Redis(adapter) => adapter.routines(schema).await,
         }
     }
 
@@ -121,6 +132,7 @@ impl Backend {
             Self::Sqlite(adapter) => adapter.columns(schema, relation).await,
             Self::Postgres(adapter) => adapter.columns(schema, relation).await,
             Self::MySql(adapter) => adapter.columns(schema, relation).await,
+            Self::Redis(adapter) => adapter.columns(schema, relation).await,
         }
     }
 
@@ -130,6 +142,7 @@ impl Backend {
             Self::Sqlite(adapter) => adapter.close().await,
             Self::Postgres(adapter) => adapter.close().await,
             Self::MySql(adapter) => adapter.close().await,
+            Self::Redis(adapter) => adapter.close().await,
         }
     }
 }
@@ -140,5 +153,6 @@ pub fn supported() -> Vec<&'static str> {
         Dialect::Sqlite.name(),
         Dialect::Postgres.name(),
         Dialect::MySql.name(),
+        Dialect::Redis.name(),
     ]
 }

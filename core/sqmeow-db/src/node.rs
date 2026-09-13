@@ -16,6 +16,8 @@ pub enum RelationKind {
     MaterializedView,
     /// Something the server reports that does not fit above, such as a foreign table.
     Other,
+    /// A Redis key, by the type of value it holds.
+    Key(KeyType),
 }
 
 impl RelationKind {
@@ -26,6 +28,60 @@ impl RelationKind {
             Self::View => "view",
             Self::MaterializedView => "materialized view",
             Self::Other => "relation",
+            Self::Key(_) => "key",
+        }
+    }
+}
+
+/// What a Redis key holds.
+///
+/// Also the group the drawer lists a key under, because the command that reads a key back depends
+/// on it: there is no one statement that shows a hash and a list alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyType {
+    String,
+    Hash,
+    List,
+    Set,
+    SortedSet,
+    Stream,
+}
+
+impl KeyType {
+    /// Every type, in the order the drawer lists their groups.
+    pub const ALL: [Self; 6] = [
+        Self::String,
+        Self::Hash,
+        Self::List,
+        Self::Set,
+        Self::SortedSet,
+        Self::Stream,
+    ];
+
+    /// Read the answer `TYPE` gives.
+    ///
+    /// `none`, for a key that has gone, and a module's own type such as `ReJSON-RL` answer nothing.
+    pub fn from_redis(name: &str) -> Option<Self> {
+        match name {
+            "string" => Some(Self::String),
+            "hash" => Some(Self::Hash),
+            "list" => Some(Self::List),
+            "set" => Some(Self::Set),
+            "zset" => Some(Self::SortedSet),
+            "stream" => Some(Self::Stream),
+            _ => None,
+        }
+    }
+
+    /// The drawer group's key, which the plugin matches on, and the label it draws.
+    pub fn group(self) -> (&'static str, &'static str) {
+        match self {
+            Self::String => ("strings", "Strings"),
+            Self::Hash => ("hashes", "Hashes"),
+            Self::List => ("lists", "Lists"),
+            Self::Set => ("sets", "Sets"),
+            Self::SortedSet => ("sorted_sets", "Sorted sets"),
+            Self::Stream => ("streams", "Streams"),
         }
     }
 }
@@ -167,5 +223,21 @@ mod tests {
         assert_eq!(RelationKind::View.name(), "view");
         assert_eq!(RelationKind::MaterializedView.name(), "materialized view");
         assert_eq!(RelationKind::Other.name(), "relation");
+        assert_eq!(RelationKind::Key(KeyType::Hash).name(), "key");
+    }
+
+    #[test]
+    fn redis_types_are_read_and_grouped() {
+        assert_eq!(KeyType::from_redis("zset"), Some(KeyType::SortedSet));
+        assert_eq!(KeyType::from_redis("none"), None);
+        assert_eq!(KeyType::from_redis("ReJSON-RL"), None);
+
+        let mut groups: Vec<&str> = KeyType::ALL.iter().map(|kind| kind.group().0).collect();
+        groups.dedup();
+        assert_eq!(
+            groups.len(),
+            KeyType::ALL.len(),
+            "each type has a group of its own"
+        );
     }
 }

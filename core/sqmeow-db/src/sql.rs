@@ -47,6 +47,26 @@ enum Mode {
     BlockComment,
 }
 
+/// Split a buffer of Redis commands into statements, one per line.
+///
+/// A Redis command ends with its line, so that is all the splitting a script needs. Blank lines are
+/// dropped, and so are lines starting with `#` or `--`, which is how people comment one.
+pub fn split_lines(input: &str) -> Vec<Statement> {
+    input
+        .lines()
+        .enumerate()
+        .filter_map(|(line, text)| {
+            let sql = text.trim();
+            let skip = sql.is_empty() || sql.starts_with('#') || sql.starts_with("--");
+            (!skip).then(|| Statement {
+                sql: sql.to_owned(),
+                start_line: line,
+                end_line: line,
+            })
+        })
+        .collect()
+}
+
 /// Split a buffer of SQL into its statements.
 ///
 /// Whitespace-only and comment-only fragments are dropped, so a trailing semicolon or a trailing
@@ -277,6 +297,16 @@ mod tests {
 
     fn sqls(input: &str) -> Vec<String> {
         split(input).into_iter().map(|s| s.sql).collect()
+    }
+
+    #[test]
+    fn redis_commands_are_one_per_line() {
+        let statements = split_lines("SET k \"a;b\"\n\n# note\n-- note\n  GET k  \n");
+        let sql: Vec<&str> = statements.iter().map(|s| s.sql.as_str()).collect();
+        assert_eq!(sql, vec!["SET k \"a;b\"", "GET k"]);
+        assert_eq!((statements[1].start_line, statements[1].end_line), (4, 4));
+        // The cursor on the comment runs the command above it, as with SQL.
+        assert_eq!(statement_at(&statements, 2).unwrap().sql, "SET k \"a;b\"");
     }
 
     #[test]

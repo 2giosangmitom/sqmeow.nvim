@@ -1,5 +1,5 @@
 local MiniTest = require('mini.test')
--- The plugin against PostgreSQL and MySQL, not just SQLite.
+-- The plugin against PostgreSQL, MySQL and Redis, not just SQLite.
 --
 -- Skipped unless the servers are up. `just db-up` starts them and `just test-lua` passes their
 -- URLs in, so a machine with no Docker still runs the rest of the suite.
@@ -137,6 +137,85 @@ for dialect, url in pairs(servers) do
     -- The connection name comes from the URL, and must never carry the password.
     eq(state.current_connection().name:find('sqmeow:sqmeow', 1, true), nil)
   end
+end
+
+-- Redis speaks no SQL, so it gets cases of its own rather than a turn through the loop above.
+local redis_url = vim.env.SQMEOW_TEST_REDIS_URL
+
+--- One level of the drawer, as the engine reports it.
+local function introspect(path)
+  local drawer = require('sqmeow.ui.drawer')
+  local original = drawer.on_nodes
+  local reply
+  drawer.on_nodes = function(payload)
+    reply = payload
+  end
+  rpc.request('introspect', { conn_id = state.current_connection().id, path = path })
+  local settled = vim.wait(TIMEOUT, function()
+    return reply ~= nil
+  end, 20)
+  drawer.on_nodes = original
+
+  assert(settled, 'the drawer level should arrive')
+  eq(reply.error, nil)
+  return reply.nodes
+end
+
+local function named(nodes, name)
+  for _, node in ipairs(nodes) do
+    if (node.key or node.name) == name then
+      return node
+    end
+  end
+end
+
+T['redis'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      if not redis_url then
+        MiniTest.skip('set SQMEOW_TEST_REDIS_URL, or run `just db-up`')
+      end
+      connect(redis_url)
+    end,
+    post_case = function()
+      api.disconnect()
+    end,
+  },
+})
+
+T['redis']['connects and reports its dialect'] = function()
+  eq(state.current_connection().dialect, 'redis')
+end
+
+T['redis']['runs a script one command per line'] = function()
+  -- Read as one statement, these would be a `SET` with three words too many and fail.
+  local summary = run('SET test:lua:visits 41\nINCR test:lua:visits')
+  eq(summary.state, 'done')
+  eq(vim.trim(lines()[1]), '42')
+end
+
+T['redis']['lists keys under the group for their type'] = function()
+  run('DEL test:lua:hash')
+  run('HSET test:lua:hash field value')
+
+  local db = introspect({})[1].name
+  local hashes = named(introspect({ db }), 'hashes')
+  eq(hashes.kind, 'keys')
+  eq(hashes.count >= 1, true)
+
+  local key = named(introspect({ db, 'hashes' }), 'test:lua:hash')
+  eq(key.kind, 'key')
+  eq(key.expandable, false)
+end
+
+T['redis']['previews a key with the read for its type'] = function()
+  run('DEL test:lua:preview')
+  run('HSET test:lua:preview colour teal')
+
+  local summary = run(require('sqmeow.sql').read_key('hashes', 'test:lua:preview', 10))
+  eq(summary.state, 'done')
+  eq(summary.rows, 1)
+  eq(lines()[1]:find('colour', 1, true) ~= nil and lines()[1]:find('teal', 1, true) ~= nil, true)
 end
 
 return T

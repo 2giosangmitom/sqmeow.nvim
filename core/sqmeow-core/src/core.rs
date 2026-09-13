@@ -13,8 +13,8 @@ use rmpv::Value;
 use sqmeow_adapters::Backend;
 use sqmeow_db::export::{self, Format, Rows};
 use sqmeow_db::{
-    CatalogEntry, Cell, ColumnNode, Error as DbError, RelationKind, RelationNode, ResultSet,
-    RoutineKind, RoutineNode, SchemaNode, sql,
+    CatalogEntry, Cell, ColumnNode, Dialect, Error as DbError, KeyType, RelationKind, RelationNode,
+    ResultSet, RoutineKind, RoutineNode, SchemaNode, sql,
 };
 use sqmeow_rpc::{Handler, Nvim, Reply};
 use tokio::sync::Notify;
@@ -176,7 +176,12 @@ impl Core {
             return reply.err(format!("no connection with id {conn_id}"));
         };
 
-        let mut statements = sql::split(&source);
+        // A Redis command ends with its line, where a SQL statement ends with a semicolon.
+        let mut statements = if connection.backend.dialect() == Dialect::Redis {
+            sql::split_lines(&source)
+        } else {
+            sql::split(&source)
+        };
         if statements.is_empty() {
             return reply.err("there is no statement to run");
         }
@@ -742,6 +747,23 @@ fn schema_nodes(schemas: Vec<SchemaNode>) -> Vec<Value> {
 /// Reading them costs the two queries that expanding a group would have cost anyway.
 async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>, DbError> {
     let relations = connection.backend.relations(schema).await?;
+
+    // Redis holds keys and nothing else, and what a key holds decides how it is read back, so its
+    // groups are the types rather than tables and views.
+    if connection.backend.dialect() == Dialect::Redis {
+        return Ok(KeyType::ALL
+            .into_iter()
+            .map(|wanted| {
+                let (key, name) = wanted.group();
+                let count = relations
+                    .iter()
+                    .filter(|r| r.kind == RelationKind::Key(wanted))
+                    .count();
+                group_node(key, name, "keys", count)
+            })
+            .collect());
+    }
+
     let routines = connection.backend.routines(schema).await?;
 
     let tables = relations.iter().filter(|r| is_table(r.kind)).count();
@@ -753,10 +775,10 @@ async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>
     let functions = routines.len() - procedures;
 
     Ok(vec![
-        group_node("tables", "Tables", tables),
-        group_node("views", "Views", views),
-        group_node("functions", "Functions", functions),
-        group_node("procedures", "Procedures", procedures),
+        group_node("tables", "Tables", "tables", tables),
+        group_node("views", "Views", "views", views),
+        group_node("functions", "Functions", "functions", functions),
+        group_node("procedures", "Procedures", "procedures", procedures),
     ])
 }
 
@@ -799,22 +821,38 @@ async fn members(
                     .collect(),
             ))
         }
-        // Only reachable if the plugin invents a path, since every group it can ask for came
-        // from a node this engine emitted. An error line beats a group that opens onto nothing.
-        other => Err(DbError::driver(format!("no `{other}` group in a schema"))),
+        other => {
+            // Anything else is a Redis type's group, or a path the plugin invented: every group it
+            // can ask for came from a node this engine emitted, and an error line beats a group
+            // that opens onto nothing.
+            let Some(wanted) = KeyType::ALL
+                .into_iter()
+                .find(|kind| kind.group().0 == other)
+            else {
+                return Err(DbError::driver(format!("no `{other}` group in a schema")));
+            };
+            let relations = connection.backend.relations(schema).await?;
+            Ok(relation_nodes(
+                relations
+                    .into_iter()
+                    .filter(|relation| relation.kind == RelationKind::Key(wanted))
+                    .collect(),
+            ))
+        }
     }
 }
 
 /// One group heading.
 ///
 /// `key` is what the path is built from and `name` is what is drawn, so the engine matches on a
-/// stable word rather than on whatever the drawer happens to print. An empty group is not
-/// expandable: opening it would show nothing, and the count already says why.
-fn group_node(key: &str, name: &str, count: usize) -> Value {
+/// stable word rather than on whatever the drawer happens to print. `kind` picks the icon, which
+/// the six Redis groups share. An empty group is not expandable: opening it would show nothing,
+/// and the count already says why.
+fn group_node(key: &str, name: &str, kind: &str, count: usize) -> Value {
     map(vec![
         ("key", Value::from(key)),
         ("name", Value::from(name)),
-        ("kind", Value::from(key)),
+        ("kind", Value::from(kind)),
         ("expandable", Value::from(count > 0)),
         ("count", Value::from(count as u64)),
     ])
@@ -842,7 +880,11 @@ fn relation_nodes(relations: Vec<RelationNode>) -> Vec<Value> {
             map(vec![
                 ("name", Value::from(relation.name)),
                 ("kind", Value::from(relation.kind.name())),
-                ("expandable", Value::from(true)),
+                // A Redis key has no columns to open onto.
+                (
+                    "expandable",
+                    Value::from(!matches!(relation.kind, RelationKind::Key(_))),
+                ),
             ])
         })
         .collect()

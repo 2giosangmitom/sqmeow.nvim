@@ -58,10 +58,11 @@ T['create']['asks which database first'] = function()
   connection.create()
 
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  eq(#lines, 3)
+  eq(#lines, 4)
   MiniTest.expect.no_equality(lines[1]:find('PostgreSQL'), nil)
   MiniTest.expect.no_equality(lines[2]:find('MySQL'), nil)
-  MiniTest.expect.no_equality(lines[3]:find('SQLite'), nil)
+  MiniTest.expect.no_equality(lines[3]:find('Redis'), nil)
+  MiniTest.expect.no_equality(lines[4]:find('SQLite'), nil)
 end
 
 T['create']['asks for a name and offers none'] = function()

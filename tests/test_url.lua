@@ -132,6 +132,14 @@ T['parse']['recognises the alternative scheme names'] = function()
   eq(url.parse('sqlite3:app.db').dialect, 'sqlite')
 end
 
+T['parse']['reads tls off a redis scheme'] = function()
+  eq(url.parse('rediss://cache.internal/0').tls, 'yes')
+  eq(url.parse('redis://cache.internal/0').tls, 'no')
+  eq(url.parse('valkeys://cache.internal').dialect, 'redis')
+  -- Only Redis has the field, so the other dialects' fields stay what they were.
+  eq(url.parse('postgres://host/db').tls, nil)
+end
+
 T['parse']['refuses a scheme that is not a database'] = function()
   eq(url.parse('https://example.com/db'), nil)
   eq(url.parse('not a url'), nil)
@@ -168,6 +176,15 @@ T['build']['leaves out a port, a user and options that were not given'] = functi
   eq(url.build('postgres', { host = 'h', database = 'd' }), 'postgres://h/d')
 end
 
+T['build']['writes redis tls as the rediss scheme'] = function()
+  eq(url.build('redis', { host = 'h', database = '0', tls = 'yes' }), 'rediss://h/0')
+  eq(url.build('redis', { host = 'h', database = '0', tls = 'no' }), 'redis://h/0')
+end
+
+T['build']['keeps a password that has no user'] = function()
+  eq(url.build('redis', { host = 'h', password = 's#cret' }), 'redis://:s%23cret@h/')
+end
+
 T['build']['writes a sqlite path with no authority'] = function()
   eq(url.build('sqlite', { path = '/var/app.db' }), 'sqlite:/var/app.db')
 end
@@ -190,6 +207,7 @@ T['build']['round trips everything parse produces'] = function()
     'mysql://root@127.0.0.1/sqmeow',
     'postgres://[::1]:5433/app',
     'sqlite:app.db',
+    'rediss://:secret@cache.internal:6380/2',
   }) do
     local fields = url.parse(original)
     eq(url.build(fields.dialect, fields), original)

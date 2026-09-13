@@ -132,6 +132,7 @@ local implied = {
   view = true,
   ['function'] = true,
   procedure = true,
+  key = true,
 }
 
 local function annotate(node)
@@ -527,9 +528,26 @@ local function sql_parts(path)
   return vim.list_extend({ path[1] }, vim.list_slice(path, 3, #path))
 end
 
---- Whether a node is something a `SELECT` can name.
+--- Whether a node is something a `SELECT` can name, or a Redis key that can be read the same way.
 local function is_relation(kind)
-  return kind == 'table' or kind == 'view' or kind == 'materialized view' or kind == 'relation'
+  return kind == 'table'
+    or kind == 'view'
+    or kind == 'materialized view'
+    or kind == 'relation'
+    or kind == 'key'
+end
+
+--- The statement that shows what a relation holds.
+---
+--- For a Redis key that depends on its type, which is the group the key sits under.
+local function preview_statement(node)
+  local sql = require('sqmeow.sql')
+  local dialect = dialect_of(node.conn_id)
+  local limit = require('sqmeow.config').get().ui.result.page_size
+  if dialect == 'redis' then
+    return sql.read_key(node.path[2], node.path[#node.path], limit)
+  end
+  return sql.select_from(dialect, sql_parts(node.path), limit)
 end
 
 --- Open the node under the cursor.
@@ -645,11 +663,7 @@ function M.actions.preview()
   local api = require('sqmeow.api')
   api.use(node.conn_id)
   api.execute(
-    require('sqmeow.sql').select_from(
-      dialect_of(node.conn_id),
-      sql_parts(node.path),
-      require('sqmeow.config').get().ui.result.page_size
-    ),
+    preview_statement(node),
     -- Written by the plugin, not by anyone at the keyboard, so it stays out of the query log.
     { history = false }
   )
@@ -675,11 +689,7 @@ function M.actions.yank_select()
     return
   end
 
-  local statement = require('sqmeow.sql').select_from(
-    dialect_of(node.conn_id),
-    sql_parts(node.path),
-    require('sqmeow.config').get().ui.result.page_size
-  )
+  local statement = preview_statement(node)
   vim.fn.setreg(vim.v.register or '"', statement)
   vim.notify('sqmeow: yanked ' .. statement)
 end
