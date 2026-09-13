@@ -7,16 +7,21 @@
 
 pub mod adapter;
 pub mod error;
+pub mod export;
 pub mod node;
 pub mod result;
 pub mod sql;
+pub mod types;
 pub mod value;
+pub mod width;
 
 pub use adapter::{Adapter, Dialect};
 pub use error::{Error, Result};
+pub use export::{Format, Rows};
 pub use node::{
     CatalogEntry, ColumnNode, RelationKind, RelationNode, RoutineKind, RoutineNode, SchemaNode,
 };
 pub use result::{Column, ResultSet};
 pub use sql::Statement;
+pub use types::{ForeignKey, KeyKind, TypeClass};
 pub use value::Cell;

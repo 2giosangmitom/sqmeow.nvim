@@ -1,8 +1,8 @@
 --- sqmeow.nvim, a database client for Neovim.
 ---
---- A Lua frontend over a Rust engine. The engine owns connections, queries, and the layout of
---- result grids; the plugin owns windows, buffers, and keymaps. Nothing in the plugin ever
---- touches a row of data, which is what keeps a large result from stalling the editor.
+--- A Lua frontend over a Rust engine. The engine connects to databases, runs queries and holds
+--- their results; the plugin asks it for rows a page at a time and draws everything itself: the
+--- drawer, the grid, windows, buffers and keymaps.
 ---
 ---@tag sqmeow.nvim
 ---@toc_entry Introduction
@@ -50,22 +50,22 @@
 
 --- The query log ~
 ---
---- Every finished query is written to a file of JSON lines under `stdpath('state')`, so the log is
---- still there after a restart. It holds the statement, which connection it ran on, how it went
---- and how long it took. It does not hold the rows: a cached grid goes stale as soon as the table
---- changes, and a statement you can see is cheap to run again.
+--- Every query you submit is written to a log under `core.path`, together with the rows it
+--- returned, so both are still there after a restart. Only what you ran is recorded: a preview from
+--- the drawer, and everything the plugin asks the database for itself, stays out of it.
 ---
 --- The drawer shows the most recent under `history`, and `:Sqmeow log` opens that section.
---- Choosing one puts its rows back on screen when the engine still has them, which is true for
---- anything run since Neovim started. Otherwise the statement opens in a buffer of its own, ready
---- to run, because a log holds deletes as readily as selects and picking a line out of a list is
---- not the same as asking for it to happen again.
+--- Choosing one shows the result that query returned, not the statement to run again. Nothing is
+--- run, because a log holds deletes as readily as selects and picking a line out of a list is not
+--- the same as asking for it to happen again. A result from this session comes from the engine's
+--- memory, and an older one is read back from the copy saved with the log, with the winbar saying
+--- how long ago it ran. A query that failed shows its error.
 ---
---- The same statement run twenty times is one line, and the line is the most recent run of it.
+--- Every run is an entry of its own, because two runs of the same select can answer differently.
 ---
---- `:Sqmeow log clear` empties the log, and so does `d` on the section in the drawer. Set
---- `query.persist_history` to false to keep the log to the session, and `query.history_file` to
---- put it somewhere else.
+--- `:Sqmeow log clear` empties the log and deletes the saved results, and so does `d` on the
+--- section in the drawer. Saved results are readable by their owner only. Set
+--- `query.persist_history` to false to keep the log and its results to the session.
 ---@tag sqmeow-history
 ---@toc_entry The query log
 
@@ -106,14 +106,44 @@ function M.setup(opts)
 
   -- A running engine holds the old settings, so tell it about the new ones.
   require('sqmeow.rpc').configure()
+end
 
-  -- Fetching only on first use would mean the call that wanted an engine is the one that has to
-  -- fail and be made again. Starting here usually has one ready before anything asks for it, and
-  -- it returns at once when there already is one, so a session that never opens a database pays
-  -- nothing for this beyond a `stat`.
-  if require('sqmeow.config').get().core.auto_install then
-    require('sqmeow.install').ensure()
-  end
+--- Install the engine binary.
+---
+--- Nothing installs it on its own, so this is the call to put in a plugin manager's build hook,
+--- where fetching several megabytes happens at a moment you chose: >lua
+---   {
+---     '2giosangmitom/sqmeow.nvim',
+---     dependencies = { 'MunifTanjim/nui.nvim' },
+---     build = function()
+---       require('sqmeow').install()
+---     end,
+---     opts = {},
+---   }
+--- <
+--- With no argument it works out how to install on its own: a release build is downloaded with
+--- whichever tool the machine has, and cargo compiles the checkout if there is no release for this
+--- target or the download fails. Name a method to decide instead. `'cargo'` is how to run a commit
+--- that has not been released; `'curl'`, `'wget'` and `'powershell'` each name a download tool, for
+--- a machine where the detected one does not work: >lua
+---   require('sqmeow').install('cargo')
+---   require('sqmeow').install('wget')
+---   require('sqmeow').install({ version = '1.0.2' })
+--- <
+--- Both ways put the engine in the same place, so switching between them replaces what was there
+--- rather than leaving two builds behind.
+---
+--- Waits until the install is over, because a build hook that returned early would have the plugin
+--- manager report success over an engine that is not there yet. Pass a `callback` to be handed the
+--- result instead and not wait, which is what `:Sqmeow install` does from inside a session. The
+--- waiting uses |vim.wait()|, so the editor still redraws and the progress line still moves.
+---
+---@param opts string|table|nil A method name, or a table of `method`, `version`, `callback` and
+---  `timeout` in milliseconds.
+---@return boolean|nil ok Whether an engine was installed, or nil when a `callback` was given.
+---@return string|nil err
+function M.install(opts)
+  return require('sqmeow.install').install(opts)
 end
 
 --- Stop the engine. It restarts on the next call that needs it.

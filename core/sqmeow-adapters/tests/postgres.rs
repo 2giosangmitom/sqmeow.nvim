@@ -5,7 +5,9 @@
 //! `cargo test` still works on a machine with no Docker.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Error, RelationKind, ResultSet, RoutineKind};
+use sqmeow_db::{
+    Cell, Error, ForeignKey, KeyKind, RelationKind, ResultSet, RoutineKind, TypeClass,
+};
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -365,6 +367,111 @@ async fn lists_columns_in_their_declared_order() {
         columns[1].type_name.contains("10"),
         "{}",
         columns[1].type_name
+    );
+}
+
+#[tokio::test]
+async fn marks_the_result_columns_that_are_keys() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists keyed_child cascade").await;
+    run(&backend, "drop table if exists keyed_parent cascade").await;
+    run(
+        &backend,
+        "create table keyed_parent (id int primary key, name text)",
+    )
+    .await;
+    run(
+        &backend,
+        "create table keyed_child (
+            id int primary key,
+            parent_id int references keyed_parent(id),
+            note text
+        )",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select id, parent_id, note from keyed_child order by id",
+    )
+    .await;
+
+    let keys: Vec<KeyKind> = result.columns().iter().map(|column| column.key).collect();
+    assert_eq!(
+        keys,
+        vec![KeyKind::Primary, KeyKind::Foreign, KeyKind::None],
+        "columns: {:?}",
+        result.columns()
+    );
+}
+
+#[tokio::test]
+async fn a_result_column_that_is_an_expression_is_not_a_key() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists keyed_expr cascade").await;
+    run(&backend, "create table keyed_expr (id int primary key)").await;
+
+    // `count(*)` and a literal come from no table at all, and `id + 0` comes from one but is not
+    // the column: Postgres reports no source for any of the three.
+    let result = run(
+        &backend,
+        "select count(*) as total, 1 as literal, max(id) + 0 as bumped from keyed_expr",
+    )
+    .await;
+
+    for column in result.columns() {
+        assert_eq!(column.key, KeyKind::None, "{}", column.name);
+    }
+}
+
+#[tokio::test]
+async fn a_result_column_is_classified_by_its_type() {
+    let backend = connect(&server!()).await;
+    let result = run(
+        &backend,
+        "select 'x'::text as words, 1::int4 as count, now() as at,
+                '{}'::jsonb as doc, gen_random_uuid() as ident, true as flag",
+    )
+    .await;
+
+    let classes: Vec<TypeClass> = result.columns().iter().map(|column| column.class).collect();
+    assert_eq!(
+        classes,
+        vec![
+            TypeClass::Text,
+            TypeClass::Number,
+            TypeClass::Temporal,
+            TypeClass::Json,
+            TypeClass::Uuid,
+            TypeClass::Boolean,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_drawer_column_names_what_it_references() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists fk_child cascade").await;
+    run(&backend, "drop table if exists fk_parent cascade").await;
+    run(&backend, "create table fk_parent (id int primary key)").await;
+    run(
+        &backend,
+        "create table fk_child (id int primary key, parent_id int references fk_parent(id))",
+    )
+    .await;
+
+    let columns = backend
+        .columns(SCHEMA, "fk_child")
+        .await
+        .expect("columns should load");
+
+    assert_eq!(columns[0].foreign_key, None);
+    assert_eq!(
+        columns[1].foreign_key,
+        Some(ForeignKey {
+            table: "fk_parent".into(),
+            column: "id".into(),
+        })
     );
 }
 

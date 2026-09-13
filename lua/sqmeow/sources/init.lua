@@ -14,7 +14,6 @@ local M = {}
 --- The sources that ship with the plugin.
 ---@type table<string, { load: fun(opts: table|nil): sqmeow.ConnectionSpec[], string|nil }>
 M.builtin = {
-  memory = require('sqmeow.sources.memory'),
   env = require('sqmeow.sources.env'),
   file = require('sqmeow.sources.file'),
 }
@@ -37,14 +36,7 @@ function M.load()
   local problems = {}
   local seen = {}
 
-  -- Inline connections are a memory source whether or not one was configured, so `connections`
-  -- in `setup()` works on its own.
-  local configured = vim.deepcopy(config.sources)
-  if #config.connections > 0 then
-    table.insert(configured, 1, { type = 'memory' })
-  end
-
-  for _, spec in ipairs(configured) do
+  for _, spec in ipairs(config.sources) do
     local source = M.builtin[spec.type]
 
     if not source then

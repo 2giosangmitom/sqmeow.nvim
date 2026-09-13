@@ -41,7 +41,7 @@ end
 ---@param values table<string, string> What the fields start as.
 ---@param existing string|nil The name of the saved connection being changed, if it is one.
 local function form(dialect, values, existing)
-  local spec = require('sqmeow.dialects').get(dialect)
+  local spec = assert(require('sqmeow.dialects').get(dialect), 'the menu offers known dialects')
   local opened, err = require('sqmeow.ui.form').open({
     title = existing and ('Edit %s'):format(existing) or ('New %s connection'):format(spec.label),
     fields = require('sqmeow.dialects').fields(dialect),
@@ -52,12 +52,14 @@ local function form(dialect, values, existing)
     wizard = existing == nil,
     validate = validator(dialect, existing),
     on_submit = function(answers)
-      local url = require('sqmeow.url').build(dialect, answers)
+      -- The form refuses to submit until `validator` accepts the answers, so this cannot fail.
+      local url = assert(require('sqmeow.url').build(dialect, answers))
       local name = vim.trim(answers.name)
 
       local api = require('sqmeow.api')
       if existing then
-        return api.edit(existing, { name = name, url = url })
+        api.edit(existing, { name = name, url = url })
+        return
       end
 
       if api.save(name, url) then
@@ -67,7 +69,7 @@ local function form(dialect, values, existing)
   })
 
   if not opened then
-    vim.notify(err, vim.log.levels.ERROR)
+    vim.notify(err or 'sqmeow: the dialog could not open', vim.log.levels.ERROR)
   end
 end
 
@@ -91,7 +93,7 @@ function M.create()
   })
 
   if not opened then
-    vim.notify(err, vim.log.levels.ERROR)
+    vim.notify(err or 'sqmeow: the dialog could not open', vim.log.levels.ERROR)
   end
 end
 

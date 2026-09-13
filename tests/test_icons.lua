@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local icons = require('sqmeow.icons')
 local config = require('sqmeow.config')
@@ -43,7 +44,35 @@ T['get']['covers every kind the plugin colours'] = function()
     return kinds
   end
 
-  eq(names(config.defaults.icons), names(icons.highlights))
+  -- Two tables of glyphs: the kinds of thing the drawer names, and the classes a column holds.
+  -- `icons` already had a `column` of its own, so the classes could not join it.
+  local configured = names(config.defaults.icons)
+  vim.list_extend(configured, names(config.defaults.icons.types))
+  table.sort(configured)
+
+  eq(configured, names(icons.highlights))
+end
+
+T['get']['draws the glyph for a type class'] = function()
+  eq(icons.get('number'), config.defaults.icons.types.number)
+  eq(select(2, icons.get('number')), 'SqmeowIconTypeNumber')
+end
+
+T['column_kind'] = MiniTest.new_set()
+
+T['column_kind']['prefers a key over a type'] = function()
+  eq(icons.column_kind({ class = 'number', primary_key = true }), 'primary_key')
+  eq(icons.column_kind({ class = 'number', references = 'people.id' }), 'foreign_key')
+  -- A column that is both is the primary key first, which is the stronger statement about the row.
+  eq(
+    icons.column_kind({ class = 'number', primary_key = true, references = 'people.id' }),
+    'primary_key'
+  )
+end
+
+T['column_kind']['falls back to the class and then to unknown'] = function()
+  eq(icons.column_kind({ class = 'temporal' }), 'temporal')
+  eq(icons.column_kind({}), 'unknown')
 end
 
 T['get']['falls back to a blank for a kind it does not know'] = function()

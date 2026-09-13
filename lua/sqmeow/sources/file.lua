@@ -1,6 +1,6 @@
 --- Connections from a JSON file.
 ---
---- The default source, and the one `:Sqmeow save` writes to. It lives under `stdpath('data')`
+--- The default source, and the one `:Sqmeow save` writes to. It lives under `core.path`
 --- rather than in the user's configuration, because a connection list is per-machine and is not
 --- something to commit.
 
@@ -9,7 +9,7 @@ local M = {}
 --- Where connections are kept when the source does not name a path.
 ---@return string
 function M.default_path()
-  return vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow', 'connections.json')
+  return require('sqmeow.paths').connections()
 end
 
 --- The path this source reads.

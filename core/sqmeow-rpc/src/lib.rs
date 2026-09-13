@@ -20,7 +20,7 @@ pub use connection::Connection;
 pub use error::{Error, Result};
 pub use handler::{Handler, Reply};
 pub use message::Message;
-pub use nvim::{ApiCall, Nvim};
+pub use nvim::Nvim;
 pub use transport::{Transport, stdio};
 
 pub use rmpv::Value;

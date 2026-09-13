@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local sources = require('sqmeow.sources')
 local file = require('sqmeow.sources.file')
@@ -18,31 +19,6 @@ local T = MiniTest.new_set({
 --- Configure sources without any of the defaults, so a case sees only what it declares.
 local function only(...)
   config.apply({ sources = { ... } })
-end
-
-T['memory'] = MiniTest.new_set()
-
-T['memory']['reads connections from setup'] = function()
-  config.apply({
-    sources = {},
-    connections = { { name = 'dev', url = 'sqlite://dev.db' } },
-  })
-
-  local found = sources.load()
-  eq(#found, 1)
-  eq(found[1].name, 'dev')
-  eq(found[1].source, 'memory')
-end
-
-T['memory']['needs no source entry of its own'] = function()
-  config.apply({
-    sources = { { type = 'file', path = scratch } },
-    connections = {
-      { name = 'inline', url = 'sqlite://x.db' },
-    },
-  })
-
-  eq(sources.load()[1].name, 'inline')
 end
 
 T['env'] = MiniTest.new_set()

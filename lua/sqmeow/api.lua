@@ -222,7 +222,8 @@ end
 ---
 ---@param sql string One or more statements. Only the last one's rows are shown.
 ---@param opts table|nil `line` runs only the statement at that zero-based line; `source_buf` is
---- the buffer an error should be reported in.
+--- the buffer an error should be reported in; `history = false` keeps the query out of the log,
+--- for SQL the plugin wrote rather than the user.
 ---@return integer|nil call_id
 ---@return string|nil error
 function M.execute(sql, opts)
@@ -241,11 +242,19 @@ function M.execute(sql, opts)
   local result = require('sqmeow.ui.result')
   result.open()
 
+  -- The rows are saved only for a query that goes in the log, and only when the log itself is
+  -- saved: a result on disk that no entry points at is a copy of someone's data for nothing.
+  local recorded = opts.history ~= false
+  local archive = recorded
+      and require('sqmeow.config').get().query.persist_history
+      and require('sqmeow.history').result_path()
+    or nil
+
   local call_id, err = engine().request('execute', {
     conn_id = connection.id,
     sql = sql,
-    buf = result.buffer(),
     line = opts.line,
+    archive = archive,
   })
   if not call_id then
     notify(err or 'the query was refused', vim.log.levels.ERROR)
@@ -260,6 +269,8 @@ function M.execute(sql, opts)
     state = 'executing',
     statement = sql,
     source_buf = opts.source_buf,
+    history = recorded,
+    archive = archive,
   }
   require('sqmeow.diagnostics').clear(opts.source_buf)
   result.update_winbar(state.call)
@@ -322,51 +333,51 @@ function M.cancel()
   return stopped == true
 end
 
-local function turn_page(opts)
+--- Move the result window to another page.
+---
+--- Nothing is asked of the engine beyond the rows themselves: how many fit on a page and where the
+--- view has got to are this side's to know, so the arithmetic is here.
+---
+---@param to fun(offset: integer, size: integer, rows: integer): integer
+local function turn_page(to)
   local state = require('sqmeow.state')
-  if not state.call or not state.call.call_id then
-    return
-  end
-
   local result = require('sqmeow.ui.result')
-  local request = {
-    call_id = state.call.call_id,
-    buf = result.buffer(),
-  }
-  request.offset = opts.offset
-  request.delta = opts.delta
 
-  local _, err = engine().request('page', request)
-  if err then
-    notify(err, vim.log.levels.WARN)
+  local call = state.call
+  if not (call and call.call_id) then
+    return notify('there is no result to page', vim.log.levels.WARN)
   end
+
+  local size = math.max(require('sqmeow.config').get().ui.result.page_size, 1)
+  result.show_page(to(result.offset(), size, call.rows or 0))
 end
 
 --- Show the next page of the current result.
 function M.next_page()
-  turn_page({ delta = 1 })
+  turn_page(function(offset, size)
+    return offset + size
+  end)
 end
 
 --- Show the previous page of the current result.
 function M.prev_page()
-  turn_page({ delta = -1 })
+  turn_page(function(offset, size)
+    return offset - size
+  end)
 end
 
 --- Show the first page of the current result.
 function M.first_page()
-  turn_page({ offset = 0 })
+  turn_page(function()
+    return 0
+  end)
 end
 
 --- Show the last page of the current result.
----
---- The offset comes from the row count the engine reported. The engine clamps anything past the
---- end anyway, so the fallback below is safe even when no summary has arrived yet.
 function M.last_page()
-  local call = require('sqmeow.state').call
-  local pages = call and call.pages or 0
-  local page_size = call and call.page_size or 0
-
-  turn_page({ offset = math.max(pages - 1, 0) * page_size })
+  turn_page(function(_, size, rows)
+    return math.max(math.ceil(rows / size) - 1, 0) * size
+  end)
 end
 
 --- Open the result window.
@@ -396,14 +407,45 @@ function M.reopen(call_id)
     end
   end
 
-  local _, err = engine().request('page', {
-    call_id = call_id,
-    buf = result.buffer(),
-    offset = 0,
-  })
-  if err then
-    notify(err, vim.log.levels.WARN)
+  -- Nothing is asked of the engine but the rows: it still holds them, and the summary the log kept
+  -- carries everything needed to lay the columns out again.
+  result.render(state.call)
+end
+
+--- Show a logged result the engine no longer holds, from the copy saved beside the log.
+---
+--- Nothing is run. The engine reads the file and reports it as `call:state`, the way it reports a
+--- query, so the grid, paging, the row detail and exports all work on it as they did when it ran.
+---
+---@param entry table From the query log, with a saved result.
+---@return integer|nil call_id
+---@return string|nil error
+function M.restore(entry)
+  local state = require('sqmeow.state')
+  local result = require('sqmeow.ui.result')
+  local connection = entry.connection and state.connection_by_name(entry.connection)
+  local conn_id = connection and connection.id or 0
+
+  result.open()
+  local call_id, err = engine().request('restore', { path = entry.result, conn_id = conn_id })
+  if not call_id then
+    notify(err or 'the saved result could not be read', vim.log.levels.ERROR)
+    return nil, err
   end
+
+  state.call = {
+    call_id = call_id,
+    conn_id = conn_id,
+    state = 'executing',
+    statement = entry.statement,
+    -- Already in the log. Showing it again is not running it again.
+    history = false,
+    connection = entry.connection,
+    dialect = entry.dialect,
+    ran_at = entry.at,
+  }
+  result.update_winbar(state.call)
+  return call_id
 end
 
 --- Write the current result to a file.

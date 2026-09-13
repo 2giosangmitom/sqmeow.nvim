@@ -1,6 +1,6 @@
 --- Scratchpad buffers.
 ---
---- One file per connection, under `stdpath('data')`, opened as an ordinary buffer with the `sql`
+--- One file per connection, under `core.path`, opened as an ordinary buffer with the `sql`
 --- filetype. A real file rather than a scratch buffer, so it survives a restart, `:w` does what
 --- `:w` always does, and every SQL plugin the user already has keeps working in it.
 
@@ -9,7 +9,7 @@ local M = {}
 --- Where scratchpads are kept.
 ---@return string
 function M.directory()
-  return vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow', 'scratch')
+  return require('sqmeow.paths').scratch()
 end
 
 --- Turn a connection name into something safe to use as a file name.
@@ -117,28 +117,6 @@ function M.open_path(path)
   local buf = vim.api.nvim_get_current_buf()
   vim.bo[buf].filetype = 'sql'
   M.attach(buf, M.connection_for(path))
-  return buf
-end
-
---- Show a statement in a buffer of its own.
----
---- Used for a query out of the log whose rows the engine no longer holds. A scratch buffer rather
---- than the connection's scratchpad, so nothing anyone wrote is overwritten, and it carries the
---- scratchpad's keys so running it again is `<CR>`.
----
----@param statement string
----@param connection string|nil The connection it last ran on, so it goes back to the same one.
----@return integer buf
-function M.open_statement(statement, connection)
-  require('sqmeow.ui.layout').editing_window()
-
-  local buf = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(statement, '\n', { plain = true }))
-  vim.bo[buf].filetype = 'sql'
-  vim.bo[buf].bufhidden = 'wipe'
-
-  vim.api.nvim_win_set_buf(0, buf)
-  M.attach(buf, connection)
   return buf
 end
 

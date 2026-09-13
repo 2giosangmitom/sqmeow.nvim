@@ -57,8 +57,6 @@ function M.on_call(payload)
     state.call = payload
   end
 
-  result.update_winbar(state.call)
-
   if payload.state == 'error' then
     diagnostics.set(state.call.source_buf, payload)
     notify(payload.error or 'the query failed', vim.log.levels.ERROR)
@@ -68,11 +66,17 @@ function M.on_call(payload)
     notify('query cancelled', vim.log.levels.WARN)
   end
 
+  -- Drawing comes after the state above is settled, because the grid reads it: the rows it asks
+  -- for and the label it writes both come from the summary that just arrived.
+  result.render(state.call)
+
   if payload.state ~= 'executing' then
     state.record_call(state.call)
     -- Separate from the registry above: that one mirrors what the engine still holds, and this one
     -- outlives both the engine and the editor.
     require('sqmeow.history').append(state.call)
+    -- The drawer lists the log, so a finished query shows up there without anyone asking.
+    require('sqmeow.ui.drawer').render()
   end
 end
 
@@ -87,17 +91,6 @@ function M.on_export(payload)
     return notify(('wrote %s (%d bytes)'):format(payload.path, payload.bytes))
   end
   notify(('yanked %d bytes into register %s'):format(payload.bytes, payload.register))
-end
-
---- Handle a page being painted.
----@param payload table
-function M.on_page(payload)
-  local state = require('sqmeow.state')
-  if state.call and state.call.call_id == payload.call_id then
-    -- A page changes position and nothing else, so the rest of the summary is preserved.
-    state.call = vim.tbl_extend('force', state.call, payload)
-    require('sqmeow.ui.result').update_winbar(state.call)
-  end
 end
 
 --- Handle one level of the schema tree arriving.
@@ -122,7 +115,6 @@ function M.ensure()
   local rpc = require('sqmeow.rpc')
   rpc.on('conn:state', M.on_connection)
   rpc.on('call:state', M.on_call)
-  rpc.on('page:painted', M.on_page)
   rpc.on('schema:nodes', M.on_nodes)
   rpc.on('schema:catalog', M.on_catalog)
   rpc.on('export:done', M.on_export)

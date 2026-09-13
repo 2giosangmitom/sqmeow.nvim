@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 -- The whole stack, end to end: the plugin asks, the engine queries SQLite, the engine writes the
 -- grid into the buffer. This is the test that catches a break anywhere along that path.
 
@@ -38,13 +39,14 @@ local function run(sql)
 end
 
 --- Turn a page and wait for the engine to repaint.
+--- Turn a page and answer with where the grid ended up.
+---
+--- Where a page starts is the window's own business now, not something the engine reports, so it is
+--- read back from the grid rather than waited for on the summary.
 local function page(action)
-  local before = state.call.offset
   action()
-  vim.wait(TIMEOUT, function()
-    return state.call.offset ~= before
-  end, 10)
-  return state.call
+  local current, total = result.pages(state.call)
+  return { page = current, pages = total, offset = result.offset() }
 end
 
 --- Everything the grid buffer holds: the column names, the rule, and the rows.
@@ -52,7 +54,38 @@ local function grid()
   return vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false)
 end
 
+--- Apply the configuration this suite runs on.
+---
+--- Column icons are off by default here, and turned on only by the group that tests them: every
+--- other case asserts on exact grid lines, and a glyph before each name would make every one of
+--- those expectations harder to read without saying anything about the path under test.
+local function setup(opts)
+  require('sqmeow').setup(vim.tbl_deep_extend('force', {
+    ui = { result = { page_size = 4, column_icons = false } },
+  }, opts or {}))
+end
+
+--- Every extmark the engine put on one line, as `{ group, from, to }` in column order.
+local function marks_on(line)
+  local found = vim.api.nvim_buf_get_extmarks(
+    result.buffer(),
+    vim.api.nvim_create_namespace('sqmeow'),
+    { line - 1, 0 },
+    { line - 1, -1 },
+    { details = true }
+  )
+
+  local spans = vim.tbl_map(function(mark)
+    return { group = mark[4].hl_group, from = mark[3], to = mark[4].end_col }
+  end, found)
+  table.sort(spans, function(left, right)
+    return left.from < right.from
+  end)
+  return spans
+end
+
 --- The column names and the rule under them, which the grid begins with.
+--- The column names and the rule under them, which the grid opens with.
 local function header()
   return vim.list_slice(grid(), 1, 2)
 end
@@ -68,7 +101,7 @@ local primary, second, home
 local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
-      require('sqmeow').setup({ ui = { result = { page_size = 4 } } })
+      setup()
       home = vim.api.nvim_get_current_buf()
       primary = connect('sqlite::memory:', 'first')
       run('create table people (id integer primary key, name text, score real, avatar blob)')
@@ -108,7 +141,7 @@ T['querying']['returns rows'] = function()
   local summary = run('select id, name from people order by id')
   eq(summary.state, 'done')
   eq(summary.rows, 3)
-  eq(summary.columns, 2)
+  eq(#summary.columns, 2)
 end
 
 T['querying']['writes an aligned grid into the buffer'] = function()
@@ -120,8 +153,7 @@ end
 T['querying']['puts the header and the rows in one buffer'] = function()
   run('select id, name from people order by id')
 
-  -- One window, one buffer, the way nvim-dbee does it. The engine says how many lines come
-  -- before the first row, so nothing downstream has to count them.
+  -- One window, one buffer: the column names, the rule under them, and then the rows.
   eq(grid(), {
     ' id │ name',
     '────┼──────',
@@ -129,7 +161,6 @@ T['querying']['puts the header and the rows in one buffer'] = function()
     '  2 │ bob',
     '  3 │ NULL',
   })
-  eq(state.call.header_lines, 2)
 end
 
 T['querying']['right-aligns numbers and left-aligns text'] = function()
@@ -146,7 +177,7 @@ T['querying']['keeps the header when nothing matches'] = function()
   local summary = run('select id, name from people where 0')
   eq(summary.rows, 0)
   -- The columns still show, which is what makes "no rows" different from "something broke".
-  eq(header(), { ' id │ name', '────┼─────' })
+  eq(header()[1], ' id │ name')
   eq(lines(), {})
 end
 
@@ -207,9 +238,10 @@ T['paging'] = MiniTest.new_set({
 })
 
 T['paging']['starts on the first page'] = function()
-  eq(state.call.page, 1)
-  eq(state.call.pages, 3)
-  eq(state.call.offset, 0)
+  local current, total = result.pages(state.call)
+  eq(current, 1)
+  eq(total, 3)
+  eq(result.offset(), 0)
 end
 
 T['paging']['shows only a page of rows at a time'] = function()
@@ -238,29 +270,175 @@ end
 
 T['paging']['stops at the first page going back'] = function()
   api.prev_page()
-  vim.wait(200, function()
-    return false
-  end, 10)
-  eq(state.call.offset, 0)
+  eq(result.offset(), 0)
 end
 
 T['paging']['keeps column widths steady across pages'] = function()
-  local first = header()[2]
+  -- The whole reason the engine measures over every row rather than over the page on screen: a
+  -- column sized from the first four rows would move when the fifth turned out to be wider.
+  local first = header()
   page(api.next_page)
-  eq(header()[2], first)
+  eq(header(), first)
 end
 
 T['limits'] = MiniTest.new_set()
 
 T['limits']['stop at the row cap and say so'] = function()
-  require('sqmeow').setup({ query = { max_rows = 5 }, ui = { result = { page_size = 4 } } })
+  setup({ query = { max_rows = 5 } })
 
   local summary = run([[with recursive n(x) as (select 1 union all select x + 1 from n where x < 50)
                         select x from n]])
   eq(summary.rows, 5)
   eq(summary.truncated, true)
 
-  require('sqmeow').setup({ ui = { result = { page_size = 4 } } })
+  setup()
+end
+
+T['column icons'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      -- ASCII glyphs, so an expectation can be read and a width can be counted.
+      setup({
+        ui = { result = { column_icons = true } },
+        icons = {
+          types = {
+            text = 't',
+            number = 'n',
+            boolean = 'b',
+            temporal = 'd',
+            json = 'j',
+            uuid = 'u',
+            binary = 'y',
+            unknown = '?',
+            primary_key = 'K',
+            foreign_key = 'k',
+          },
+        },
+      })
+    end,
+    post_case = function()
+      setup()
+    end,
+  },
+})
+
+T['column icons']['marks each column with what it holds'] = function()
+  run('select name, score, avatar from people order by id')
+  eq(header()[1], ' t name │ n score │ y avatar')
+end
+
+T['column icons']['marks a primary key as a key rather than as a number'] = function()
+  run('select id, name from people order by id')
+  -- `id` is an integer, and that it is the primary key is the more useful thing to say about it.
+  eq(header()[1], ' K id │ t name')
+end
+
+T['column icons']['does not call an expression a key'] = function()
+  run('select count(*) as total from people')
+  -- `count(*)` comes from no table at all, so whatever its type is classified as, it cannot be
+  -- anyone's primary or foreign key. This is the case that would break if a column's origin were
+  -- guessed from its name rather than read from the statement.
+  eq(header()[1]:find('K', 1, true), nil)
+  eq(header()[1]:find('k', 1, true), nil)
+end
+
+T['column icons']['does not widen a column its values already fill'] = function()
+  run('select avatar from people order by id')
+  -- "avatar" is six wide and `0xdeadbeef` ten, so the glyph and its space fit inside what the
+  -- values had already claimed. An icon is free wherever a column is wider than its own name, which
+  -- in a real result is most of them.
+  eq(header()[1], ' y avatar')
+end
+
+T['column icons']['leaves the rows alone'] = function()
+  run('select id, name from people order by id')
+  -- Only the header carries a glyph. The rows are padded to the same width and nothing else.
+  eq(lines(), { '    1 │ alice', '    2 │ bob', '    3 │ NULL' })
+end
+
+T['column icons']['colours each glyph by what it stands for'] = function()
+  run('select id, name from people order by id')
+
+  local groups = vim.tbl_map(function(span)
+    return span.group
+  end, marks_on(1))
+  -- One group per glyph, and the column names in the header's own group beside them.
+  eq(vim.tbl_contains(groups, 'SqmeowHeader'), true)
+  eq(vim.tbl_contains(groups, 'SqmeowIconKeyPrimary'), true)
+  eq(vim.tbl_contains(groups, 'SqmeowIconTypeText'), true)
+end
+
+T['column icons']['covers the glyph and nothing beside it'] = function()
+  run('select id from people order by id')
+
+  local glyph
+  for _, span in ipairs(marks_on(1)) do
+    if span.group == 'SqmeowIconKeyPrimary' then
+      glyph = span
+    end
+  end
+
+  assert(glyph, 'the primary key glyph should be marked')
+  eq(header()[1]:sub(glyph.from + 1, glyph.to), 'K')
+end
+
+T['column icons']['colours a null apart from a value'] = function()
+  run('select name from people order by id')
+
+  local groups = {}
+  for line = 3, 5 do
+    for _, span in ipairs(marks_on(line)) do
+      groups[span.group] = true
+    end
+  end
+  -- The third row's name is NULL, and reads as a null rather than as the text the others are.
+  eq(groups['SqmeowNull'], true)
+  eq(groups['SqmeowText'], true)
+end
+
+T['column icons']['draws every line of its own in one group'] = function()
+  run('select id, name from people order by id')
+
+  local function groups(line)
+    return vim.tbl_map(function(span)
+      return span.group
+    end, marks_on(line))
+  end
+
+  -- The rule under the names and the separators between the columns are lines the grid draws
+  -- itself rather than anything the result said. One group for all of them, so a colourscheme
+  -- cannot end up painting the horizontal one differently from the vertical ones.
+  eq(groups(2), { 'SqmeowRule' })
+  eq(vim.tbl_contains(groups(1), 'SqmeowRule'), true)
+  eq(vim.tbl_contains(groups(3), 'SqmeowRule'), true)
+end
+
+T['column icons']['colours the separator glyph and not the gap around it'] = function()
+  run('select id, name from people order by id')
+
+  local separator
+  for _, span in ipairs(marks_on(3)) do
+    if span.group == 'SqmeowRule' then
+      separator = span
+    end
+  end
+
+  assert(separator, 'the separator should be marked')
+  local line = vim.api.nvim_buf_get_lines(result.buffer(), 2, 3, false)[1]
+  -- A colourscheme that gives the group a background should paint the glyph, not the space beside
+  -- it, so the mark covers exactly the one character.
+  eq(line:sub(separator.from + 1, separator.to), '│')
+end
+
+T['column icons']['can be turned off'] = function()
+  setup({ ui = { result = { column_icons = false } } })
+  run('select id, name from people order by id')
+  eq(header()[1], ' id │ name')
+  -- The values are still coloured: the glyphs are what was turned off, not the highlighting.
+  local groups = vim.tbl_map(function(span)
+    return span.group
+  end, marks_on(3))
+  eq(vim.tbl_contains(groups, 'SqmeowNumber'), true)
 end
 
 T['statement under the cursor'] = MiniTest.new_set({

@@ -4,7 +4,9 @@
 //! past what an `i64` holds. Those decode to an exact decimal rather than being silently wrapped
 //! into a negative number.
 
+use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
@@ -13,8 +15,8 @@ use sqlx::{
     TypeInfo, ValueRef, types,
 };
 use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode,
+    Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
+    RelationNode, Result, ResultSet, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -24,6 +26,13 @@ use crate::stream::drain;
 #[derive(Debug)]
 pub struct MySqlAdapter {
     pool: MySqlPool,
+    /// Which columns of a table are keys, by table name and then column name.
+    ///
+    /// Whole tables at a time: asking `information_schema` about one column costs the same as
+    /// asking about all of them, and the next query on that table is then free. A table present
+    /// here has been read, even if it turned out to have no keys at all, which is what stops a
+    /// table with none from being looked up again on every execution.
+    keys: Mutex<HashMap<String, HashMap<String, KeyKind>>>,
 }
 
 impl MySqlAdapter {
@@ -42,26 +51,163 @@ impl MySqlAdapter {
             .await
             .map_err(Error::driver)?;
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            keys: Mutex::default(),
+        })
     }
 
     async fn columns(&self, statement: &str) -> Vec<Column> {
         let sql = AssertSqlSafe(statement.to_owned()).into_sql_str();
 
-        match self.pool.prepare(sql).await {
-            Ok(prepared) => prepared
-                .columns()
-                .iter()
-                .map(|column| Column {
-                    name: column.name().to_owned(),
-                    type_name: column.type_info().name().to_owned(),
-                })
-                .collect(),
+        let prepared = match self.pool.prepare(sql).await {
+            Ok(prepared) => prepared,
             Err(error) => {
                 tracing::debug!(%error, "could not prepare a statement to read its columns");
-                Vec::new()
+                return Vec::new();
+            }
+        };
+
+        let mut columns: Vec<Column> = prepared
+            .columns()
+            .iter()
+            .map(|column| Column::new(column.name(), column.type_info().name()))
+            .collect();
+
+        // MySQL reports the table and column a result column really came from in the column
+        // definition it sends with every result, so this costs nothing to read.
+        let sources: Vec<Option<(String, String)>> = prepared
+            .columns()
+            .iter()
+            .map(|column| {
+                let origin = column.origin();
+                let origin = origin.table_column()?;
+                Some((origin.table.to_string(), origin.name.to_string()))
+            })
+            .collect();
+
+        self.mark_keys(&sources, &mut columns).await;
+        columns
+    }
+
+    /// Mark the result columns that are keys in the table they came from.
+    ///
+    /// MySQL reports the table and column a result column really came from in the definitions it
+    /// sends with every result, so the source costs nothing to read. A column that is an expression
+    /// has none and is left unmarked: `count(*)` is nobody's primary key.
+    async fn mark_keys(&self, sources: &[Option<(String, String)>], columns: &mut [Column]) {
+        let missing: Vec<String> = {
+            let Ok(known) = self.keys.lock() else {
+                return;
+            };
+            let mut missing: Vec<String> = sources
+                .iter()
+                .flatten()
+                .map(|(table, _)| table.clone())
+                .filter(|table| !known.contains_key(table))
+                .collect();
+            missing.sort_unstable();
+            missing.dedup();
+            missing
+        };
+
+        for table in missing {
+            let found = self.read_keys(&table).await;
+            if let Ok(mut known) = self.keys.lock() {
+                // A table that answered with nothing is still recorded as read, so one without any
+                // keys is not asked about again on every execution.
+                known.insert(table, found);
             }
         }
+
+        let Ok(known) = self.keys.lock() else {
+            return;
+        };
+        for (column, source) in columns.iter_mut().zip(sources) {
+            if let Some(kind) = source
+                .as_ref()
+                .and_then(|(table, name)| known.get(table)?.get(name))
+            {
+                column.key = *kind;
+            }
+        }
+    }
+
+    /// Ask `information_schema` which columns of one table are keys.
+    ///
+    /// A failure answers with nothing rather than an error: an icon is worth one query, and it is
+    /// not worth failing the result the user actually asked for.
+    async fn read_keys(&self, origin: &str) -> HashMap<String, KeyKind> {
+        // MySQL qualifies the table with its schema when it knows one, so a cross-database join is
+        // resolved against the right database rather than against a same-named table here.
+        let (schema, table) = match origin.rsplit_once('.') {
+            Some((schema, table)) => (Some(schema), table),
+            None => (None, origin),
+        };
+
+        let rows = sqlx::query(
+            "select c.column_name as column_name,
+                    c.column_key = 'PRI' as primary_key,
+                    exists (
+                        select 1 from information_schema.key_column_usage k
+                        where k.table_schema = c.table_schema
+                          and k.table_name = c.table_name
+                          and k.column_name = c.column_name
+                          and k.referenced_table_name is not null
+                    ) as foreign_key
+             from information_schema.columns c
+             -- An unqualified table is one in the connection's own database, which is the server's
+             -- to name rather than something this side has to go and ask for.
+             where c.table_schema = coalesce(?, database()) and c.table_name = ?",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await;
+
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::debug!(%error, origin, "could not read which result columns are keys");
+                return HashMap::new();
+            }
+        };
+
+        rows.iter()
+            .filter_map(|row| {
+                let column = row.try_get::<String, _>("column_name").ok()?;
+                Some((column, key_kind(row)))
+            })
+            .collect()
+    }
+}
+
+/// What a drawer column's foreign key points at, if it has one.
+fn foreign_key(row: &MySqlRow) -> Option<ForeignKey> {
+    Some(ForeignKey {
+        table: row
+            .try_get::<Option<String>, _>("references_table")
+            .ok()??,
+        column: row
+            .try_get::<Option<String>, _>("references_column")
+            .ok()??,
+    })
+}
+
+/// Which key an `information_schema` row says a column is.
+///
+/// The primary key wins over a foreign one, matching every other adapter: a column that is both is
+/// more usefully described as the one rows are identified by.
+fn key_kind(row: &MySqlRow) -> KeyKind {
+    // Both come back as integers: MySQL has no boolean, and a comparison yields 1 or 0.
+    let flag = |name| row.try_get::<i64, _>(name).unwrap_or(0) != 0;
+
+    if flag("primary_key") {
+        KeyKind::Primary
+    } else if flag("foreign_key") {
+        KeyKind::Foreign
+    } else {
+        KeyKind::None
     }
 }
 
@@ -181,13 +327,30 @@ impl Adapter for MySqlAdapter {
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         // `column_type` keeps the declared width and signedness, which `data_type` drops.
         let rows = sqlx::query(
-            "select column_name as name,
-                    column_type as type_name,
-                    is_nullable as nullable,
-                    column_key as key_kind
-             from information_schema.columns
-             where table_schema = ? and table_name = ?
-             order by ordinal_position",
+            "select c.column_name as name,
+                    c.column_type as type_name,
+                    c.is_nullable as nullable,
+                    c.column_key as key_kind,
+                    k.referenced_table_name as references_table,
+                    k.referenced_column_name as references_column
+             from information_schema.columns c
+             -- One row per column even where a column takes part in several constraints: the
+             -- drawer shows one target, and the lowest ordinal is the first one declared.
+             left join information_schema.key_column_usage k
+                    on k.table_schema = c.table_schema
+                   and k.table_name = c.table_name
+                   and k.column_name = c.column_name
+                   and k.referenced_table_name is not null
+                   and k.ordinal_position = (
+                       select min(k2.ordinal_position)
+                       from information_schema.key_column_usage k2
+                       where k2.table_schema = c.table_schema
+                         and k2.table_name = c.table_name
+                         and k2.column_name = c.column_name
+                         and k2.referenced_table_name is not null
+                   )
+             where c.table_schema = ? and c.table_name = ?
+             order by c.ordinal_position",
         )
         .bind(schema)
         .bind(relation)
@@ -203,6 +366,7 @@ impl Adapter for MySqlAdapter {
                     type_name: row.try_get::<String, _>("type_name").ok()?,
                     nullable: row.try_get::<String, _>("nullable").ok()? == "YES",
                     primary_key: row.try_get::<String, _>("key_kind").ok()? == "PRI",
+                    foreign_key: foreign_key(row),
                 })
             })
             .collect())

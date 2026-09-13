@@ -16,8 +16,15 @@ local M = {}
 ---@class sqmeow.Keymap
 ---@field action string The name the configuration overrides it by.
 ---@field lhs string|string[] One key, or several that do the same thing.
----@field mode string|string[] Defaults to normal mode.
+---@field mode string|string[]|nil Defaults to normal mode.
 ---@field desc string Shown by which-key, by `:map`, and in the cheatsheet.
+
+--- A mapping as it is applied, after the user's overrides.
+---@class sqmeow.ResolvedKeymap
+---@field action string
+---@field lhs string[] Empty for an action the user turned off.
+---@field mode string|string[]
+---@field desc string
 
 --- Built-in mappings, per surface.
 ---
@@ -131,7 +138,7 @@ end
 --- rather than by position.
 ---
 ---@param surface string 'drawer' or 'result'.
----@return sqmeow.Keymap[] # In presentation order. An action the user disabled has no keys.
+---@return sqmeow.ResolvedKeymap[] # In presentation order. An action the user disabled has no keys.
 function M.resolve(surface)
   local overrides = (require('sqmeow.config').get().keymaps or {})[surface] or {}
 

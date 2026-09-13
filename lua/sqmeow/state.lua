@@ -14,18 +14,35 @@ local M = {}
 ---@field error string|nil
 
 ---@class sqmeow.CallSummary
----@field call_id integer
----@field conn_id integer
+---@field call_id integer|nil Absent for an entry from the log that has no rows to read.
+---@field conn_id integer|nil Absent when the database it ran on is not open.
 ---@field state 'executing'|'done'|'error'|'cancelled'
----@field rows integer|nil
----@field columns integer|nil
+---@field rows integer|nil How many rows the engine is holding.
+---@field columns sqmeow.ResultColumn[]|nil One per column, in order.
 ---@field affected integer|nil
 ---@field truncated boolean|nil
----@field page integer|nil
----@field pages integer|nil
----@field offset integer|nil
 ---@field elapsed_ms integer|nil
 ---@field error string|nil
+---@field source_buf integer|nil The buffer the SQL came from, where an error is reported.
+---@field statement string|nil The SQL as submitted. The plugin's own record; the engine never sends it.
+---@field history boolean|nil False for a call that stays out of the query log.
+---@field archive string|nil Where the engine was asked to save the rows for the log.
+---@field connection string|nil For a result shown from the log, the database it ran on.
+---@field dialect string|nil For a result shown from the log, what that database speaks.
+---@field ran_at integer|nil For a result shown from the log, when it ran, in seconds since the epoch.
+
+--- One column of a result, as the engine describes it.
+---
+--- `widest` is measured over every row rather than over the page on screen, which is what lets the
+--- grid pin a column's width and not have it shift as the user pages.
+---@class sqmeow.ResultColumn
+---@field name string
+---@field type_name string
+---@field class string One of the type classes the icons are keyed by.
+---@field key string|nil `primary_key` or `foreign_key`, absent when the column is neither.
+---@field widest integer Display columns taken by the widest value, `NULL`s excluded.
+---@field nulls boolean Whether any value in the column is `NULL`.
+---@field numeric boolean Whether every value is a number, which decides alignment.
 
 ---@type table<integer, sqmeow.Connection>
 M.connections = {}

@@ -4,18 +4,20 @@
 //! type. Decoding therefore switches on the type name the server reported, and a type nothing here
 //! recognises becomes an `Unsupported` cell naming it, rather than failing the whole query.
 
+use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use sqlx::postgres::types::Oid;
-use sqlx::postgres::{PgConnectOptions, PgHasArrayType, PgPool, PgPoolOptions, PgRow};
+use sqlx::postgres::{PgColumn, PgConnectOptions, PgHasArrayType, PgPool, PgPoolOptions, PgRow};
 use sqlx::{
     AssertSqlSafe, Column as _, Decode, Executor, Postgres, Row, SqlSafeStr, Statement as _, Type,
     TypeInfo, ValueRef, types,
 };
 use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode,
+    Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
+    RelationNode, Result, ResultSet, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -25,6 +27,14 @@ use crate::stream::drain;
 #[derive(Debug)]
 pub struct PostgresAdapter {
     pool: PgPool,
+    /// Which of a table's columns are keys, by table OID and attribute number.
+    ///
+    /// Looked up once per column and then held for the life of the connection. A result's columns
+    /// are almost always the same columns as the last result's, so the cache means running a query
+    /// twice costs one catalog lookup rather than two. It is never invalidated: a schema changed
+    /// under a live connection leaves an icon one query out of date, which is a smaller price than
+    /// a catalog round trip before every execution.
+    keys: Mutex<HashMap<(Oid, i16), KeyKind>>,
 }
 
 impl PostgresAdapter {
@@ -44,26 +54,152 @@ impl PostgresAdapter {
             .await
             .map_err(Error::driver)?;
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            keys: Mutex::default(),
+        })
     }
 
     async fn columns(&self, statement: &str) -> Vec<Column> {
         let sql = AssertSqlSafe(statement.to_owned()).into_sql_str();
 
-        match self.pool.prepare(sql).await {
-            Ok(prepared) => prepared
-                .columns()
-                .iter()
-                .map(|column| Column {
-                    name: column.name().to_owned(),
-                    type_name: column.type_info().name().to_owned(),
-                })
-                .collect(),
+        let prepared = match self.pool.prepare(sql).await {
+            Ok(prepared) => prepared,
             Err(error) => {
                 tracing::debug!(%error, "could not prepare a statement to read its columns");
-                Vec::new()
+                return Vec::new();
+            }
+        };
+
+        let mut columns: Vec<Column> = prepared
+            .columns()
+            .iter()
+            .map(|column| Column::new(column.name(), column.type_info().name()))
+            .collect();
+
+        self.mark_keys(prepared.columns(), &mut columns).await;
+        columns
+    }
+
+    /// Mark the result columns that are keys in the table they came from.
+    ///
+    /// Postgres names a column's source in the row description, as a table OID and an attribute
+    /// number, and those are what the keys are looked up by. Not the table's *name*: a name is
+    /// resolved through `search_path` and means different tables in different schemas, while the
+    /// pair is exact and costs nothing to obtain. A column that is an expression has neither, and
+    /// is left unmarked — `count(*)` is nobody's primary key.
+    async fn mark_keys(&self, prepared: &[PgColumn], columns: &mut [Column]) {
+        let sources: Vec<Option<(Oid, i16)>> = prepared
+            .iter()
+            .map(|column| column.relation_id().zip(column.relation_attribute_no()))
+            .collect();
+
+        let missing: Vec<(Oid, i16)> = {
+            let Ok(known) = self.keys.lock() else {
+                return;
+            };
+            let mut missing: Vec<(Oid, i16)> = sources
+                .iter()
+                .flatten()
+                .filter(|source| !known.contains_key(source))
+                .copied()
+                .collect();
+            // Sorted by the OID's own integer, because `Oid` is a newtype that does not order.
+            missing.sort_unstable_by_key(|(relation, attribute)| (relation.0, *attribute));
+            missing.dedup();
+            missing
+        };
+
+        if !missing.is_empty() {
+            let found = self.read_keys(&missing).await;
+            if let Ok(mut known) = self.keys.lock() {
+                // Every pair that was asked about is recorded, including the ones the catalog had
+                // nothing to say about. Otherwise a column that is not a key would be looked up
+                // again on every execution of the query it appears in.
+                for source in missing {
+                    let kind = found.get(&source).copied().unwrap_or_default();
+                    known.insert(source, kind);
+                }
             }
         }
+
+        let Ok(known) = self.keys.lock() else {
+            return;
+        };
+        for (column, source) in columns.iter_mut().zip(sources) {
+            if let Some(kind) = source.and_then(|source| known.get(&source)) {
+                column.key = *kind;
+            }
+        }
+    }
+
+    /// Ask the catalog which of these columns are keys.
+    ///
+    /// A failure answers with nothing rather than an error: an icon is worth one query, and it is
+    /// not worth failing the result the user actually asked for.
+    async fn read_keys(&self, wanted: &[(Oid, i16)]) -> HashMap<(Oid, i16), KeyKind> {
+        let relations: Vec<Oid> = wanted.iter().map(|(relation, _)| *relation).collect();
+        let attributes: Vec<i16> = wanted.iter().map(|(_, attribute)| *attribute).collect();
+
+        // The primary key wins over a foreign one, which is decided here rather than by the caller
+        // so every dialect answers the same question the same way. `conkey` is an array because a
+        // constraint can span columns, and a column is a key if it takes part in one at all.
+        let rows = sqlx::query(
+            "select want.relation, want.attribute,
+                    bool_or(c.contype = 'p') as primary_key,
+                    bool_or(c.contype = 'f') as foreign_key
+             from unnest($1::oid[], $2::int2[]) as want(relation, attribute)
+             left join pg_catalog.pg_constraint c
+                    on c.conrelid = want.relation
+                   and want.attribute = any(c.conkey)
+                   and c.contype in ('p', 'f')
+             group by want.relation, want.attribute",
+        )
+        .bind(&relations)
+        .bind(&attributes)
+        .fetch_all(&self.pool)
+        .await;
+
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::debug!(%error, "could not read which result columns are keys");
+                return HashMap::new();
+            }
+        };
+
+        rows.iter()
+            .filter_map(|row| {
+                let relation = row.try_get::<Oid, _>("relation").ok()?;
+                let attribute = row.try_get::<i16, _>("attribute").ok()?;
+                Some(((relation, attribute), key_kind(row)))
+            })
+            .collect()
+    }
+}
+
+/// What a drawer column's foreign key points at, if it has one.
+fn foreign_key(row: &PgRow) -> Option<ForeignKey> {
+    Some(ForeignKey {
+        table: row
+            .try_get::<Option<String>, _>("references_table")
+            .ok()??,
+        column: row
+            .try_get::<Option<String>, _>("references_column")
+            .ok()??,
+    })
+}
+
+/// Which key a catalog row says a column is.
+fn key_kind(row: &PgRow) -> KeyKind {
+    let flag = |name| row.try_get::<Option<bool>, _>(name).ok().flatten() == Some(true);
+
+    if flag("primary_key") {
+        KeyKind::Primary
+    } else if flag("foreign_key") {
+        KeyKind::Foreign
+    } else {
+        KeyKind::None
     }
 }
 
@@ -198,12 +334,27 @@ impl Adapter for PostgresAdapter {
             "select a.attname as name,
                     format_type(a.atttypid, a.atttypmod) as type_name,
                     not a.attnotnull as nullable,
-                    coalesce(i.indisprimary, false) as primary_key
+                    coalesce(i.indisprimary, false) as primary_key,
+                    f.table_name as references_table,
+                    f.column_name as references_column
              from pg_attribute a
              join pg_class c on c.oid = a.attrelid
              join pg_namespace n on n.oid = c.relnamespace
              left join pg_index i
                on i.indrelid = c.oid and i.indisprimary and a.attnum = any(i.indkey)
+             -- A foreign key can span columns, so the referenced column is the one sitting at the
+             -- same position in `confkey` as this column sits in `conkey`. Laterally, because that
+             -- position is not known until the row is in hand. The first match wins: a column
+             -- constrained twice is still one line in a tree.
+             left join lateral (
+                 select fc.relname as table_name, fa.attname as column_name
+                 from pg_constraint k
+                 cross join unnest(k.conkey, k.confkey) as pair(local, remote)
+                 join pg_class fc on fc.oid = k.confrelid
+                 join pg_attribute fa on fa.attrelid = k.confrelid and fa.attnum = pair.remote
+                 where k.conrelid = c.oid and k.contype = 'f' and pair.local = a.attnum
+                 limit 1
+             ) f on true
              where n.nspname = $1 and c.relname = $2 and a.attnum > 0 and not a.attisdropped
              order by a.attnum",
         )
@@ -221,6 +372,7 @@ impl Adapter for PostgresAdapter {
                     type_name: row.try_get::<String, _>("type_name").ok()?,
                     nullable: row.try_get::<bool, _>("nullable").unwrap_or(true),
                     primary_key: row.try_get::<bool, _>("primary_key").unwrap_or(false),
+                    foreign_key: foreign_key(row),
                 })
             })
             .collect())

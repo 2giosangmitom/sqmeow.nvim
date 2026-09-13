@@ -4,7 +4,6 @@ members = [
   "core/sqmeow-rpc",
   "core/sqmeow-db",
   "core/sqmeow-adapters",
-  "core/sqmeow-render",
   "core/sqmeow-core",
 ]
 
@@ -21,7 +20,6 @@ repository = "https://github.com/2giosangmitom/sqmeow.nvim"
 sqmeow-rpc = { path = "core/sqmeow-rpc" }
 sqmeow-db = { path = "core/sqmeow-db" }
 sqmeow-adapters = { path = "core/sqmeow-adapters" }
-sqmeow-render = { path = "core/sqmeow-render" }
 
 rmpv = "1.3"
 thiserror = "2"

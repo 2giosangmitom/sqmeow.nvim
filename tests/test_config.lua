@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local config = require('sqmeow.config')
 
@@ -53,15 +54,21 @@ end
 
 T['validation']['leaves freeform options alone'] = function()
   eq(config.validate({ keymaps = { result = { next_page = '<C-n>' } } }), {})
-  eq(config.validate({ connections = { { name = 'dev', url = 'sqlite://:memory:' } } }), {})
+  eq(config.validate({ sources = { { type = 'file', path = '/tmp/connections.json' } } }), {})
+end
+
+T['validation']['refuses connections declared in setup'] = function()
+  eq(config.validate({ connections = { { name = 'dev', url = 'sqlite://:memory:' } } }), {
+    'unknown option `connections`',
+  })
 end
 
 T['validation']['still checks that a freeform option is a table'] = function()
   eq(config.validate({ keymaps = 'none' }), { '`keymaps` must be a table, got string' })
 end
 
-T['validation']['accepts a nullable option with no default'] = function()
-  eq(config.validate({ core = { path = '/usr/bin/sqmeow-core' } }), {})
+T['validation']['takes a directory for core.path'] = function()
+  eq(config.validate({ core = { path = '~/.local/share/sqmeow' } }), {})
   eq(config.validate({ core = { path = 7 } }), { '`core.path` must be a string, got number' })
 end
 

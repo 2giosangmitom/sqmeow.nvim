@@ -4,7 +4,8 @@
 //! truncation marker, which is right for reading and wrong for a file: an export must carry the
 //! value, line breaks and full length included, and let the format's own rules handle it.
 
-use sqmeow_db::{Cell, ResultSet};
+use crate::result::ResultSet;
+use crate::value::Cell;
 
 /// What an export is written as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,15 +149,12 @@ fn quote(field: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use sqmeow_db::Column;
+    use crate::result::Column;
 
     use super::*;
 
     fn column(name: &str) -> Column {
-        Column {
-            name: name.into(),
-            type_name: "TEXT".into(),
-        }
+        Column::new(name, "TEXT")
     }
 
     fn sample() -> ResultSet {

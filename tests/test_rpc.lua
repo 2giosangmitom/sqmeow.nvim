@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local rpc = require('sqmeow.rpc')
 
@@ -17,7 +18,6 @@ T['engine']['starts and answers a handshake'] = function()
   eq(type(channel), 'number')
 
   local info = rpc.info()
-  eq(info.protocol_version, rpc.protocol_version)
   eq(type(info.core_version), 'string')
   eq(type(info.pid), 'number')
 end

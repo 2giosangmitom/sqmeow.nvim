@@ -43,6 +43,19 @@ M.highlights = {
   postgres = 'SqmeowIconPostgres',
   mysql = 'SqmeowIconMysql',
   sqlite = 'SqmeowIconSqlite',
+
+  -- What a column holds, or the key it is. The engine puts these in the grid header itself; the
+  -- drawer draws them from here, so a column reads the same in both places.
+  text = 'SqmeowIconTypeText',
+  number = 'SqmeowIconTypeNumber',
+  boolean = 'SqmeowIconTypeBoolean',
+  temporal = 'SqmeowIconTypeTemporal',
+  json = 'SqmeowIconTypeJson',
+  uuid = 'SqmeowIconTypeUuid',
+  binary = 'SqmeowIconTypeBinary',
+  unknown = 'SqmeowIconTypeUnknown',
+  primary_key = 'SqmeowIconKeyPrimary',
+  foreign_key = 'SqmeowIconKeyForeign',
 }
 
 --- The icon for a kind, and the group it is drawn in.
@@ -52,6 +65,11 @@ M.highlights = {
 ---@return string highlight
 function M.get(kind)
   local icon = configured()[kind]
+  -- The type classes and the two key kinds live in their own table, since `icons` already has a
+  -- `column` of its own for the drawer's column rows.
+  if icon == nil then
+    icon = (configured().types or {})[kind]
+  end
   -- `icons` also holds the marker and grid tables, and a caller asking for one of those
   -- by mistake should get a space rather than a table where a line is being built.
   if type(icon) ~= 'string' then
@@ -64,6 +82,24 @@ end
 ---@return { open: string, closed: string, leaf: string }
 function M.markers()
   return configured().markers
+end
+
+--- Which icon a drawer column is drawn with.
+---
+--- A key wins over a type, the same way round as in the grid header: that a column is what rows
+--- are found by is more useful than what it is stored as. A column the engine could not classify
+--- falls back to `unknown`, whose glyph says only that.
+---
+---@param node table A drawer column node, carrying `class` and possibly `references`.
+---@return string kind A key of `M.highlights`.
+function M.column_kind(node)
+  if node.primary_key then
+    return 'primary_key'
+  end
+  if node.references then
+    return 'foreign_key'
+  end
+  return node.class or 'unknown'
 end
 
 --- Which icon a connection shows.

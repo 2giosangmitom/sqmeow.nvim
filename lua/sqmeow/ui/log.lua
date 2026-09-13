@@ -1,8 +1,8 @@
---- What has been run, and how it went.
+--- What has been run, and what came back.
 ---
---- The log outlives the session. Every finished call is written to |sqmeow.history|, so a query
---- from last week is still here, and one from this session can be put back on screen without
---- running anything again.
+--- The log outlives the session. Every query the user submits is written to |sqmeow.history| with
+--- the rows it returned, so choosing one shows its result again, from last week as readily as from
+--- a minute ago, without running anything.
 
 local M = {}
 
@@ -70,20 +70,49 @@ function M.entries(opts)
   return require('sqmeow.history').entries(opts)
 end
 
---- Act on one entry.
+--- Show what one entry returned.
 ---
---- Its rows if the engine still has them, and the statement itself otherwise. Nothing is run: a
---- log holds deletes as readily as selects, and picking a line out of a list is not the same as
---- asking for it to happen again.
+--- From the engine's memory when it still holds the result, and from the copy saved with the log
+--- otherwise. Nothing is run either way: a log holds deletes as readily as selects, and picking a
+--- line out of a list is not the same as asking for it to happen again.
 ---
 ---@param entry table
 function M.reopen(entry)
-  if require('sqmeow.history').reopenable(entry) then
-    return require('sqmeow.api').reopen(entry.call_id)
+  local history = require('sqmeow.history')
+  local api = require('sqmeow.api')
+
+  if history.reopenable(entry) then
+    return api.reopen(entry.call_id)
+  end
+  if history.saved(entry) then
+    return api.restore(entry)
   end
 
-  require('sqmeow.ui.editor').open_statement(entry.statement, entry.connection)
-  vim.notify('sqmeow: the rows are long gone, so here is the query')
+  if entry.state == 'done' and (entry.rows or 0) > 0 then
+    return vim.notify('sqmeow: the rows this query returned were not kept', vim.log.levels.WARN)
+  end
+
+  -- A failure, a cancellation, or a statement that changed rows rather than returning any: what
+  -- the log recorded is the whole of what there is to show.
+  local state = require('sqmeow.state')
+  local result = require('sqmeow.ui.result')
+  local connection = entry.connection and state.connection_by_name(entry.connection)
+
+  result.open()
+  state.call = {
+    conn_id = connection and connection.id or nil,
+    state = entry.state,
+    error = entry.error,
+    rows = entry.rows,
+    affected = entry.affected,
+    elapsed_ms = entry.elapsed_ms,
+    statement = entry.statement,
+    history = false,
+    connection = entry.connection,
+    dialect = entry.dialect,
+    ran_at = entry.at,
+  }
+  result.render(state.call)
 end
 
 --- Show the log in the drawer.

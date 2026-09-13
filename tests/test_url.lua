@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local url = require('sqmeow.url')
 local config = require('sqmeow.config')
