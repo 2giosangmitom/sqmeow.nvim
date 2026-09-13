@@ -421,17 +421,15 @@ drawer
  q         Close the drawer
 
 result
- L    Next page
- H    Previous page
- gg   First page
- G    Last page
- K    Show this row down the page
- yc   Yank this cell
- yr   Yank this row as CSV
- yp   Yank this page as CSV
- x    Write the result to a file
- ?    Show these mappings
- q    Close the result window
+ L       Next page
+ H       Previous page
+ gg      First page
+ G       Last page
+ K       Show this row down the page
+ x       Export the result to a file
+ x (x)   Export the selected rows
+ ?       Show these mappings
+ q       Close the result window
 
 editor
  <CR>        Run the statement under the cursor
@@ -697,17 +695,6 @@ Return ~
 `(boolean)` stopped Whether there was a query to stop.
 
 ------------------------------------------------------------------------------
-                                                                   *turn_page()*
-                               `turn_page`({to})
-Move the result window to another page.
-
-Nothing is asked of the engine beyond the rows themselves: how many fit on a page and where the
-view has got to are this side's to know, so the arithmetic is here.
-
-Parameters ~
-{to} `(fun(offset: integer, size: integer, rows: integer): integer)`
-
-------------------------------------------------------------------------------
                                                         *sqmeow.api.next_page()*
                             `sqmeow.api.next_page`()
 Show the next page of the current result.
@@ -767,8 +754,12 @@ Return ~
                           `sqmeow.api.export`({opts})
 Write the current result to a file.
 
+Without a `path`, asks for the format, file and whether to write a header in a dialog that
+shows the query being exported.
+
 Parameters ~
-{opts} `(table|nil)` `path` skips the prompt; `format` is 'csv' or 'json'.
+{opts} `(table|nil)` `path` skips the dialog; `format` is 'csv' or 'json'; `headers` defaults to
+true; `offset` and `limit` write that many rows from that one, zero-based, rather than all rows.
 
 ------------------------------------------------------------------------------
                                                        *sqmeow.api.scratchpad()*

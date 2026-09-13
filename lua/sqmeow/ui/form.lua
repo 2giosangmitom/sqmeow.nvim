@@ -1,12 +1,12 @@
 --- A dialog that asks for several values at once.
 ---
---- The plugin's answer to typing a connection string by hand. A form names every value it wants,
---- shows what is already there, keeps a password out of sight, and refuses to save something that
---- cannot work, none of which a single prompt asking for a URL can do.
+--- What the connection dialog and the export dialog are built from. A form names every value it
+--- wants, shows what is already there, keeps a password out of sight, and refuses to save
+--- something that cannot work, none of which a single prompt can do.
 ---
 --- Built on nui.nvim, which supplies the floating window and the single-line editor. The
 --- dependency is loaded here and nowhere else, so a user without it gets one clear message from
---- the one feature that needs it rather than an error at startup.
+--- whichever dialog they opened rather than an error at startup.
 
 local M = {}
 
@@ -19,6 +19,8 @@ local M = {}
 ---@field validate nil|fun(values: table<string, string>): string|nil What is wrong, if anything.
 ---@field on_submit fun(values: table<string, string>)
 ---@field on_cancel nil|fun()
+---@field on_change nil|fun(values: table<string, string>, key: string) May adjust other values.
+---@field preview nil|{ title: string, lines: string[], filetype: string|nil } Read-only pane below.
 
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow-form')
 
@@ -30,13 +32,14 @@ local function nui()
   local modules = {}
   for name, path in pairs({
     Popup = 'nui.popup',
+    Layout = 'nui.layout',
     Input = 'nui.input',
     Line = 'nui.line',
     Text = 'nui.text',
   }) do
     local ok, module = pcall(require, path)
     if not ok then
-      return nil, 'sqmeow: the connection dialog needs nui.nvim (MunifTanjim/nui.nvim)'
+      return nil, 'sqmeow: this dialog needs nui.nvim (MunifTanjim/nui.nvim)'
     end
     modules[name] = module
   end
@@ -62,6 +65,9 @@ end
 ---@return string text
 ---@return string highlight
 local function shown(field, value)
+  if field.checkbox then
+    return value == 'yes' and '[x]' or '[ ]', 'SqmeowFormValue'
+  end
   if value == '' then
     return field.hint or '', 'SqmeowNull'
   end
@@ -101,26 +107,59 @@ function M.open(spec)
   local column = gutter + label_width + 2
 
   local width = math.max(56, column + 34)
-  local border = require('sqmeow.config').border()
 
-  local popup = parts.Popup({
-    enter = true,
-    focusable = true,
-    position = '40%',
-    size = { width = width, height = #fields },
-    zindex = 100,
-    border = {
-      style = border,
+  --- One of the dialog's windows, with the border and stacking every one of them shares.
+  local function window(options, top, bottom)
+    options.zindex = 100
+    options.border = {
+      style = require('sqmeow.config').border(),
       text = {
-        top = (' %s '):format(spec.title),
+        top = (' %s '):format(top),
         top_align = 'center',
-        bottom = ' <CR> edit   <C-s> save   q cancel ',
+        bottom = bottom,
         bottom_align = 'center',
       },
+    }
+    return parts.Popup(options)
+  end
+
+  local popup = window(
+    {
+      enter = true,
+      focusable = true,
+      position = '40%',
+      size = { width = width, height = #fields },
+      buf_options = { filetype = 'sqmeow-form', modifiable = false },
+      win_options = { cursorline = true, wrap = false },
     },
-    buf_options = { filetype = 'sqmeow-form', modifiable = false },
-    win_options = { cursorline = true, wrap = false },
-  })
+    spec.title,
+    spec.preview and ' <CR> edit   <C-d>/<C-u> scroll   <C-s> save   q cancel '
+      or ' <CR> edit   <C-s> save   q cancel '
+  )
+
+  -- With a preview the dialog grows into a column: the fields on top, the preview filling the rest.
+  local layout, preview
+  if spec.preview then
+    preview = window({
+      focusable = false,
+      buf_options = { filetype = spec.preview.filetype },
+      win_options = { wrap = false },
+    }, spec.preview.title)
+    layout = parts.Layout(
+      {
+        relative = 'editor',
+        position = '50%',
+        size = {
+          width = math.max(math.floor(vim.o.columns * 0.6), width),
+          height = math.max(math.floor(vim.o.lines * 0.6), #fields + 10),
+        },
+      },
+      parts.Layout.Box({
+        parts.Layout.Box(popup, { size = #fields + 2 }),
+        parts.Layout.Box(preview, { grow = 1 }),
+      }, { dir = 'col' })
+    )
+  end
 
   local function render()
     local blank = {}
@@ -135,11 +174,15 @@ function M.open(spec)
     for index, field in ipairs(fields) do
       local line = parts.Line()
       line:append((' '):rep(gutter))
+      -- A field that does not apply to the other answers stays where it is, dimmed, so the rows do
+      -- not move under the cursor as those answers change.
+      local disabled = field.enabled ~= nil and not field.enabled(values)
+      local text, group = shown(field, values[field.key])
       line:append(
         field.label .. (' '):rep(column - gutter - vim.fn.strdisplaywidth(field.label)),
-        'SqmeowFormLabel'
+        disabled and 'SqmeowNull' or 'SqmeowFormLabel'
       )
-      line:append(shown(field, values[field.key]))
+      line:append(text, disabled and 'SqmeowNull' or group)
       line:render(popup.bufnr, NAMESPACE, index)
     end
 
@@ -170,6 +213,22 @@ function M.open(spec)
     vim.fn.matchadd('Conceal', '.', 10, -1, { window = winid, conceal = '*' })
   end
 
+  local function change(key, value)
+    values[key] = value
+    if spec.on_change then
+      spec.on_change(values, key)
+    end
+    render()
+  end
+
+  --- The first field from `index` on that is typed into rather than chosen, for wizard mode.
+  local function typed(index)
+    while fields[index] and (fields[index].options or fields[index].checkbox) do
+      index = index + 1
+    end
+    return index
+  end
+
   local edit
   edit = function(index)
     local field = fields[index]
@@ -177,23 +236,36 @@ function M.open(spec)
       return
     end
     focus(index)
+    if field.enabled and not field.enabled(values) then
+      return
+    end
+
+    local options = field.options or (field.checkbox and { 'yes', 'no' })
+    if options then
+      local at = 0
+      for position, option in ipairs(options) do
+        if option == values[field.key] then
+          at = position
+        end
+      end
+      return change(field.key, options[at % #options + 1])
+    end
 
     local input = parts.Input({
       relative = { type = 'win', winid = popup.winid },
       position = { row = index - 1, col = column },
-      size = { width = width - column },
+      size = { width = vim.api.nvim_win_get_width(popup.winid) - column },
       zindex = 110,
       border = { style = 'none' },
       win_options = { winhighlight = 'Normal:SqmeowFormEdit' },
     }, {
       default_value = values[field.key],
       on_submit = function(value)
-        values[field.key] = value
-        render()
+        change(field.key, value)
         -- In wizard mode one answer leads to the next, which is what makes a new connection a
         -- single run of typing rather than a row of separate decisions.
-        if spec.wizard and index < #fields then
-          return edit(index + 1)
+        if spec.wizard and fields[typed(index + 1)] then
+          return edit(typed(index + 1))
         end
         focus(math.min(index + 1, #fields))
       end,
@@ -209,7 +281,7 @@ function M.open(spec)
   end
 
   local function close()
-    popup:unmount()
+    (layout or popup):unmount()
   end
 
   local function submit()
@@ -223,7 +295,13 @@ function M.open(spec)
     spec.on_submit(values)
   end
 
-  popup:mount()
+  if layout then
+    layout:mount()
+    vim.api.nvim_buf_set_lines(preview.bufnr, 0, -1, false, spec.preview.lines)
+    vim.bo[preview.bufnr].modifiable = false
+  else
+    popup:mount()
+  end
   render()
 
   local map = function(keys, run)
@@ -241,6 +319,16 @@ function M.open(spec)
   map({ '<S-Tab>' }, function()
     focus((current() - 2) % #fields + 1)
   end)
+  if preview then
+    -- The preview takes no focus, so a query too long for it is scrolled from the fields.
+    for _, key in ipairs({ '<C-d>', '<C-u>' }) do
+      map({ key }, function()
+        vim.api.nvim_win_call(preview.winid, function()
+          vim.cmd.normal({ vim.keycode(key), bang = true })
+        end)
+      end)
+    end
+  end
   map({ '<C-s>' }, submit)
   map({ 'q', '<Esc>' }, function()
     close()
@@ -250,7 +338,7 @@ function M.open(spec)
   end)
 
   if spec.wizard then
-    edit(1)
+    edit(typed(1))
   end
 
   return true
@@ -272,7 +360,7 @@ function M.menu(opts)
 
   local ok, Menu = pcall(require, 'nui.menu')
   if not ok then
-    return false, 'sqmeow: the connection dialog needs nui.nvim (MunifTanjim/nui.nvim)'
+    return false, 'sqmeow: this dialog needs nui.nvim (MunifTanjim/nui.nvim)'
   end
 
   local width = 0

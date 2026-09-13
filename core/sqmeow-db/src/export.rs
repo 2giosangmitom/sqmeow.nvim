@@ -41,19 +41,11 @@ pub struct Rows {
 }
 
 impl Rows {
-    /// Every row.
-    pub fn all(result: &ResultSet) -> Self {
+    /// Every row: `end` is clamped to the result when it is written.
+    pub fn all() -> Self {
         Self {
             start: 0,
-            end: result.row_count(),
-        }
-    }
-
-    /// One row.
-    pub fn one(index: usize) -> Self {
-        Self {
-            start: index,
-            end: index.saturating_add(1),
+            end: usize::MAX,
         }
     }
 
@@ -63,41 +55,41 @@ impl Rows {
     }
 }
 
-/// Write a result in the given format.
-pub fn write(result: &ResultSet, format: Format, rows: Rows) -> String {
+/// Write a result in the given format. `headers` only affects CSV: JSON keys every value by name.
+pub fn write(result: &ResultSet, format: Format, rows: Rows, headers: bool) -> String {
     match format {
-        Format::Csv => csv(result, rows),
+        Format::Csv => csv(result, rows, headers),
         Format::Json => json(result, rows),
     }
 }
 
-/// Write a result as CSV, with a header row.
+/// Write a result as CSV, optionally with a header row.
 ///
 /// `NULL` becomes an empty field. CSV cannot tell an empty string from a missing value, and every
-/// tool that reads CSV already assumes that, so inventing a marker would be worse.
-pub fn csv(result: &ResultSet, rows: Rows) -> String {
-    let mut out = String::new();
+/// tool that reads CSV already assumes that, so inventing a marker would be worse. A row that is one
+/// `NULL` alone is written as `""`, as the `csv` crate does, so it is not read back as a blank line.
+pub fn csv(result: &ResultSet, rows: Rows, headers: bool) -> String {
+    let mut writer = csv::Writer::from_writer(Vec::new());
 
-    let header: Vec<String> = result
-        .columns()
-        .iter()
-        .map(|column| quote(&column.name))
-        .collect();
-    out.push_str(&header.join(","));
-    out.push('\n');
-
-    for row in rows.clamped(result) {
-        let fields: Vec<String> = (0..result.columns().len())
-            .map(|column| match result.cell(row, column) {
-                Some(Cell::Null) | None => String::new(),
-                Some(cell) => quote(&cell.text("")),
-            })
-            .collect();
-        out.push_str(&fields.join(","));
-        out.push('\n');
+    if headers {
+        writer
+            .write_record(result.columns().iter().map(|column| column.name.as_str()))
+            .expect("writing to memory cannot fail");
     }
 
-    out
+    for row in rows.clamped(result) {
+        writer
+            .write_record((0..result.columns().len()).map(
+                |column| match result.cell(row, column) {
+                    Some(Cell::Null) | None => String::new(),
+                    Some(cell) => cell.text("").into_owned(),
+                },
+            ))
+            .expect("writing to memory cannot fail");
+    }
+
+    let bytes = writer.into_inner().expect("flushing to memory cannot fail");
+    String::from_utf8(bytes).expect("every field written was a string")
 }
 
 /// Write a result as a JSON array of objects.
@@ -139,14 +131,6 @@ fn value(cell: &Cell) -> serde_json::Value {
     }
 }
 
-/// Quote a CSV field, per RFC 4180.
-fn quote(field: &str) -> String {
-    if !field.contains([',', '"', '\n', '\r']) {
-        return field.to_owned();
-    }
-    format!("\"{}\"", field.replace('"', "\"\""))
-}
-
 #[cfg(test)]
 mod tests {
     use crate::result::Column;
@@ -176,13 +160,13 @@ mod tests {
 
     #[test]
     fn csv_starts_with_a_header() {
-        let text = csv(&sample(), Rows::all(&sample()));
+        let text = csv(&sample(), Rows::all(), true);
         assert_eq!(text.lines().next(), Some("id,name"));
     }
 
     #[test]
     fn csv_writes_null_as_an_empty_field() {
-        let text = csv(&sample(), Rows::all(&sample()));
+        let text = csv(&sample(), Rows::all(), true);
         assert_eq!(text.lines().nth(2), Some("2,"));
     }
 
@@ -194,7 +178,7 @@ mod tests {
         result.push_row(vec![Cell::Text("has\"quote".into())]);
         result.push_row(vec![Cell::Text("has\nbreak".into())]);
 
-        let text = csv(&result, Rows::all(&result));
+        let text = csv(&result, Rows::all(), true);
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[1], "plain");
         assert_eq!(lines[2], "\"has,comma\"");
@@ -207,15 +191,28 @@ mod tests {
     #[test]
     fn csv_writes_only_the_rows_asked_for() {
         let result = sample();
-        let text = csv(&result, Rows::one(1));
+        let text = csv(&result, Rows { start: 1, end: 2 }, true);
         assert_eq!(text.lines().count(), 2);
         assert_eq!(text.lines().nth(1), Some("2,"));
     }
 
     #[test]
+    fn csv_quotes_a_lone_null_so_the_row_is_not_a_blank_line() {
+        let mut result = ResultSet::new("select v", vec![column("v")]);
+        result.push_row(vec![Cell::Null]);
+        assert_eq!(csv(&result, Rows::all(), false), "\"\"\n");
+    }
+
+    #[test]
+    fn csv_can_leave_the_header_out() {
+        let result = sample();
+        assert_eq!(csv(&result, Rows::all(), false), "1,alice\n2,\n");
+    }
+
+    #[test]
     fn a_row_range_past_the_end_is_clamped() {
         let result = sample();
-        let text = csv(&result, Rows { start: 0, end: 99 });
+        let text = csv(&result, Rows { start: 0, end: 99 }, true);
         assert_eq!(text.lines().count(), 3);
 
         let empty = csv(
@@ -224,6 +221,7 @@ mod tests {
                 start: 99,
                 end: 100,
             },
+            true,
         );
         assert_eq!(empty.lines().count(), 1);
     }
@@ -241,8 +239,7 @@ mod tests {
             Cell::Text("x".into()),
         ]);
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&json(&result, Rows::all(&result))).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json(&result, Rows::all())).unwrap();
         assert_eq!(parsed[0]["a"], serde_json::json!(1));
         assert_eq!(parsed[0]["b"], serde_json::json!(true));
         assert_eq!(parsed[0]["c"], serde_json::Value::Null);
@@ -254,8 +251,7 @@ mod tests {
         let mut result = ResultSet::new("select doc", vec![column("doc")]);
         result.push_row(vec![Cell::Json("{\"a\":1}".into())]);
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&json(&result, Rows::all(&result))).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json(&result, Rows::all())).unwrap();
         assert_eq!(parsed[0]["doc"]["a"], serde_json::json!(1));
     }
 
@@ -264,8 +260,7 @@ mod tests {
         let mut result = ResultSet::new("select v", vec![column("v")]);
         result.push_row(vec![Cell::Text("a\nb".into())]);
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&json(&result, Rows::all(&result))).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json(&result, Rows::all())).unwrap();
         assert_eq!(parsed[0]["v"], serde_json::json!("a\nb"));
     }
 
@@ -274,14 +269,13 @@ mod tests {
         let mut result = ResultSet::new("select v", vec![column("v")]);
         result.push_row(vec![Cell::Float(f64::INFINITY)]);
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&json(&result, Rows::all(&result))).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json(&result, Rows::all())).unwrap();
         assert_eq!(parsed[0]["v"], serde_json::json!("Infinity"));
     }
 
     #[test]
     fn an_empty_result_writes_an_empty_json_array() {
         let result = ResultSet::new("select 1", vec![column("v")]);
-        assert_eq!(json(&result, Rows::all(&result)), "[]");
+        assert_eq!(json(&result, Rows::all()), "[]");
     }
 }

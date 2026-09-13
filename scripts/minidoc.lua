@@ -44,7 +44,22 @@ local hooks = vim.deepcopy(doc.default_hooks)
 ---
 --- mini.doc infers both from the line after the annotation, which is written as `function M.foo`,
 --- so without this every tag in the help file would read `M.foo()`.
+---
+--- A comment above a `local` explains the module's own workings rather than anything a user can
+--- reach, so that block is dropped. The exception is a block that names itself with `@tag` or
+--- produces text with `@eval`, which is what the module headers above `local M = {}` and the
+--- default configuration do.
 hooks.block_pre = function(block)
+  local first = block.info.afterlines[1] or ''
+  local explicit = block:has_descendant(function(node)
+    return type(node) == 'table'
+      and node.type == 'section'
+      and (node.info.id == '@tag' or node.info.id == '@eval')
+  end)
+  if first:match('^local ') and not explicit then
+    return block:clear_lines()
+  end
+
   local name = module_of(block)
   if name then
     block.info.afterlines = vim.tbl_map(function(line)

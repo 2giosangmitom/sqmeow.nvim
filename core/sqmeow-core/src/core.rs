@@ -542,12 +542,22 @@ impl Core {
             None => Format::Csv,
         };
 
-        let scope = args.opt_string("scope").unwrap_or_else(|| "all".to_owned());
-        let row = args.opt_usize("row");
-        let limit = args.opt_usize("limit");
-        let column = args.opt_usize("column");
-        let register = args.opt_string("register");
-        let path = args.opt_string("path");
+        // The selected rows, which only the editor knows, so it sends the range rather than the
+        // engine guessing. Without an `offset` the whole result is written.
+        let rows = match args.opt_usize("offset") {
+            Some(start) => Rows {
+                start,
+                end: args
+                    .opt_usize("limit")
+                    .map_or(usize::MAX, |limit| start.saturating_add(limit)),
+            },
+            None => Rows::all(),
+        };
+        let headers = args.opt_bool("headers").unwrap_or(true);
+        let path = match args.string("path") {
+            Ok(path) => path,
+            Err(error) => return reply.err(error),
+        };
 
         if self.session.with_call(call_id, |_| ()).is_none() {
             return reply.err(format!("result {call_id} is no longer held"));
@@ -555,104 +565,40 @@ impl Core {
 
         reply.ok(Value::from(call_id));
         tokio::spawn(async move {
-            self.run_export(call_id, format, scope, row, limit, column, register, path)
-                .await;
+            self.run_export(call_id, format, rows, headers, path).await;
         });
     }
 
-    /// Render part of a result and put it somewhere the user can use it.
+    /// Render part of a result and write it to a file.
     ///
     /// The text never travels back as a reply. A hundred thousand rows of CSV would be a very
-    /// large message for the editor to decode only to hand straight to `setreg`, so the engine
-    /// writes it into the register, or into the file, itself.
-    #[expect(clippy::too_many_arguments, reason = "one argument per protocol field")]
+    /// large message for the editor to decode only to write straight back out, so the engine
+    /// writes the file itself.
     async fn run_export(
         self: Arc<Self>,
         call_id: u64,
         format: Format,
-        scope: String,
-        row: Option<usize>,
-        limit: Option<usize>,
-        column: Option<usize>,
-        register: Option<String>,
-        path: Option<String>,
+        rows: Rows,
+        headers: bool,
+        path: String,
     ) {
-        let rendered = self
-            .session
-            .with_call(call_id, |call| match scope.as_str() {
-                "cell" => {
-                    let cell = call
-                        .result
-                        .cell(row.unwrap_or(0), column.unwrap_or(0))
-                        .unwrap_or(&Cell::Null);
-                    // An empty string for `NULL`: what one is shown as is the editor's to choose,
-                    // and an export carries the value rather than the way it was drawn.
-                    Ok(cell.text("").into_owned())
-                }
-                "row" => Ok(export::write(
-                    &call.result,
-                    format,
-                    Rows::one(row.unwrap_or(0)),
-                )),
-                // The rows on screen, which only the editor knows: it decides how many fit and
-                // where it has scrolled to, so it sends the range rather than the engine guessing.
-                "range" => Ok(export::write(
-                    &call.result,
-                    format,
-                    Rows {
-                        start: row.unwrap_or(0),
-                        end: row.unwrap_or(0).saturating_add(limit.unwrap_or(0)),
-                    },
-                )),
-                "all" => Ok(export::write(&call.result, format, Rows::all(&call.result))),
-                other => Err(format!(
-                    "unknown export scope `{other}`; expected cell, row, range or all"
-                )),
-            });
-
-        let text = match rendered {
-            Some(Ok(text)) => text,
-            Some(Err(error)) => return self.emit_export(call_id, Err(error)),
-            None => return self.emit_export(call_id, Err("the result is no longer held".into())),
+        let Some(text) = self.session.with_call(call_id, |call| {
+            export::write(&call.result, format, rows, headers)
+        }) else {
+            return self.emit_export(call_id, Err("the result is no longer held".into()));
         };
 
         let bytes = text.len();
-
-        match path {
-            Some(path) => match tokio::fs::write(&path, text).await {
-                Ok(()) => self.emit_export(
-                    call_id,
-                    Ok(vec![
-                        ("target", Value::from("file")),
-                        ("path", Value::from(path)),
-                        ("bytes", Value::from(bytes as u64)),
-                    ]),
-                ),
-                Err(error) => {
-                    self.emit_export(call_id, Err(format!("could not write {path}: {error}")));
-                }
-            },
-            None => {
-                let register = register.unwrap_or_else(|| "\"".to_owned());
-                let call = self.nvim.client().request(
-                    "nvim_call_function",
-                    vec![
-                        Value::from("setreg"),
-                        Value::Array(vec![Value::from(register.clone()), Value::from(text)]),
-                    ],
-                );
-
-                match call.await {
-                    Ok(_) => self.emit_export(
-                        call_id,
-                        Ok(vec![
-                            ("target", Value::from("register")),
-                            ("register", Value::from(register)),
-                            ("bytes", Value::from(bytes as u64)),
-                        ]),
-                    ),
-                    Err(error) => self.emit_export(call_id, Err(error.to_string())),
-                }
+        match tokio::fs::write(&path, text).await {
+            Ok(()) => self.emit_export(
+                call_id,
+                Ok(vec![
+                    ("path", Value::from(path)),
+                    ("bytes", Value::from(bytes as u64)),
+                ]),
+            ),
+            Err(error) => {
+                self.emit_export(call_id, Err(format!("could not write {path}: {error}")));
             }
         }
     }

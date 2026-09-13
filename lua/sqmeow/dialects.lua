@@ -12,6 +12,11 @@ local M = {}
 ---@field mask boolean|nil Drawn as asterisks, and never echoed anywhere else.
 ---@field optional boolean|nil Saving does not insist on a value.
 ---@field hint string|nil Shown in place of an empty value.
+---@field options string[]|nil Chosen from rather than typed: editing the field cycles to its next
+--- option. Wizard mode passes over it.
+---@field checkbox boolean|nil Holds 'yes' or 'no', drawn as a box editing ticks or clears. Wizard mode
+--- passes over it.
+---@field enabled nil|fun(values: table<string, string>): boolean Dimmed and left alone while false.
 
 ---@class sqmeow.Dialect
 ---@field id string What the engine calls it.

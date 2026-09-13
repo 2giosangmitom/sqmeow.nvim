@@ -18,7 +18,7 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 - ▶️ Run the statement under the cursor, a selection or the whole buffer. Errors show up as diagnostics on their own lines.
 - 📄 Scratchpads you create and name from the drawer, as many per connection as you like. They survive a restart and stay tied to their connection, so two of them can query two databases side by side.
 - 🕘 A query log that keeps every result, so you can look at yesterday's answer without running the query again.
-- ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Yank as CSV or export to CSV and JSON.
+- ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Export the result, or just the rows you select, to CSV or JSON.
 - 🔐 Passwords can come from `{{ env "VAR" }}` or `{{ exec "cmd" }}`, and are masked wherever a URL is shown.
 - ⌨️ No global keymaps. Every key is buffer-local and configurable, with `<Plug>` mappings for your own bindings.
 
@@ -111,14 +111,13 @@ Subcommands complete with `<Tab>`. See `:h sqmeow` for the rest.
 
 **Result**
 
-| Key                | Action                        |
-| ------------------ | ----------------------------- |
-| `L` / `H`          | Next / previous page          |
-| `gg` / `G`         | First / last page             |
-| `K`                | Show the row in detail        |
-| `yc` / `yr` / `yp` | Yank cell / row / page as CSV |
-| `x`                | Export the result             |
-| `q`                | Close                         |
+| Key        | Action                                             |
+| ---------- | -------------------------------------------------- |
+| `L` / `H`  | Next / previous page                               |
+| `gg` / `G` | First / last page                                  |
+| `K`        | Show the row in detail                             |
+| `x`        | Export the result, or the selection in visual mode |
+| `q`        | Close                                              |
 
 **Scratchpad**
 

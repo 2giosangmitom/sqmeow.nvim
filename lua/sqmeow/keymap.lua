@@ -64,12 +64,10 @@ M.defaults = {
     { action = 'first_page', lhs = 'gg', desc = 'First page' },
     { action = 'last_page', lhs = 'G', desc = 'Last page' },
     { action = 'detail', lhs = 'K', desc = 'Show this row down the page' },
-    { action = 'yank_cell', lhs = 'yc', desc = 'Yank this cell' },
-    { action = 'yank_row', lhs = 'yr', desc = 'Yank this row as CSV' },
-    { action = 'yank_page', lhs = 'yp', desc = 'Yank this page as CSV' },
     -- Not `e`: a wide grid is crossed with the word motions, and `x` edits nothing in a buffer
     -- that cannot be edited.
-    { action = 'export', lhs = 'x', desc = 'Write the result to a file' },
+    { action = 'export', lhs = 'x', desc = 'Export the result to a file' },
+    { action = 'export_selection', lhs = 'x', mode = 'x', desc = 'Export the selected rows' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the result window' },
   },
@@ -166,6 +164,14 @@ function M.resolve(surface)
   end, M.defaults[surface] or {})
 end
 
+--- Actions that were taken out, and what took their place, so an override naming one says why it
+--- no longer does anything.
+local REMOVED = {
+  yank_cell = 'yanking was replaced by exporting: `x`, or `x` on a visual selection',
+  yank_row = 'yanking was replaced by exporting: `x`, or `x` on a visual selection',
+  yank_page = 'yanking was replaced by exporting: `x`, or `x` on a visual selection',
+}
+
 --- Overrides that name an action the surface does not have.
 ---
 --- Reported by `:checkhealth` rather than silently ignored: a mistyped action name would otherwise
@@ -187,7 +193,11 @@ function M.problems()
       end
       for action in pairs(overrides) do
         if not known[action] then
-          table.insert(problems, ('`%s` has no action named `%s`'):format(surface, action))
+          local problem = ('`%s` has no action named `%s`'):format(surface, action)
+          if REMOVED[action] then
+            problem = problem .. '; ' .. REMOVED[action]
+          end
+          table.insert(problems, problem)
         end
       end
     end

@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+csv.workspace = true
 serde_json.workspace = true
 unicode-width.workspace = true
 thiserror.workspace = true

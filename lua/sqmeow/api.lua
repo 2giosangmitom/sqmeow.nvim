@@ -472,25 +472,28 @@ end
 
 --- Write the current result to a file.
 ---
----@param opts table|nil `path` skips the prompt; `format` is 'csv' or 'json'.
+--- Without a `path`, asks for the format, file and whether to write a header in a dialog that
+--- shows the query being exported.
+---
+---@param opts table|nil `path` skips the dialog; `format` is 'csv' or 'json'; `headers` defaults to
+--- true; `offset` and `limit` write that many rows from that one, zero-based, rather than all rows.
 function M.export(opts)
   opts = opts or {}
   local state = require('sqmeow.state')
-  if not (state.call and state.call.call_id) then
+  local call = state.call
+  if not (call and call.call_id) then
     notify('there is no result to export', vim.log.levels.WARN)
     return
   end
 
-  local format = opts.format or 'csv'
-  local function write(path)
-    if not path or path == '' then
-      return
-    end
+  local function write(format, path, headers)
     local _, err = engine().request('export', {
-      call_id = state.call.call_id,
+      call_id = call.call_id,
       format = format,
-      scope = 'all',
-      path = vim.fn.fnamemodify(path, ':p'),
+      headers = headers,
+      offset = opts.offset,
+      limit = opts.limit,
+      path = vim.fn.fnamemodify(vim.fs.normalize(path), ':p'),
     })
     if err then
       notify(err, vim.log.levels.ERROR)
@@ -498,14 +501,91 @@ function M.export(opts)
   end
 
   if opts.path then
-    return write(opts.path)
+    return write(opts.format or 'csv', opts.path, opts.headers ~= false)
   end
 
-  vim.ui.input({
-    prompt = 'Write ' .. format .. ' to: ',
-    default = vim.fs.joinpath(vim.uv.cwd() or '.', 'result.' .. format),
-    completion = 'file',
-  }, write)
+  -- Named after the table the query reads from, as far as a pattern can tell, and otherwise after
+  -- the connection. Quotes and a schema in front are dropped: `"public"."people"` is `people`.
+  local relation = (call.statement or ''):match('[Ff][Rr][Oo][Mm]%s+([%w_%.`"%[%]]+)')
+  relation = relation and relation:gsub('[`"%[%]]', ''):match('([^.]+)$')
+  local connection = call.connection or (state.connections[call.conn_id] or {}).name or 'result'
+  local stem = (relation or connection):gsub('[^%w_-]', '_') .. os.date('_%Y%m%d_%H%M%S')
+
+  local count = opts.limit or call.rows or 0
+  local plural = count == 1 and '' or 's'
+  local summary = opts.limit and ('-- Exporting %d selected row%s'):format(count, plural)
+    or ('-- Exporting all %d row%s'):format(count, plural)
+
+  local format = (opts.format or 'csv'):upper()
+  -- The file the last refused save would have replaced. Saving again with the same answers is the
+  -- confirmation, so overwriting takes one more key rather than a prompt of its own.
+  local confirmed
+
+  local ok, err = require('sqmeow.ui.form').open({
+    title = 'Export',
+    fields = {
+      { key = 'format', label = 'Format', options = { 'CSV', 'JSON' } },
+      { key = 'filename', label = 'Filename' },
+      { key = 'path', label = 'Path' },
+      {
+        key = 'headers',
+        label = 'Include headers',
+        checkbox = true,
+        -- JSON names every value by its column, so there is no header to leave out.
+        enabled = function(values)
+          return values.format == 'CSV'
+        end,
+      },
+    },
+    values = {
+      format = format,
+      filename = stem .. '.' .. format:lower(),
+      path = vim.fn.fnamemodify(vim.uv.cwd() or '.', ':~'),
+      headers = 'yes',
+    },
+    preview = {
+      title = 'Query',
+      filetype = 'sql',
+      lines = vim.list_extend({ summary }, vim.split(call.statement or '', '\n')),
+    },
+    on_change = function(values, key)
+      -- The extension follows the format, unless the user named the file something else.
+      if key == 'format' then
+        local bare = values.filename:match('^(.*)%.csv$') or values.filename:match('^(.*)%.json$')
+        if bare then
+          values.filename = bare .. '.' .. values.format:lower()
+        end
+      end
+    end,
+    validate = function(values)
+      if vim.trim(values.filename) == '' then
+        return 'a file name is needed'
+      end
+      if vim.trim(values.path) == '' then
+        return 'a path is needed'
+      end
+      local directory = vim.fs.normalize(values.path)
+      if vim.fn.isdirectory(directory) == 0 then
+        return values.path .. ' is not a directory'
+      end
+
+      local target = vim.fs.joinpath(directory, values.filename)
+      if vim.uv.fs_stat(target) and confirmed ~= target then
+        confirmed = target
+        return values.filename .. ' exists: <C-s> again to overwrite it'
+      end
+    end,
+    on_submit = function(values)
+      write(
+        values.format:lower(),
+        vim.fs.joinpath(values.path, values.filename),
+        values.headers == 'yes'
+      )
+    end,
+  })
+  if not ok then
+    notify(err or 'the export dialog could not open', vim.log.levels.ERROR)
+  end
 end
 
 --- Create a scratchpad for a connection, asking what to call it.

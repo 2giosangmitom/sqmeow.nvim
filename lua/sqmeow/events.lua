@@ -99,10 +99,7 @@ function M.on_export(payload)
     return notify(payload.error, vim.log.levels.ERROR)
   end
 
-  if payload.target == 'file' then
-    return notify(('wrote %s (%d bytes)'):format(payload.path, payload.bytes))
-  end
-  notify(('yanked %d bytes into register %s'):format(payload.bytes, payload.register))
+  notify(('wrote %s (%d bytes)'):format(payload.path, payload.bytes))
 end
 
 --- Handle one level of the schema tree arriving.
