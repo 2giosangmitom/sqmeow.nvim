@@ -15,12 +15,8 @@ local M = {}
 --- with the tag. release-please bumps it, finding the line by the annotation.
 M.version = '1.0.2' -- x-release-please-version
 
---- Protocol revision this plugin speaks. An engine reporting anything else is refused.
-M.protocol_version = 2
-
 ---@class sqmeow.EngineInfo
 ---@field core_version string
----@field protocol_version integer
 ---@field pid integer
 ---@field adapters string[]
 
@@ -155,15 +151,6 @@ function M.start()
     return nil, ('the engine did not answer the handshake: %s'):format(handshake)
   end
   ---@cast handshake sqmeow.EngineInfo
-
-  if handshake.protocol_version ~= M.protocol_version then
-    local message = ('engine speaks protocol %s, this plugin speaks %s; run `:Sqmeow install`'):format(
-      handshake.protocol_version,
-      M.protocol_version
-    )
-    M.stop()
-    return nil, message
-  end
 
   info = handshake
   M.configure()

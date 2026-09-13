@@ -309,8 +309,6 @@ The dot beside a connection follows `DiagnosticOk` and `DiagnosticError`, so it 
 
 `:help sqmeow` is generated from the annotated sources with [mini.doc](https://github.com/nvim-mini/mini.doc) and committed, because plugin managers do not run build steps. The default configuration and the keymap table are evaluated at generation time and inlined, so the documented defaults are literally the ones the code uses and cannot fall behind.
 
-The protocol the two halves speak is written down in [core/PROTOCOL.md](core/PROTOCOL.md). It is the contract both sides code against, so a field cannot change without that document changing first.
-
 ## 🤝 Contributing
 
 Contributions are welcome, whether they fix a bug, teach the engine a dialect or improve the documentation. The toolchain is pinned with [mise](https://mise.jdx.dev), and every command CI runs is a [just](https://just.systems) recipe.

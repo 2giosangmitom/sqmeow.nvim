@@ -84,7 +84,6 @@ local function check_engine()
 
   local info = assert(rpc.info(), 'a started engine has answered its handshake')
   vim.health.ok(('running on channel %d, pid %d'):format(channel, info.pid))
-  vim.health.ok(('protocol %d'):format(info.protocol_version))
 
   if #info.adapters == 0 then
     vim.health.info('no database adapters are compiled in yet')

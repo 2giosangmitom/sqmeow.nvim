@@ -24,13 +24,6 @@ use crate::args::Args;
 use crate::session::{Call, Connection, OptionsPatch, Session};
 use crate::value::{map, optional, strings};
 
-/// The protocol revision the editor is checked against.
-///
-/// Bumped only when a message changes shape in a way an older plugin cannot read. The plugin
-/// compares this at handshake and tells the user to update, which beats a decode failure three
-/// calls later with no explanation.
-pub const PROTOCOL_VERSION: u64 = 2;
-
 /// Everything one editor session talks to.
 pub struct Core {
     nvim: Nvim,
@@ -62,7 +55,6 @@ impl Core {
 
         Ok(map(vec![
             ("core_version", Value::from(env!("CARGO_PKG_VERSION"))),
-            ("protocol_version", Value::from(PROTOCOL_VERSION)),
             ("pid", Value::from(std::process::id())),
             // Read from the build rather than hardcoded, so the drawer and the connect prompt
             // cannot offer a database this binary was not compiled with.
