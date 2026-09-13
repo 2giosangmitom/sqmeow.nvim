@@ -73,6 +73,7 @@ M.defaults = {
   icons = {
     -- The kind of thing a drawer row names.
     connection = '󰆼',
+    database = '󰆼',
     schema = '󰙅',
     table = '󰓫',
     view = '󰈈',

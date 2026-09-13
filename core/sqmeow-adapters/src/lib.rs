@@ -50,12 +50,22 @@ pub enum Backend {
 impl Backend {
     /// Open a connection, choosing the adapter from the URL's scheme.
     pub async fn connect(url: &str) -> Result<Self> {
+        Self::connect_to(url, None).await
+    }
+
+    /// Open a connection to one database of the server the URL points at.
+    ///
+    /// Only PostgreSQL uses `database`: it is the one dialect whose cluster lists databases that
+    /// need a connection of their own to be read.
+    pub async fn connect_to(url: &str, database: Option<&str>) -> Result<Self> {
         let dialect =
             Dialect::from_url(url).ok_or_else(|| Error::UnsupportedUrl(url.to_owned()))?;
 
         match dialect {
             Dialect::Sqlite => Ok(Self::Sqlite(SqliteAdapter::connect(url).await?)),
-            Dialect::Postgres => Ok(Self::Postgres(PostgresAdapter::connect(url).await?)),
+            Dialect::Postgres => Ok(Self::Postgres(
+                PostgresAdapter::connect(url, database).await?,
+            )),
             Dialect::MySql => Ok(Self::MySql(MySqlAdapter::connect(url).await?)),
             Dialect::Redis => Ok(Self::Redis(RedisAdapter::connect(url).await?)),
         }
@@ -93,6 +103,14 @@ impl Backend {
             Self::Postgres(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::MySql(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::Redis(adapter) => adapter.execute(statement, max_rows, cancel).await,
+        }
+    }
+
+    /// The databases of a PostgreSQL cluster, when the URL named none, and `None` otherwise.
+    pub async fn databases(&self) -> Option<Result<Vec<String>>> {
+        match self {
+            Self::Postgres(adapter) => adapter.databases().await,
+            _ => None,
         }
     }
 

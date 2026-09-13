@@ -23,7 +23,8 @@ end
 --- reports success, which arrives as an event and is announced to the user.
 ---
 ---@param url string A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
----@param opts table|nil Options: `name` for the label shown in the interface.
+---@param opts table|nil Options: `name` for the label shown in the interface; `database` and
+--- `parent` open one database of the cluster that connection `parent` lists.
 ---@return integer|nil id The connection id, or nil if the engine refused the request.
 ---@return string|nil error
 ---@usage >lua
@@ -36,13 +37,21 @@ function M.connect(url, opts)
   local id = state.next_connection_id()
   local name = opts.name or require('sqmeow.url').label(url)
 
-  local accepted, err = engine().request('connect', { id = id, url = url, name = name })
+  local accepted, err =
+    engine().request('connect', { id = id, url = url, name = name, database = opts.database })
   if not accepted then
     notify(err or 'the engine refused the connection', vim.log.levels.ERROR)
     return nil, err
   end
 
-  state.add_connection({ id = id, name = name, url = url, state = 'connecting' })
+  state.add_connection({
+    id = id,
+    name = name,
+    url = url,
+    state = 'connecting',
+    parent = opts.parent,
+    database = opts.database,
+  })
   return id
 end
 
@@ -155,6 +164,13 @@ function M.disconnect(id)
   id = id or state.current
   if not id then
     return
+  end
+
+  -- The databases opened from a cluster go with it, since the drawer draws them inside it.
+  for _, child in ipairs(state.connection_list()) do
+    if child.parent == id then
+      M.disconnect(child.id)
+    end
   end
 
   engine().request('disconnect', { id = id })

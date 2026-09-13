@@ -12,6 +12,8 @@ local M = {}
 ---@field dialect string|nil Known once the engine reports a successful connection.
 ---@field state 'connecting'|'connected'|'error'|'closed'
 ---@field error string|nil
+---@field parent integer|nil For one database of a cluster, the connection that listed it.
+---@field database string|nil For one database of a cluster, which one.
 
 ---@class sqmeow.CallSummary
 ---@field call_id integer|nil Absent for an entry from the log that has no rows to read.
@@ -176,6 +178,20 @@ end
 function M.connection_by_name(name)
   for _, connection in pairs(M.connections) do
     if connection.name == name then
+      return connection
+    end
+  end
+  return nil
+end
+
+--- The connection opened for one database of a cluster, if it is open.
+---
+---@param parent integer
+---@param database string
+---@return sqmeow.Connection|nil
+function M.child_connection(parent, database)
+  for _, connection in pairs(M.connections) do
+    if connection.parent == parent and connection.database == database then
       return connection
     end
   end

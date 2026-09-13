@@ -35,16 +35,27 @@ pub struct PostgresAdapter {
     /// under a live connection leaves an icon one query out of date, which is a smaller price than
     /// a catalog round trip before every execution.
     keys: Mutex<HashMap<(Oid, i16), KeyKind>>,
+    /// Whether the URL named no database, so the drawer lists the server's databases instead.
+    cluster: bool,
 }
 
 impl PostgresAdapter {
-    /// Open a connection.
+    /// Open a connection, to `database` when given and otherwise to the one the URL names.
     ///
     /// The pool holds a single connection, because a database client is a session: a transaction,
     /// a `SET`, a temporary table or a prepared statement must still be there for the next
     /// statement the user runs. A larger pool would scatter those across connections.
-    pub async fn connect(url: &str) -> Result<Self> {
-        let options = PgConnectOptions::from_str(url).map_err(Error::driver)?;
+    ///
+    /// A URL naming no database reaches the whole cluster. It connects to `postgres`, which every
+    /// server has, rather than to the database named after the user, which most servers do not.
+    pub async fn connect(url: &str, database: Option<&str>) -> Result<Self> {
+        let mut options = PgConnectOptions::from_str(url).map_err(Error::driver)?;
+        let cluster = database.is_none() && options.get_database().is_none();
+        if let Some(database) = database {
+            options = options.database(database);
+        } else if cluster {
+            options = options.database("postgres");
+        }
         let pool = PgPoolOptions::new()
             .max_connections(1)
             // sqlx retries a refused connection until this expires. A mistyped host should say so
@@ -57,7 +68,27 @@ impl PostgresAdapter {
         Ok(Self {
             pool,
             keys: Mutex::default(),
+            cluster,
         })
+    }
+
+    /// The databases a connection to the whole cluster can open, or `None` for one database.
+    ///
+    /// Templates and databases refusing connections are left out: neither can be opened.
+    pub async fn databases(&self) -> Option<Result<Vec<String>>> {
+        if !self.cluster {
+            return None;
+        }
+        Some(
+            sqlx::query_scalar(
+                "select datname from pg_database
+                 where datallowconn and not datistemplate
+                 order by datname",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(Error::driver),
+        )
     }
 
     async fn columns(&self, statement: &str) -> Vec<Column> {

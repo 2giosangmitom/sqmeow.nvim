@@ -25,6 +25,14 @@ function M.on_connection(payload)
   connection.dialect = payload.dialect or connection.dialect
   connection.error = payload.error
 
+  -- A database opened from a cluster is drawn already open, so what it holds is read straight
+  -- away. Scheduled, so the request is not made from inside the engine's own event.
+  if payload.state == 'connected' and connection.parent then
+    vim.schedule(function()
+      require('sqmeow.ui.drawer').load(payload.id, {})
+    end)
+  end
+
   require('sqmeow.ui.drawer').render()
   require('sqmeow.ui.editor').update_winbar()
 

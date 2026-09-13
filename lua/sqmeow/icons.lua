@@ -22,6 +22,7 @@ end
 --- <
 M.highlights = {
   connection = 'SqmeowIconConnection',
+  database = 'SqmeowIconSchema',
   schema = 'SqmeowIconSchema',
   table = 'SqmeowIconTable',
   view = 'SqmeowIconView',

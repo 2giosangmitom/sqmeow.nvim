@@ -100,12 +100,20 @@ impl Core {
         let name = args
             .opt_string("name")
             .unwrap_or_else(|| format!("connection {id}"));
+        // One database of a cluster the URL reaches as a whole, opened from the drawer.
+        let database = args.opt_string("database");
 
         reply.ok(Value::from(id));
-        tokio::spawn(async move { self.run_connect(id, name, url).await });
+        tokio::spawn(async move { self.run_connect(id, name, url, database).await });
     }
 
-    async fn run_connect(self: Arc<Self>, id: i64, name: String, url: String) {
+    async fn run_connect(
+        self: Arc<Self>,
+        id: i64,
+        name: String,
+        url: String,
+        database: Option<String>,
+    ) {
         self.emit_connection(id, "connecting", vec![("name", Value::from(name.clone()))]);
 
         // The expanded URL holds the password and never leaves this function: it is not logged,
@@ -121,7 +129,7 @@ impl Core {
             }
         };
 
-        match Backend::connect(&url).await {
+        match Backend::connect_to(&url, database.as_deref()).await {
             Ok(backend) => {
                 let dialect = backend.dialect().name();
                 self.session
@@ -375,7 +383,12 @@ impl Core {
     /// be looked at.
     async fn run_introspect(self: Arc<Self>, connection: Arc<Connection>, path: Vec<String>) {
         let nodes = match path.as_slice() {
-            [] => connection.backend.schemas().await.map(schema_nodes),
+            // A cluster's databases are each opened as a connection of their own, so the tree
+            // below one of them belongs to that connection rather than continuing this path.
+            [] => match connection.backend.databases().await {
+                Some(databases) => databases.map(database_nodes),
+                None => connection.backend.schemas().await.map(schema_nodes),
+            },
             [schema] => group_nodes(&connection, schema).await,
             [schema, group] => members(&connection, schema, group).await,
             // The group a relation sits under says nothing about its columns, so it is skipped.
@@ -735,6 +748,20 @@ fn schema_nodes(schemas: Vec<SchemaNode>) -> Vec<Value> {
                 ("kind", Value::from("schema")),
                 ("expandable", Value::from(true)),
                 ("is_default", Value::from(schema.is_default)),
+            ])
+        })
+        .collect()
+}
+
+/// The databases of a cluster, which the plugin opens one connection each for.
+fn database_nodes(databases: Vec<String>) -> Vec<Value> {
+    databases
+        .into_iter()
+        .map(|name| {
+            map(vec![
+                ("name", Value::from(name)),
+                ("kind", Value::from("database")),
+                ("expandable", Value::from(true)),
             ])
         })
         .collect()

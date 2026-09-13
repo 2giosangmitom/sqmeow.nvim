@@ -27,6 +27,10 @@
 --- will call this database from now on, so it is yours to choose. The URL is never shown. >lua
 ---   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
 --- <
+--- The database may be left empty to reach every database on the server. MySQL and MariaDB then
+--- list each one where a schema would be. PostgreSQL lists the cluster's databases, and `<CR>` on
+--- one opens it as a connection of its own, named `connection/database` and drawn inside the
+--- cluster, so `u`, `a` and previews under it all run on that database.
 ---@tag sqmeow-connecting
 ---@toc_entry Making a connection
 

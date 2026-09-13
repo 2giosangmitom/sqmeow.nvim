@@ -127,6 +127,7 @@ end
 --- row is noise. What survives is the kind a group does not imply: a materialised view among the
 --- views, or a foreign table among the tables.
 local implied = {
+  database = true,
   schema = true,
   table = true,
   view = true,
@@ -264,6 +265,25 @@ local function schema_nodes(conn_id, path)
     local expandable = node.expandable == true
     local open = expandable and M.is_expanded(conn_id, child)
 
+    local children = nil
+    if open and node.kind == 'database' then
+      -- One database of a cluster is a connection of its own, opened when it was expanded, and
+      -- what it holds is that connection's tree.
+      local opened = require('sqmeow.state').child_connection(conn_id, node.name)
+      if opened and opened.state == 'connected' then
+        children = schema_nodes(opened.id, {})
+      elseif opened then
+        children = {
+          parts.Tree.Node({
+            id = ('node:%d:%s:loading'):format(conn_id, table.concat(child, '/')),
+            placeholder = '…',
+          }),
+        }
+      end
+    elseif open then
+      children = schema_nodes(conn_id, child)
+    end
+
     local built = parts.Tree.Node({
       id = ('node:%d:%s'):format(conn_id, table.concat(child, '/')),
       conn_id = conn_id,
@@ -276,7 +296,7 @@ local function schema_nodes(conn_id, path)
       -- something the database actually holds.
       count = node.count,
       expandable = expandable,
-    }, open and schema_nodes(conn_id, child) or nil)
+    }, children)
 
     if open then
       built:expand()
@@ -385,14 +405,17 @@ function M.connection_rows()
   local open = {}
 
   for _, connection in ipairs(require('sqmeow.state').connection_list()) do
-    open[connection.name] = true
-    table.insert(drawn, {
-      id = connection.id,
-      name = connection.name,
-      dialect = connection.dialect,
-      note = connection.state,
-      connected = connection.state == 'connected',
-    })
+    -- One database of a cluster is drawn inside the cluster, not beside it.
+    if not connection.parent then
+      open[connection.name] = true
+      table.insert(drawn, {
+        id = connection.id,
+        name = connection.name,
+        dialect = connection.dialect,
+        note = connection.state,
+        connected = connection.state == 'connected',
+      })
+    end
   end
 
   for _, spec in ipairs((require('sqmeow.sources').load())) do
@@ -513,6 +536,37 @@ local function dialect_of(conn_id)
   return connection and connection.dialect or nil
 end
 
+--- The connection opened for the database row under the cursor, if it is open.
+local function opened_database(node)
+  return require('sqmeow.state').child_connection(node.conn_id, node.name)
+end
+
+--- Expand or collapse one database of a cluster, opening a connection for it the first time.
+---
+--- A PostgreSQL connection reads one database only, so each database a cluster lists is opened as
+--- a connection of its own, named after both. Queries, previews and scratchpads under it then run
+--- there, with nothing else having to know it came from a cluster.
+local function toggle_database(node)
+  local key = node_key(node.conn_id, node.path)
+  if opened_database(node) then
+    expanded[key] = not expanded[key] or nil
+    return M.render()
+  end
+
+  local parent = require('sqmeow.state').connections[node.conn_id]
+  expanded[key] = true
+  local id = require('sqmeow.api').connect(parent.url, {
+    name = ('%s/%s'):format(parent.name, node.name),
+    parent = parent.id,
+    database = node.name,
+  })
+  -- Marked open, the way a connection someone expanded is, so a refresh reloads what it holds.
+  if id then
+    expanded[node_key(id, {})] = true
+  end
+  M.render()
+end
+
 --- Actions the drawer's keys are bound to.
 M.actions = {}
 
@@ -589,6 +643,9 @@ function M.actions.toggle()
     expanded[HISTORY] = not expanded[HISTORY] or nil
     return M.render()
   end
+  if node.kind == 'database' then
+    return toggle_database(node)
+  end
 
   local id = node_key(node.conn_id, node.path)
   if expanded[id] then
@@ -611,6 +668,14 @@ function M.actions.refresh()
   -- Scratchpads are read from the directory on every draw, so redrawing is the whole refresh.
   if not node.conn_id then
     return M.render()
+  end
+  -- A database of a cluster is refreshed as the connection it was opened as.
+  if node.kind == 'database' then
+    local opened = opened_database(node)
+    if not opened then
+      return
+    end
+    node = { conn_id = opened.id, path = {} }
   end
 
   local path = node.path or {}
@@ -744,6 +809,10 @@ end
 --- different key.
 function M.actions.use()
   local node = M.current_node()
+  if node and node.kind == 'database' then
+    local opened = opened_database(node)
+    node = { kind = 'connection', name = node.name, conn_id = opened and opened.id }
+  end
   if not node or node.kind ~= 'connection' then
     return
   end
@@ -773,7 +842,10 @@ end
 function M.actions.new_scratchpad()
   local node = M.current_node()
   local name = node and node.kind == 'connection' and node.name or nil
-  if node and not name and node.conn_id then
+  if node and node.kind == 'database' then
+    local opened = opened_database(node)
+    name = opened and opened.name
+  elseif node and not name and node.conn_id then
     local connection = require('sqmeow.state').connections[node.conn_id]
     name = connection and connection.name
   end

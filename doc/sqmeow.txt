@@ -37,6 +37,10 @@ The first thing it asks for is a name, and it suggests nothing: the name is what
 will call this database from now on, so it is yours to choose. The URL is never shown. >lua
   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
 <
+The database may be left empty to reach every database on the server. MySQL and MariaDB then
+list each one where a schema would be. PostgreSQL lists the cluster's databases, and `<CR>` on
+one opens it as a connection of its own, named `connection/database` and drawn inside the
+cluster, so `u`, `a` and previews under it all run on that database.
 
 ------------------------------------------------------------------------------
                                                                  *sqmeow-active*
@@ -225,6 +229,7 @@ is built, so the documented defaults cannot drift from the ones the code uses.
     icons = {
       -- The kind of thing a drawer row names.
       connection = '󰆼',
+      database = '󰆼',
       schema = '󰙅',
       table = '󰓫',
       view = '󰈈',
@@ -495,7 +500,8 @@ reports success, which arrives as an event and is announced to the user.
 
 Parameters ~
 {url} `(string)` A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
-{opts} `(table|nil)` Options: `name` for the label shown in the interface.
+{opts} `(table|nil)` Options: `name` for the label shown in the interface; `database` and
+`parent` open one database of the cluster that connection `parent` lists.
 Return ~
 `(integer|nil)` id The connection id, or nil if the engine refused the request.
 Return ~
