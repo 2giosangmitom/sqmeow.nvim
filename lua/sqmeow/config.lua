@@ -34,9 +34,7 @@ M.defaults = {
   },
 
   ui = {
-    -- 'ide' is drawer left, editor top right, result bottom right.
-    layout = 'ide',
-    drawer = { width = 36, position = 'left' },
+    drawer = { width = 36 },
     -- `column_icons` marks each column of the grid header with what it holds, or with the key it
     -- is. Worth turning off in a terminal without a patched font, and in a very wide result where
     -- the columns are better spent on values.

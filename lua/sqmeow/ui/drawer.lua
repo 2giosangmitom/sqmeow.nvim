@@ -880,12 +880,7 @@ function M.open()
   require('sqmeow.ui.layout').remember()
   local previous = vim.api.nvim_get_current_win()
 
-  vim.cmd(
-    ('%s vertical %dsplit'):format(
-      config.position == 'right' and 'botright' or 'topleft',
-      config.width
-    )
-  )
+  vim.cmd(('topleft vertical %dsplit'):format(config.width))
   win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(win, M.buffer())
 

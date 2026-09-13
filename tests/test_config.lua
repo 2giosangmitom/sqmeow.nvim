@@ -19,7 +19,6 @@ end
 T['defaults']['survive a partial override'] = function()
   config.apply({ ui = { drawer = { width = 50 } } })
   eq(config.get().ui.drawer.width, 50)
-  eq(config.get().ui.drawer.position, 'left')
   eq(config.get().ui.result.page_size, 100)
 end
 
