@@ -351,8 +351,18 @@ Class ~
 Fields ~
 {action} `(string)` The name the configuration overrides it by.
 {lhs} `(string|string[])` One key, or several that do the same thing.
-{mode} `(string|string[])` Defaults to normal mode.
+{mode} `(string|string[]|nil)` Defaults to normal mode.
 {desc} `(string)` Shown by which-key, by `:map`, and in the cheatsheet.
+
+------------------------------------------------------------------------------
+A mapping as it is applied, after the user's overrides.
+Class ~
+{sqmeow.ResolvedKeymap}
+Fields ~
+{action} `(string)`
+{lhs} `(string[])` Empty for an action the user turned off.
+{mode} `(string|string[])`
+{desc} `(string)`
 
 ------------------------------------------------------------------------------
                                                         *sqmeow.keymap.defaults*
@@ -420,7 +430,7 @@ rather than by position.
 Parameters ~
 {surface} `(string)` 'drawer' or 'result'.
 Return ~
-`(sqmeow.Keymap[])` # In presentation order. An action the user disabled has no keys.
+`(sqmeow.ResolvedKeymap[])` # In presentation order. An action the user disabled has no keys.
 
 ------------------------------------------------------------------------------
                                                       *sqmeow.keymap.problems()*

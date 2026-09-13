@@ -517,6 +517,7 @@ end
 ---@return string|nil err
 function M.install(opts)
   opts = type(opts) == 'string' and { method = opts } or opts or {}
+  ---@cast opts table
 
   if opts.method and not vim.tbl_contains(M.methods, opts.method) then
     local err = ('`%s` is not a way to install the engine; pick one of %s'):format(
@@ -622,7 +623,8 @@ function M.version(path)
     return nil, tostring(result)
   end
   if result.code ~= 0 then
-    return nil, (result.stderr or ''):gsub('%s+$', '')
+    local message = (result.stderr or ''):gsub('%s+$', '')
+    return nil, message
   end
 
   return (result.stdout or ''):match('([%d%.]+)')

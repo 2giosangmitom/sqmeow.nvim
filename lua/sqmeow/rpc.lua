@@ -154,6 +154,7 @@ function M.start()
     M.stop()
     return nil, ('the engine did not answer the handshake: %s'):format(handshake)
   end
+  ---@cast handshake sqmeow.EngineInfo
 
   if handshake.protocol_version ~= M.protocol_version then
     local message = ('engine speaks protocol %s, this plugin speaks %s; run `:Sqmeow install`'):format(

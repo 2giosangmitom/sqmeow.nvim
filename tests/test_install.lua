@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local install = require('sqmeow.install')
 

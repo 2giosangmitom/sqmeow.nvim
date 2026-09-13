@@ -39,7 +39,7 @@ function M.restore()
   saved = nil
 
   -- Sizes first, then the cursor, so the window it lands in is already the right size.
-  pcall(vim.cmd, restore.sizes)
+  pcall(vim.api.nvim_command, restore.sizes)
   if vim.api.nvim_win_is_valid(restore.win) then
     pcall(vim.api.nvim_set_current_win, restore.win)
   end

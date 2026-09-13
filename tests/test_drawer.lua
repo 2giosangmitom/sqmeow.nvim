@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 -- The schema drawer, against a real SQLite database, through the real engine.
 
 local eq = MiniTest.expect.equality

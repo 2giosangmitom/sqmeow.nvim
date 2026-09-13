@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local keymap = require('sqmeow.keymap')
 local help = require('sqmeow.ui.help')

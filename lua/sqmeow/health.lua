@@ -82,7 +82,7 @@ local function check_engine()
     return
   end
 
-  local info = rpc.info()
+  local info = assert(rpc.info(), 'a started engine has answered its handshake')
   vim.health.ok(('running on channel %d, pid %d'):format(channel, info.pid))
   vim.health.ok(('protocol %d'):format(info.protocol_version))
 

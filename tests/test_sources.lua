@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local sources = require('sqmeow.sources')
 local file = require('sqmeow.sources.file')

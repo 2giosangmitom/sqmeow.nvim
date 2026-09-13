@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 -- The plugin against PostgreSQL and MySQL, not just SQLite.
 --
 -- Skipped unless the servers are up. `just db-up` starts them and `just test-lua` passes their

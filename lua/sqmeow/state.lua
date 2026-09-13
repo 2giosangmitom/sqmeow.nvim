@@ -14,8 +14,8 @@ local M = {}
 ---@field error string|nil
 
 ---@class sqmeow.CallSummary
----@field call_id integer
----@field conn_id integer
+---@field call_id integer|nil Absent for an entry from the log that has no rows to read.
+---@field conn_id integer|nil Absent when the database it ran on is not open.
 ---@field state 'executing'|'done'|'error'|'cancelled'
 ---@field rows integer|nil How many rows the engine is holding.
 ---@field columns sqmeow.ResultColumn[]|nil One per column, in order.
@@ -23,6 +23,7 @@ local M = {}
 ---@field truncated boolean|nil
 ---@field elapsed_ms integer|nil
 ---@field error string|nil
+---@field source_buf integer|nil The buffer the SQL came from, where an error is reported.
 ---@field statement string|nil The SQL as submitted. The plugin's own record; the engine never sends it.
 ---@field history boolean|nil False for a call that stays out of the query log.
 ---@field archive string|nil Where the engine was asked to save the rows for the log.

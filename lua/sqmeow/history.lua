@@ -25,7 +25,7 @@ M.session = ('%d.%d'):format(vim.uv.os_getpid(), vim.uv.hrtime())
 -- Entries in the order they were run, with the path and the state of the file they were read
 -- from. Both are checked before the list is served, so changing `core.path`, or another editor
 -- appending to the same file, is noticed rather than served stale.
-local cache = { path = nil, entries = {}, stamp = nil }
+local cache = { path = '', entries = {}, stamp = nil }
 
 -- Counts the result files this Neovim has named, so two queries in the same second get two.
 local named = 0

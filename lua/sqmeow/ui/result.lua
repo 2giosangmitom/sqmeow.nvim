@@ -50,7 +50,8 @@ end
 --- then still be valid while showing someone else's buffer. Treating that as closed means the
 --- next query opens a window of its own rather than painting into whatever moved in.
 local function valid_win()
-  return valid(win, vim.api.nvim_win_is_valid)
+  return win ~= nil
+    and vim.api.nvim_win_is_valid(win)
     and valid_buf()
     and vim.api.nvim_win_get_buf(win) == buf
 end
@@ -153,10 +154,11 @@ end
 --- The buffer the grid is drawn into.
 ---@return integer
 function M.buffer()
-  if not valid_buf() then
-    buf = scratch('sqmeow://result', 'sqmeow-result')
-    require('sqmeow.keymap').apply('result', buf, M.actions)
+  if buf and valid_buf() then
+    return buf
   end
+  buf = scratch('sqmeow://result', 'sqmeow-result')
+  require('sqmeow.keymap').apply('result', buf, M.actions)
   return buf
 end
 
@@ -403,7 +405,7 @@ local function draw()
 
   local parts, err = nui()
   if not parts then
-    return vim.notify(err, vim.log.levels.ERROR)
+    return vim.notify(err or 'sqmeow: the result grid needs nui.nvim', vim.log.levels.ERROR)
   end
 
   vim.bo[handle].modifiable = true
@@ -558,7 +560,7 @@ end
 --- header rather than on a row.
 function M.current_cell()
   local call = require('sqmeow.state').call
-  if not (valid_win() and call and call.columns and #spans > 0) then
+  if not (win and valid_win() and call and call.columns and #spans > 0) then
     return nil
   end
 
@@ -612,7 +614,7 @@ end
 ---@return boolean moved
 function M.goto_column(index)
   local span = spans[index]
-  if not (span and valid_win()) then
+  if not (span and win and valid_win()) then
     return false
   end
 
@@ -718,7 +720,7 @@ end
 --- Show the result window, creating it if needed.
 ---@return integer win
 function M.open()
-  if valid_win() then
+  if win and valid_win() then
     return win
   end
 
@@ -747,7 +749,7 @@ end
 
 --- Hide the result window, keeping what it holds.
 function M.close()
-  if valid_win() then
+  if win and valid_win() then
     require('sqmeow.ui.layout').close_window(win)
   end
   win = nil
@@ -773,6 +775,7 @@ function M.update_winbar(summary)
   -- The connection the result came from, not the active one. They differ the moment someone
   -- switches, and relabelling an old grid with a database it never touched is a lie.
   local state = require('sqmeow.state')
+  ---@type { name: string, dialect: string|nil }|nil
   local connection = summary and summary.conn_id and state.connections[summary.conn_id]
   if not connection and summary and summary.connection then
     -- A result shown from the log names the database it came from, whether or not that is open.

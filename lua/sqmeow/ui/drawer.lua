@@ -408,13 +408,13 @@ end
 
 --- Redraw the tree.
 function M.render()
-  if not valid_buf() then
+  if not (buf and valid_buf()) then
     return
   end
 
   local parts, err = nui()
   if not parts then
-    return vim.notify(err, vim.log.levels.ERROR)
+    return vim.notify(err or 'sqmeow: the drawer needs nui.nvim', vim.log.levels.ERROR)
   end
 
   local icons = require('sqmeow.icons')
@@ -492,7 +492,7 @@ end
 ---
 ---@return table|nil
 function M.current_node()
-  if not (valid_win() and tree) then
+  if not (win and tree and valid_win()) then
     return nil
   end
 
@@ -698,7 +698,8 @@ function M.actions.rename()
       -- A connection that was saved under the old name is renamed with it, since a user who
       -- renames what they are looking at meant the connection, not this session's copy of it.
       if require('sqmeow.sources').find(node.name) then
-        return require('sqmeow.api').edit(node.name, { name = name })
+        require('sqmeow.api').edit(node.name, { name = name })
+        return
       end
       require('sqmeow.api').rename(node.conn_id, name)
     end)
@@ -850,7 +851,7 @@ end
 --- The drawer buffer, created on first use.
 ---@return integer
 function M.buffer()
-  if valid_buf() then
+  if buf and valid_buf() then
     return buf
   end
 
@@ -870,7 +871,7 @@ end
 --- Show the drawer.
 ---@return integer win
 function M.open()
-  if valid_win() then
+  if win and valid_win() then
     return win
   end
 
@@ -903,7 +904,7 @@ end
 
 --- Hide the drawer, keeping what it has loaded.
 function M.close()
-  if valid_win() then
+  if win and valid_win() then
     require('sqmeow.ui.layout').close_window(win)
   end
   win = nil

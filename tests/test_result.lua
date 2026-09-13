@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local result = require('sqmeow.ui.result')
 
@@ -147,20 +148,20 @@ T['pages'] = MiniTest.new_set({
 
 T['pages']['is one page when a result fits'] = function()
   require('sqmeow').setup({ ui = { result = { page_size = 100 } } })
-  local current, total = result.pages({ rows = 9 })
+  local current, total = result.pages({ state = 'done', rows = 9 })
   eq(current, 1)
   eq(total, 1)
 end
 
 T['pages']['counts a partial last page'] = function()
   require('sqmeow').setup({ ui = { result = { page_size = 4 } } })
-  local _, total = result.pages({ rows = 9 })
+  local _, total = result.pages({ state = 'done', rows = 9 })
   eq(total, 3)
 end
 
 T['pages']['says one page for a result with no rows'] = function()
   require('sqmeow').setup({ ui = { result = { page_size = 4 } } })
-  local current, total = result.pages({ rows = 0 })
+  local current, total = result.pages({ state = 'done', rows = 0 })
   eq(current, 1)
   eq(total, 1)
 end

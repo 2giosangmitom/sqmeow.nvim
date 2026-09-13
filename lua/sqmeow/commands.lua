@@ -384,7 +384,7 @@ M.subcommands = {
       if not channel then
         return notify(err, vim.log.levels.ERROR)
       end
-      local info = rpc.info()
+      local info = assert(rpc.info(), 'a started engine has answered its handshake')
       notify(('engine %s running (pid %d)'):format(info.core_version, info.pid))
     end,
   },

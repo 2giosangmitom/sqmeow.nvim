@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local editor = require('sqmeow.ui.editor')
 local detail = require('sqmeow.ui.detail')

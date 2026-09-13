@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 -- The whole stack, end to end: the plugin asks, the engine queries SQLite, the engine writes the
 -- grid into the buffer. This is the test that catches a break anywhere along that path.
 

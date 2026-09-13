@@ -1,3 +1,4 @@
+local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local history = require('sqmeow.history')
 local config = require('sqmeow.config')
@@ -75,7 +76,13 @@ T['records a finished call'] = function()
 end
 
 T['names the connection the call ran on'] = function()
-  state.connections[1] = { id = 1, name = 'production', dialect = 'postgres' }
+  state.connections[1] = {
+    id = 1,
+    name = 'production',
+    url = 'sqlite::memory:',
+    state = 'connected',
+    dialect = 'postgres',
+  }
   history.append(call())
 
   eq(history.entries()[1].connection, 'production')
@@ -192,8 +199,9 @@ T['listing']['keeps every run of the same statement'] = function()
 end
 
 T['listing']['tells apart the same statement on two connections'] = function()
-  state.connections[1] = { id = 1, name = 'dev' }
-  state.connections[2] = { id = 2, name = 'production' }
+  state.connections[1] = { id = 1, name = 'dev', url = 'sqlite::memory:', state = 'connected' }
+  state.connections[2] =
+    { id = 2, name = 'production', url = 'sqlite::memory:', state = 'connected' }
   history.append(call({ conn_id = 1 }))
   history.append(call({ conn_id = 2 }))
 
@@ -201,8 +209,9 @@ T['listing']['tells apart the same statement on two connections'] = function()
 end
 
 T['listing']['narrows to one connection'] = function()
-  state.connections[1] = { id = 1, name = 'dev' }
-  state.connections[2] = { id = 2, name = 'production' }
+  state.connections[1] = { id = 1, name = 'dev', url = 'sqlite::memory:', state = 'connected' }
+  state.connections[2] =
+    { id = 2, name = 'production', url = 'sqlite::memory:', state = 'connected' }
   history.append(call({ conn_id = 1, statement = 'select 1' }))
   history.append(call({ conn_id = 2, statement = 'select 2' }))
 
