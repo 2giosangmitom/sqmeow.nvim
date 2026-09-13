@@ -303,9 +303,12 @@ local function scratchpad_node()
   local children = {}
   for index, pad in ipairs(pads) do
     children[index] = parts.Tree.Node({
-      id = 'pad:' .. pad.name,
+      -- By path, since two connections can each have a scratchpad of the same name.
+      id = 'pad:' .. pad.path,
       kind = 'scratchpad',
       name = pad.name,
+      -- The connection folder it is in, so `report` for one database reads apart from another's.
+      note = pad.folder,
       file = pad.path,
       expandable = false,
     })
@@ -760,6 +763,28 @@ end
 --- looking when they notice the connection they want is not there.
 function M.actions.add()
   require('sqmeow.ui.connection').create()
+end
+
+--- Create a scratchpad for the connection under the cursor.
+---
+--- Anywhere inside a connection counts, so a user reading a table does not have to climb back up
+--- to the connection's own row first. The name is asked for, and nothing is created if none is
+--- given.
+function M.actions.new_scratchpad()
+  local node = M.current_node()
+  local name = node and node.kind == 'connection' and node.name or nil
+  if node and not name and node.conn_id then
+    local connection = require('sqmeow.state').connections[node.conn_id]
+    name = connection and connection.name
+  end
+
+  if not name then
+    return vim.notify(
+      'sqmeow: put the cursor on a connection to create a scratchpad for it',
+      vim.log.levels.WARN
+    )
+  end
+  require('sqmeow.api').scratchpad(name)
 end
 
 --- Edit the connection under the cursor.

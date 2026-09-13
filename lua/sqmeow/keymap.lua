@@ -47,6 +47,11 @@ M.defaults = {
     { action = 'rename', lhs = 'R', desc = 'Rename the connection or scratchpad under the cursor' },
     { action = 'use', lhs = 'u', desc = 'Run queries against this connection' },
     { action = 'add', lhs = 'A', desc = 'Add a connection' },
+    {
+      action = 'new_scratchpad',
+      lhs = 'a',
+      desc = 'Create a scratchpad for the connection under the cursor',
+    },
     { action = 'edit', lhs = 'e', desc = 'Edit the connection under the cursor' },
     { action = 'delete', lhs = 'd', desc = 'Delete the scratchpad, or empty the query log' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
@@ -115,7 +120,7 @@ M.plug = {
     end,
   },
   ['sqmeow-scratch'] = {
-    desc = 'Open the scratchpad for this connection',
+    desc = 'Create a scratchpad for this connection',
     run = function()
       require('sqmeow.api').scratchpad()
     end,

@@ -47,9 +47,11 @@ drawer makes the connection under the cursor active, and `:Sqmeow use [name]` do
 from the command line. `<CR>` only opens a row out, so reading a schema never changes where the
 next query goes.
 
-A scratchpad overrides that. It is opened for one database and named after it, so it runs there
+A scratchpad overrides that. It is created for one database, with `a` on that connection in the
+drawer or `:Sqmeow scratch [name]`, and kept in a folder named after it, so it runs there
 whatever else is active, and the line above it says which database that is. Two scratchpads
-side by side therefore reach two databases without anything being switched between them.
+side by side therefore reach two databases without anything being switched between them. One
+for Redis is a `.redis` file rather than a `.sql` one, and opens with that filetype.
 
 `:Sqmeow bind <name>` ties any other buffer to a connection the same way, and `:Sqmeow bind
 none` unties it. A buffer tied to a database that is not open refuses to run rather than
@@ -385,6 +387,7 @@ drawer
  R         Rename the connection or scratchpad under the cursor
  u         Run queries against this connection
  A         Add a connection
+ a         Create a scratchpad for the connection under the cursor
  e         Edit the connection under the cursor
  d         Delete the scratchpad, or empty the query log
  ?         Show these mappings
@@ -741,13 +744,14 @@ Parameters ~
 
 ------------------------------------------------------------------------------
                                                        *sqmeow.api.scratchpad()*
-                        `sqmeow.api.scratchpad`({name})
-Open the scratchpad for a connection.
+                     `sqmeow.api.scratchpad`({connection})
+Create a scratchpad for a connection, asking what to call it.
+
+Asked rather than named for the user: a connection can have any number of scratchpads, and only
+the person about to write in one knows what it is for.
 
 Parameters ~
-{name} `(string|nil)` Defaults to the current connection.
-Return ~
-`(integer)` buf
+{connection} `(string|nil)` Connection name. Defaults to the current connection.
 
 ------------------------------------------------------------------------------
                                                       *sqmeow.api.open_drawer()*
@@ -762,13 +766,11 @@ Hide the schema drawer.
 ------------------------------------------------------------------------------
                                                          *sqmeow.api.open_all()*
                             `sqmeow.api.open_all`()
-Open every surface at once: the drawer, a scratchpad, and the result window.
+Open the drawer and the result window.
 
-What `:Sqmeow` on its own does. A database client is three panes, and opening them one command
-at a time is work the user should not have to do to get started.
-
-The order is the layout: the drawer takes the left, the scratchpad the window beside it, and
-the result the strip along the bottom.
+What `:Sqmeow` on its own does. No scratchpad is opened: scratchpads are created when someone
+asks for one, and the window beside the drawer keeps whatever it was showing. The drawer takes
+the left and the result the strip along the bottom.
 
 ------------------------------------------------------------------------------
                                                            *sqmeow.api.toggle()*

@@ -14,11 +14,11 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 ## ✨ Features
 
 - 🐘 SQLite, PostgreSQL, MySQL and Redis, with several connections open at once.
-- 🖥️ One command opens the whole client: schema drawer, scratchpad and result grid.
+- 🖥️ One command opens the client: schema drawer and result grid.
 - 📝 A connection form with real fields, so nobody types a URL by hand. The password stays hidden behind asterisks.
 - 🌲 A schema drawer with tables, views, functions, procedures and columns with their types and keys, loaded as you expand.
 - ▶️ Run the statement under the cursor, a selection or the whole buffer. Errors show up as diagnostics on their own lines.
-- 📄 Scratchpads that survive a restart, each tied to its own connection, so two of them can query two databases side by side.
+- 📄 Scratchpads you create and name from the drawer, as many per connection as you like. They survive a restart and stay tied to their connection, so two of them can query two databases side by side.
 - 🕘 A query log that keeps every result, so you can look at yesterday's answer without running the query again.
 - ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Yank as CSV or export to CSV and JSON.
 - 🔐 Passwords can come from `{{ env "VAR" }}` or `{{ exec "cmd" }}`, and are masked wherever a URL is shown.
@@ -51,9 +51,9 @@ To track the latest commit instead of a release, drop `version` and use `install
 
 ## ⚡ Usage
 
-1. `:Sqmeow` opens the drawer, a scratchpad and the result window. Run it again to restore your layout.
+1. `:Sqmeow` opens the drawer and the result window. Run it again to restore your layout.
 2. `:Sqmeow add` (or `A` in the drawer) opens a form to add a connection.
-3. `<CR>` on a connection in the drawer opens it. `u` makes it the one queries run against.
+3. `<CR>` on a connection in the drawer opens it. `u` makes it the one queries run against, and `a` creates a scratchpad for it.
 4. Write SQL in the scratchpad and press `<CR>` to run the statement under the cursor, or a visual selection. Errors show as diagnostics. On a Redis connection, write one command per line; the drawer lists keys by type.
 
 Press `?` in the drawer or result window to list its keys.
@@ -75,7 +75,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 | `:Sqmeow use [name]`         | Choose the connection queries run against           |
 | `:Sqmeow bind <name\|none>`  | Tie the current buffer to a connection, or untie it |
 | `:Sqmeow disconnect`         | Close the current connection                        |
-| `:Sqmeow scratch [name]`     | Open the scratchpad for a connection                |
+| `:Sqmeow scratch [name]`     | Create a scratchpad for a connection                |
 | `:Sqmeow execute [sql]`      | Run the buffer, the selection, or the given SQL     |
 | `:Sqmeow cancel`             | Stop the running query                              |
 | `:Sqmeow export <csv\|json>` | Write the result to a file                          |
@@ -96,6 +96,7 @@ Subcommands complete with `<Tab>`. See `:h sqmeow` for the rest.
 | `p`         | Preview the relation                  |
 | `r`         | Reload the subtree                    |
 | `y` / `s`   | Yank the qualified name / a `SELECT`  |
+| `a`         | Create a scratchpad for the connection |
 | `A` / `e`   | Add / edit a connection               |
 | `R`         | Rename a connection or scratchpad     |
 | `d`         | Delete a scratchpad, or empty the log |

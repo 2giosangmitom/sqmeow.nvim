@@ -1,10 +1,18 @@
 --- Scratchpad buffers.
 ---
---- One file per connection, under `core.path`, opened as an ordinary buffer with the `sql`
---- filetype. A real file rather than a scratch buffer, so it survives a restart, `:w` does what
---- `:w` always does, and every SQL plugin the user already has keeps working in it.
+--- Files under `core.path`, created only when asked for: `a` in the drawer, `:Sqmeow scratch`, or
+--- `<Plug>(sqmeow-scratch)`. Each lives in a folder named after its connection, which is what ties
+--- it to that database, and has the extension of what the connection speaks: `.sql`, or `.redis`.
+--- Real files rather than scratch buffers, so they survive a restart, `:w` does what `:w` always
+--- does, and every SQL plugin the user already has keeps working in them.
+---
+--- A file straight under the directory and named after a connection is how scratchpads were kept
+--- before they had folders. It is still listed, and still tied to that connection.
 
 local M = {}
+
+--- The filetype for each extension a scratchpad can have.
+local filetypes = { sql = 'sql', redis = 'redis' }
 
 --- Where scratchpads are kept.
 ---@return string
@@ -12,7 +20,7 @@ function M.directory()
   return require('sqmeow.paths').scratch()
 end
 
---- Turn a connection name into something safe to use as a file name.
+--- Turn a connection or scratchpad name into something safe to use as a file name.
 ---
 ---@param name string
 ---@return string
@@ -21,28 +29,70 @@ function M.slug(name)
   return slug == '' and 'scratch' or slug
 end
 
---- The scratchpad file for a connection.
+--- The filetype a scratchpad file opens with, or nil for a file that is not one.
 ---
----@param name string|nil Connection name. Defaults to the current connection.
----@return string
-function M.path(name)
-  if not name then
-    local connection = require('sqmeow.state').current_connection()
-    name = connection and connection.name or 'scratch'
+---@param path string
+---@return string|nil
+function M.filetype(path)
+  return filetypes[path:match('%.(%w+)$') or '']
+end
+
+--- What a connection speaks, whether it is open or only saved.
+---@param name string
+---@return string|nil
+local function dialect_of(name)
+  local dialects = require('sqmeow.dialects')
+  local open = require('sqmeow.state').connection_by_name(name)
+  if open then
+    return open.dialect or (open.url and dialects.of_url(open.url))
   end
-  return vim.fs.joinpath(M.directory(), M.slug(name) .. '.sql')
+  local spec = require('sqmeow.sources').find(name)
+  return spec and dialects.of_url(spec.url) or nil
+end
+
+--- Where a connection's scratchpad of this name is kept.
+---
+--- The extension follows the connection's dialect, so a Redis script is not opened as SQL.
+---
+---@param connection string Connection name.
+---@param name string Scratchpad name, without an extension.
+---@return string
+function M.path(connection, name)
+  local extension = dialect_of(connection) == 'redis' and 'redis' or 'sql'
+  return vim.fs.joinpath(M.directory(), M.slug(connection), M.slug(name) .. '.' .. extension)
+end
+
+--- Whether a path is somewhere a scratchpad can be: in the directory, or one folder below it.
+---
+--- Every rename and delete is checked against this, because a path from anywhere else reaching
+--- them would change a file nobody was asked about.
+---
+---@param path string Already normalised.
+---@return boolean
+local function is_pad_path(path)
+  local directory = vim.fs.normalize(M.directory())
+  local parent = vim.fs.dirname(path)
+  return parent == directory or vim.fs.dirname(parent) == directory
 end
 
 --- The connection a scratchpad belongs to.
 ---
---- Worked out from the file name, which is the connection's own name run through `M.slug`. Every
---- connection the plugin knows about is checked, open or merely saved, so a scratchpad written for
---- a database that is not open still knows which one it wants.
+--- The folder it is in names the connection. A file straight under the directory is one from
+--- before folders, and its own name does instead. Every connection the plugin knows about is
+--- checked, open or merely saved, so a scratchpad written for a database that is not open still
+--- knows which one it wants.
 ---
 ---@param path string
 ---@return string|nil name
 function M.connection_for(path)
-  local slug = vim.fn.fnamemodify(path, ':t:r')
+  path = vim.fs.normalize(path)
+  if not is_pad_path(path) then
+    return nil
+  end
+
+  local parent = vim.fs.dirname(path)
+  local slug = parent == vim.fs.normalize(M.directory()) and vim.fn.fnamemodify(path, ':t:r')
+    or vim.fs.basename(parent)
 
   for _, connection in ipairs(require('sqmeow.state').connection_list()) do
     if M.slug(connection.name) == slug then
@@ -73,20 +123,32 @@ end
 --- Read from the directory each time rather than remembered, so one written in another Neovim, or
 --- deleted outside the editor, is right without a refresh.
 ---
----@return { name: string, path: string, modified: integer }[] # Most recently written first.
+---@return { name: string, path: string, folder: string|nil, modified: integer }[] # Most recently
+--- written first. `folder` is the connection folder it is in, and nil for one from before folders.
 function M.list()
   local directory = M.directory()
   local pads = {}
 
+  local function add(path, folder)
+    local stat = vim.uv.fs_stat(path)
+    table.insert(pads, {
+      name = vim.fn.fnamemodify(path, ':t:r'),
+      path = path,
+      folder = folder,
+      modified = stat and stat.mtime.sec or 0,
+    })
+  end
+
   for entry, kind in vim.fs.dir(directory) do
-    if kind == 'file' and entry:sub(-4) == '.sql' then
-      local path = vim.fs.joinpath(directory, entry)
-      local stat = vim.uv.fs_stat(path)
-      table.insert(pads, {
-        name = entry:sub(1, -5),
-        path = path,
-        modified = stat and stat.mtime.sec or 0,
-      })
+    local path = vim.fs.joinpath(directory, entry)
+    if kind == 'file' and M.filetype(entry) then
+      add(path, nil)
+    elseif kind == 'directory' then
+      for inner, inner_kind in vim.fs.dir(path) do
+        if inner_kind == 'file' and M.filetype(inner) then
+          add(vim.fs.joinpath(path, inner), entry)
+        end
+      end
     end
   end
 
@@ -105,7 +167,7 @@ end
 --- back into one.
 ---
 --- The window is chosen rather than assumed. A plain `:edit` opens in the current window, and the
---- current window when the drawer's `<CR>` fires is the drawer itself, which would put a SQL file
+--- current window when the drawer's `<CR>` fires is the drawer itself, which would put a file
 --- where the tree was.
 ---
 ---@param path string
@@ -115,15 +177,39 @@ function M.open_path(path)
   vim.cmd.edit(vim.fn.fnameescape(path))
 
   local buf = vim.api.nvim_get_current_buf()
-  vim.bo[buf].filetype = 'sql'
+  vim.bo[buf].filetype = M.filetype(path) or 'sql'
   M.attach(buf, M.connection_for(path))
   return buf
+end
+
+--- Create a scratchpad for a connection, and open it.
+---
+--- The file is written straight away, empty, so the drawer lists it before anything is typed. A
+--- name that is already taken opens that scratchpad rather than failing: somewhere to write under
+--- that name is what was asked for, and it is there.
+---
+---@param connection string Connection name.
+---@param name string
+---@return integer|nil buf
+---@return string|nil error
+function M.create(connection, name)
+  if vim.trim(name or '') == '' then
+    return nil, 'a scratchpad needs a name'
+  end
+
+  local path = M.path(connection, name)
+  vim.fn.mkdir(vim.fs.dirname(path), 'p')
+  if not vim.uv.fs_stat(path) and vim.fn.writefile({}, path) ~= 0 then
+    return nil, ('could not create %s'):format(path)
+  end
+  return M.open_path(path)
 end
 
 --- Rename a scratchpad.
 ---
 --- The new name goes through the same slug as every other one, so a name typed with a slash or a
---- space cannot land outside the scratchpad directory or produce a file nobody can open again.
+--- space cannot land outside the scratchpad's folder or produce a file nobody can open again. The
+--- folder and the extension stay, so a renamed scratchpad keeps its connection and its filetype.
 ---
 ---@param path string
 ---@param name string The new name, without the extension.
@@ -131,24 +217,25 @@ end
 ---@return string|nil error
 function M.rename(path, name)
   path = vim.fs.normalize(path)
-  local directory = vim.fs.normalize(M.directory())
 
-  if vim.fs.dirname(path) ~= directory then
+  if not is_pad_path(path) then
     return nil, ('%s is not a scratchpad'):format(path)
   end
   if not vim.uv.fs_stat(path) then
     return nil, ('there is no scratchpad at %s'):format(path)
   end
 
+  local folder = vim.fs.dirname(path)
   local slug = M.slug(name)
-  local target = vim.fs.normalize(vim.fs.joinpath(directory, slug .. '.sql'))
+  local extension = path:match('%.(%w+)$') or 'sql'
+  local target = vim.fs.normalize(vim.fs.joinpath(folder, slug .. '.' .. extension))
 
   if target == path then
     return target
   end
   -- The slug should make this impossible. Checked anyway, because the cost of being wrong is
   -- writing over a file somewhere else on the disk.
-  if vim.fs.dirname(target) ~= directory then
+  if vim.fs.dirname(target) ~= folder then
     return nil, ('`%s` is not a usable scratchpad name'):format(name)
   end
   if vim.uv.fs_stat(target) then
@@ -190,9 +277,7 @@ end
 function M.remove(path)
   path = vim.fs.normalize(path)
 
-  -- Only ever a file this plugin wrote. A path from anywhere else reaching here would delete
-  -- something nobody was asked about.
-  if vim.fs.dirname(path) ~= vim.fs.normalize(M.directory()) then
+  if not is_pad_path(path) then
     return false, ('%s is not a scratchpad'):format(path)
   end
   if not vim.uv.fs_stat(path) then
@@ -265,15 +350,6 @@ function M.update_winbar()
       vim.wo[win].winbar = ('%%#SqmeowWinbar# %s %%*'):format(label)
     end
   end
-end
-
---- Open the scratchpad for a connection.
----
----@param name string|nil Connection name. Defaults to the current connection.
----@return integer buf
-function M.open(name)
-  vim.fn.mkdir(M.directory(), 'p')
-  return M.open_path(M.path(name))
 end
 
 --- Whether a buffer is one of ours.

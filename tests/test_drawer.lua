@@ -829,6 +829,48 @@ T['scratchpads']['are not deleted from a row that is not one'] = function()
   eq(called, false)
 end
 
+T['scratchpads']['are created for the connection under the cursor'] = function()
+  local editor = require('sqmeow.ui.editor')
+  local input = vim.ui.input
+  vim.ui.input = function(opts, on_confirm)
+    eq(opts.prompt:find('scratch', 1, true) ~= nil, true)
+    on_confirm('report')
+  end
+  MiniTest.finally(function()
+    vim.ui.input = input
+    vim.cmd('silent! bwipeout!')
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'scratch'), 'rf')
+    drawer.open()
+    drawer.render()
+  end)
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
+  vim.api.nvim_set_current_win(drawer.open())
+  drawer.actions.new_scratchpad()
+
+  -- Opened beside the drawer, as a SQL file in the connection's folder, and listed under its name.
+  eq(vim.fs.basename(vim.api.nvim_buf_get_name(0)), 'report.sql')
+  eq(vim.bo.filetype, 'sql')
+  eq(vim.b.sqmeow_connection, 'scratch')
+  expand('scratchpads')
+  eq(lines()[line_matching('report')], '    * report  scratch')
+end
+
+T['scratchpads']['are not created from a row outside every connection'] = function()
+  local called = false
+  local input = vim.ui.input
+  vim.ui.input = function()
+    called = true
+  end
+  MiniTest.finally(function()
+    vim.ui.input = input
+  end)
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratchpads'), 0 })
+  drawer.actions.new_scratchpad()
+  eq(called, false)
+end
+
 T['scratchpads']['say so when there are none'] = function()
   vim.fn.delete(vim.fs.joinpath(require('sqmeow.ui.editor').directory(), 'notes.sql'))
   drawer.render()
@@ -851,7 +893,7 @@ T['window']['maps its keys buffer-locally with descriptions'] = function()
     seen[map.lhs] = map.desc
   end
 
-  for _, key in ipairs({ '<CR>', 'o', 'r', 'y', 's', '?', 'q' }) do
+  for _, key in ipairs({ '<CR>', 'o', 'r', 'y', 's', 'a', '?', 'q' }) do
     eq(type(seen[key]), 'string')
   end
 end

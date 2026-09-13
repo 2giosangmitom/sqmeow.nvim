@@ -37,9 +37,11 @@
 --- from the command line. `<CR>` only opens a row out, so reading a schema never changes where the
 --- next query goes.
 ---
---- A scratchpad overrides that. It is opened for one database and named after it, so it runs there
+--- A scratchpad overrides that. It is created for one database, with `a` on that connection in the
+--- drawer or `:Sqmeow scratch [name]`, and kept in a folder named after it, so it runs there
 --- whatever else is active, and the line above it says which database that is. Two scratchpads
---- side by side therefore reach two databases without anything being switched between them.
+--- side by side therefore reach two databases without anything being switched between them. One
+--- for Redis is a `.redis` file rather than a `.sql` one, and opens with that filetype.
 ---
 --- `:Sqmeow bind <name>` ties any other buffer to a connection the same way, and `:Sqmeow bind
 --- none` unties it. A buffer tied to a database that is not open refuses to run rather than
