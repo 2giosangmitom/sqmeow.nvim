@@ -9,11 +9,11 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 ![Repo size](https://img.shields.io/github/repo-size/2giosangmitom/sqmeow.nvim?color=%23DDB6F2&label=SIZE&logo=codesandbox&style=for-the-badge&logoColor=D9E0EE&labelColor=302D41)
 ![LICENSE](https://img.shields.io/github/license/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=alpinedotjs&color=ee999f&logoColor=D9E0EE&labelColor=302D41)
 
-> Early development. SQLite, PostgreSQL, MySQL and Redis work end to end.
+> Early development. Every database under [Supported databases](#supported-databases) works end to end.
 
 ## ✨ Features
 
-- 🐘 SQLite, PostgreSQL, MySQL and Redis, with several connections open at once.
+- 🐘 Several connections open at once, each to a different database if you like.
 - 🖥️ One command opens the client: schema drawer and result grid.
 - 📝 A connection form with real fields, so nobody types a URL by hand. The password stays hidden behind asterisks.
 - 🌲 A schema drawer with tables, views, functions, procedures and columns with their types and keys, loaded as you expand.
@@ -23,6 +23,15 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 - ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Yank as CSV or export to CSV and JSON.
 - 🔐 Passwords can come from `{{ env "VAR" }}` or `{{ exec "cmd" }}`, and are masked wherever a URL is shown.
 - ⌨️ No global keymaps. Every key is buffer-local and configurable, with `<Plug>` mappings for your own bindings.
+
+<a id="supported-databases"></a>
+
+## 🗄️ Supported databases
+
+- SQLite
+- PostgreSQL
+- MySQL, MariaDB
+- Redis, Valkey, Dragonfly
 
 ## 🎬 Preview
 
