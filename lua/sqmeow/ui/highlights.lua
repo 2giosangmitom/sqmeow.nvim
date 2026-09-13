@@ -41,10 +41,13 @@ M.links = {
   SqmeowIconQuery = 'Function',
   SqmeowIconHistory = 'Statement',
 
-  -- The dot beside a connection. Standard diagnostic groups, so it is green and red in every
-  -- colourscheme without this plugin naming a colour.
+  -- The dot beside a connection. Linked to groups every colourscheme defines, so it is green once
+  -- open, plain text while closed, and the error colour after a failure, without this plugin
+  -- naming a colour.
   SqmeowConnected = 'DiagnosticOk',
-  SqmeowDisconnected = 'DiagnosticError',
+  SqmeowConnecting = 'DiagnosticWarn',
+  SqmeowConnectionError = 'Error',
+  SqmeowDisconnected = 'Normal',
   SqmeowIconFunction = 'Function',
   SqmeowIconProcedure = 'Macro',
 

@@ -466,6 +466,55 @@ T['saved connections']['open when chosen'] = function()
   eq(opened, 'ledger')
 end
 
+T['saved connections']['say they are connecting while they do'] = function()
+  state.add_connection({
+    id = 999,
+    name = 'ledger',
+    url = 'postgres://localhost/ledger',
+    state = 'connecting',
+  })
+  MiniTest.finally(function()
+    state.remove_connection(999)
+    drawer.render()
+  end)
+  drawer.render()
+
+  local number = line_matching('ledger')
+  eq(lines()[number]:find('connecting$') ~= nil, true)
+  eq(marks_on(number)[2].group, 'SqmeowConnecting')
+end
+
+T['saved connections']['can be tried again after failing to open'] = function()
+  require('sqmeow.sources.file').add({ name = 'broken', url = 'mongodb://localhost/broken' })
+  drawer.render()
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('broken'), 0 })
+  drawer.actions.toggle()
+  assert(
+    vim.wait(TIMEOUT, function()
+      return state.connection_by_name('broken') == nil
+    end, 10),
+    'the failed connection should be forgotten'
+  )
+  -- Back to a saved row that says it failed, rather than left drawn as the connection that did.
+  local number = line_matching('broken')
+  eq(lines()[number]:find('error$') ~= nil, true)
+  eq(marks_on(number)[2].group, 'SqmeowConnectionError')
+
+  local opened
+  local connect = require('sqmeow.api').connect_named
+  require('sqmeow.api').connect_named = function(name)
+    opened = name
+  end
+  MiniTest.finally(function()
+    require('sqmeow.api').connect_named = connect
+  end)
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('broken'), 0 })
+  drawer.actions.toggle()
+  eq(opened, 'broken')
+end
+
 T['history'] = MiniTest.new_set({
   hooks = {
     pre_case = function()

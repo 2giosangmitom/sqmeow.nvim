@@ -401,10 +401,11 @@ end
 ---
 ---@return table[]
 function M.connection_rows()
+  local state = require('sqmeow.state')
   local drawn = {}
   local open = {}
 
-  for _, connection in ipairs(require('sqmeow.state').connection_list()) do
+  for _, connection in ipairs(state.connection_list()) do
     -- One database of a cluster is drawn inside the cluster, not beside it.
     if not connection.parent then
       open[connection.name] = true
@@ -413,6 +414,7 @@ function M.connection_rows()
         name = connection.name,
         dialect = connection.dialect,
         note = connection.state,
+        status = connection.state,
         connected = connection.state == 'connected',
       })
     end
@@ -425,6 +427,7 @@ function M.connection_rows()
         url = spec.url,
         dialect = require('sqmeow.dialects').of_url(spec.url),
         note = 'saved',
+        status = state.failures[spec.name] and 'error' or 'disconnected',
         connected = false,
       })
     end
@@ -457,8 +460,12 @@ function M.render()
       name = connection.name,
       kind = 'connection',
       icon_kind = icons.connection_kind(connection.dialect),
-      badge = connection.connected and 'connected' or 'disconnected',
-      note = connection.dialect or connection.note,
+      badge = connection.status,
+      -- A connection on its way, or one that failed, says so in words beside the dot.
+      note = (connection.status == 'connecting' or connection.status == 'error')
+          and connection.status
+        or connection.dialect
+        or connection.note,
       url = connection.url,
       -- A connection nobody has opened has nothing to show yet. Pressing the same key opens it,
       -- and then it does, which is why the marker is drawn either way.

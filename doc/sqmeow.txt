@@ -204,7 +204,9 @@ is built, so the documented defaults cannot drift from the ones the code uses.
         -- What a SQL `NULL` reads as. Distinct from an empty string, which is drawn as nothing.
         null_text = 'NULL',
       },
-      border = 'rounded',
+      -- The border of every dialog. 'default' follows Neovim's own 'winborder'; any nui border
+      -- style, such as 'rounded', sets one for this plugin alone.
+      border = 'default',
       winbar = true,
       persist_session = false,
     },
@@ -241,9 +243,12 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       query = '󰐊',
       history = '󰋚',
 
-      -- Beside a connection, saying whether it is open. One glyph in two colours: the difference is
-      -- `SqmeowConnected` and `SqmeowDisconnected`, not the character.
+      -- Beside a connection, saying what state it is in. One glyph in four colours: the difference
+      -- is `SqmeowConnected`, `SqmeowConnecting`, `SqmeowConnectionError` and `SqmeowDisconnected`,
+      -- not the character.
       connected = '●',
+      connecting = '●',
+      error = '●',
       disconnected = '●',
       ['function'] = '󰊕',
       procedure = '󰡱',
@@ -339,6 +344,18 @@ Read the active configuration.
 Return ~
 `(table)` config
 
+------------------------------------------------------------------------------
+                                                        *sqmeow.config.border()*
+                            `sqmeow.config.border`()
+The border style dialogs are drawn with.
+
+`ui.border`, unless it is 'default', which means Neovim's 'winborder', so a border chosen once
+for every floating window reaches this plugin's too. nui takes the named styles as they are,
+but not the custom form, eight characters separated by commas, which it needs as a list.
+
+Return ~
+`(string|string[])` style
+
 
 ==============================================================================
 ------------------------------------------------------------------------------
@@ -407,7 +424,7 @@ result
  yc   Yank this cell
  yr   Yank this row as CSV
  yp   Yank this page as CSV
- e    Write the result to a file
+ x    Write the result to a file
  ?    Show these mappings
  q    Close the result window
 

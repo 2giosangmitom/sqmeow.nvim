@@ -37,13 +37,10 @@ function M.connect(url, opts)
   local id = state.next_connection_id()
   local name = opts.name or require('sqmeow.url').label(url)
 
-  local accepted, err =
-    engine().request('connect', { id = id, url = url, name = name, database = opts.database })
-  if not accepted then
-    notify(err or 'the engine refused the connection', vim.log.levels.ERROR)
-    return nil, err
-  end
-
+  -- Recorded and drawn before the engine is asked. Its events can arrive while the request is
+  -- still waiting on an answer, and an event for a connection not recorded yet is dropped, which
+  -- left the drawer showing nothing while it connected.
+  state.failures[name] = nil
   state.add_connection({
     id = id,
     name = name,
@@ -52,6 +49,16 @@ function M.connect(url, opts)
     parent = opts.parent,
     database = opts.database,
   })
+  require('sqmeow.ui.drawer').render()
+
+  local accepted, err =
+    engine().request('connect', { id = id, url = url, name = name, database = opts.database })
+  if not accepted then
+    state.remove_connection(id)
+    require('sqmeow.ui.drawer').render()
+    notify(err or 'the engine refused the connection', vim.log.levels.ERROR)
+    return nil, err
+  end
   return id
 end
 

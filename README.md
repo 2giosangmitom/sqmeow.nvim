@@ -117,7 +117,7 @@ Subcommands complete with `<Tab>`. See `:h sqmeow` for the rest.
 | `gg` / `G`         | First / last page             |
 | `K`                | Show the row in detail        |
 | `yc` / `yr` / `yp` | Yank cell / row / page as CSV |
-| `e`                | Export the result             |
+| `x`                | Export the result             |
 | `q`                | Close                         |
 
 **Scratchpad**
@@ -155,7 +155,7 @@ require('sqmeow').setup({
   ui = {
     drawer = { width = 36 },
     result = { height = 16, page_size = 100, max_column_width = 48, column_icons = true, null_text = 'NULL' },
-    border = 'rounded',
+    border = 'default', -- follows 'winborder'; or any nui border style
     winbar = true,
     persist_session = false,
   },

@@ -101,7 +101,7 @@ function M.open(spec)
   local column = gutter + label_width + 2
 
   local width = math.max(56, column + 34)
-  local border = require('sqmeow.config').get().ui.border
+  local border = require('sqmeow.config').border()
 
   local popup = parts.Popup({
     enter = true,
@@ -293,7 +293,7 @@ function M.menu(opts)
     size = { width = math.max(width + 2, 32), height = #lines },
     zindex = 100,
     border = {
-      style = require('sqmeow.config').get().ui.border,
+      style = require('sqmeow.config').border(),
       text = { top = (' %s '):format(opts.title), top_align = 'center' },
     },
     win_options = { cursorline = true },

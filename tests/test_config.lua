@@ -71,4 +71,25 @@ T['validation']['takes a directory for core.path'] = function()
   eq(config.validate({ core = { path = 7 } }), { '`core.path` must be a string, got number' })
 end
 
+T['border'] = MiniTest.new_set()
+
+T['border']['follows winborder unless one is set'] = function()
+  local before = vim.o.winborder
+  MiniTest.finally(function()
+    vim.o.winborder = before
+    config.apply({})
+  end)
+
+  config.apply({})
+  vim.o.winborder = 'double'
+  eq(config.border(), 'double')
+
+  -- The custom form, which nui only takes as a list.
+  vim.o.winborder = '+,-,+,|,+,-,+,|'
+  eq(config.border(), { '+', '-', '+', '|', '+', '-', '+', '|' })
+
+  config.apply({ ui = { border = 'rounded' } })
+  eq(config.border(), 'rounded')
+end
+
 return T

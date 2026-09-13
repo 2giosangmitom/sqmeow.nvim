@@ -49,6 +49,13 @@ local M = {}
 ---@type table<integer, sqmeow.Connection>
 M.connections = {}
 
+--- Why each connection last failed to open, by name, until it is tried again.
+---
+--- A failed connection is forgotten, so that choosing it again tries again. This is what lets the
+--- drawer still say that it failed.
+---@type table<string, string>
+M.failures = {}
+
 --- The connection queries run against.
 ---@type integer|nil
 M.current = nil
@@ -226,6 +233,7 @@ end
 --- Forget everything. Used when the engine restarts, since its session went with it.
 function M.reset()
   M.connections = {}
+  M.failures = {}
   M.current = nil
   M.call = nil
   M.calls = {}

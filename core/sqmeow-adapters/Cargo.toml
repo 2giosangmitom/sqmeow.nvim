@@ -14,7 +14,7 @@ futures-util.workspace = true
 redis.workspace = true
 serde_json.workspace = true
 sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }
-tokio = { workspace = true, features = ["sync", "macros"] }
+tokio = { workspace = true, features = ["sync", "macros", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 

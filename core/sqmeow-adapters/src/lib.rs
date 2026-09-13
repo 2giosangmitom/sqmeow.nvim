@@ -19,6 +19,38 @@ use tokio_util::sync::CancellationToken;
 /// How long to keep trying to open a connection before giving up.
 pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Open a pool, trying again while the server resets connections, until `CONNECT_TIMEOUT`.
+///
+/// sqlx retries a refused connection itself, but not one reset or cut off mid-handshake, which is
+/// what a server that has just restarted does: a container's port accepts before the database
+/// behind it is ready, so the first attempt after a restart fails when a second would not.
+pub(crate) async fn connect_retrying<T, F, Fut>(mut open: F) -> sqlx::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = sqlx::Result<T>>,
+{
+    use std::io::ErrorKind;
+
+    let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
+    loop {
+        match open().await {
+            Err(sqlx::Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    ErrorKind::ConnectionReset
+                        | ErrorKind::ConnectionAborted
+                        | ErrorKind::UnexpectedEof
+                        | ErrorKind::BrokenPipe
+                ) && tokio::time::Instant::now() < deadline =>
+            {
+                tracing::debug!(%error, "the server cut the connection off; trying again");
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            outcome => return outcome,
+        }
+    }
+}
+
 pub use mysql::MySqlAdapter;
 pub use postgres::PostgresAdapter;
 // `self::`, because a bare `redis` here would also name the driver crate.
@@ -173,4 +205,43 @@ pub fn supported() -> Vec<&'static str> {
         Dialect::MySql.name(),
         Dialect::Redis.name(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::ErrorKind;
+
+    use super::connect_retrying;
+
+    #[tokio::test]
+    async fn a_reset_connection_is_tried_again() {
+        let mut attempts = 0;
+        let opened = connect_retrying(|| {
+            attempts += 1;
+            let attempt = attempts;
+            async move {
+                if attempt < 3 {
+                    Err(sqlx::Error::Io(ErrorKind::ConnectionReset.into()))
+                } else {
+                    Ok(attempt)
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(opened.expect("the third attempt should open"), 3);
+    }
+
+    #[tokio::test]
+    async fn any_other_failure_is_reported_at_once() {
+        let mut attempts = 0;
+        let opened: sqlx::Result<()> = connect_retrying(|| {
+            attempts += 1;
+            async { Err(sqlx::Error::PoolTimedOut) }
+        })
+        .await;
+
+        assert!(opened.is_err());
+        assert_eq!(attempts, 1);
+    }
 }

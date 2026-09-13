@@ -42,14 +42,16 @@ impl MySqlAdapter {
     /// the next statement the user runs.
     pub async fn connect(url: &str) -> Result<Self> {
         let options = MySqlConnectOptions::from_str(url).map_err(Error::driver)?;
-        let pool = MySqlPoolOptions::new()
-            .max_connections(1)
-            // sqlx retries a refused connection until this expires. A mistyped host should say so
-            // while the user still remembers typing it, not half a minute later.
-            .acquire_timeout(crate::CONNECT_TIMEOUT)
-            .connect_with(options)
-            .await
-            .map_err(Error::driver)?;
+        let pool = crate::connect_retrying(|| {
+            MySqlPoolOptions::new()
+                .max_connections(1)
+                // sqlx retries a refused connection until this expires. A mistyped host should
+                // say so while the user still remembers typing it, not half a minute later.
+                .acquire_timeout(crate::CONNECT_TIMEOUT)
+                .connect_with(options.clone())
+        })
+        .await
+        .map_err(Error::driver)?;
 
         Ok(Self {
             pool,

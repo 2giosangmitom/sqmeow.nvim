@@ -67,7 +67,9 @@ M.defaults = {
     { action = 'yank_cell', lhs = 'yc', desc = 'Yank this cell' },
     { action = 'yank_row', lhs = 'yr', desc = 'Yank this row as CSV' },
     { action = 'yank_page', lhs = 'yp', desc = 'Yank this page as CSV' },
-    { action = 'export', lhs = 'e', desc = 'Write the result to a file' },
+    -- Not `e`: a wide grid is crossed with the word motions, and `x` edits nothing in a buffer
+    -- that cannot be edited.
+    { action = 'export', lhs = 'x', desc = 'Write the result to a file' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the result window' },
   },
