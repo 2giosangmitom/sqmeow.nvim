@@ -9,6 +9,8 @@
 
 local M = {}
 
+local utils = require('sqmeow.utils')
+
 local buf = nil
 local win = nil
 
@@ -50,22 +52,6 @@ local function under(key, prefix)
   end
   local boundary = prefix:sub(-1) == '\0' and prefix or (prefix .. '\0')
   return key:sub(1, #boundary) == boundary
-end
-
-local function valid_buf()
-  return buf ~= nil and vim.api.nvim_buf_is_valid(buf)
-end
-
---- Whether the drawer window is still the drawer window.
----
---- A valid handle is not enough: something else can take a window over, and the tree would then
---- be drawn into a buffer nobody is looking at. Treating that as closed means the next `:Sqmeow
---- toggle` opens a sidebar rather than fighting over one.
-local function valid_win()
-  return win ~= nil
-    and vim.api.nvim_win_is_valid(win)
-    and valid_buf()
-    and vim.api.nvim_win_get_buf(win) == buf
 end
 
 --- Whether the tree currently shows this node's children.
@@ -156,13 +142,9 @@ local function annotate(node)
   return table.concat(parts, '  ')
 end
 
---- nui's tree, or nil with a message when it is not installed.
+--- The nui.nvim components the drawer is built from.
 local function nui()
-  local ok, Tree = pcall(require, 'nui.tree')
-  if not ok then
-    return nil, 'sqmeow: the drawer needs nui.nvim (MunifTanjim/nui.nvim)'
-  end
-  return { Tree = Tree, Line = require('nui.line'), Text = require('nui.text') }
+  return utils.nui({ 'tree', 'line', 'text' }, 'the drawer')
 end
 
 --- Turn one node into the line the drawer draws for it.
@@ -435,13 +417,13 @@ end
 
 --- Redraw the tree.
 function M.render()
-  if not (buf and valid_buf()) then
+  if not (buf and utils.buf_valid(buf)) then
     return
   end
 
   local parts, err = nui()
   if not parts then
-    return vim.notify(err or 'sqmeow: the drawer needs nui.nvim', vim.log.levels.ERROR)
+    return utils.notify(err, vim.log.levels.ERROR)
   end
 
   local icons = require('sqmeow.icons')
@@ -519,7 +501,7 @@ end
 ---
 ---@return table|nil
 function M.current_node()
-  if not (win and tree and valid_win()) then
+  if not (win and tree and utils.shows(win, buf)) then
     return nil
   end
 
@@ -749,10 +731,16 @@ function M.actions.preview()
     return
   end
 
+  -- Nil for a Redis key of a type nothing reads back.
+  local statement = preview_statement(node)
+  if not statement then
+    return
+  end
+
   local api = require('sqmeow.api')
   api.use(node.conn_id)
   api.execute(
-    preview_statement(node),
+    statement,
     -- Written by the plugin, not by anyone at the keyboard, so it stays out of the query log.
     { history = false }
   )
@@ -768,7 +756,7 @@ function M.actions.yank_name()
 
   local name = require('sqmeow.sql').qualify(dialect_of(node.conn_id), sql_parts(node.path))
   vim.fn.setreg(vim.v.register or '"', name)
-  vim.notify('sqmeow: yanked ' .. name)
+  utils.notify('yanked ' .. name)
 end
 
 --- Copy a `SELECT` for the relation under the cursor.
@@ -779,8 +767,11 @@ function M.actions.yank_select()
   end
 
   local statement = preview_statement(node)
+  if not statement then
+    return
+  end
   vim.fn.setreg(vim.v.register or '"', statement)
-  vim.notify('sqmeow: yanked ' .. statement)
+  utils.notify('yanked ' .. statement)
 end
 
 --- Rename the connection or the scratchpad under the cursor.
@@ -815,10 +806,10 @@ function M.actions.rename()
 
     local renamed, err = require('sqmeow.ui.editor').rename(node.file, name)
     if not renamed then
-      return vim.notify('sqmeow: ' .. err, vim.log.levels.ERROR)
+      return utils.notify(err or 'the scratchpad could not be renamed', vim.log.levels.ERROR)
     end
 
-    vim.notify(('sqmeow: renamed %s to %s'):format(node.name, vim.fn.fnamemodify(renamed, ':t:r')))
+    utils.notify(('renamed %s to %s'):format(node.name, vim.fn.fnamemodify(renamed, ':t:r')))
     M.render()
   end)
 end
@@ -838,12 +829,12 @@ function M.actions.use()
     return
   end
   if not node.conn_id then
-    return vim.notify(('sqmeow: `%s` is not open yet'):format(node.name), vim.log.levels.WARN)
+    return utils.notify(('`%s` is not open yet'):format(node.name), vim.log.levels.WARN)
   end
 
   local connection = require('sqmeow.api').use(node.conn_id)
   if connection then
-    vim.notify(('sqmeow: queries now run on %s'):format(connection.name))
+    utils.notify(('queries now run on %s'):format(connection.name))
   end
 end
 
@@ -872,8 +863,8 @@ function M.actions.new_scratchpad()
   end
 
   if not name then
-    return vim.notify(
-      'sqmeow: put the cursor on a connection to create a scratchpad for it',
+    return utils.notify(
+      'put the cursor on a connection to create a scratchpad for it',
       vim.log.levels.WARN
     )
   end
@@ -891,15 +882,15 @@ function M.actions.edit()
 
   local spec = require('sqmeow.sources').find(node.name)
   if not spec then
-    return vim.notify(
-      ('sqmeow: `%s` is open but not saved, so there is nothing to edit'):format(node.name),
+    return utils.notify(
+      ('`%s` is open but not saved, so there is nothing to edit'):format(node.name),
       vim.log.levels.WARN
     )
   end
 
   if not require('sqmeow.ui.connection').edit(spec) then
-    vim.notify(
-      ('sqmeow: `%s` holds a url the form cannot take apart'):format(node.name),
+    utils.notify(
+      ('`%s` holds a url the form cannot take apart'):format(node.name),
       vim.log.levels.WARN
     )
   end
@@ -920,7 +911,7 @@ function M.actions.delete()
           return
         end
         require('sqmeow.history').clear()
-        vim.notify('sqmeow: the query log is empty')
+        utils.notify('the query log is empty')
         M.render()
       end
     )
@@ -939,10 +930,10 @@ function M.actions.delete()
 
     local removed, err = require('sqmeow.ui.editor').remove(node.file)
     if not removed then
-      return vim.notify('sqmeow: ' .. err, vim.log.levels.ERROR)
+      return utils.notify(err or 'the scratchpad could not be deleted', vim.log.levels.ERROR)
     end
 
-    vim.notify('sqmeow: deleted the scratchpad ' .. node.name)
+    utils.notify('deleted the scratchpad ' .. node.name)
     M.render()
   end)
 end
@@ -979,7 +970,7 @@ end
 --- The drawer buffer, created on first use.
 ---@return integer
 function M.buffer()
-  if buf and valid_buf() then
+  if buf and utils.buf_valid(buf) then
     return buf
   end
 
@@ -999,7 +990,7 @@ end
 --- Show the drawer.
 ---@return integer win
 function M.open()
-  if win and valid_win() then
+  if win and utils.shows(win, buf) then
     return win
   end
 
@@ -1027,7 +1018,7 @@ end
 
 --- Hide the drawer, keeping what it has loaded.
 function M.close()
-  if win and valid_win() then
+  if win and utils.shows(win, buf) then
     require('sqmeow.ui.layout').close_window(win)
   end
   win = nil
@@ -1037,7 +1028,7 @@ end
 --- Whether the drawer is showing.
 ---@return boolean
 function M.is_open()
-  return valid_win()
+  return utils.shows(win, buf)
 end
 
 --- Forget everything. Used when the engine restarts, since its session went with it.

@@ -6,32 +6,23 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Mutex;
-use std::time::Instant;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
-use sqlx::{
-    AssertSqlSafe, Column as _, Executor, Row, SqlSafeStr, SqlitePool, Statement as _, TypeInfo,
-    ValueRef,
-};
+use sqlx::{AssertSqlSafe, Row, SqlitePool, Statement as _, TypeInfo, ValueRef};
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
     RelationNode, Result, ResultSet, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::stream::drain;
+use crate::stream::{self, TableKeys, origins, prepare, result_columns, text_or_bytes};
 
 /// A pool against one SQLite database.
 #[derive(Debug)]
 pub struct SqliteAdapter {
     pool: SqlitePool,
-    /// Which columns of a table are keys, by table name and then column name.
-    ///
-    /// Whole tables at a time, because that is the only shape the pragmas come in. A table present
-    /// here has been read, even if it turned out to have no keys, which is what stops one without
-    /// any from being asked about again on every execution.
-    keys: Mutex<HashMap<String, HashMap<String, KeyKind>>>,
+    /// Which columns of a table are keys, read from the pragmas a whole table at a time.
+    keys: TableKeys,
 }
 
 impl SqliteAdapter {
@@ -57,98 +48,36 @@ impl SqliteAdapter {
 
         Ok(Self {
             pool,
-            keys: Mutex::default(),
+            keys: TableKeys::default(),
         })
     }
 
-    /// Ask the database what a statement's result looks like, before running it.
-    ///
-    /// This is what lets a query returning no rows still show its header, which is the difference
-    /// between "no rows" and "something went wrong" at a glance.
+    /// What a statement's result looks like, with the columns that are keys marked.
     async fn columns(&self, statement: &str) -> Vec<Column> {
-        let sql = AssertSqlSafe(statement.to_owned()).into_sql_str();
-
-        let prepared = match self.pool.prepare(sql).await {
-            Ok(prepared) => prepared,
-            // Preparing is a convenience. A statement that will not prepare may still run, and if
-            // it cannot, executing it reports the real error.
-            Err(error) => {
-                tracing::debug!(%error, "could not prepare a statement to read its columns");
-                return Vec::new();
-            }
+        let Some(prepared) = prepare(&self.pool, statement).await else {
+            return Vec::new();
         };
-
-        let mut columns: Vec<Column> = prepared
-            .columns()
-            .iter()
-            .map(|column| Column::new(column.name(), column.type_info().name()))
-            .collect();
-
-        // SQLite will name the table and column a result column came from, for a prepared
-        // statement, without being asked and without a query.
-        let sources: Vec<Option<(String, String)>> = prepared
-            .columns()
-            .iter()
-            .map(|column| {
-                let origin = column.origin();
-                let origin = origin.table_column()?;
-                Some((origin.table.to_string(), origin.name.to_string()))
+        let mut columns = result_columns(prepared.columns());
+        // SQLite names the table and column a result column came from, for a prepared statement,
+        // without being asked and without a query.
+        self.keys
+            .mark(&origins(prepared.columns()), &mut columns, |table| {
+                self.read_keys(table)
             })
-            .collect();
-
-        self.mark_keys(&sources, &mut columns).await;
+            .await;
         columns
-    }
-
-    /// Mark the result columns that are keys in the table they came from.
-    ///
-    /// A column that is an expression has no origin and is left unmarked.
-    async fn mark_keys(&self, sources: &[Option<(String, String)>], columns: &mut [Column]) {
-        let missing: Vec<String> = {
-            let Ok(known) = self.keys.lock() else {
-                return;
-            };
-            let mut missing: Vec<String> = sources
-                .iter()
-                .flatten()
-                .map(|(table, _)| table.clone())
-                .filter(|table| !known.contains_key(table))
-                .collect();
-            missing.sort_unstable();
-            missing.dedup();
-            missing
-        };
-
-        for table in missing {
-            let found = self.read_keys(&table).await;
-            if let Ok(mut known) = self.keys.lock() {
-                known.insert(table, found);
-            }
-        }
-
-        let Ok(known) = self.keys.lock() else {
-            return;
-        };
-        for (column, source) in columns.iter_mut().zip(sources) {
-            if let Some(kind) = source
-                .as_ref()
-                .and_then(|(table, name)| known.get(table)?.get(name))
-            {
-                column.key = *kind;
-            }
-        }
     }
 
     /// Ask the pragmas which columns of one table are keys.
     ///
     /// A failure answers with nothing rather than an error: an icon is worth two pragmas, and it is
     /// not worth failing the result the user actually asked for.
-    async fn read_keys(&self, table: &str) -> HashMap<String, KeyKind> {
+    async fn read_keys(&self, table: String) -> HashMap<String, KeyKind> {
         let mut keys = HashMap::new();
 
         // Foreign keys first, so a column that is both has its primary key written over the top.
         // Which is the order every other adapter resolves the two in.
-        let sql = format!("pragma foreign_key_list({})", self.quote_ident(table));
+        let sql = format!("pragma foreign_key_list({})", self.quote_ident(&table));
         match sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await {
             Ok(rows) => {
                 for row in &rows {
@@ -158,11 +87,11 @@ impl SqliteAdapter {
                 }
             }
             Err(error) => {
-                tracing::debug!(%error, table, "could not read a table's foreign keys");
+                tracing::debug!(%error, %table, "could not read a table's foreign keys");
             }
         }
 
-        let sql = format!("pragma table_info({})", self.quote_ident(table));
+        let sql = format!("pragma table_info({})", self.quote_ident(&table));
         match sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await {
             Ok(rows) => {
                 for row in &rows {
@@ -176,7 +105,7 @@ impl SqliteAdapter {
                 }
             }
             Err(error) => {
-                tracing::debug!(%error, table, "could not read a table's primary key");
+                tracing::debug!(%error, %table, "could not read a table's primary key");
             }
         }
 
@@ -199,28 +128,17 @@ impl Adapter for SqliteAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let started = Instant::now();
         let columns = self.columns(statement).await;
-        let width = columns.len();
-        let mut result = ResultSet::new(statement, columns);
-
-        // The SQL is whatever the user typed into their own editor, against their own
-        // database. There is no untrusted input to escape here, and refusing to run it would
-        // defeat the point of the plugin.
-        let stream = sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(&self.pool);
-
-        drain(
-            stream,
-            &mut result,
+        stream::execute(
+            &self.pool,
+            statement,
+            columns,
             max_rows,
             &cancel,
             |outcome| outcome.rows_affected(),
-            |row| decode_row(row, width),
+            decode_cell,
         )
-        .await?;
-
-        result.set_elapsed(started.elapsed());
-        Ok(result)
+        .await
     }
 
     /// SQLite calls them databases: `main`, `temp`, and anything attached.
@@ -338,13 +256,6 @@ impl Adapter for SqliteAdapter {
     }
 }
 
-fn decode_row(row: &SqliteRow, width: usize) -> Vec<Cell> {
-    // A row can be wider than `describe` predicted, so take whichever is larger and let the result
-    // set trim or pad. Losing a column silently would be worse than showing an extra one.
-    let width = width.max(row.len());
-    (0..width).map(|index| decode_cell(row, index)).collect()
-}
-
 fn decode_cell(row: &SqliteRow, index: usize) -> Cell {
     let Ok(raw) = row.try_get_raw(index) else {
         return Cell::Null;
@@ -358,37 +269,20 @@ fn decode_cell(row: &SqliteRow, index: usize) -> Cell {
     match type_name.as_str() {
         "INTEGER" | "INT" | "BIGINT" => row
             .try_get::<i64, _>(index)
-            .map_or_else(|_| fallback(row, index, &type_name), Cell::Int),
+            .map_or_else(|_| text_or_bytes(row, index, &type_name), Cell::Int),
         "REAL" | "FLOAT" | "DOUBLE" => row
             .try_get::<f64, _>(index)
-            .map_or_else(|_| fallback(row, index, &type_name), Cell::Float),
+            .map_or_else(|_| text_or_bytes(row, index, &type_name), Cell::Float),
         "BOOLEAN" | "BOOL" => row
             .try_get::<bool, _>(index)
-            .map_or_else(|_| fallback(row, index, &type_name), Cell::Bool),
+            .map_or_else(|_| text_or_bytes(row, index, &type_name), Cell::Bool),
         "TEXT" | "VARCHAR" | "CHAR" | "CLOB" => row
             .try_get::<String, _>(index)
-            .map_or_else(|_| fallback(row, index, &type_name), Cell::Text),
+            .map_or_else(|_| text_or_bytes(row, index, &type_name), Cell::Text),
         "BLOB" => row.try_get::<Vec<u8>, _>(index).map_or_else(
-            |_| fallback(row, index, &type_name),
+            |_| text_or_bytes(row, index, &type_name),
             |bytes| Cell::bytes(&bytes),
         ),
-        _ => fallback(row, index, &type_name),
-    }
-}
-
-/// Last resort for a value whose declared type did not decode.
-///
-/// SQLite will happily store text in an integer column, so a failed decode is a normal event
-/// rather than a bug, and the value itself is still worth showing.
-fn fallback(row: &SqliteRow, index: usize, type_name: &str) -> Cell {
-    if let Ok(text) = row.try_get::<String, _>(index) {
-        return Cell::Text(text);
-    }
-    if let Ok(bytes) = row.try_get::<Vec<u8>, _>(index) {
-        return Cell::bytes(&bytes);
-    }
-    Cell::Unsupported {
-        type_name: type_name.to_owned(),
-        raw: String::new(),
+        _ => text_or_bytes(row, index, &type_name),
     }
 }

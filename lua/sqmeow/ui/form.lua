@@ -10,6 +10,8 @@
 
 local M = {}
 
+local utils = require('sqmeow.utils')
+
 --- What the form needs from its caller.
 ---@class sqmeow.FormSpec
 ---@field title string Drawn along the top of the dialog.
@@ -24,26 +26,9 @@ local M = {}
 
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow-form')
 
---- nui's pieces, or nil when it is not installed.
----
----@return table|nil
----@return string|nil error
+--- The nui.nvim components this dialog is built from.
 local function nui()
-  local modules = {}
-  for name, path in pairs({
-    Popup = 'nui.popup',
-    Layout = 'nui.layout',
-    Input = 'nui.input',
-    Line = 'nui.line',
-    Text = 'nui.text',
-  }) do
-    local ok, module = pcall(require, path)
-    if not ok then
-      return nil, 'sqmeow: this dialog needs nui.nvim (MunifTanjim/nui.nvim)'
-    end
-    modules[name] = module
-  end
-  return modules
+  return utils.nui({ 'popup', 'layout', 'input', 'line', 'text' }, 'this dialog')
 end
 
 --- Whether the dialog can be opened at all.
@@ -360,7 +345,7 @@ function M.menu(opts)
 
   local ok, Menu = pcall(require, 'nui.menu')
   if not ok then
-    return false, 'sqmeow: this dialog needs nui.nvim (MunifTanjim/nui.nvim)'
+    return false, 'this dialog needs nui.nvim (MunifTanjim/nui.nvim)'
   end
 
   local width = 0

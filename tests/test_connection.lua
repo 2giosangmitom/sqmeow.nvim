@@ -1,5 +1,6 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
+local helpers = dofile('tests/helpers.lua')
 local connection = require('sqmeow.ui.connection')
 local config = require('sqmeow.config')
 local file = require('sqmeow.sources.file')
@@ -93,14 +94,9 @@ end
 T['from a url'] = MiniTest.new_set()
 
 T['from a url']['saves the url as typed and connects'] = function()
-  local api = require('sqmeow.api')
-  local connect = api.connect
   local connected
-  api.connect = function(url, opts)
+  helpers.stub(require('sqmeow.api'), 'connect', function(url, opts)
     connected = { url = url, name = opts.name }
-  end
-  MiniTest.finally(function()
-    api.connect = connect
   end)
 
   -- A template for the password is kept whole, which the form of separate fields cannot do.

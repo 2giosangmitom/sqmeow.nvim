@@ -120,7 +120,7 @@ T['file']['refuses to edit one that is not there'] = function()
     path = scratch,
   })
   eq(written, false)
-  eq(err:find('nope', 1, true) ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('nope', 1, true) ~= nil, true)
 end
 
 T['file']['refuses a rename onto a name already taken'] = function()
@@ -130,7 +130,7 @@ T['file']['refuses a rename onto a name already taken'] = function()
   -- Two rows under one name is a list the loader cannot tell apart.
   local written, err = file.update('a', { name = 'b', url = 'sqlite://a.db' }, { path = scratch })
   eq(written, false)
-  eq(err:find('already', 1, true) ~= nil, true)
+  eq(assert(err, 'there should be an error'):find('already', 1, true) ~= nil, true)
 
   only({ type = 'file', path = scratch })
   eq(#sources.load(), 2)

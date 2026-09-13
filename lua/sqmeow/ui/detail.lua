@@ -6,6 +6,8 @@
 
 local M = {}
 
+local utils = require('sqmeow.utils')
+
 local popup = nil
 
 -- Room for most type names. A longer one is cut short rather than pushing every value out.
@@ -67,17 +69,15 @@ function M.open(row)
 
   local columns, err = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = row })
   if not columns then
-    vim.notify('sqmeow: ' .. (err or 'that row is not there'), vim.log.levels.WARN)
+    utils.notify(err or 'that row is not there', vim.log.levels.WARN)
     return
   end
 
-  local ok, Popup = pcall(require, 'nui.popup')
-  if not ok then
-    return vim.notify(
-      'sqmeow: the row detail needs nui.nvim (MunifTanjim/nui.nvim)',
-      vim.log.levels.ERROR
-    )
+  local nui, nui_err = utils.nui({ 'popup' }, 'the row detail')
+  if not nui then
+    return utils.notify(nui_err, vim.log.levels.ERROR)
   end
+  local Popup = nui.Popup
 
   -- Which columns are keys is known from the result, not from the row, so it is read from there.
   for index, column in ipairs(columns) do

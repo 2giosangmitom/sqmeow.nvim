@@ -8,9 +8,7 @@
 
 local M = {}
 
-local function notify(message, level)
-  vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
-end
+local notify = require('sqmeow.utils').notify
 
 local function engine()
   require('sqmeow.events').ensure()
@@ -97,7 +95,7 @@ end
 function M.save(name, url)
   local written, err = require('sqmeow.sources').save({ name = name, url = url })
   if not written then
-    notify(err, vim.log.levels.ERROR)
+    notify(err or 'the connection could not be saved', vim.log.levels.ERROR)
   end
   return written
 end
@@ -124,7 +122,7 @@ function M.edit(name, changes)
   local wanted = { name = changes.name or spec.name, url = changes.url or spec.url }
   local written, err = require('sqmeow.sources').update(name, wanted)
   if not written then
-    notify(err, vim.log.levels.ERROR)
+    notify(err or 'the connection could not be updated', vim.log.levels.ERROR)
     return false
   end
 
@@ -254,6 +252,7 @@ function M.execute(sql, opts)
   local connection, reason = M.target(opts.source_buf)
 
   if not connection then
+    reason = reason or 'connect to a database first'
     notify(reason, vim.log.levels.ERROR)
     return nil, reason
   end

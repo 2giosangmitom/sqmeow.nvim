@@ -5,6 +5,8 @@
 
 local M = {}
 
+local utils = require('sqmeow.utils')
+
 local popup = nil
 
 --- The lines describing one surface's mappings.
@@ -52,15 +54,16 @@ function M.open(surface)
 
   local lines = M.lines(surface)
   if #lines == 0 then
-    vim.notify('sqmeow: this surface has no mappings')
+    utils.notify('this surface has no mappings')
     return
   end
 
-  local ok, Popup = pcall(require, 'nui.popup')
-  if not ok then
-    vim.notify('sqmeow: the help float needs nui.nvim (MunifTanjim/nui.nvim)', vim.log.levels.ERROR)
+  local nui, err = utils.nui({ 'popup' }, 'the help float')
+  if not nui then
+    utils.notify(err, vim.log.levels.ERROR)
     return
   end
+  local Popup = nui.Popup
 
   local width = 0
   for _, line in ipairs(lines) do

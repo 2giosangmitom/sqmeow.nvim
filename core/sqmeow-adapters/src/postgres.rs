@@ -7,21 +7,17 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Mutex;
-use std::time::Instant;
 
 use sqlx::postgres::types::Oid;
 use sqlx::postgres::{PgColumn, PgConnectOptions, PgHasArrayType, PgPool, PgPoolOptions, PgRow};
-use sqlx::{
-    AssertSqlSafe, Column as _, Decode, Executor, Postgres, Row, SqlSafeStr, Statement as _, Type,
-    TypeInfo, ValueRef, types,
-};
+use sqlx::{Decode, Postgres, Row, Statement as _, Type, TypeInfo, ValueRef, types};
 use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
-    RelationNode, Result, ResultSet, RoutineNode, SchemaNode,
+    Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
+    ResultSet, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::stream::drain;
+use crate::stream::{self, foreign_key, prepare, result_columns};
 
 /// A pool against one PostgreSQL database.
 #[derive(Debug)]
@@ -93,23 +89,12 @@ impl PostgresAdapter {
         )
     }
 
+    /// What a statement's result looks like, with the columns that are keys marked.
     async fn columns(&self, statement: &str) -> Vec<Column> {
-        let sql = AssertSqlSafe(statement.to_owned()).into_sql_str();
-
-        let prepared = match self.pool.prepare(sql).await {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                tracing::debug!(%error, "could not prepare a statement to read its columns");
-                return Vec::new();
-            }
+        let Some(prepared) = prepare(&self.pool, statement).await else {
+            return Vec::new();
         };
-
-        let mut columns: Vec<Column> = prepared
-            .columns()
-            .iter()
-            .map(|column| Column::new(column.name(), column.type_info().name()))
-            .collect();
-
+        let mut columns = result_columns(prepared.columns());
         self.mark_keys(prepared.columns(), &mut columns).await;
         columns
     }
@@ -211,18 +196,6 @@ impl PostgresAdapter {
     }
 }
 
-/// What a drawer column's foreign key points at, if it has one.
-fn foreign_key(row: &PgRow) -> Option<ForeignKey> {
-    Some(ForeignKey {
-        table: row
-            .try_get::<Option<String>, _>("references_table")
-            .ok()??,
-        column: row
-            .try_get::<Option<String>, _>("references_column")
-            .ok()??,
-    })
-}
-
 /// Which key a catalog row says a column is.
 fn key_kind(row: &PgRow) -> KeyKind {
     let flag = |name| row.try_get::<Option<bool>, _>(name).ok().flatten() == Some(true);
@@ -251,25 +224,17 @@ impl Adapter for PostgresAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let started = Instant::now();
         let columns = self.columns(statement).await;
-        let width = columns.len();
-        let mut result = ResultSet::new(statement, columns);
-
-        let stream = sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(&self.pool);
-
-        drain(
-            stream,
-            &mut result,
+        stream::execute(
+            &self.pool,
+            statement,
+            columns,
             max_rows,
             &cancel,
             |outcome| outcome.rows_affected(),
-            |row| decode_row(row, width),
+            decode_cell,
         )
-        .await?;
-
-        result.set_elapsed(started.elapsed());
-        Ok(result)
+        .await
     }
 
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
@@ -414,11 +379,6 @@ impl Adapter for PostgresAdapter {
     async fn close(&self) {
         self.pool.close().await;
     }
-}
-
-fn decode_row(row: &PgRow, width: usize) -> Vec<Cell> {
-    let width = width.max(row.len());
-    (0..width).map(|index| decode_cell(row, index)).collect()
 }
 
 fn decode_cell(row: &PgRow, index: usize) -> Cell {

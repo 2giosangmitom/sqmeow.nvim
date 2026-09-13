@@ -6,6 +6,8 @@
 
 local M = {}
 
+local utils = require('sqmeow.utils')
+
 --- How long ago something ran, in words.
 ---
 --- Rounded hard, because the point is to tell this morning's query from last month's, not to time
@@ -89,7 +91,7 @@ function M.reopen(entry)
   end
 
   if entry.state == 'done' and (entry.rows or 0) > 0 then
-    return vim.notify('sqmeow: the rows this query returned were not kept', vim.log.levels.WARN)
+    return utils.notify('the rows this query returned were not kept', vim.log.levels.WARN)
   end
 
   -- A failure, a cancellation, or a statement that changed rows rather than returning any: what

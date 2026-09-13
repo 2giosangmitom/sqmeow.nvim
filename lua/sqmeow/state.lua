@@ -26,6 +26,8 @@ local M = {}
 ---@field truncated boolean|nil
 ---@field elapsed_ms integer|nil
 ---@field error string|nil
+---@field start_line integer|nil For an error, the zero-based line the failing statement starts on.
+---@field end_line integer|nil For an error, the zero-based line the failing statement ends on.
 ---@field source_buf integer|nil The buffer the SQL came from, where an error is reported.
 ---@field statement string|nil The SQL as submitted. The plugin's own record; the engine never sends it.
 ---@field history boolean|nil False for a call that stays out of the query log.
@@ -249,7 +251,7 @@ end
 --- connection runs on `test` until a `use`, and a label without it leaves someone reading the grid
 --- of one database while believing they queried another.
 ---
----@param connection { name: string, dialect: string|nil, database: string|nil, current_database: string|nil }
+---@param connection { name: string, dialect?: string, database?: string, current_database?: string }
 ---@return string
 function M.label(connection)
   local name = connection.name

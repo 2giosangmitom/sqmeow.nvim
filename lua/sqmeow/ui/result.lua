@@ -17,6 +17,8 @@
 
 local M = {}
 
+local utils = require('sqmeow.utils')
+
 local buf = nil
 local win = nil
 
@@ -34,27 +36,6 @@ local HEADER_LINES = 2
 --- Named rather than anonymous, so a colourscheme, a test or anything else looking for the grid's
 --- marks can find them.
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow')
-
-local function valid(handle, check)
-  return handle ~= nil and check(handle)
-end
-
-local function valid_buf()
-  return valid(buf, vim.api.nvim_buf_is_valid)
-end
-
---- Whether the result window is still the result window.
----
---- A valid handle is not enough. Something else can take a window over, which `:bdelete` on the
---- buffer it held, a session restore, and anything else opening a file all do, and the window would
---- then still be valid while showing someone else's buffer. Treating that as closed means the
---- next query opens a window of its own rather than painting into whatever moved in.
-local function valid_win()
-  return win ~= nil
-    and vim.api.nvim_win_is_valid(win)
-    and valid_buf()
-    and vim.api.nvim_win_get_buf(win) == buf
-end
 
 --- How many rows fit in one page.
 ---@return integer
@@ -161,7 +142,7 @@ end
 --- The buffer the grid is drawn into.
 ---@return integer
 function M.buffer()
-  if buf and valid_buf() then
+  if buf and utils.buf_valid(buf) then
     return buf
   end
   buf = scratch('sqmeow://result', 'sqmeow-result')
@@ -171,23 +152,9 @@ end
 
 -- -- drawing ---------------------------------------------------------------------------------
 
---- nui's pieces, or nil with a message when it is not installed.
----
---- Loaded through `pcall` rather than required at the top, so a missing nui.nvim is one clear
---- message rather than a stack trace from whichever call happened to run first.
+--- The nui.nvim components the result grid is built from.
 local function nui()
-  local parts = {}
-  for name, module in pairs({
-    Line = 'nui.line',
-    Text = 'nui.text',
-  }) do
-    local ok, loaded = pcall(require, module)
-    if not ok then
-      return nil, 'sqmeow: the result grid needs nui.nvim (MunifTanjim/nui.nvim)'
-    end
-    parts[name] = loaded
-  end
-  return parts
+  return utils.nui({ 'line', 'text' }, 'the result grid')
 end
 
 --- What a cell reads as in the grid.
@@ -324,10 +291,9 @@ end
 ---@param measured table[]
 ---@param align boolean Whether to right-align the columns that hold numbers.
 ---@return table line A `NuiLine`.
-local function build_row(cells, measured, align)
-  local parts = assert(nui())
-  local vertical = glyphs().vertical
-  local separator_width = vim.api.nvim_strwidth(vertical) + 2
+local function build_row(grid, cells, measured, align)
+  local parts, vertical = grid.parts, grid.marks.vertical
+  local separator_width = grid.separator_width
 
   local line = parts.Line()
   line:append(' ')
@@ -354,7 +320,7 @@ local function build_row(cells, measured, align)
       -- Only the last piece can overflow: everything before it was sized to fit.
       local last = segments[#segments]
       if last then
-        last[1] = truncate(last[1], vim.api.nvim_strwidth(last[1]) + room, glyphs().ellipsis)
+        last[1] = truncate(last[1], vim.api.nvim_strwidth(last[1]) + room, grid.marks.ellipsis)
         room = column.width - segments_width(segments)
       end
     end
@@ -379,9 +345,8 @@ local function build_row(cells, measured, align)
 end
 
 --- The rule under the column names.
-local function build_rule(measured)
-  local parts = assert(nui())
-  local marks = glyphs()
+local function build_rule(grid, measured)
+  local parts, marks = grid.parts, grid.marks
   local joint = ('%s%s%s'):format(marks.horizontal, marks.cross, marks.horizontal)
 
   local text = marks.horizontal
@@ -412,8 +377,13 @@ local function draw()
 
   local parts, err = nui()
   if not parts then
-    return vim.notify(err or 'sqmeow: the result grid needs nui.nvim', vim.log.levels.ERROR)
+    return utils.notify(err, vim.log.levels.ERROR)
   end
+
+  -- Read once per draw rather than once per row: a page of five hundred rows would otherwise load
+  -- nui, read the configuration and measure the separator five hundred times over.
+  local grid = { parts = parts, marks = glyphs() }
+  grid.separator_width = vim.api.nvim_strwidth(grid.marks.vertical) + 2
 
   vim.bo[handle].modifiable = true
   vim.api.nvim_buf_clear_namespace(handle, NAMESPACE, 0, -1)
@@ -442,8 +412,8 @@ local function draw()
     names[index] = cell
   end
 
-  table.insert(lines, build_row(names, measured, false))
-  table.insert(lines, build_rule(measured))
+  table.insert(lines, build_row(grid, names, measured, false))
+  table.insert(lines, build_rule(grid, measured))
 
   for _, row in ipairs(page.rows) do
     local cells = {}
@@ -457,7 +427,7 @@ local function draw()
       end
       cells[index] = { { text, group } }
     end
-    table.insert(lines, build_row(cells, measured, true))
+    table.insert(lines, build_row(grid, cells, measured, true))
   end
 
   vim.api.nvim_buf_set_lines(handle, 0, -1, false, vim.tbl_map(trimmed, lines))
@@ -492,7 +462,7 @@ function M.show_page(offset)
     limit = size,
   })
   if err then
-    vim.notify('sqmeow: ' .. err, vim.log.levels.WARN)
+    utils.notify(err, vim.log.levels.WARN)
     return false
   end
 
@@ -567,7 +537,7 @@ end
 --- header rather than on a row.
 function M.current_cell()
   local call = require('sqmeow.state').call
-  if not (win and valid_win() and call and call.columns and #spans > 0) then
+  if not (win and utils.shows(win, buf) and call and call.columns and #spans > 0) then
     return nil
   end
 
@@ -621,7 +591,7 @@ end
 ---@return boolean moved
 function M.goto_column(index)
   local span = spans[index]
-  if not (span and win and valid_win()) then
+  if not (span and win and utils.shows(win, buf)) then
     return false
   end
 
@@ -701,7 +671,7 @@ end
 --- Show the result window, creating it if needed.
 ---@return integer win
 function M.open()
-  if win and valid_win() then
+  if win and utils.shows(win, buf) then
     return win
   end
 
@@ -730,7 +700,7 @@ end
 
 --- Hide the result window, keeping what it holds.
 function M.close()
-  if win and valid_win() then
+  if win and utils.shows(win, buf) then
     require('sqmeow.ui.layout').close_window(win)
   end
   win = nil
@@ -742,14 +712,14 @@ end
 --- Whether the result window is showing.
 ---@return boolean
 function M.is_open()
-  return valid_win()
+  return utils.shows(win, buf)
 end
 
 --- Update the line above the grid.
 ---
 ---@param summary sqmeow.CallSummary|nil
 function M.update_winbar(summary)
-  if not valid_win() or not require('sqmeow.config').get().ui.winbar then
+  if not utils.shows(win, buf) or not require('sqmeow.config').get().ui.winbar then
     return
   end
 
