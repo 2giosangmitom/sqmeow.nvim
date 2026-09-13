@@ -25,6 +25,21 @@ function M.on_connection(payload)
   connection.dialect = payload.dialect or connection.dialect
   connection.error = payload.error
 
+  -- Forgotten before the drawer is drawn. Drawn first, a failed connection stays on screen with
+  -- an id nothing answers to, and choosing it again does nothing instead of trying again.
+  if payload.state == 'error' or payload.state == 'closed' then
+    state.remove_connection(payload.id)
+  end
+  state.failures[connection.name] = payload.state == 'error' and payload.error or nil
+
+  -- A database opened from a cluster is drawn already open, so what it holds is read straight
+  -- away. Scheduled, so the request is not made from inside the engine's own event.
+  if payload.state == 'connected' and connection.parent then
+    vim.schedule(function()
+      require('sqmeow.ui.drawer').load(payload.id, {})
+    end)
+  end
+
   require('sqmeow.ui.drawer').render()
   require('sqmeow.ui.editor').update_winbar()
 
@@ -35,9 +50,6 @@ function M.on_connection(payload)
       ('could not connect to %s: %s'):format(connection.name, payload.error),
       vim.log.levels.ERROR
     )
-    state.remove_connection(payload.id)
-  elseif payload.state == 'closed' then
-    state.remove_connection(payload.id)
   end
 end
 
@@ -87,10 +99,7 @@ function M.on_export(payload)
     return notify(payload.error, vim.log.levels.ERROR)
   end
 
-  if payload.target == 'file' then
-    return notify(('wrote %s (%d bytes)'):format(payload.path, payload.bytes))
-  end
-  notify(('yanked %d bytes into register %s'):format(payload.bytes, payload.register))
+  notify(('wrote %s (%d bytes)'):format(payload.path, payload.bytes))
 end
 
 --- Handle one level of the schema tree arriving.

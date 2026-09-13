@@ -186,13 +186,12 @@ T['tree']['colours the marker apart from the icon'] = function()
   line_matching('main')
 
   -- `v o s scratch  sqlite`: the marker, the dot saying the connection is open, the dialect
-  -- icon, the name in the group that marks the active connection, and the trailing note. The note
-  -- starts after the two spaces separating it, which are part of neither it nor the name.
+  -- icon, the plain name, and the trailing note. The note starts after the two spaces separating
+  -- it, which are part of neither it nor the name.
   eq(marks_on(1), {
     { group = 'SqmeowMarker', from = 0, to = 1 },
     { group = 'SqmeowConnected', from = 2, to = 3 },
     { group = 'SqmeowIconSqlite', from = 4, to = 5 },
-    { group = 'SqmeowActive', from = 6, to = 13 },
     { group = 'SqmeowNull', from = 15, to = 21 },
   })
 end
@@ -295,9 +294,8 @@ T['tree']['expands a relation into its columns'] = function()
   line_matching('score')
 
   local text = table.concat(lines(), '\n')
-  -- The icon before the name says it is the primary key, so the words no longer do.
-  eq(text:find('K id%s+INTEGER') ~= nil, true)
-  eq(text:find('id%s+INTEGER%s+primary key') ~= nil, false)
+  -- A key says so in two letters beside its type.
+  eq(text:find('K id%s+INTEGER %(PK%)') ~= nil, true)
   eq(text:find('t name%s+TEXT%s+not null') ~= nil, true)
   eq(text:find('n score%s+REAL') ~= nil, true)
 end
@@ -314,13 +312,12 @@ T['tree']['marks a column with what it holds'] = function()
   eq(vim.tbl_contains(groups, 'SqmeowIconTypeNumber'), true)
 end
 
-T['tree']['names what a foreign key points at'] = function()
+T['tree']['marks a foreign key'] = function()
   open_relation('Tables', 'posts')
   line_matching('author_id')
 
   local text = table.concat(lines(), '\n')
-  -- The one thing about a column an icon cannot say, and what a reader following a relation wants.
-  eq(text:find('k author_id%s+INTEGER%s+→ people%.id') ~= nil, true)
+  eq(text:find('k author_id%s+INTEGER %(FK%)') ~= nil, true)
 end
 
 T['tree']['leaves a blank marker unmarked'] = function()
@@ -400,31 +397,11 @@ T['the active connection'] = MiniTest.new_set({
   },
 })
 
---- The group of the name on a connection row, which says whether it is the active one.
-local function name_group(pattern)
-  for _, span in ipairs(marks_on(line_matching(pattern))) do
-    if span.group == 'SqmeowActive' then
-      return span.group
-    end
-  end
-  return nil
-end
-
-T['the active connection']['is the only one marked'] = function()
-  require('sqmeow.api').use(state.connection_by_name('scratch').id)
-  drawer.render()
-
-  eq(name_group('scratch'), 'SqmeowActive')
-  eq(name_group('other'), nil)
-end
-
 T['the active connection']['moves when another is chosen'] = function()
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('other'), 0 })
   drawer.actions.use()
 
   eq(state.current, state.connection_by_name('other').id)
-  eq(name_group('other'), 'SqmeowActive')
-  eq(name_group('scratch'), nil)
 end
 
 T['the active connection']['does not move when a row is only opened'] = function()
@@ -485,6 +462,55 @@ T['saved connections']['open when chosen'] = function()
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('ledger'), 0 })
   drawer.actions.toggle()
   eq(opened, 'ledger')
+end
+
+T['saved connections']['say they are connecting while they do'] = function()
+  state.add_connection({
+    id = 999,
+    name = 'ledger',
+    url = 'postgres://localhost/ledger',
+    state = 'connecting',
+  })
+  MiniTest.finally(function()
+    state.remove_connection(999)
+    drawer.render()
+  end)
+  drawer.render()
+
+  local number = line_matching('ledger')
+  eq(lines()[number]:find('connecting$') ~= nil, true)
+  eq(marks_on(number)[2].group, 'SqmeowConnecting')
+end
+
+T['saved connections']['can be tried again after failing to open'] = function()
+  require('sqmeow.sources.file').add({ name = 'broken', url = 'mongodb://localhost/broken' })
+  drawer.render()
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('broken'), 0 })
+  drawer.actions.toggle()
+  assert(
+    vim.wait(TIMEOUT, function()
+      return state.connection_by_name('broken') == nil
+    end, 10),
+    'the failed connection should be forgotten'
+  )
+  -- Back to a saved row that says it failed, rather than left drawn as the connection that did.
+  local number = line_matching('broken')
+  eq(lines()[number]:find('error$') ~= nil, true)
+  eq(marks_on(number)[2].group, 'SqmeowConnectionError')
+
+  local opened
+  local connect = require('sqmeow.api').connect_named
+  require('sqmeow.api').connect_named = function(name)
+    opened = name
+  end
+  MiniTest.finally(function()
+    require('sqmeow.api').connect_named = connect
+  end)
+
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('broken'), 0 })
+  drawer.actions.toggle()
+  eq(opened, 'broken')
 end
 
 T['history'] = MiniTest.new_set({

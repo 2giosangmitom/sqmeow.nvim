@@ -532,64 +532,101 @@ T['exporting'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
       run('select id, name from people order by id')
-      vim.fn.setreg('"', 'untouched')
     end,
   },
 })
 
---- Wait for the engine to finish an export and put the register's contents back.
-local function exported()
-  assert(
-    vim.wait(TIMEOUT, function()
-      return vim.fn.getreg('"') ~= 'untouched'
-    end, 10),
-    'the export should reach the register'
-  )
-  return vim.fn.getreg('"')
-end
-
-T['exporting']['yanks one cell exactly as it is'] = function()
-  -- Line three, because the grid opens with the column names and the rule under them.
-  vim.api.nvim_win_set_cursor(result.open(), { 3, 6 })
-  result.actions.yank_cell()
-  eq(exported(), 'alice')
-end
-
-T['exporting']['yanks a row as csv'] = function()
-  vim.api.nvim_win_set_cursor(result.open(), { 3, 0 })
-  result.actions.yank_row()
-  eq(exported(), 'id,name\n1,alice\n')
-end
-
-T['exporting']['yanks nothing when the cursor is on the header'] = function()
-  vim.api.nvim_win_set_cursor(result.open(), { 1, 0 })
-  eq(result.current_cell(), nil)
-
-  result.actions.yank_cell()
-  eq(vim.fn.getreg('"'), 'untouched')
-end
-
-T['exporting']['yanks the page as csv'] = function()
-  result.actions.yank_page()
-
-  local text = exported()
-  eq(text:find('id,name', 1, true), 1)
-  -- NULL becomes an empty field, which is the only thing CSV can say.
-  eq(text:find('3,\n', 1, true) ~= nil, true)
-end
-
-T['exporting']['writes the whole result to a file'] = function()
-  local path = vim.fn.tempname() .. '.json'
-  api.export({ format = 'json', path = path })
-
+--- Wait for the engine to write a file and hand back what it holds.
+local function written(path)
   assert(
     vim.wait(TIMEOUT, function()
       return vim.uv.fs_stat(path) ~= nil
     end, 10),
     'the file should be written'
   )
+  return table.concat(vim.fn.readfile(path, 'b'), '\n')
+end
 
-  local decoded = vim.json.decode(table.concat(vim.fn.readfile(path), '\n'))
+T['exporting']['writes only the rows asked for, without a header'] = function()
+  local path = vim.fn.tempname() .. '.csv'
+  api.export({ format = 'csv', path = path, headers = false, offset = 1, limit = 1 })
+  eq(written(path), '2,bob\n')
+  vim.fn.delete(path)
+end
+
+T['exporting']['exports a visual selection from the dialog'] = function()
+  local dir = vim.fn.tempname()
+  vim.fn.mkdir(dir, 'p')
+  local cwd = vim.uv.cwd()
+  vim.cmd.cd(dir)
+
+  local win = result.open()
+  vim.api.nvim_set_current_win(win)
+  -- Line three is the first row: the grid opens with the column names and the rule under them.
+  vim.api.nvim_win_set_cursor(win, { 3, 0 })
+  vim.api.nvim_feedkeys('Vjx', 'mx', false)
+
+  local drawn = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  eq(vim.trim(drawn[1]):match('^Format%s+CSV$') ~= nil, true)
+  -- Include headers is the fourth field, and editing a checkbox clears it.
+  vim.api.nvim_feedkeys(vim.keycode('4G<CR><C-s>'), 'mx', false)
+
+  assert(vim.wait(TIMEOUT, function()
+    return vim.fn.glob(dir .. '/*.csv') ~= ''
+  end, 10))
+  eq(written(vim.fn.glob(dir .. '/*.csv')), '1,alice\n2,bob\n')
+
+  vim.cmd.cd(cwd)
+  vim.fn.delete(dir, 'rf')
+end
+
+T['exporting']['the dialog follows the format and asks before overwriting'] = function()
+  local dir = vim.fn.tempname()
+  vim.fn.mkdir(dir, 'p')
+  local cwd = vim.uv.cwd()
+  vim.cmd.cd(dir)
+
+  local function drawn()
+    return vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  end
+
+  api.export()
+  -- Named after the table the query reads from.
+  eq(drawn()[2]:match('people_%d+_%d+%.csv$') ~= nil, true)
+  eq(drawn()[4]:match('%[x%]$') ~= nil, true)
+
+  vim.api.nvim_feedkeys(vim.keycode('gg<CR>'), 'mx', false)
+  eq(drawn()[2]:match('people_%d+_%d+%.json$') ~= nil, true)
+  -- JSON has no header to leave out, so the checkbox is left as it is.
+  vim.api.nvim_feedkeys(vim.keycode('4G<CR>'), 'mx', false)
+  eq(drawn()[4]:match('%[x%]$') ~= nil, true)
+
+  local path = vim.fs.joinpath(dir, drawn()[2]:match('%S+$'))
+  vim.fn.writefile({ 'old' }, path)
+  vim.api.nvim_feedkeys(vim.keycode('<C-s>'), 'mx', false)
+  vim.wait(100)
+  eq(vim.fn.readfile(path), { 'old' })
+
+  -- The second save with the same answers is the confirmation. Waited on until the new contents
+  -- parse, because the file is empty for a moment while the engine writes it.
+  vim.api.nvim_feedkeys(vim.keycode('<C-s>'), 'mx', false)
+  local decoded
+  assert(vim.wait(TIMEOUT, function()
+    local ok, value = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), '\n'))
+    decoded = ok and value or nil
+    return decoded ~= nil
+  end, 10))
+  eq(decoded[1].name, 'alice')
+
+  vim.cmd.cd(cwd)
+  vim.fn.delete(dir, 'rf')
+end
+
+T['exporting']['writes the whole result to a file'] = function()
+  local path = vim.fn.tempname() .. '.json'
+  api.export({ format = 'json', path = path })
+
+  local decoded = vim.json.decode(written(path))
   eq(#decoded, 3)
   eq(decoded[1].name, 'alice')
   -- JSON can say null, so it does.
@@ -634,6 +671,24 @@ T['row detail']['refuses a row past the end'] = function()
   })
   eq(columns, nil)
   eq(err ~= nil, true)
+end
+
+T['row detail']['opens the row in a popup that q closes'] = function()
+  run('select id, name from people order by id')
+  local detail = require('sqmeow.ui.detail')
+  detail.open(0)
+  MiniTest.finally(detail.close)
+
+  local buf = vim.api.nvim_get_current_buf()
+  eq(vim.bo[buf].filetype, 'sqmeow-row')
+  -- A float. nui places it inside its border window, so it is relative to that window.
+  eq(vim.api.nvim_win_get_config(0).relative ~= '', true)
+  local shown = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  eq(#shown, 2)
+  eq(shown[2]:find('^name%s+%S+%s+alice$') ~= nil, true)
+
+  vim.api.nvim_feedkeys('q', 'x', false)
+  eq(vim.api.nvim_buf_is_valid(buf), false)
 end
 
 T['choosing a connection'] = MiniTest.new_set({

@@ -91,7 +91,8 @@ end
 ---
 ---@param summary sqmeow.CallSummary|nil
 ---@return string
-function M.describe(summary)
+---@param highlight boolean|nil Colour the icons with winbar markup, for drawing in a winbar.
+function M.describe(summary, highlight)
   if not summary then
     return 'sqmeow'
   end
@@ -128,7 +129,13 @@ function M.describe(summary)
     table.insert(parts, ('page %d/%d'):format(current, total))
   end
   if summary.elapsed_ms then
-    table.insert(parts, M.format_duration(summary.elapsed_ms))
+    local elapsed = M.format_duration(summary.elapsed_ms)
+    local icon, group = require('sqmeow.icons').get('elapsed')
+    if icon ~= '' then
+      icon = highlight and ('%%#%s#%s%%*'):format(group, icon) or icon
+      elapsed = icon .. ' ' .. elapsed
+    end
+    table.insert(parts, elapsed)
   end
   -- A result from the log is what the query returned then, and the table may say otherwise now.
   if summary.ran_at then
@@ -628,20 +635,6 @@ end
 
 -- -- actions --------------------------------------------------------------------------------
 
-local function engine_export(request)
-  local call = require('sqmeow.state').call
-  if not (call and call.call_id) then
-    vim.notify('sqmeow: there is no result to export', vim.log.levels.WARN)
-    return
-  end
-
-  request.call_id = call.call_id
-  local _, err = require('sqmeow.rpc').request('export', request)
-  if err then
-    vim.notify('sqmeow: ' .. err, vim.log.levels.ERROR)
-  end
-end
-
 --- Actions the result window's keys are bound to.
 M.actions = {}
 
@@ -661,41 +654,29 @@ function M.actions.last_page()
   require('sqmeow.api').last_page()
 end
 
---- Copy the value under the cursor, exactly as it is rather than as the grid shows it.
-function M.actions.yank_cell()
-  local cell = M.current_cell()
-  if not cell then
-    return
-  end
-  engine_export({ scope = 'cell', row = cell.row, column = cell.column, register = vim.v.register })
-end
-
---- Copy the row under the cursor as CSV.
-function M.actions.yank_row()
-  local cell = M.current_cell()
-  if not cell then
-    return
-  end
-  engine_export({ scope = 'row', format = 'csv', row = cell.row, register = vim.v.register })
-end
-
---- Copy the visible page as CSV.
----
---- The range travels with the request now: only this side knows how many rows a page holds and
---- which one is on screen.
-function M.actions.yank_page()
-  engine_export({
-    scope = 'range',
-    format = 'csv',
-    row = page.offset,
-    limit = #page.rows,
-    register = vim.v.register,
-  })
-end
+--- Cut text to a display width, ending in `marker` when anything was cut. The row detail uses it too.
+M.truncate = truncate
 
 --- Write the whole result to a file.
 function M.actions.export()
   require('sqmeow.api').export()
+end
+
+--- Write the rows the visual selection covers to a file.
+function M.actions.export_selection()
+  local first, last = vim.fn.line('v'), vim.fn.line('.')
+  if first > last then
+    first, last = last, first
+  end
+  vim.cmd.normal({ vim.keycode('<Esc>'), bang = true })
+
+  -- Buffer lines to rows of this page: the column names and the rule above them are not rows.
+  first = math.max(first - HEADER_LINES, 1)
+  last = math.min(last - HEADER_LINES, #page.rows)
+  if last < first then
+    return
+  end
+  require('sqmeow.api').export({ offset = page.offset + first - 1, limit = last - first + 1 })
 end
 
 --- Show the row under the cursor as a list of columns and values.
@@ -785,7 +766,7 @@ function M.update_winbar(summary)
   local label = connection and ('%s (%s)'):format(connection.name, connection.dialect or '?')
     or 'not connected'
 
-  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s'):format(label, M.describe(summary))
+  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s'):format(label, M.describe(summary, true))
 end
 
 return M

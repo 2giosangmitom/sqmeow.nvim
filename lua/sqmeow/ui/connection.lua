@@ -73,6 +73,48 @@ local function form(dialect, values, existing)
   end
 end
 
+--- Ask for a name and a whole URL, for someone who already has one.
+---
+--- The URL is saved as typed, so a `{{ env }}` or `{{ exec }}` template for the password survives,
+--- which the form of separate fields would percent encode away.
+---
+---@param values table<string, string>|nil What the fields start as.
+function M.from_url(values)
+  local opened, err = require('sqmeow.ui.form').open({
+    title = 'New connection from a URL',
+    fields = {
+      { key = 'name', label = 'Name' },
+      { key = 'url', label = 'URL', hint = 'postgres://user@localhost/app' },
+    },
+    values = values,
+    wizard = values == nil,
+    validate = function(answers)
+      local name, url = vim.trim(answers.name or ''), vim.trim(answers.url or '')
+      if name == '' then
+        return 'Name cannot be empty'
+      end
+      if not require('sqmeow.dialects').of_url(url) then
+        return 'the URL has to start with a database the plugin speaks, such as postgres://'
+      end
+      if require('sqmeow.sources').find(name) then
+        return ('there is already a connection called `%s`'):format(name)
+      end
+      return nil
+    end,
+    on_submit = function(answers)
+      local name, url = vim.trim(answers.name), vim.trim(answers.url)
+      local api = require('sqmeow.api')
+      if api.save(name, url) then
+        api.connect(url, { name = name })
+      end
+    end,
+  })
+
+  if not opened then
+    vim.notify(err or 'sqmeow: the dialog could not open', vim.log.levels.ERROR)
+  end
+end
+
 --- Ask which database, then ask for its details.
 ---
 --- The entry point behind `:Sqmeow add` and `A` in the drawer.
@@ -83,12 +125,21 @@ function M.create()
     local icon, highlight = icons.get(dialect.id)
     return { label = dialect.label, icon = icon, highlight = highlight, value = dialect.id }
   end, require('sqmeow.dialects').list)
+  -- Last, for someone holding a URL who would rather paste it than take it apart into fields.
+  local icon, highlight = icons.get('connection')
+  table.insert(
+    items,
+    { label = 'Connection string', icon = icon, highlight = highlight, value = 'url' }
+  )
 
   local opened, err = require('sqmeow.ui.form').menu({
     title = 'Connect to',
     items = items,
-    on_choice = function(dialect)
-      form(dialect, {}, nil)
+    on_choice = function(choice)
+      if choice == 'url' then
+        return M.from_url()
+      end
+      form(choice, {}, nil)
     end,
   })
 

@@ -32,21 +32,27 @@ M.links = {
   SqmeowFormValue = 'Normal',
   SqmeowFormEdit = 'Visual',
 
+  -- The row detail: a column's name, then its type.
+  SqmeowDetailName = 'Identifier',
+  SqmeowDetailType = 'Type',
+
   SqmeowIconConnection = 'Directory',
   SqmeowIconSchema = 'Directory',
   SqmeowIconTable = 'Type',
   SqmeowIconView = 'Special',
   SqmeowIconColumn = 'Identifier',
   SqmeowIconScratchpad = 'String',
+  SqmeowIconElapsed = 'Special',
   SqmeowIconQuery = 'Function',
   SqmeowIconHistory = 'Statement',
 
-  -- The dot beside a connection. Standard diagnostic groups, so it is green and red in every
-  -- colourscheme without this plugin naming a colour.
+  -- The dot beside a connection. Linked to groups every colourscheme defines, so it is green once
+  -- open, plain text while closed, and the error colour after a failure, without this plugin
+  -- naming a colour.
   SqmeowConnected = 'DiagnosticOk',
-  SqmeowDisconnected = 'DiagnosticError',
-  -- The name of the connection a query runs on when the buffer does not name its own.
-  SqmeowActive = 'Title',
+  SqmeowConnecting = 'DiagnosticWarn',
+  SqmeowConnectionError = 'Error',
+  SqmeowDisconnected = 'Normal',
   SqmeowIconFunction = 'Function',
   SqmeowIconProcedure = 'Macro',
 

@@ -48,7 +48,9 @@ M.defaults = {
       -- What a SQL `NULL` reads as. Distinct from an empty string, which is drawn as nothing.
       null_text = 'NULL',
     },
-    border = 'rounded',
+    -- The border of every dialog. 'default' follows Neovim's own 'winborder'; any nui border
+    -- style, such as 'rounded', sets one for this plugin alone.
+    border = 'default',
     winbar = true,
     persist_session = false,
   },
@@ -73,6 +75,7 @@ M.defaults = {
   icons = {
     -- The kind of thing a drawer row names.
     connection = '󰆼',
+    database = '󰆼',
     schema = '󰙅',
     table = '󰓫',
     view = '󰈈',
@@ -83,10 +86,15 @@ M.defaults = {
     scratchpad = '󰈙',
     query = '󰐊',
     history = '󰋚',
+    -- Before how long a query took, in the result's winbar. An empty string leaves it out.
+    elapsed = '󱎫',
 
-    -- Beside a connection, saying whether it is open. One glyph in two colours: the difference is
-    -- `SqmeowConnected` and `SqmeowDisconnected`, not the character.
+    -- Beside a connection, saying what state it is in. One glyph in four colours: the difference
+    -- is `SqmeowConnected`, `SqmeowConnecting`, `SqmeowConnectionError` and `SqmeowDisconnected`,
+    -- not the character.
     connected = '●',
+    connecting = '●',
+    error = '●',
     disconnected = '●',
     ['function'] = '󰊕',
     procedure = '󰡱',
@@ -216,6 +224,29 @@ end
 ---@return table config
 function M.get()
   return M.current
+end
+
+--- The border style dialogs are drawn with.
+---
+--- `ui.border`, unless it is 'default', which means Neovim's 'winborder', so a border chosen once
+--- for every floating window reaches this plugin's too. nui takes the named styles as they are,
+--- but not the custom form, eight characters separated by commas, which it needs as a list.
+---
+---@return string|string[] style
+function M.border()
+  local style = M.get().ui.border
+  if style ~= 'default' then
+    return style
+  end
+
+  local winborder = vim.fn.exists('+winborder') == 1 and vim.o.winborder or ''
+  if winborder == '' then
+    return 'default'
+  end
+  if winborder:find(',', 1, true) then
+    return vim.split(winborder, ',', { plain = true })
+  end
+  return winborder
 end
 
 return M

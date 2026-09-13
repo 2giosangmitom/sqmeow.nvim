@@ -55,6 +55,31 @@ async fn run(backend: &Backend, sql: &str) -> ResultSet {
 }
 
 #[tokio::test]
+async fn a_url_naming_no_database_lists_the_cluster() {
+    let url = server!();
+    let (cluster, database) = url.rsplit_once('/').expect("the test url names a database");
+
+    let backend = connect(cluster).await;
+    let databases = backend
+        .databases()
+        .await
+        .expect("a url naming no database reaches the cluster")
+        .expect("the databases should load");
+    assert!(databases.iter().any(|name| name == database));
+    assert!(
+        !databases.iter().any(|name| name.starts_with("template")),
+        "a template cannot be opened, so it is not listed"
+    );
+
+    // One database of it, opened the way the drawer opens it, is a single database again.
+    let one = Backend::connect_to(cluster, Some(database))
+        .await
+        .expect("the database should open");
+    assert!(one.databases().await.is_none());
+    assert!(connect(&url).await.databases().await.is_none());
+}
+
+#[tokio::test]
 async fn connects_and_reports_its_dialect() {
     let backend = connect(&server!()).await;
     assert_eq!(backend.dialect().name(), "postgres");

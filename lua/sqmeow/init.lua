@@ -27,12 +27,19 @@
 --- will call this database from now on, so it is yours to choose. The URL is never shown. >lua
 ---   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
 --- <
+--- The menu's last choice, `Connection string`, asks for a name and a whole URL instead, saved as
+--- typed, so a password template such as `{{ env "PGPASSWORD" }}` needs no escaping.
+---
+--- The database may be left empty to reach every database on the server. MySQL and MariaDB then
+--- list each one where a schema would be. PostgreSQL lists the cluster's databases, and `<CR>` on
+--- one opens it as a connection of its own, named `connection/database` and drawn inside the
+--- cluster, so `u`, `a` and previews under it all run on that database.
 ---@tag sqmeow-connecting
 ---@toc_entry Making a connection
 
 --- Which database a query runs on ~
 ---
---- One connection is active, and it is the one whose name is highlighted in the drawer. `u` in the
+--- One connection is active, and the result window's winbar names it. `u` in the
 --- drawer makes the connection under the cursor active, and `:Sqmeow use [name]` does the same
 --- from the command line. `<CR>` only opens a row out, so reading a schema never changes where the
 --- next query goes.

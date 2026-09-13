@@ -173,4 +173,17 @@ T['cheatsheet']['shows an override rather than the default'] = function()
   eq(text:find('<C-n>', 1, true) ~= nil, true)
 end
 
+T['defaults']['leave the result free to be crossed sideways'] = function()
+  -- A wide grid is read by moving along a line, and a mapping on one of these takes that away.
+  local motions = { 'w', 'b', 'e', 'W', 'B', 'E', 'ge', 'gE', 'h', 'l', '0', '^', '$' }
+  vim.list_extend(motions, { 'f', 'F', 't', 'T', ';', ',', 'zh', 'zl', 'zH', 'zL' })
+
+  for _, entry in ipairs(keymap.resolve('result')) do
+    local keys = type(entry.lhs) == 'table' and entry.lhs or { entry.lhs }
+    for _, lhs in ipairs(keys) do
+      eq(vim.tbl_contains(motions, lhs), false)
+    end
+  end
+end
+
 return T

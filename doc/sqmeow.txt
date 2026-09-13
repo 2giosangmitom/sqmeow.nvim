@@ -37,12 +37,19 @@ The first thing it asks for is a name, and it suggests nothing: the name is what
 will call this database from now on, so it is yours to choose. The URL is never shown. >lua
   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
 <
+The menu's last choice, `Connection string`, asks for a name and a whole URL instead, saved as
+typed, so a password template such as `{{ env "PGPASSWORD" }}` needs no escaping.
+
+The database may be left empty to reach every database on the server. MySQL and MariaDB then
+list each one where a schema would be. PostgreSQL lists the cluster's databases, and `<CR>` on
+one opens it as a connection of its own, named `connection/database` and drawn inside the
+cluster, so `u`, `a` and previews under it all run on that database.
 
 ------------------------------------------------------------------------------
                                                                  *sqmeow-active*
 Which database a query runs on ~
 
-One connection is active, and it is the one whose name is highlighted in the drawer. `u` in the
+One connection is active, and the result window's winbar names it. `u` in the
 drawer makes the connection under the cursor active, and `:Sqmeow use [name]` does the same
 from the command line. `<CR>` only opens a row out, so reading a schema never changes where the
 next query goes.
@@ -200,7 +207,9 @@ is built, so the documented defaults cannot drift from the ones the code uses.
         -- What a SQL `NULL` reads as. Distinct from an empty string, which is drawn as nothing.
         null_text = 'NULL',
       },
-      border = 'rounded',
+      -- The border of every dialog. 'default' follows Neovim's own 'winborder'; any nui border
+      -- style, such as 'rounded', sets one for this plugin alone.
+      border = 'default',
       winbar = true,
       persist_session = false,
     },
@@ -225,6 +234,7 @@ is built, so the documented defaults cannot drift from the ones the code uses.
     icons = {
       -- The kind of thing a drawer row names.
       connection = '󰆼',
+      database = '󰆼',
       schema = '󰙅',
       table = '󰓫',
       view = '󰈈',
@@ -235,10 +245,15 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       scratchpad = '󰈙',
       query = '󰐊',
       history = '󰋚',
+      -- Before how long a query took, in the result's winbar. An empty string leaves it out.
+      elapsed = '󱎫',
 
-      -- Beside a connection, saying whether it is open. One glyph in two colours: the difference is
-      -- `SqmeowConnected` and `SqmeowDisconnected`, not the character.
+      -- Beside a connection, saying what state it is in. One glyph in four colours: the difference
+      -- is `SqmeowConnected`, `SqmeowConnecting`, `SqmeowConnectionError` and `SqmeowDisconnected`,
+      -- not the character.
       connected = '●',
+      connecting = '●',
+      error = '●',
       disconnected = '●',
       ['function'] = '󰊕',
       procedure = '󰡱',
@@ -334,6 +349,18 @@ Read the active configuration.
 Return ~
 `(table)` config
 
+------------------------------------------------------------------------------
+                                                        *sqmeow.config.border()*
+                            `sqmeow.config.border`()
+The border style dialogs are drawn with.
+
+`ui.border`, unless it is 'default', which means Neovim's 'winborder', so a border chosen once
+for every floating window reaches this plugin's too. nui takes the named styles as they are,
+but not the custom form, eight characters separated by commas, which it needs as a list.
+
+Return ~
+`(string|string[])` style
+
 
 ==============================================================================
 ------------------------------------------------------------------------------
@@ -394,17 +421,15 @@ drawer
  q         Close the drawer
 
 result
- L    Next page
- H    Previous page
- gg   First page
- G    Last page
- K    Show this row down the page
- yc   Yank this cell
- yr   Yank this row as CSV
- yp   Yank this page as CSV
- e    Write the result to a file
- ?    Show these mappings
- q    Close the result window
+ L       Next page
+ H       Previous page
+ gg      First page
+ G       Last page
+ K       Show this row down the page
+ x       Export the result to a file
+ x (x)   Export the selected rows
+ ?       Show these mappings
+ q       Close the result window
 
 editor
  <CR>        Run the statement under the cursor
@@ -495,7 +520,8 @@ reports success, which arrives as an event and is announced to the user.
 
 Parameters ~
 {url} `(string)` A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
-{opts} `(table|nil)` Options: `name` for the label shown in the interface.
+{opts} `(table|nil)` Options: `name` for the label shown in the interface; `database` and
+`parent` open one database of the cluster that connection `parent` lists.
 Return ~
 `(integer|nil)` id The connection id, or nil if the engine refused the request.
 Return ~
@@ -669,17 +695,6 @@ Return ~
 `(boolean)` stopped Whether there was a query to stop.
 
 ------------------------------------------------------------------------------
-                                                                   *turn_page()*
-                               `turn_page`({to})
-Move the result window to another page.
-
-Nothing is asked of the engine beyond the rows themselves: how many fit on a page and where the
-view has got to are this side's to know, so the arithmetic is here.
-
-Parameters ~
-{to} `(fun(offset: integer, size: integer, rows: integer): integer)`
-
-------------------------------------------------------------------------------
                                                         *sqmeow.api.next_page()*
                             `sqmeow.api.next_page`()
 Show the next page of the current result.
@@ -739,8 +754,12 @@ Return ~
                           `sqmeow.api.export`({opts})
 Write the current result to a file.
 
+Without a `path`, asks for the format, file and whether to write a header in a dialog that
+shows the query being exported.
+
 Parameters ~
-{opts} `(table|nil)` `path` skips the prompt; `format` is 'csv' or 'json'.
+{opts} `(table|nil)` `path` skips the dialog; `format` is 'csv' or 'json'; `headers` defaults to
+true; `offset` and `limit` write that many rows from that one, zero-based, rather than all rows.
 
 ------------------------------------------------------------------------------
                                                        *sqmeow.api.scratchpad()*

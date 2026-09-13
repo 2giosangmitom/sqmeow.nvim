@@ -22,6 +22,7 @@ end
 --- <
 M.highlights = {
   connection = 'SqmeowIconConnection',
+  database = 'SqmeowIconSchema',
   schema = 'SqmeowIconSchema',
   table = 'SqmeowIconTable',
   view = 'SqmeowIconView',
@@ -32,7 +33,10 @@ M.highlights = {
   scratchpad = 'SqmeowIconScratchpad',
   query = 'SqmeowIconQuery',
   history = 'SqmeowIconHistory',
+  elapsed = 'SqmeowIconElapsed',
   connected = 'SqmeowConnected',
+  connecting = 'SqmeowConnecting',
+  error = 'SqmeowConnectionError',
   disconnected = 'SqmeowDisconnected',
   ['function'] = 'SqmeowIconFunction',
   procedure = 'SqmeowIconProcedure',

@@ -76,7 +76,7 @@ function M.open(surface)
       height = math.min(#lines, vim.o.lines - 4),
     },
     border = {
-      style = require('sqmeow.config').get().ui.border,
+      style = require('sqmeow.config').border(),
       text = { top = ' ' .. surface .. ' ' },
     },
     buf_options = { modifiable = true, readonly = false },

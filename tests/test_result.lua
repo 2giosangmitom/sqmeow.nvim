@@ -48,20 +48,35 @@ T['describe']['reports a cancellation'] = function()
   eq(result.describe({ state = 'cancelled' }), 'cancelled')
 end
 
+--- How long a query took, as `describe` writes it: behind the configured icon.
+local function took(ms)
+  return require('sqmeow.icons').get('elapsed') .. ' ' .. ms
+end
+
 T['describe']['counts rows, singular and plural'] = function()
-  eq(result.describe({ state = 'done', rows = 1, elapsed_ms = 4 }), '1 row  4ms')
-  eq(result.describe({ state = 'done', rows = 2, elapsed_ms = 4 }), '2 rows  4ms')
+  eq(result.describe({ state = 'done', rows = 1, elapsed_ms = 4 }), '1 row  ' .. took('4ms'))
+  eq(result.describe({ state = 'done', rows = 2, elapsed_ms = 4 }), '2 rows  ' .. took('4ms'))
 end
 
 T['describe']['reports affected rows when a statement returned none'] = function()
   eq(
     result.describe({ state = 'done', rows = 0, affected = 3, elapsed_ms = 1 }),
-    '3 rows affected  1ms'
+    '3 rows affected  ' .. took('1ms')
   )
 end
 
 T['describe']['says so when nothing came back at all'] = function()
-  eq(result.describe({ state = 'done', rows = 0, elapsed_ms = 1 }), 'no rows  1ms')
+  eq(result.describe({ state = 'done', rows = 0, elapsed_ms = 1 }), 'no rows  ' .. took('1ms'))
+end
+
+T['describe']['colours the time icon only for a winbar'] = function()
+  local summary = { state = 'done', rows = 1, elapsed_ms = 4 }
+  local icon = require('sqmeow.icons').get('elapsed')
+  eq(result.describe(summary, true), ('1 row  %%#SqmeowIconElapsed#%s%%* 4ms'):format(icon))
+
+  -- Without a glyph, the time stands alone.
+  require('sqmeow').setup({ icons = { elapsed = '' } })
+  eq(result.describe(summary, true), '1 row  4ms')
 end
 
 T['describe']['flags a truncated result'] = function()
@@ -76,8 +91,11 @@ T['describe']['shows the page only when there is more than one'] = function()
   -- real; here only the page size decides whether there is more than one page at all.
   require('sqmeow').setup({ ui = { result = { page_size = 100 } } })
 
-  eq(result.describe({ state = 'done', rows = 5, elapsed_ms = 1 }), '5 rows  1ms')
-  eq(result.describe({ state = 'done', rows = 500, elapsed_ms = 1 }), '500 rows  page 1/5  1ms')
+  eq(result.describe({ state = 'done', rows = 5, elapsed_ms = 1 }), '5 rows  ' .. took('1ms'))
+  eq(
+    result.describe({ state = 'done', rows = 500, elapsed_ms = 1 }),
+    '500 rows  page 1/5  ' .. took('1ms')
+  )
 end
 
 T['window'] = MiniTest.new_set()

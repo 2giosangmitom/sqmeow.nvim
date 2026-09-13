@@ -18,7 +18,7 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 - ▶️ Run the statement under the cursor, a selection or the whole buffer. Errors show up as diagnostics on their own lines.
 - 📄 Scratchpads you create and name from the drawer, as many per connection as you like. They survive a restart and stay tied to their connection, so two of them can query two databases side by side.
 - 🕘 A query log that keeps every result, so you can look at yesterday's answer without running the query again.
-- ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Yank as CSV or export to CSV and JSON.
+- ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Export the result, or just the rows you select, to CSV or JSON.
 - 🔐 Passwords can come from `{{ env "VAR" }}` or `{{ exec "cmd" }}`, and are masked wherever a URL is shown.
 - ⌨️ No global keymaps. Every key is buffer-local and configurable, with `<Plug>` mappings for your own bindings.
 
@@ -59,7 +59,7 @@ To track the latest commit instead of a release, drop `version` and use `install
 ## ⚡ Usage
 
 1. `:Sqmeow` opens the drawer and the result window. Run it again to restore your layout.
-2. `:Sqmeow add` (or `A` in the drawer) opens a form to add a connection.
+2. `:Sqmeow add` (or `A` in the drawer) opens a form to add a connection. Leave the database empty to list every database on the server, or choose **Connection string** to paste a whole URL.
 3. `<CR>` on a connection in the drawer opens it. `u` makes it the one queries run against, and `a` creates a scratchpad for it.
 4. Write SQL in the scratchpad and press `<CR>` to run the statement under the cursor, or a visual selection. Errors show as diagnostics. On a Redis connection, write one command per line; the drawer lists keys by type.
 
@@ -111,14 +111,13 @@ Subcommands complete with `<Tab>`. See `:h sqmeow` for the rest.
 
 **Result**
 
-| Key                | Action                        |
-| ------------------ | ----------------------------- |
-| `L` / `H`          | Next / previous page          |
-| `gg` / `G`         | First / last page             |
-| `K`                | Show the row in detail        |
-| `yc` / `yr` / `yp` | Yank cell / row / page as CSV |
-| `e`                | Export the result             |
-| `q`                | Close                         |
+| Key        | Action                                             |
+| ---------- | -------------------------------------------------- |
+| `L` / `H`  | Next / previous page                               |
+| `gg` / `G` | First / last page                                  |
+| `K`        | Show the row in detail                             |
+| `x`        | Export the result, or the selection in visual mode |
+| `q`        | Close                                              |
 
 **Scratchpad**
 
@@ -155,7 +154,7 @@ require('sqmeow').setup({
   ui = {
     drawer = { width = 36 },
     result = { height = 16, page_size = 100, max_column_width = 48, column_icons = true, null_text = 'NULL' },
-    border = 'rounded',
+    border = 'default', -- follows 'winborder'; or any nui border style
     winbar = true,
     persist_session = false,
   },

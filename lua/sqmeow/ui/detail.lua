@@ -1,79 +1,59 @@
---- One row, read down the page instead of across it.
+--- One row, read down the page instead of across it, in a popup.
 ---
---- A grid is the wrong shape for a wide table or a long text column: the value is either truncated
---- or off the side of the window. This shows one row as a list, with each value whole, including
---- the line breaks a grid cell has to flatten.
----
---- The lines are laid out here rather than by `nui.table`, which is what draws the grid. A table
---- puts each row on one line, and a value holding line breaks is exactly what this view exists to
---- show whole, so the one component that would otherwise fit is the one that cannot.
+--- A grid is the wrong shape for a wide table: most of its columns are off the side of the window.
+--- This lists one row as a line per column, with its name, its type and its value, the way a
+--- database client's row detail does, and `q` closes it again.
 
 local M = {}
 
-local split = nil
+local popup = nil
 
---- Lay a row out as lines.
+-- Room for most type names. A longer one is cut short rather than pushing every value out.
+local TYPE_WIDTH = 16
+
+--- Lay a row out as lines, each value on one line and cut to fit.
 ---
---- A value holding line breaks is indented under its name rather than escaped, because having
---- room for it is the whole point of this view.
----
----@param columns table[] As the engine sends them: name, value, type_name, is_null.
----@return string[]
-function M.lines(columns)
-  local widest = 0
-  for _, column in ipairs(columns) do
-    widest = math.max(widest, vim.fn.strdisplaywidth(column.name))
+---@param columns table[] As the engine sends them, each with `key` from the result's columns.
+---@param width integer The width the lines have to fit in.
+---@return NuiLine[]
+function M.lines(columns, width)
+  local Line = require('nui.line')
+  local truncate = require('sqmeow.ui.result').truncate
+  local config = require('sqmeow.config').get()
+  local ellipsis = config.icons.grid.ellipsis
+
+  local types = {}
+  local name_width, type_width = 0, 0
+  for index, column in ipairs(columns) do
+    -- A key says so in two letters, kept whole when a long type name is cut to make room for them.
+    local key = ({ primary_key = ' (PK)', foreign_key = ' (FK)' })[column.key] or ''
+    local declared = column.declared_type or column.type_name or ''
+    types[index] = truncate(declared, TYPE_WIDTH - #key, ellipsis) .. key
+
+    name_width = math.max(name_width, vim.api.nvim_strwidth(column.name))
+    type_width = math.max(type_width, vim.api.nvim_strwidth(types[index]))
   end
 
+  local value_width = math.max(width - name_width - type_width - 4, 1)
   local lines = {}
-  for _, column in ipairs(columns) do
-    local padding = (' '):rep(widest - vim.fn.strdisplaywidth(column.name))
-    local value = column.is_null and 'NULL' or column.value
-    local first, rest = value:match('^([^\n]*)\n(.*)$')
+  for index, column in ipairs(columns) do
+    local line = Line()
+    local name_pad = (' '):rep(name_width - vim.api.nvim_strwidth(column.name) + 2)
+    local type_pad = (' '):rep(type_width - vim.api.nvim_strwidth(types[index]) + 2)
+    line:append(column.name .. name_pad, 'SqmeowDetailName')
+    line:append(types[index] .. type_pad, 'SqmeowDetailType')
 
-    if first then
-      table.insert(lines, ('%s%s  %s'):format(column.name, padding, first))
-      for _, continuation in ipairs(vim.split(rest, '\n', { plain = true })) do
-        table.insert(lines, ('%s  %s'):format((' '):rep(widest), continuation))
-      end
+    if column.is_null then
+      line:append(config.ui.result.null_text, 'SqmeowNull')
     else
-      table.insert(lines, ('%s%s  %s'):format(column.name, padding, value))
+      -- Line breaks are flattened, so every column stays on one line under the one before it.
+      local value = column.value:gsub('[\r\n]', ' ')
+      line:append(truncate(value, value_width, ellipsis))
     end
+    lines[index] = line
   end
 
   return lines
-end
-
---- The split the row is shown in, or nil with a message when nui is not installed.
-local function build()
-  local ok, Split = pcall(require, 'nui.split')
-  if not ok then
-    return nil, 'sqmeow: the row detail needs nui.nvim (MunifTanjim/nui.nvim)'
-  end
-
-  return Split({
-    relative = 'editor',
-    position = 'right',
-    size = '40%',
-    buf_options = {
-      buftype = 'nofile',
-      bufhidden = 'hide',
-      swapfile = false,
-      filetype = 'sqmeow-row',
-    },
-    win_options = {
-      number = false,
-      relativenumber = false,
-      signcolumn = 'no',
-      wrap = false,
-    },
-  })
-end
-
---- The detail buffer, or nil when the view has never been opened.
----@return integer|nil
-function M.buffer()
-  return split and split.bufnr or nil
 end
 
 --- Show one row of the current result.
@@ -91,42 +71,74 @@ function M.open(row)
     return
   end
 
-  if not split then
-    local built, build_err = build()
-    if not built then
-      return vim.notify(build_err, vim.log.levels.ERROR)
-    end
-    split = built
+  local ok, Popup = pcall(require, 'nui.popup')
+  if not ok then
+    return vim.notify(
+      'sqmeow: the row detail needs nui.nvim (MunifTanjim/nui.nvim)',
+      vim.log.levels.ERROR
+    )
   end
 
-  local previous = vim.api.nvim_get_current_win()
-  split:mount()
-  split:map('n', 'q', M.close, { nowait = true })
-
-  vim.bo[split.bufnr].modifiable = true
-  vim.api.nvim_buf_set_lines(split.bufnr, 0, -1, false, M.lines(columns))
-  vim.bo[split.bufnr].modifiable = false
-
-  vim.wo[split.winid].winbar = ('%%#SqmeowWinbar# row %d '):format(row + 1)
-
-  -- Opening a detail should not steal the cursor from the grid it was opened from.
-  if vim.api.nvim_win_is_valid(previous) then
-    vim.api.nvim_set_current_win(previous)
+  -- Which columns are keys is known from the result, not from the row, so it is read from there.
+  for index, column in ipairs(columns) do
+    local described = call.columns and call.columns[index]
+    column.key = described and described.key
   end
+
+  M.close()
+  local width = math.floor(vim.o.columns * 0.8)
+  popup = Popup({
+    enter = true,
+    focusable = true,
+    relative = 'editor',
+    position = '50%',
+    size = {
+      width = width,
+      height = math.max(math.min(#columns, math.floor(vim.o.lines * 0.8)), 1),
+    },
+    zindex = 50,
+    border = {
+      style = require('sqmeow.config').border(),
+      text = { top = ' Row details ', top_align = 'center' },
+    },
+    buf_options = {
+      buftype = 'nofile',
+      bufhidden = 'wipe',
+      swapfile = false,
+      filetype = 'sqmeow-row',
+    },
+    win_options = { cursorline = true, wrap = false, number = false, relativenumber = false },
+  })
+  popup:mount()
+  popup:map('n', 'q', M.close, { nowait = true })
+  popup:map('n', '<Esc>', M.close, { nowait = true })
+  popup:on('BufLeave', M.close, { once = true })
+
+  local lines = M.lines(columns, width)
+  local namespace = vim.api.nvim_create_namespace('sqmeow.detail')
+  vim.api.nvim_buf_set_lines(
+    popup.bufnr,
+    0,
+    -1,
+    false,
+    vim.tbl_map(function(line)
+      return line:content()
+    end, lines)
+  )
+  for index, line in ipairs(lines) do
+    line:highlight(popup.bufnr, namespace, index)
+  end
+  vim.bo[popup.bufnr].modifiable = false
 end
 
---- Hide the detail window.
+--- Close the popup.
 function M.close()
-  if split then
-    split:unmount()
+  -- Forgotten before unmounting, since unmounting fires the `BufLeave` that calls this again.
+  local closing = popup
+  popup = nil
+  if closing then
+    closing:unmount()
   end
-  split = nil
-end
-
---- Whether the detail window is showing.
----@return boolean
-function M.is_open()
-  return split ~= nil and split.winid ~= nil and vim.api.nvim_win_is_valid(split.winid)
 end
 
 return M

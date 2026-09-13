@@ -46,6 +46,7 @@ redis = { version = "1.7", default-features = false, features = [
   "tokio-rustls-comp",
   "tls-rustls-insecure",
 ] }
+csv = "1.4"
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

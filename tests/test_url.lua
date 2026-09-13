@@ -176,6 +176,12 @@ T['build']['leaves out a port, a user and options that were not given'] = functi
   eq(url.build('postgres', { host = 'h', database = 'd' }), 'postgres://h/d')
 end
 
+T['build']['leaves the database out when it was not given'] = function()
+  -- Which is how a connection to every database on the server is asked for.
+  eq(url.build('postgres', { host = 'h', user = 'me' }), 'postgres://me@h/')
+  eq(url.parse('postgres://me@h/').database, '')
+end
+
 T['build']['writes redis tls as the rediss scheme'] = function()
   eq(url.build('redis', { host = 'h', database = '0', tls = 'yes' }), 'rediss://h/0')
   eq(url.build('redis', { host = 'h', database = '0', tls = 'no' }), 'redis://h/0')

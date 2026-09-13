@@ -12,6 +12,8 @@ local M = {}
 ---@field dialect string|nil Known once the engine reports a successful connection.
 ---@field state 'connecting'|'connected'|'error'|'closed'
 ---@field error string|nil
+---@field parent integer|nil For one database of a cluster, the connection that listed it.
+---@field database string|nil For one database of a cluster, which one.
 
 ---@class sqmeow.CallSummary
 ---@field call_id integer|nil Absent for an entry from the log that has no rows to read.
@@ -46,6 +48,13 @@ local M = {}
 
 ---@type table<integer, sqmeow.Connection>
 M.connections = {}
+
+--- Why each connection last failed to open, by name, until it is tried again.
+---
+--- A failed connection is forgotten, so that choosing it again tries again. This is what lets the
+--- drawer still say that it failed.
+---@type table<string, string>
+M.failures = {}
 
 --- The connection queries run against.
 ---@type integer|nil
@@ -182,6 +191,20 @@ function M.connection_by_name(name)
   return nil
 end
 
+--- The connection opened for one database of a cluster, if it is open.
+---
+---@param parent integer
+---@param database string
+---@return sqmeow.Connection|nil
+function M.child_connection(parent, database)
+  for _, connection in pairs(M.connections) do
+    if connection.parent == parent and connection.database == database then
+      return connection
+    end
+  end
+  return nil
+end
+
 --- Every connection, ordered by id so the interface does not reshuffle between draws.
 ---@return sqmeow.Connection[]
 function M.connection_list()
@@ -210,6 +233,7 @@ end
 --- Forget everything. Used when the engine restarts, since its session went with it.
 function M.reset()
   M.connections = {}
+  M.failures = {}
   M.current = nil
   M.call = nil
   M.calls = {}

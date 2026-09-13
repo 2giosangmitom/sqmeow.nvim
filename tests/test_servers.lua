@@ -17,8 +17,8 @@ local servers = {
   mysql = vim.env.SQMEOW_TEST_MYSQL_URL,
 }
 
-local function connect(url)
-  local id = assert(api.connect(url), 'the engine should accept the connection')
+local function connect(url, opts)
+  local id = assert(api.connect(url, opts), 'the engine should accept the connection')
   local settled = vim.wait(TIMEOUT, function()
     local connection = state.connections[id]
     return connection == nil or connection.state ~= 'connecting'
@@ -236,6 +236,66 @@ for server, url in pairs(redis_servers) do
     eq(summary.state, 'done')
     eq(lines()[1]:find('teal', 1, true) ~= nil, true)
   end
+end
+
+-- A PostgreSQL URL naming no database reaches every database on the server.
+T['postgres cluster'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      if not servers.postgres then
+        MiniTest.skip('set SQMEOW_TEST_POSTGRES_URL, or run `just db-up`')
+      end
+    end,
+    post_case = function()
+      api.disconnect()
+      require('sqmeow.ui.drawer').close()
+    end,
+  },
+})
+
+T['postgres cluster']['opens a database from the drawer as its own connection'] = function()
+  local drawer = require('sqmeow.ui.drawer')
+  local cluster_url, database = servers.postgres:match('^(.*/)([^/?]+)$')
+  local cluster = connect(cluster_url, { name = 'cluster' })
+  eq(cluster.state, 'connected')
+  drawer.open()
+
+  local function drawn()
+    return vim.api.nvim_buf_get_lines(drawer.buffer(), 0, -1, false)
+  end
+  local function toggle(pattern)
+    local found
+    local arrived = vim.wait(TIMEOUT, function()
+      for number, line in ipairs(drawn()) do
+        if line:find(pattern) then
+          found = number
+          return true
+        end
+      end
+      return false
+    end, 20)
+    assert(
+      arrived,
+      ('no line matching %q; drawer holds:\n%s'):format(pattern, table.concat(drawn(), '\n'))
+    )
+    vim.api.nvim_win_set_cursor(drawer.open(), { found, 0 })
+    drawer.actions.toggle()
+  end
+
+  toggle(' cluster')
+  toggle(' ' .. database .. '$')
+  -- The schemas are the child connection's, read once it has connected.
+  toggle(' public$')
+
+  local child = state.child_connection(cluster.id, database)
+  eq(child.name, 'cluster/' .. database)
+  eq(child.state, 'connected')
+  for _, line in ipairs(drawn()) do
+    eq(line:find('cluster/', 1, true), nil)
+  end
+
+  api.disconnect(cluster.id)
+  eq(state.child_connection(cluster.id, database), nil)
 end
 
 return T
