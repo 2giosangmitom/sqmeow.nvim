@@ -9,8 +9,6 @@
 
 local M = {}
 
-local namespace = vim.api.nvim_create_namespace('sqmeow.drawer')
-
 local buf = nil
 local win = nil
 
@@ -19,11 +17,39 @@ local win = nil
 local expanded = {}
 local cache = {}
 
--- Line number to the node drawn on it, rebuilt on every render.
-local rows = {}
+-- The nui tree the drawer was last drawn with, kept so the cursor can be turned into a node.
+local tree = nil
 
 local function node_key(conn_id, path)
   return conn_id .. '\0' .. table.concat(path, '\0')
+end
+
+--- Read a key back into the connection and path it was built from.
+---
+---@param key string
+---@return integer|nil conn_id Nil for a key that is not a schema node's, such as the scratchpads.
+---@return string[] path
+local function key_parts(key)
+  local parts = vim.split(key, '\0', { plain = true })
+  local conn_id = tonumber(table.remove(parts, 1))
+  -- An empty path leaves one empty trailing piece behind, which is not a path element.
+  if #parts == 1 and parts[1] == '' then
+    parts = {}
+  end
+  return conn_id, parts
+end
+
+--- Whether a key names something at or under a path.
+---
+--- The separator has to be there exactly once. A key for a path of no elements — a whole
+--- connection — already ends in one, so appending another matches nothing, and refreshing a
+--- connection would quietly reload none of the levels under it.
+local function under(key, prefix)
+  if key == prefix then
+    return true
+  end
+  local boundary = prefix:sub(-1) == '\0' and prefix or (prefix .. '\0')
+  return key:sub(1, #boundary) == boundary
 end
 
 local function valid_buf()
@@ -89,7 +115,7 @@ end
 function M.invalidate(conn_id, path)
   local prefix = node_key(conn_id, path)
   for cached in pairs(cache) do
-    if cached == prefix or cached:sub(1, #prefix + 1) == prefix .. '\0' then
+    if under(cached, prefix) then
       cache[cached] = nil
     end
   end
@@ -120,161 +146,182 @@ local function annotate(node)
   end
 
   local parts = { node.type_name }
-  if node.primary_key then
-    table.insert(parts, 'primary key')
-  elseif not node.nullable then
+  -- What a foreign key points at, which is the one thing about a column the icon cannot say and a
+  -- reader following a relation is looking for.
+  if node.references then
+    table.insert(parts, '→ ' .. node.references)
+  end
+  -- No "primary key" here any more: the icon beside the name carries it, and repeating it in words
+  -- spends a third of the drawer's width saying the same thing twice.
+  if not node.primary_key and not node.nullable then
     table.insert(parts, 'not null')
   end
   return table.concat(parts, '  ')
 end
 
---- Add one row, with its marker and its icon coloured apart from the text.
+--- nui's tree, or nil with a message when it is not installed.
+local function nui()
+  local ok, Tree = pcall(require, 'nui.tree')
+  if not ok then
+    return nil, 'sqmeow: the drawer needs nui.nvim (MunifTanjim/nui.nvim)'
+  end
+  return { Tree = Tree, Line = require('nui.line'), Text = require('nui.text') }
+end
+
+--- Turn one node into the line the drawer draws for it.
 ---
---- The three spans get different groups on purpose. A marker says whether a row is open, an icon
---- says what the row holds, and colouring them is most of what makes a tree readable without
---- reading it. Every marker shares `SqmeowMarker`, since none of them names a kind of thing.
+--- Each piece gets its own highlight on purpose. A marker says whether a row is open, a badge says
+--- something about the thing itself, an icon says what the row holds, and colouring them apart is
+--- most of what makes a tree readable without reading it.
 ---
----@return string # The label, so a caller can measure where its own trailing note begins.
-local function emit(lines, highlights, node)
+--- Built as a `NuiLine` rather than as a string with byte offsets worked out beside it, which is
+--- what this used to be: the offsets had to be recomputed whenever a piece changed width, and a
+--- multi-byte glyph made every one of them a measurement rather than a length.
+local function prepare_node(node)
+  local parts = assert(nui())
   local icons = require('sqmeow.icons')
-  local icon, icon_group = icons.get(node.kind)
-  local indent = node.indent or ''
-  local prefix = ('%s%s '):format(indent, node.marker)
+  local line = parts.Line()
+
+  line:append(('  '):rep(node:get_depth() - 1))
+
+  -- A row the tree could not fill in: still loading, or an error where children should be.
+  if node.placeholder then
+    line:append(parts.Text(node.placeholder, node.placeholder_group))
+    return line
+  end
+
+  local marks = icons.markers()
+  local marker = marks.leaf
+  -- A connection carries a marker whether or not it can be opened yet: pressing the same key on a
+  -- closed one connects it, so a leaf's blank marker would say it is a dead end when it is not.
+  if node.expandable or node.show_marker then
+    marker = node:is_expanded() and marks.open or marks.closed
+  end
+  -- A leaf's marker is a space, and a highlight over nothing is one more thing for the editor to
+  -- keep track of on every row of a long tree.
+  if marker:match('%S') then
+    line:append(parts.Text(marker, 'SqmeowMarker'))
+  else
+    line:append(marker)
+  end
+  line:append(' ')
 
   -- A badge sits between the marker and the icon: the marker says whether the row is open, the
   -- badge says something about the thing itself, and the icon says what kind of thing it is.
-  local badge
   if node.badge then
     local text, group = icons.get(node.badge)
-    badge = { group = group, from = #prefix, to = #prefix + #text }
-    prefix = prefix .. text .. ' '
+    line:append(parts.Text(text, group))
+    line:append(' ')
   end
 
-  local label = ('%s%s %s'):format(prefix, icon, node.name)
+  local icon, icon_group = icons.get(node.icon_kind or node.kind)
+  line:append(parts.Text(icon, icon_group))
+  line:append(' ')
+  line:append(parts.Text(node.name, node.name_group))
 
-  local note = node.note or ''
-  table.insert(lines, note == '' and label or ('%s  %s'):format(label, note))
-  table.insert(rows, node.row)
-
-  local line = #lines - 1
-  -- A leaf's marker is blank by default, and an extmark over nothing is one more thing for the
-  -- editor to keep track of on every row of a long tree.
-  if node.marker:match('%S') then
-    table.insert(highlights, {
-      line = line,
-      group = 'SqmeowMarker',
-      from = #indent,
-      to = #indent + #node.marker,
-    })
-  end
-  if badge then
-    table.insert(highlights, { line = line, group = badge.group, from = badge.from, to = badge.to })
-  end
-  table.insert(
-    highlights,
-    { line = line, group = icon_group, from = #prefix, to = #prefix + #icon }
-  )
-  if node.name_group then
-    local from = #prefix + #icon + 1
-    table.insert(
-      highlights,
-      { line = line, group = node.name_group, from = from, to = from + #node.name }
-    )
-  end
-  if note ~= '' then
-    table.insert(highlights, { line = line, group = 'SqmeowNull', from = #label, to = -1 })
+  if node.note and node.note ~= '' then
+    line:append('  ')
+    line:append(parts.Text(node.note, 'SqmeowNull'))
   end
 
-  return label
+  return line
 end
 
-local function draw(lines, highlights, conn_id, path, depth)
+--- The nodes one level of the schema tree contributes.
+---
+---@param conn_id integer
+---@param path string[]
+---@return table[]
+local function schema_nodes(conn_id, path)
+  local parts = assert(nui())
+  local icons = require('sqmeow.icons')
   local entry = cache[node_key(conn_id, path)]
   if not entry then
-    return
+    return {}
   end
 
-  local indent = ('  '):rep(depth)
+  local id = ('node:%d:%s'):format(conn_id, table.concat(path, '/'))
 
   if entry.loading and not entry.nodes then
-    table.insert(lines, indent .. '…')
-    table.insert(rows, false)
-    return
+    return { parts.Tree.Node({ id = id .. ':loading', placeholder = '…' }) }
   end
   if entry.error then
-    table.insert(lines, indent .. entry.error)
-    table.insert(rows, false)
-    table.insert(highlights, { line = #lines - 1, group = 'SqmeowError', from = 0, to = -1 })
-    return
+    return {
+      parts.Tree.Node({
+        id = id .. ':error',
+        placeholder = entry.error,
+        placeholder_group = 'SqmeowError',
+      }),
+    }
   end
 
-  local marks = require('sqmeow.icons').markers()
-
+  local nodes = {}
   for _, node in ipairs(entry.nodes or {}) do
     -- The engine's own word for the node, which for a group heading is not what is drawn:
     -- `Tables` is a label, `tables` is what the engine matches on.
     local child = vim.list_extend(vim.list_slice(path, 1, #path), { node.key or node.name })
-    local marker = marks.leaf
-    if node.expandable then
-      marker = M.is_expanded(conn_id, child) and marks.open or marks.closed
-    end
+    local expandable = node.expandable == true
+    local open = expandable and M.is_expanded(conn_id, child)
 
-    emit(lines, highlights, {
-      indent = indent,
-      marker = marker,
-      kind = node.kind,
+    local built = parts.Tree.Node({
+      id = ('node:%d:%s'):format(conn_id, table.concat(child, '/')),
+      conn_id = conn_id,
+      path = child,
       name = node.name,
+      kind = node.kind,
+      icon_kind = node.kind == 'column' and icons.column_kind(node) or nil,
       note = annotate(node),
-      row = {
-        conn_id = conn_id,
-        path = child,
-        name = node.name,
-        kind = node.kind,
-        -- Only a group heading has one, so it doubles as how an action tells a heading apart
-        -- from something the database actually holds.
-        count = node.count,
-        expandable = node.expandable == true,
-      },
-    })
+      -- Only a group heading has one, so it doubles as how an action tells a heading apart from
+      -- something the database actually holds.
+      count = node.count,
+      expandable = expandable,
+    }, open and schema_nodes(conn_id, child) or nil)
 
-    if node.expandable and M.is_expanded(conn_id, child) then
-      draw(lines, highlights, conn_id, child, depth + 1)
+    if open then
+      built:expand()
     end
+    table.insert(nodes, built)
   end
+
+  return nodes
 end
 
 -- The scratchpad section is keyed on this rather than a connection id, because a scratchpad
 -- belongs to the plugin's data directory and outlives whatever connection it was written for.
 local SCRATCHPADS = 'scratchpads'
 
---- Draw the saved scratchpads under a heading of their own.
+--- The saved scratchpads, under a heading of their own.
 ---
 --- Below the connections, because the tree is about databases first. Reopening yesterday's query
 --- is something a user can see rather than something they have to remember exists.
-local function draw_scratchpads(lines, highlights, marks)
+local function scratchpad_node()
+  local parts = assert(nui())
   local pads = require('sqmeow.ui.editor').list()
   local open = expanded[SCRATCHPADS] == true
 
-  emit(lines, highlights, {
-    marker = open and marks.open or marks.closed,
+  local children = {}
+  for index, pad in ipairs(pads) do
+    children[index] = parts.Tree.Node({
+      id = 'pad:' .. pad.name,
+      kind = 'scratchpad',
+      name = pad.name,
+      file = pad.path,
+      expandable = false,
+    })
+  end
+
+  local node = parts.Tree.Node({
+    id = SCRATCHPADS,
     kind = 'scratchpads',
     name = 'scratchpads',
     note = #pads == 0 and 'none saved' or tostring(#pads),
-    row = { kind = 'scratchpads', name = 'scratchpads', expandable = true },
-  })
-  if not open then
-    return
-  end
+    expandable = true,
+  }, children)
 
-  for _, pad in ipairs(pads) do
-    emit(lines, highlights, {
-      indent = '  ',
-      marker = marks.leaf,
-      kind = 'scratchpad',
-      name = pad.name,
-      row = { kind = 'scratchpad', name = pad.name, file = pad.path, expandable = false },
-    })
+  if open then
+    node:expand()
   end
+  return node
 end
 
 -- Keyed on this for the same reason as the scratchpads: the log belongs to the plugin rather than
@@ -284,35 +331,40 @@ local HISTORY = 'history'
 --- How many queries the drawer offers before the section becomes a wall of text.
 local HISTORY_SHOWN = 20
 
---- Draw what has been run under a heading of its own.
-local function draw_history(lines, highlights, marks)
-  local entries = require('sqmeow.ui.log').entries({ limit = HISTORY_SHOWN })
+--- What has been run, under a heading of its own.
+local function history_node()
+  local parts = assert(nui())
+  local log = require('sqmeow.ui.log')
+  local entries = log.entries({ limit = HISTORY_SHOWN })
   local open = expanded[HISTORY] == true
 
-  emit(lines, highlights, {
-    marker = open and marks.open or marks.closed,
-    kind = 'history',
-    name = 'history',
-    note = #entries == 0 and 'nothing yet' or tostring(#entries),
-    row = { kind = 'history', name = 'history', expandable = true },
-  })
-  if not open then
-    return
-  end
-
-  for _, entry in ipairs(entries) do
+  local children = {}
+  for index, entry in ipairs(entries) do
     -- One line, however it was written. A statement spread over six lines would otherwise take
     -- six rows of the tree and say no more than its first clause does.
     local statement = (entry.statement:gsub('%s+', ' '):gsub('^%s', ''))
-    emit(lines, highlights, {
-      indent = '  ',
-      marker = marks.leaf,
+    children[index] = parts.Tree.Node({
+      id = ('query:%d'):format(index),
       kind = 'query',
       name = statement,
-      note = require('sqmeow.ui.log').ago(entry.at),
-      row = { kind = 'query', name = statement, entry = entry, expandable = false },
+      note = log.ago(entry.at),
+      entry = entry,
+      expandable = false,
     })
   end
+
+  local node = parts.Tree.Node({
+    id = HISTORY,
+    kind = 'history',
+    name = 'history',
+    note = #entries == 0 and 'nothing yet' or tostring(#entries),
+    expandable = true,
+  }, children)
+
+  if open then
+    node:expand()
+  end
+  return node
 end
 
 --- Every connection the drawer draws.
@@ -360,70 +412,96 @@ function M.render()
     return
   end
 
-  local marks = require('sqmeow.icons').markers()
-  local lines, highlights = {}, {}
-  rows = {}
+  local parts, err = nui()
+  if not parts then
+    return vim.notify(err, vim.log.levels.ERROR)
+  end
 
+  local icons = require('sqmeow.icons')
   local active = require('sqmeow.state').current
+  local nodes = {}
 
   for _, connection in ipairs(M.connection_rows()) do
     local open = connection.id ~= nil and M.is_expanded(connection.id, {})
-    emit(lines, highlights, {
-      marker = open and marks.open or marks.closed,
-      badge = connection.connected and 'connected' or 'disconnected',
-      kind = require('sqmeow.icons').connection_kind(connection.dialect),
+
+    local node = parts.Tree.Node({
+      id = 'conn:' .. tostring(connection.id or connection.name),
+      conn_id = connection.id,
+      path = {},
       name = connection.name,
+      kind = 'connection',
+      icon_kind = icons.connection_kind(connection.dialect),
+      badge = connection.connected and 'connected' or 'disconnected',
       -- The active one is the database a query runs on unless the buffer names another, so it is
       -- the one row in the tree worth telling apart from its neighbours.
       name_group = connection.id == active and 'SqmeowActive' or nil,
       note = connection.dialect or connection.note,
-      row = {
-        conn_id = connection.id,
-        path = {},
-        name = connection.name,
-        kind = 'connection',
-        url = connection.url,
-        -- A connection nobody has opened has nothing to show yet. Pressing the same key opens it,
-        -- and then it does.
-        expandable = connection.connected,
-      },
-    })
+      url = connection.url,
+      -- A connection nobody has opened has nothing to show yet. Pressing the same key opens it,
+      -- and then it does, which is why the marker is drawn either way.
+      expandable = connection.connected,
+      show_marker = true,
+    }, open and schema_nodes(connection.id, {}) or nil)
 
     if open then
-      draw(lines, highlights, connection.id, {}, 1)
+      node:expand()
     end
+    table.insert(nodes, node)
   end
 
-  if #lines == 0 then
-    table.insert(lines, 'no connections, run :Sqmeow add')
-    table.insert(rows, false)
+  if #nodes == 0 then
+    table.insert(
+      nodes,
+      parts.Tree.Node({ id = 'empty', placeholder = 'no connections, run :Sqmeow add' })
+    )
   end
 
-  draw_scratchpads(lines, highlights, marks)
-  draw_history(lines, highlights, marks)
+  table.insert(nodes, scratchpad_node())
+  table.insert(nodes, history_node())
 
-  vim.bo[buf].modifiable = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-
-  vim.api.nvim_buf_clear_namespace(buf, namespace, 0, -1)
-  for _, highlight in ipairs(highlights) do
-    vim.api.nvim_buf_set_extmark(buf, namespace, highlight.line, highlight.from, {
-      end_col = highlight.to == -1 and #lines[highlight.line + 1] or highlight.to,
-      hl_group = highlight.group,
+  -- One tree for the life of the buffer, fed new nodes rather than rebuilt. A fresh tree does not
+  -- know which lines the last one occupied, so rendering it writes a second copy underneath the
+  -- first instead of replacing it.
+  if not (tree and tree.bufnr == buf) then
+    tree = parts.Tree({
+      bufnr = buf,
+      -- The same namespace the drawer has always marked in, so anything looking for its highlights
+      -- still finds them under that name rather than under one nui invented.
+      ns_id = 'sqmeow.drawer',
+      prepare_node = prepare_node,
+      -- The id exactly as it was set, rather than nui's default of prefixing it: these are looked
+      -- up by name from elsewhere, and a lookup that has to know about a prefix is one that breaks
+      -- when the prefix changes.
+      get_node_id = function(node)
+        return node.id
+      end,
     })
   end
+
+  tree:set_nodes(nodes)
+
+  vim.bo[buf].modifiable = true
+  tree:render()
+  vim.bo[buf].modifiable = false
 end
 
 --- The node the cursor is on, if it is on one.
+---
+--- Asked of the tree by line rather than of the window it is showing in, so an action fired from
+--- somewhere else still reads the drawer's own cursor.
+---
 ---@return table|nil
 function M.current_node()
-  if not valid_win() then
+  if not (valid_win() and tree) then
     return nil
   end
-  local line = vim.api.nvim_win_get_cursor(win)[1]
-  local node = rows[line]
-  return node or nil
+
+  local node = tree:get_node(vim.api.nvim_win_get_cursor(win)[1])
+  -- A placeholder is a line the tree could not fill in, not something to act on.
+  if not node or node.placeholder then
+    return nil
+  end
+  return node
 end
 
 local function dialect_of(conn_id)
@@ -514,17 +592,46 @@ function M.actions.refresh()
     return M.render()
   end
 
-  M.invalidate(node.conn_id, node.path)
-  if M.is_expanded(node.conn_id, node.path) then
-    M.load(node.conn_id, node.path)
+  local path = node.path or {}
+  local prefix = node_key(node.conn_id, path)
+
+  -- Everything at or under the node is dropped, so everything at or under it has to be asked for
+  -- again. Reloading only the node itself would leave every level someone has open below it with
+  -- no cache entry and nothing on its way, which draws as a level that has quietly lost its
+  -- children rather than as one being refreshed.
+  M.invalidate(node.conn_id, path)
+
+  local reload = {}
+  for key, open in pairs(expanded) do
+    if open == true and under(key, prefix) then
+      table.insert(reload, key)
+    end
+  end
+  -- Shallowest first, so a level arrives before the levels drawn inside it.
+  table.sort(reload, function(left, right)
+    return #left < #right
+  end)
+
+  for _, key in ipairs(reload) do
+    local conn_id, level = key_parts(key)
+    if conn_id then
+      M.load(conn_id, level)
+    end
   end
 
   -- A row is drawn from the level above it, so the count on `Tables (3)` belongs to the schema's
   -- children and not to the tables themselves. Reloading only what sits under the node would
   -- leave that number saying what it said before the refresh.
-  if node.path and #node.path > 0 then
-    M.load(node.conn_id, vim.list_slice(node.path, 1, #node.path - 1))
+  if #path > 0 then
+    M.load(node.conn_id, vim.list_slice(path, 1, #path - 1))
   end
+
+  -- The relation picker searches a list the engine holds for the whole connection, and a refresh
+  -- that renewed the tree but not that list would have the two disagreeing about what exists.
+  if #path == 0 then
+    require('sqmeow.rpc').request('catalog', { conn_id = node.conn_id, refresh = true })
+  end
+
   M.render()
 end
 
@@ -542,7 +649,9 @@ function M.actions.preview()
       dialect_of(node.conn_id),
       sql_parts(node.path),
       require('sqmeow.config').get().ui.result.page_size
-    )
+    ),
+    -- Written by the plugin, not by anyone at the keyboard, so it stays out of the query log.
+    { history = false }
   )
 end
 
@@ -717,11 +826,14 @@ function M.reveal_history()
   expanded[HISTORY] = true
   M.render()
 
-  for number, row in ipairs(rows) do
-    if row and row.kind == 'history' then
-      pcall(vim.api.nvim_win_set_cursor, M.open(), { number, 0 })
-      return
-    end
+  -- Asked of the tree by node id rather than by walking lines: the tree knows where it put the
+  -- heading, and the id is fixed whatever else the drawer happens to be showing.
+  if not tree then
+    return
+  end
+  local _, linenr = tree:get_node(HISTORY)
+  if linenr then
+    pcall(vim.api.nvim_win_set_cursor, M.open(), { linenr, 0 })
   end
 end
 
@@ -812,7 +924,7 @@ function M.reset()
 
   expanded = { [SCRATCHPADS] = pads }
   cache = {}
-  rows = {}
+  tree = nil
   M.render()
 end
 

@@ -16,6 +16,8 @@ local M = {}
 M.links = {
   SqmeowWinbar = 'Title',
   SqmeowHeader = 'Title',
+  -- Every line the grid draws itself: the rule under the column names and the separators
+  -- between the columns. One group for both, so they cannot end up different colours.
   SqmeowRule = 'WinSeparator',
   SqmeowNull = 'Comment',
   SqmeowNumber = 'Number',
@@ -47,6 +49,21 @@ M.links = {
   SqmeowActive = 'Title',
   SqmeowIconFunction = 'Function',
   SqmeowIconProcedure = 'Macro',
+
+  -- The glyph before each column name in the result grid, and beside each column in the drawer.
+  -- Each follows the group a colourscheme already uses for that kind of value, so a grid of types
+  -- reads the way the same types read in a source file. The two keys follow the groups for things
+  -- that identify and link, which is what a key does.
+  SqmeowIconTypeText = 'String',
+  SqmeowIconTypeNumber = 'Number',
+  SqmeowIconTypeBoolean = 'Boolean',
+  SqmeowIconTypeTemporal = 'Constant',
+  SqmeowIconTypeJson = 'Structure',
+  SqmeowIconTypeUuid = 'Special',
+  SqmeowIconTypeBinary = 'Comment',
+  SqmeowIconTypeUnknown = 'Comment',
+  SqmeowIconKeyPrimary = 'Identifier',
+  SqmeowIconKeyForeign = 'Function',
   SqmeowIconPostgres = 'Constant',
   SqmeowIconMysql = 'Constant',
   SqmeowIconSqlite = 'Constant',

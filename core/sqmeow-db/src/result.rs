@@ -6,7 +6,16 @@
 
 use std::time::Duration;
 
+use crate::types::{KeyKind, TypeClass};
 use crate::value::Cell;
+use crate::width;
+
+/// The widest a column is measured to, past which the exact figure stops mattering.
+///
+/// The editor caps columns far below this, so a value wider than the cap only ever needs to be
+/// known as "wider than the cap". Measuring a megabyte of text to learn that costs real time when
+/// a result holds a hundred thousand of them.
+pub const MAX_MEASURED_WIDTH: usize = 512;
 
 /// One column of a result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +24,61 @@ pub struct Column {
     pub name: String,
     /// The database's own type name, shown in the row detail.
     pub type_name: String,
+    /// What kind of value it holds, for the icon in the grid header.
+    pub class: TypeClass,
+    /// Whether it is a key in the table it came from.
+    ///
+    /// Note that this is the one field here the plugin cannot work out for itself.
+    ///
+    /// Always [`KeyKind::None`] for a column that is an expression rather than a table's: a
+    /// `count(*)` is nobody's primary key. An adapter that cannot attribute a column to a table
+    /// leaves this alone rather than guessing.
+    pub key: KeyKind,
+}
+
+impl Column {
+    /// A column whose class follows from its type name and which is not a key.
+    ///
+    /// Every adapter builds result columns through here, so classification happens once rather
+    /// than three times, and a dialect cannot forget to do it.
+    pub fn new(name: impl Into<String>, type_name: impl Into<String>) -> Self {
+        let type_name = type_name.into();
+        Self {
+            name: name.into(),
+            class: TypeClass::from_type_name(&type_name),
+            type_name,
+            key: KeyKind::None,
+        }
+    }
+
+    /// The same column, marked as a key.
+    pub fn with_key(mut self, key: KeyKind) -> Self {
+        self.key = key;
+        self
+    }
+}
+
+/// What the editor needs to size a column, measured once over the whole result.
+///
+/// Measured here rather than in the editor because the editor is only ever sent one page, and a
+/// column sized from one page changes width when the user turns to the next: the grid would appear
+/// to shift under them. Counting characters is not laying anything out — nothing here knows what a
+/// separator is, how a value is aligned, or what `NULL` is shown as.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ColumnStats {
+    /// Display columns taken by the widest value, `NULL`s excluded and capped at
+    /// [`MAX_MEASURED_WIDTH`].
+    ///
+    /// `NULL`s are excluded because what they are shown as is the plugin's to choose, so only the
+    /// plugin can say how wide one is.
+    pub widest: usize,
+    /// Whether any value in the column is `NULL`.
+    pub nulls: bool,
+    /// Whether every value in the column is a number, which is what decides right alignment.
+    ///
+    /// A column of numbers with one `NULL` is still numeric, and one stray text value makes the
+    /// whole column textual.
+    pub numeric: bool,
 }
 
 /// The rows one statement produced.
@@ -54,6 +118,42 @@ impl ResultSet {
             column.push(cell);
         }
         self.row_count += 1;
+    }
+
+    /// Measure one column for the editor.
+    ///
+    /// Walks the whole column once. This is the only pass over every cell the engine makes on a
+    /// result, and it is what lets the editor draw a page at a time without the columns moving.
+    pub fn column_stats(&self, index: usize) -> ColumnStats {
+        let cells = self.column_cells(index);
+
+        let mut stats = ColumnStats {
+            widest: 0,
+            nulls: false,
+            numeric: !cells.is_empty(),
+        };
+
+        for cell in cells {
+            if cell.is_null() {
+                stats.nulls = true;
+                continue;
+            }
+            if !cell.is_numeric() {
+                stats.numeric = false;
+            }
+            if stats.widest < MAX_MEASURED_WIDTH {
+                // Measured against the same text the plugin will draw, so a value holding a line
+                // break is measured as the escape sequence that reaches the grid rather than as
+                // the two lines it would otherwise be.
+                let shown = cell.display("");
+                stats.widest = stats
+                    .widest
+                    .max(width::width_capped(&shown, MAX_MEASURED_WIDTH));
+            }
+        }
+
+        stats.widest = stats.widest.min(MAX_MEASURED_WIDTH);
+        stats
     }
 
     /// The columns, in order.
@@ -130,16 +230,75 @@ mod tests {
     use super::*;
 
     fn columns() -> Vec<Column> {
-        vec![
-            Column {
-                name: "id".into(),
-                type_name: "INTEGER".into(),
-            },
-            Column {
-                name: "name".into(),
-                type_name: "TEXT".into(),
-            },
-        ]
+        vec![Column::new("id", "INTEGER"), Column::new("name", "TEXT")]
+    }
+
+    #[test]
+    fn a_column_is_measured_over_every_row() {
+        let mut result = ResultSet::new("select v", vec![Column::new("v", "TEXT")]);
+        result.push_row(vec![Cell::Text("short".into())]);
+        result.push_row(vec![Cell::Text("a much longer value".into())]);
+
+        // Over the whole column, not one page of it, which is the point: a column sized from the
+        // first page would change width when the user turned to the second.
+        let stats = result.column_stats(0);
+        assert_eq!(stats.widest, 19);
+        assert!(!stats.nulls);
+        assert!(!stats.numeric);
+    }
+
+    #[test]
+    fn a_null_is_reported_rather_than_measured() {
+        let mut result = ResultSet::new("select v", vec![Column::new("v", "INTEGER")]);
+        result.push_row(vec![Cell::Int(1)]);
+        result.push_row(vec![Cell::Null]);
+
+        // What `NULL` is drawn as is the plugin's to choose, so only the plugin can say how wide
+        // one is. A `NULL` still leaves the column numeric.
+        let stats = result.column_stats(0);
+        assert_eq!(stats.widest, 1);
+        assert!(stats.nulls);
+        assert!(stats.numeric);
+    }
+
+    #[test]
+    fn one_text_value_makes_a_column_textual() {
+        let mut result = ResultSet::new("select v", vec![Column::new("v", "TEXT")]);
+        result.push_row(vec![Cell::Int(1)]);
+        result.push_row(vec![Cell::Text("x".into())]);
+        assert!(!result.column_stats(0).numeric);
+    }
+
+    #[test]
+    fn an_empty_column_is_not_numeric() {
+        // Nothing to align, and calling it numeric would right-align a header over no rows.
+        let result = ResultSet::new("select v", vec![Column::new("v", "INTEGER")]);
+        assert!(!result.column_stats(0).numeric);
+    }
+
+    #[test]
+    fn a_very_wide_value_is_measured_only_far_enough() {
+        let mut result = ResultSet::new("select v", vec![Column::new("v", "TEXT")]);
+        result.push_row(vec![Cell::Text("a".repeat(100_000))]);
+
+        // The editor caps columns far below this, so the exact figure stops mattering; measuring
+        // the whole megabyte to learn it is wide would cost real time on a large result.
+        assert_eq!(result.column_stats(0).widest, MAX_MEASURED_WIDTH);
+    }
+
+    #[test]
+    fn width_is_measured_in_display_columns() {
+        let mut result = ResultSet::new("select v", vec![Column::new("v", "TEXT")]);
+        result.push_row(vec![Cell::Text("日本".into())]);
+        assert_eq!(result.column_stats(0).widest, 4);
+    }
+
+    #[test]
+    fn a_line_break_is_measured_as_what_reaches_the_grid() {
+        let mut result = ResultSet::new("select v", vec![Column::new("v", "TEXT")]);
+        result.push_row(vec![Cell::Text("a\nb".into())]);
+        // Four columns: the escape is what the plugin draws, so it is what was measured.
+        assert_eq!(result.column_stats(0).widest, 4);
     }
 
     #[test]

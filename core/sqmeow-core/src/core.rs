@@ -5,20 +5,21 @@
 //! a call id and report the rest through events. Neovim blocks inside `rpcrequest`, so a handler
 //! that waited on a socket would freeze the editor for as long as the query took.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use rmpv::Value;
 use sqmeow_adapters::Backend;
+use sqmeow_db::export::{self, Format, Rows};
 use sqmeow_db::{
     CatalogEntry, Cell, ColumnNode, Error as DbError, RelationKind, RelationNode, ResultSet,
     RoutineKind, RoutineNode, SchemaNode, sql,
 };
-use sqmeow_render::export::{Format, Rows};
-use sqmeow_render::{GridStylePatch, Layout, export};
-use sqmeow_rpc::{ApiCall, Handler, Nvim, Reply};
+use sqmeow_rpc::{Handler, Nvim, Reply};
 use tokio::sync::Notify;
 
+use crate::archive;
 use crate::args::Args;
 use crate::session::{Call, Connection, OptionsPatch, Session};
 use crate::value::{map, optional, strings};
@@ -28,7 +29,7 @@ use crate::value::{map, optional, strings};
 /// Bumped only when a message changes shape in a way an older plugin cannot read. The plugin
 /// compares this at handshake and tells the user to update, which beats a decode failure three
 /// calls later with no explanation.
-pub const PROTOCOL_VERSION: u64 = 1;
+pub const PROTOCOL_VERSION: u64 = 2;
 
 /// Everything one editor session talks to.
 pub struct Core {
@@ -70,40 +71,20 @@ impl Core {
     }
 
     /// Mirror the plugin's configuration into the engine.
+    ///
+    /// Only two settings are left here. Everything else that used to travel — the page size, the
+    /// column width cap, what `NULL` reads as, the grid's characters, the column icons — described
+    /// how a result should look, and the engine no longer draws one.
     fn configure(&self, args: &Args) -> Result<Value, String> {
         let options = self.session.configure(OptionsPatch {
             max_rows: args.opt_usize("max_rows"),
             history_size: args.opt_usize("history_size"),
-            page_size: args.opt_usize("page_size"),
-            max_column_width: args.opt_usize("max_column_width"),
-            null_text: args.opt_string("null_text"),
-            style: GridStylePatch {
-                vertical: args.opt_string("grid_vertical"),
-                horizontal: args.opt_string("grid_horizontal"),
-                cross: args.opt_string("grid_cross"),
-                ellipsis: args.opt_string("grid_ellipsis"),
-            },
         });
 
         // Echo what was actually applied, since values are clamped rather than rejected.
         Ok(map(vec![
             ("max_rows", Value::from(options.max_rows as u64)),
             ("history_size", Value::from(options.history_size as u64)),
-            ("page_size", Value::from(options.grid.page_size as u64)),
-            (
-                "max_column_width",
-                Value::from(options.grid.max_column_width as u64),
-            ),
-            ("null_text", Value::from(options.grid.null_text)),
-            // Echoed back one by one, because a separator that was not one column wide was
-            // dropped rather than applied, and the plugin has no other way to learn that.
-            ("grid_vertical", Value::from(options.grid.style.vertical)),
-            (
-                "grid_horizontal",
-                Value::from(options.grid.style.horizontal),
-            ),
-            ("grid_cross", Value::from(options.grid.style.cross)),
-            ("grid_ellipsis", Value::from(options.grid.style.ellipsis)),
         ]))
     }
 
@@ -199,10 +180,6 @@ impl Core {
             Ok(sql) => sql,
             Err(error) => return reply.err(error),
         };
-        let buf = match args.integer("buf") {
-            Ok(buf) => buf,
-            Err(error) => return reply.err(error),
-        };
         let Some(connection) = self.session.connection(conn_id) else {
             return reply.err(format!("no connection with id {conn_id}"));
         };
@@ -221,12 +198,18 @@ impl Core {
             }
         }
 
+        // Where to save the rows once the query is done, when the plugin wants them for its log.
+        let archive = args.opt_string("archive").map(PathBuf::from);
+
         // The id goes back before the query starts, so the editor can show a running state and
         // offer to cancel it from the moment the call is made.
         let call_id = self.session.next_call_id();
         reply.ok(Value::from(call_id));
 
-        tokio::spawn(async move { self.run_call(call_id, connection, statements, buf).await });
+        tokio::spawn(async move {
+            self.run_call(call_id, connection, statements, archive)
+                .await
+        });
     }
 
     async fn run_call(
@@ -234,7 +217,7 @@ impl Core {
         call_id: u64,
         connection: Arc<Connection>,
         statements: Vec<sql::Statement>,
-        buf: i64,
+        archive: Option<PathBuf>,
     ) {
         let conn_id = connection.id;
         let options = self.session.options();
@@ -293,25 +276,80 @@ impl Core {
         }
 
         // Only the last statement's rows are shown. A script ends with the query worth looking at.
-        let result = last.unwrap_or_default();
-        let layout = Layout::measure(&result, &options.grid);
-        let header = layout.header(&result, &options.grid);
-        let rows = layout.rows(&result, &options.grid, 0);
+        let mut result = last.unwrap_or_default();
+        // The whole call's time rather than the last statement's, since that is what a saved copy
+        // should say the query took.
+        result.set_elapsed(started.elapsed());
 
         let call = Call {
             id: call_id,
             conn_id,
             result,
-            layout,
-            offset: 0,
         };
-        let mut payload = summarize(&call, options.grid.page_size);
+        let mut payload = summarize(&call);
         payload.extend(elapsed(started));
 
-        self.paint(buf, header, rows).await;
-        self.session.store_call(call);
+        let call = self.session.store_call(call);
         self.session.end_call(call_id);
         self.emit_call(call_id, conn_id, "done", payload);
+
+        if let Some(path) = archive {
+            save(path, call);
+        }
+    }
+
+    /// Read a result saved by an earlier `execute` back into the session.
+    ///
+    /// Answers with a call id straight away and reads the file on a blocking thread, because a
+    /// large result takes a while to decode and Neovim is waiting inside `rpcrequest`. What was
+    /// read arrives as `call:state`, exactly as a query's result does.
+    fn spawn_restore(self: Arc<Self>, args: &Args, reply: Reply) {
+        let path = match args.string("path") {
+            Ok(path) => PathBuf::from(path),
+            Err(error) => return reply.err(error),
+        };
+        // The connection it ran on, when that is open. Nothing is asked of it: the id only says
+        // which database the rows came from.
+        let conn_id = args.opt_integer("conn_id").unwrap_or(0);
+
+        let call_id = self.session.next_call_id();
+        reply.ok(Value::from(call_id));
+
+        tokio::spawn(async move {
+            let read = tokio::task::spawn_blocking(move || archive::read(&path)).await;
+            let result = match read {
+                Ok(Ok(result)) => result,
+                Ok(Err(error)) => {
+                    return self.emit_call(
+                        call_id,
+                        conn_id,
+                        "error",
+                        vec![("error", Value::from(error))],
+                    );
+                }
+                Err(error) => {
+                    let error = format!("the saved result could not be read: {error}");
+                    return self.emit_call(
+                        call_id,
+                        conn_id,
+                        "error",
+                        vec![("error", Value::from(error))],
+                    );
+                }
+            };
+
+            let elapsed_ms = result.elapsed().as_millis() as u64;
+            let call = Call {
+                id: call_id,
+                conn_id,
+                result,
+            };
+            let mut payload = summarize(&call);
+            payload.push(("elapsed_ms", Value::from(elapsed_ms)));
+
+            self.session.store_call(call);
+            self.emit_call(call_id, conn_id, "done", payload);
+        });
     }
 
     fn spawn_introspect(self: Arc<Self>, args: &Args, reply: Reply) {
@@ -449,7 +487,6 @@ impl Core {
     fn row(&self, args: &Args) -> Result<Value, String> {
         let call_id = args.integer("call_id")? as u64;
         let index = args.opt_usize("row").unwrap_or(0);
-        let null_text = self.session.options().grid.null_text;
 
         let row = self
             .session
@@ -471,8 +508,9 @@ impl Core {
                                 ("declared_type", Value::from(meta.type_name.clone())),
                                 ("is_null", Value::from(cell.is_null())),
                                 // The unescaped text: a detail view has room for the line breaks
-                                // a grid cell has to flatten away.
-                                ("value", Value::from(cell.text(&null_text).into_owned())),
+                                // a grid cell has to flatten away. Empty for `NULL`, which the
+                                // editor recognises from `is_null` and shows in its own words.
+                                ("value", Value::from(cell.text("").into_owned())),
                             ])
                         })
                         .collect(),
@@ -496,6 +534,7 @@ impl Core {
 
         let scope = args.opt_string("scope").unwrap_or_else(|| "all".to_owned());
         let row = args.opt_usize("row");
+        let limit = args.opt_usize("limit");
         let column = args.opt_usize("column");
         let register = args.opt_string("register");
         let path = args.opt_string("path");
@@ -506,7 +545,7 @@ impl Core {
 
         reply.ok(Value::from(call_id));
         tokio::spawn(async move {
-            self.run_export(call_id, format, scope, row, column, register, path)
+            self.run_export(call_id, format, scope, row, limit, column, register, path)
                 .await;
         });
     }
@@ -523,13 +562,11 @@ impl Core {
         format: Format,
         scope: String,
         row: Option<usize>,
+        limit: Option<usize>,
         column: Option<usize>,
         register: Option<String>,
         path: Option<String>,
     ) {
-        let options = self.session.options();
-        let page_size = options.grid.page_size;
-
         let rendered = self
             .session
             .with_call(call_id, |call| match scope.as_str() {
@@ -538,24 +575,28 @@ impl Core {
                         .result
                         .cell(row.unwrap_or(0), column.unwrap_or(0))
                         .unwrap_or(&Cell::Null);
-                    Ok(cell.text(&options.grid.null_text).into_owned())
+                    // An empty string for `NULL`: what one is shown as is the editor's to choose,
+                    // and an export carries the value rather than the way it was drawn.
+                    Ok(cell.text("").into_owned())
                 }
                 "row" => Ok(export::write(
                     &call.result,
                     format,
                     Rows::one(row.unwrap_or(0)),
                 )),
-                "page" => Ok(export::write(
+                // The rows on screen, which only the editor knows: it decides how many fit and
+                // where it has scrolled to, so it sends the range rather than the engine guessing.
+                "range" => Ok(export::write(
                     &call.result,
                     format,
                     Rows {
-                        start: call.offset,
-                        end: call.offset + page_size,
+                        start: row.unwrap_or(0),
+                        end: row.unwrap_or(0).saturating_add(limit.unwrap_or(0)),
                     },
                 )),
                 "all" => Ok(export::write(&call.result, format, Rows::all(&call.result))),
                 other => Err(format!(
-                    "unknown export scope `{other}`; expected cell, row, page or all"
+                    "unknown export scope `{other}`; expected cell, row, range or all"
                 )),
             });
 
@@ -618,87 +659,50 @@ impl Core {
         }
     }
 
-    fn spawn_page(self: Arc<Self>, args: &Args, reply: Reply) {
-        let call_id = match args.integer("call_id") {
-            Ok(id) => id as u64,
-            Err(error) => return reply.err(error),
-        };
-        let buf = match args.integer("buf") {
-            Ok(buf) => buf,
-            Err(error) => return reply.err(error),
-        };
-        let offset = args.opt_usize("offset");
-        let delta = args.opt_integer("delta").unwrap_or(0);
+    /// Hand the editor a slice of a result's rows.
+    ///
+    /// Answered from the dispatch call rather than a task. A page is bounded by what fits on a
+    /// screen, so building it is not work the editor should wait on a task for, and paging that
+    /// takes a round trip through the scheduler feels slower than paging that does not.
+    ///
+    /// Each row is an array of values in column order, in whatever msgpack type the value really
+    /// is: a number stays a number so the editor can align it, and `NULL` is nil. Text arrives
+    /// already flattened to one line, since a grid row is one line and only this side knows the
+    /// original.
+    fn rows(&self, args: &Args) -> Result<Value, String> {
+        let call_id = args.integer("call_id")? as u64;
+        let offset = args.opt_usize("offset").unwrap_or(0);
+        let limit = args.opt_usize("limit").unwrap_or(0);
 
-        if self.session.with_call(call_id, |_| ()).is_none() {
-            return reply.err(format!("result {call_id} is no longer held"));
-        }
+        let rows = self.session.with_call(call_id, |call| {
+            let result = &call.result;
+            let end = offset.saturating_add(limit).min(result.row_count());
+            if offset >= end {
+                // An out-of-range offset yields no rows rather than an error: a page request can
+                // race a result being replaced, and an empty page is the honest answer.
+                return Value::Array(Vec::new());
+            }
 
-        reply.ok(Value::from(call_id));
-        tokio::spawn(async move { self.run_page(call_id, buf, offset, delta).await });
-    }
+            let width = result.columns().len();
+            let rows: Vec<Value> = (offset..end)
+                .map(|row| {
+                    Value::Array(
+                        (0..width)
+                            .map(|column| {
+                                cell_value(result.cell(row, column).unwrap_or(&Cell::Null))
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
 
-    async fn run_page(self: Arc<Self>, call_id: u64, buf: i64, offset: Option<usize>, delta: i64) {
-        let options = self.session.options();
-        let page_size = options.grid.page_size;
-
-        let current = self
-            .session
-            .with_call(call_id, |call| call.offset)
-            .unwrap_or(0);
-        let target = match offset {
-            Some(offset) => offset,
-            // A delta is counted in pages, so the plugin never does row arithmetic of its own.
-            None => current.saturating_add_signed(delta.saturating_mul(page_size as i64) as isize),
-        };
-
-        let Some(settled) = self.session.seek_call(call_id, target, page_size) else {
-            return;
-        };
-
-        let rendered = self.session.with_call(call_id, |call| {
-            (
-                call.layout.header(&call.result, &options.grid),
-                call.layout.rows(&call.result, &options.grid, settled),
-                summarize(call, page_size),
-            )
+            Value::Array(rows)
         });
 
-        let Some((header, rows, payload)) = rendered else {
-            return;
-        };
-
-        self.paint(buf, header, rows).await;
-        if let Err(error) = self.nvim.emit("page:painted", map(payload)) {
-            tracing::warn!(%error, "could not report a painted page");
-        }
+        rows.ok_or_else(|| format!("result {call_id} is no longer held"))
     }
 
     // -- talking to the editor -------------------------------------------------------------------
-
-    /// Write a page into the editor in one round trip.
-    ///
-    /// The column names, the rule under them, and the rows are one block in one buffer. The
-    /// editor knows how many lines come before the first row, from `header_lines` in the summary,
-    /// which is all it needs to turn a cursor position into a row of the result.
-    ///
-    /// The buffer is left unmodifiable, so the option is lifted and restored around the write.
-    /// Every call travels together, because a separate message per call would leave the user with
-    /// a briefly editable buffer to fall into.
-    async fn paint(&self, buf: i64, header: Vec<String>, rows: Vec<String>) {
-        let mut lines = header;
-        lines.extend(rows);
-
-        let calls = vec![
-            ApiCall::buf_set_option(buf, "modifiable", Value::Boolean(true)),
-            ApiCall::buf_set_lines(buf, 0, -1, lines),
-            ApiCall::buf_set_option(buf, "modifiable", Value::Boolean(false)),
-        ];
-
-        if let Err(error) = self.nvim.call_atomic(calls).await {
-            tracing::warn!(%error, buf, "could not paint a result buffer");
-        }
-    }
 
     fn emit_call(&self, call_id: u64, conn_id: i64, state: &str, extra: Vec<(&str, Value)>) {
         let mut pairs = vec![
@@ -856,15 +860,34 @@ fn column_nodes(columns: Vec<ColumnNode>) -> Vec<Value> {
     columns
         .into_iter()
         .map(|column| {
-            map(vec![
+            // Read before the name is moved out, since it is derived from the type name.
+            let class = column.class().name();
+            let mut pairs = vec![
                 ("name", Value::from(column.name)),
                 ("kind", Value::from("column")),
                 // A column is a leaf; the tree stops here.
                 ("expandable", Value::from(false)),
+                ("class", Value::from(class)),
                 ("type_name", Value::from(column.type_name)),
                 ("nullable", Value::from(column.nullable)),
                 ("primary_key", Value::from(column.primary_key)),
-            ])
+            ];
+
+            // What the column points at, as the drawer shows it: `authors.id`. One string rather
+            // than two fields, because the drawer has nothing to do with the halves separately and
+            // a qualified name is what a reader is looking for.
+            //
+            // Left out entirely rather than sent as nil: a msgpack nil arrives in Lua as `vim.NIL`,
+            // which is a userdata that tests as true, so a nil here would make every column look
+            // like it references something.
+            if let Some(key) = column.foreign_key {
+                pairs.push((
+                    "references",
+                    Value::from(format!("{}.{}", key.table, key.column)),
+                ));
+            }
+
+            map(pairs)
         })
         .collect()
 }
@@ -883,42 +906,85 @@ fn catalog_entries(entries: &[CatalogEntry]) -> Vec<Value> {
         .collect()
 }
 
-/// What the editor needs to describe a result: its size, its position, and whether it is whole.
-fn summarize(call: &Call, page_size: usize) -> Vec<(&'static str, Value)> {
+/// One cell, as the value it really is rather than as text.
+///
+/// This is what "structured" means on the wire: a number reaches Lua as a number, so the editor can
+/// align it without parsing it back; a boolean as a boolean; `NULL` as nil, which Neovim decodes to
+/// `vim.NIL` and so survives being an element of an array.
+///
+/// Everything else arrives as a string, already flattened to a single line. A grid row is one line,
+/// and the escaping has to happen on the side that still has the original: a value holding a line
+/// break would otherwise arrive as two rows, and the width this column was measured to would be
+/// wrong. Exports do not come through here, so nothing they carry is flattened.
+fn cell_value(cell: &Cell) -> Value {
+    match cell {
+        Cell::Null => Value::Nil,
+        Cell::Bool(value) => Value::from(*value),
+        Cell::Int(value) => Value::from(*value),
+        Cell::Float(value) => Value::from(*value),
+        // Exact numerics stay text: they do not fit a float without losing digits, which is the
+        // whole reason the database has the type.
+        other => Value::from(other.display("").into_owned()),
+    }
+}
+
+/// What the editor needs to describe a result and lay its columns out.
+///
+/// Each column carries what it is and how wide its widest value is, measured over every row. That
+/// measurement is the one thing the editor cannot work out for itself: it is sent one page at a
+/// time, and a column sized from one page would change width when the user turned to the next.
+fn summarize(call: &Call) -> Vec<(&'static str, Value)> {
     let result = &call.result;
-    let spans = call.layout.spans();
 
     let columns: Vec<Value> = result
         .columns()
         .iter()
-        .zip(spans)
-        .map(|(column, (start, width))| {
-            map(vec![
+        .enumerate()
+        .map(|(index, column)| {
+            let stats = result.column_stats(index);
+            let mut pairs = vec![
                 ("name", Value::from(column.name.clone())),
                 ("type_name", Value::from(column.type_name.clone())),
-                // Where the column sits, in display columns, so the editor can tell which cell a
-                // cursor is on without knowing anything about how the grid was laid out.
-                ("start", Value::from(start as u64)),
-                ("width", Value::from(width as u64)),
-            ])
+                ("class", Value::from(column.class.name())),
+                // Display columns taken by the widest value, `NULL`s excluded, since what one
+                // reads as is the editor's choice and so only the editor can measure it.
+                ("widest", Value::from(stats.widest as u64)),
+                ("nulls", Value::from(stats.nulls)),
+                ("numeric", Value::from(stats.numeric)),
+            ];
+            // Left out rather than sent as nil for a column that is no kind of key: a msgpack nil
+            // reaches Lua as `vim.NIL`, which is a userdata and tests as true.
+            if let Some(key) = column.key.name() {
+                pairs.push(("key", Value::from(key)));
+            }
+            map(pairs)
         })
         .collect();
 
     vec![
-        ("column_spans", Value::Array(columns)),
-        // What the editor has to skip to reach the first row of data.
-        ("header_lines", Value::from(Layout::HEADER_LINES as u64)),
+        ("columns", Value::Array(columns)),
         ("call_id", Value::from(call.id)),
         ("conn_id", Value::from(call.conn_id)),
         ("rows", Value::from(result.row_count() as u64)),
-        ("columns", Value::from(result.columns().len() as u64)),
         ("truncated", Value::from(result.is_truncated())),
         ("affected", optional(result.affected().map(Value::from))),
-        ("offset", Value::from(call.offset as u64)),
-        ("page", Value::from(call.page_number(page_size) as u64)),
-        ("pages", Value::from(result.page_count(page_size) as u64)),
-        ("page_size", Value::from(page_size as u64)),
     ]
+}
+
+/// Save a finished result where the plugin asked, for its query log to show again later.
+///
+/// Started after `done` has gone out rather than before it: writing a hundred thousand rows takes
+/// time the user should spend looking at them. A statement that returned no columns has nothing to
+/// save, and the plugin knows not to point at a file for one.
+fn save(path: PathBuf, call: Arc<Call>) {
+    if call.result.columns().is_empty() {
+        return;
+    }
+    tokio::task::spawn_blocking(move || {
+        if let Err(error) = archive::write(&path, &call.result) {
+            tracing::warn!(%error, path = %path.display(), "could not save a result");
+        }
+    });
 }
 
 fn elapsed(started: Instant) -> Vec<(&'static str, Value)> {
@@ -952,7 +1018,8 @@ impl Handler for Core {
             "connect" => return self.spawn_connect(&args, reply),
             "disconnect" => return self.spawn_disconnect(&args, reply),
             "execute" => return self.spawn_execute(&args, reply),
-            "page" => return self.spawn_page(&args, reply),
+            "restore" => return self.spawn_restore(&args, reply),
+            "rows" => self.rows(&args),
             "introspect" => return self.spawn_introspect(&args, reply),
             "catalog" => return self.spawn_catalog(&args, reply),
             "export" => return self.spawn_export(&args, reply),

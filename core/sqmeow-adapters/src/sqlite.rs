@@ -4,7 +4,9 @@
 //! comes from the value, not from the column. Decoding here asks each value for its storage class
 //! rather than trusting the schema.
 
+use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
@@ -13,8 +15,8 @@ use sqlx::{
     ValueRef,
 };
 use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode,
+    Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
+    RelationNode, Result, ResultSet, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -24,6 +26,12 @@ use crate::stream::drain;
 #[derive(Debug)]
 pub struct SqliteAdapter {
     pool: SqlitePool,
+    /// Which columns of a table are keys, by table name and then column name.
+    ///
+    /// Whole tables at a time, because that is the only shape the pragmas come in. A table present
+    /// here has been read, even if it turned out to have no keys, which is what stops one without
+    /// any from being asked about again on every execution.
+    keys: Mutex<HashMap<String, HashMap<String, KeyKind>>>,
 }
 
 impl SqliteAdapter {
@@ -47,7 +55,10 @@ impl SqliteAdapter {
             .await
             .map_err(Error::driver)?;
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            keys: Mutex::default(),
+        })
     }
 
     /// Ask the database what a statement's result looks like, before running it.
@@ -57,22 +68,119 @@ impl SqliteAdapter {
     async fn columns(&self, statement: &str) -> Vec<Column> {
         let sql = AssertSqlSafe(statement.to_owned()).into_sql_str();
 
-        match self.pool.prepare(sql).await {
-            Ok(prepared) => prepared
-                .columns()
-                .iter()
-                .map(|column| Column {
-                    name: column.name().to_owned(),
-                    type_name: column.type_info().name().to_owned(),
-                })
-                .collect(),
+        let prepared = match self.pool.prepare(sql).await {
+            Ok(prepared) => prepared,
             // Preparing is a convenience. A statement that will not prepare may still run, and if
             // it cannot, executing it reports the real error.
             Err(error) => {
                 tracing::debug!(%error, "could not prepare a statement to read its columns");
-                Vec::new()
+                return Vec::new();
+            }
+        };
+
+        let mut columns: Vec<Column> = prepared
+            .columns()
+            .iter()
+            .map(|column| Column::new(column.name(), column.type_info().name()))
+            .collect();
+
+        // SQLite will name the table and column a result column came from, for a prepared
+        // statement, without being asked and without a query.
+        let sources: Vec<Option<(String, String)>> = prepared
+            .columns()
+            .iter()
+            .map(|column| {
+                let origin = column.origin();
+                let origin = origin.table_column()?;
+                Some((origin.table.to_string(), origin.name.to_string()))
+            })
+            .collect();
+
+        self.mark_keys(&sources, &mut columns).await;
+        columns
+    }
+
+    /// Mark the result columns that are keys in the table they came from.
+    ///
+    /// A column that is an expression has no origin and is left unmarked.
+    async fn mark_keys(&self, sources: &[Option<(String, String)>], columns: &mut [Column]) {
+        let missing: Vec<String> = {
+            let Ok(known) = self.keys.lock() else {
+                return;
+            };
+            let mut missing: Vec<String> = sources
+                .iter()
+                .flatten()
+                .map(|(table, _)| table.clone())
+                .filter(|table| !known.contains_key(table))
+                .collect();
+            missing.sort_unstable();
+            missing.dedup();
+            missing
+        };
+
+        for table in missing {
+            let found = self.read_keys(&table).await;
+            if let Ok(mut known) = self.keys.lock() {
+                known.insert(table, found);
             }
         }
+
+        let Ok(known) = self.keys.lock() else {
+            return;
+        };
+        for (column, source) in columns.iter_mut().zip(sources) {
+            if let Some(kind) = source
+                .as_ref()
+                .and_then(|(table, name)| known.get(table)?.get(name))
+            {
+                column.key = *kind;
+            }
+        }
+    }
+
+    /// Ask the pragmas which columns of one table are keys.
+    ///
+    /// A failure answers with nothing rather than an error: an icon is worth two pragmas, and it is
+    /// not worth failing the result the user actually asked for.
+    async fn read_keys(&self, table: &str) -> HashMap<String, KeyKind> {
+        let mut keys = HashMap::new();
+
+        // Foreign keys first, so a column that is both has its primary key written over the top.
+        // Which is the order every other adapter resolves the two in.
+        let sql = format!("pragma foreign_key_list({})", self.quote_ident(table));
+        match sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await {
+            Ok(rows) => {
+                for row in &rows {
+                    if let Ok(column) = row.try_get::<String, _>("from") {
+                        keys.insert(column, KeyKind::Foreign);
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::debug!(%error, table, "could not read a table's foreign keys");
+            }
+        }
+
+        let sql = format!("pragma table_info({})", self.quote_ident(table));
+        match sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await {
+            Ok(rows) => {
+                for row in &rows {
+                    // `pk` is the column's position in the primary key, counted from one, and zero
+                    // for a column that is not part of it.
+                    if row.try_get::<i64, _>("pk").unwrap_or(0) > 0
+                        && let Ok(column) = row.try_get::<String, _>("name")
+                    {
+                        keys.insert(column, KeyKind::Primary);
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::debug!(%error, table, "could not read a table's primary key");
+            }
+        }
+
+        keys
     }
 }
 
@@ -179,11 +287,39 @@ impl Adapter for SqliteAdapter {
             .await
             .map_err(Error::driver)?;
 
+        // A separate pragma, because SQLite has no one view joining a column to what it references.
+        // A table with no foreign keys at all answers with nothing, which is not an error.
+        let sql = format!(
+            "pragma {}.foreign_key_list({})",
+            self.quote_ident(schema),
+            self.quote_ident(relation)
+        );
+        let references: HashMap<String, ForeignKey> = sqlx::query(AssertSqlSafe(sql))
+            .fetch_all(&self.pool)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|row| {
+                let from = row.try_get::<String, _>("from").ok()?;
+                let table = row.try_get::<String, _>("table").ok()?;
+                // A reference that names no column points at the other table's primary key, which
+                // is what SQLite leaves out rather than spelling.
+                let column = row
+                    .try_get::<Option<String>, _>("to")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "rowid".to_owned());
+                Some((from, ForeignKey { table, column }))
+            })
+            .collect();
+
         Ok(rows
             .iter()
             .filter_map(|row| {
+                let name = row.try_get::<String, _>("name").ok()?;
                 Some(ColumnNode {
-                    name: row.try_get::<String, _>("name").ok()?,
+                    foreign_key: references.get(&name).cloned(),
+                    name,
                     // A column with no declared type is legal in SQLite, and its values can be
                     // anything, which is worth showing rather than leaving blank.
                     type_name: match row.try_get::<String, _>("type").ok()? {

@@ -90,9 +90,9 @@ local T = MiniTest.new_set({
       -- Pinned to plain characters, so every assertion below can say what a line reads as
       -- without the suite needing a Nerd Font. All of it is ordinary configuration.
       require('sqmeow').setup({
-        -- A log of its own, so the drawer's history section holds what this file put there and
-        -- not whatever the machine running the suite has run before.
-        query = { history_file = vim.fs.joinpath(vim.fn.tempname(), 'history.jsonl') },
+        -- A directory of its own, so the drawer's history holds what this file put there and not
+        -- whatever the machine running the suite has run before.
+        core = { path = vim.fn.tempname() },
         icons = {
           connection = '#',
           schema = '@',
@@ -118,6 +118,19 @@ local T = MiniTest.new_set({
           sqlite = 's',
           markers = { open = 'v', closed = '>', leaf = ' ' },
           grid = { vertical = '|', horizontal = '-', cross = '+', ellipsis = '~' },
+          -- ASCII, like every other glyph here, so a pattern can match on them.
+          types = {
+            text = 't',
+            number = 'n',
+            boolean = 'b',
+            temporal = 'd',
+            json = 'j',
+            uuid = 'u',
+            binary = 'y',
+            unknown = '?',
+            primary_key = 'K',
+            foreign_key = 'k',
+          },
         },
       })
 
@@ -128,6 +141,11 @@ local T = MiniTest.new_set({
 
       run('create table people (id integer primary key, name text not null, score real)')
       run('create view adults as select * from people')
+      run([[create table posts (
+             id integer primary key,
+             author_id integer references people(id),
+             title text
+           )]])
       api.open_drawer()
     end,
     post_once = function()
@@ -167,13 +185,14 @@ T['tree']['colours the marker apart from the icon'] = function()
   line_matching('main')
 
   -- `v o s scratch  sqlite`: the marker, the dot saying the connection is open, the dialect
-  -- icon, the name in the group that marks the active connection, and the trailing note.
+  -- icon, the name in the group that marks the active connection, and the trailing note. The note
+  -- starts after the two spaces separating it, which are part of neither it nor the name.
   eq(marks_on(1), {
     { group = 'SqmeowMarker', from = 0, to = 1 },
     { group = 'SqmeowConnected', from = 2, to = 3 },
     { group = 'SqmeowIconSqlite', from = 4, to = 5 },
     { group = 'SqmeowActive', from = 6, to = 13 },
-    { group = 'SqmeowNull', from = 13, to = 21 },
+    { group = 'SqmeowNull', from = 15, to = 21 },
   })
 end
 
@@ -191,7 +210,7 @@ T['tree']['expands a schema into groups that count what they hold'] = function()
   line_matching('Procedures')
 
   local text = table.concat(lines(), '\n')
-  eq(text:find('T Tables%s+%(1%)') ~= nil, true)
+  eq(text:find('T Tables%s+%(2%)') ~= nil, true)
   eq(text:find('V Views%s+%(1%)') ~= nil, true)
   -- SQLite has no stored routines at all, which the count says without being opened.
   eq(text:find('F Functions%s+%(0%)') ~= nil, true)
@@ -233,7 +252,7 @@ T['tree']['renews the count on a heading it refreshes'] = function()
     run('drop table late')
     vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('Tables'), 0 })
     drawer.actions.refresh()
-    line_matching('T Tables%s+%(1%)')
+    line_matching('T Tables%s+%(2%)')
   end)
 
   vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('Tables'), 0 })
@@ -243,7 +262,31 @@ T['tree']['renews the count on a heading it refreshes'] = function()
   -- tables, and it is drawn from the level above them, so a refresh that reloads one and not the
   -- other leaves the drawer contradicting itself.
   line_matching('= late')
-  line_matching('T Tables%s+%(2%)')
+  line_matching('T Tables%s+%(3%)')
+end
+
+T['tree']['refreshing a connection reloads every level that is open'] = function()
+  open_relation('Tables', 'people')
+  line_matching('score')
+
+  run('alter table people add column added text')
+  MiniTest.finally(function()
+    run('alter table people drop column added')
+  end)
+
+  -- Refreshed from the connection, three levels above the columns. Everything under it was
+  -- dropped, so everything under it has to be asked for again: reloading only the connection
+  -- would leave the schema, the group and the columns with no cache entry and nothing on the way,
+  -- which draws as levels that have quietly lost their children.
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch'), 0 })
+  drawer.actions.refresh()
+
+  line_matching('added')
+  local text = table.concat(lines(), '\n')
+  -- The levels in between are still there rather than having emptied out.
+  eq(text:find('T Tables', 1, true) ~= nil, true)
+  eq(text:find('= people', 1, true) ~= nil, true)
+  eq(text:find('n score', 1, true) ~= nil, true)
 end
 
 T['tree']['expands a relation into its columns'] = function()
@@ -251,9 +294,32 @@ T['tree']['expands a relation into its columns'] = function()
   line_matching('score')
 
   local text = table.concat(lines(), '\n')
-  eq(text:find('id%s+INTEGER%s+primary key') ~= nil, true)
-  eq(text:find('name%s+TEXT%s+not null') ~= nil, true)
-  eq(text:find('score%s+REAL') ~= nil, true)
+  -- The icon before the name says it is the primary key, so the words no longer do.
+  eq(text:find('K id%s+INTEGER') ~= nil, true)
+  eq(text:find('id%s+INTEGER%s+primary key') ~= nil, false)
+  eq(text:find('t name%s+TEXT%s+not null') ~= nil, true)
+  eq(text:find('n score%s+REAL') ~= nil, true)
+end
+
+T['tree']['marks a column with what it holds'] = function()
+  open_relation('Tables', 'people')
+  local number = line_matching('score')
+
+  -- The glyph is coloured by what the column holds rather than by it being a column, which is the
+  -- whole reason to draw one: a schema reads as types without being read as words.
+  local groups = vim.tbl_map(function(span)
+    return span.group
+  end, marks_on(number))
+  eq(vim.tbl_contains(groups, 'SqmeowIconTypeNumber'), true)
+end
+
+T['tree']['names what a foreign key points at'] = function()
+  open_relation('Tables', 'posts')
+  line_matching('author_id')
+
+  local text = table.concat(lines(), '\n')
+  -- The one thing about a column an icon cannot say, and what a reader following a relation wants.
+  eq(text:find('k author_id%s+INTEGER%s+→ people%.id') ~= nil, true)
 end
 
 T['tree']['leaves a blank marker unmarked'] = function()
@@ -307,10 +373,11 @@ T['actions']['preview a relation into the result window'] = function()
     return state.call ~= nil and state.call.state == 'done'
   end, 10))
 
-  -- ASCII rules, because this file asked for the ASCII icon set and that setting reaches the
-  -- grid the engine draws as well as the markers the drawer draws.
+  -- ASCII rules and ASCII icons, because this file asked for the ASCII set and that setting
+  -- reaches the grid the engine draws as well as the markers the drawer draws. `id` is marked as
+  -- the primary key rather than as a number, which is the more useful thing to say about it.
   local grid = vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
-  eq(grid[1], ' id | name | score')
+  eq(grid[1], ' K id | t name | n score')
 end
 
 T['the active connection'] = MiniTest.new_set({
@@ -454,6 +521,77 @@ T['history']['puts a query back on screen when chosen'] = function()
   drawer.actions.toggle()
 
   eq(require('sqmeow.state').call.call_id, summary.call_id)
+end
+
+T['history']['shows a saved result once the engine no longer holds it'] = function()
+  local history = require('sqmeow.history')
+  local summary = run('select 5 as five')
+  local entry = history.entries()[1]
+  assert(
+    vim.wait(TIMEOUT, function()
+      return history.saved(entry)
+    end, 10),
+    'the engine should save the result'
+  )
+
+  -- As if Neovim had restarted: the call ids the last session handed out mean nothing now.
+  local session = history.session
+  history.session = 'a later one'
+  MiniTest.finally(function()
+    history.session = session
+  end)
+
+  drawer.render()
+  expand('history')
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('select 5'), 0 })
+  drawer.actions.toggle()
+
+  assert(
+    vim.wait(TIMEOUT, function()
+      return state.call.call_id ~= summary.call_id and state.call.state == 'done'
+    end, 10),
+    'the saved result should be read back'
+  )
+
+  eq(state.call.rows, 1)
+  eq(state.call.ran_at, entry.at)
+  local grid = vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
+  eq(vim.trim(grid[3]), '5')
+  -- Showing it again is not running it again.
+  eq(#history.entries(), 1)
+end
+
+T['history']['shows the error a failed query had'] = function()
+  local history = require('sqmeow.history')
+  run('select nope_at_all from nowhere_at_all')
+  local entry = history.entries()[1]
+  eq(entry.state, 'error')
+
+  local session = history.session
+  history.session = 'a later one'
+  MiniTest.finally(function()
+    history.session = session
+  end)
+
+  drawer.render()
+  expand('history')
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('nope_at_all'), 0 })
+  drawer.actions.toggle()
+
+  eq(state.call.state, 'error')
+  eq(state.call.error, entry.error)
+  eq(state.call.call_id, nil)
+end
+
+T['history']['leaves out a preview the drawer ran'] = function()
+  open_relation('Tables', 'people')
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('people'), 0 })
+  drawer.actions.preview()
+
+  assert(vim.wait(TIMEOUT, function()
+    return state.call ~= nil and state.call.state == 'done'
+  end, 10))
+  eq(require('sqmeow.history').entries(), {})
 end
 
 T['history']['empties on request'] = function()

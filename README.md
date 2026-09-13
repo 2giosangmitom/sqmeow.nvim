@@ -20,11 +20,11 @@ _sqmeow.nvim_ is a database client for Neovim: a Lua frontend over a Rust engine
 - 🌲 Lazy schema browsing, so a database with ten thousand tables opens as fast as one with ten.
 - 📄 Scratchpads that survive a restart, listed in the drawer, renameable and deletable in place.
 - 🕘 A query log written to disk, so what you ran yesterday is still there today.
-- ⚡ Rows are decoded and laid out in Rust, which is what keeps a large result from stalling the editor.
+- ⚡ Rows are decoded in Rust and drawn with nui.nvim, a page at a time, so a large result never stalls the editor.
 - 🐘 SQLite, PostgreSQL and MySQL, with schemas, views, functions and procedures.
 - 🔐 Passwords that stay out of the config, expanded by the engine and never echoed back.
 - ⌨️ No global keymaps. Every key is buffer-local, described, and yours to change.
-- 🧩 No dependency on any other plugin except nui.nvim, and that one is optional.
+- 🧩 One plugin dependency: nui.nvim, which draws the grid, the schema tree and the dialog.
 
 ## 🎬 Preview
 
@@ -32,7 +32,9 @@ _sqmeow.nvim_ is a database client for Neovim: a Lua frontend over a Rust engine
 
 ## 🚀 Installation
 
-Requires Neovim 0.10 or newer. No database client tools, and no Rust toolchain once prebuilt engines ship. [nui.nvim](https://github.com/MunifTanjim/nui.nvim) powers the connection dialog and is optional, though without it you are back to typing URLs at a prompt.
+Requires Neovim 0.10 or newer. No database client tools and no Rust toolchain, unless you ask to build the engine yourself. [nui.nvim](https://github.com/MunifTanjim/nui.nvim) is required: it draws the result grid, the schema tree and the connection dialog.
+
+The engine is a separate binary and **nothing installs it on its own**. Call `install()` from your plugin manager's build hook, so it happens when you update the plugin rather than in the middle of a session.
 
 With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
@@ -40,12 +42,36 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 {
   '2giosangmitom/sqmeow.nvim',
   dependencies = { 'MunifTanjim/nui.nvim' },
-  version = "*", -- Use latest release instead of commit
+  version = '*', -- Use the latest release instead of the latest commit
+  build = function()
+    -- Works out how to install on its own. If that picks wrong, name a method:
+    --    'curl', 'wget', 'powershell', 'cargo'
+    require('sqmeow').install()
+  end,
   opts = {},
 }
 ```
 
-Calling `setup` is optional; without it every option keeps its default.
+Calling `setup` is optional; without it every option keeps its default. Calling `install` is not: without an engine, the first query tells you to run it.
+
+### Running the latest commit
+
+`install()` downloads a build of the matching release. To run an untagged commit there is no release to download, so build the checkout instead — this needs a Rust toolchain:
+
+```lua
+{
+  '2giosangmitom/sqmeow.nvim',
+  dependencies = { 'MunifTanjim/nui.nvim' },
+  build = function()
+    require('sqmeow').install('cargo')
+  end,
+  opts = {},
+}
+```
+
+Either way the engine ends up in the same place, so switching between them replaces what you had rather than leaving two behind.
+
+`:Sqmeow install [method]` does the same thing from inside a session, without waiting. `:checkhealth sqmeow` says which engine is running and where it came from.
 
 ## ⚡ Getting started
 
@@ -161,7 +187,7 @@ Everything lives under `:Sqmeow`, which completes its subcommands and their argu
 | `:Sqmeow export csv`     | Write the result to a file                                       |
 | `:Sqmeow log [clear]`    | Show past queries, or forget them                                |
 | `:Sqmeow drawer`         | Show the schema drawer, or hide it                               |
-| `:Sqmeow update`         | Download the engine this plugin needs                            |
+| `:Sqmeow install [how]`  | Install the engine, by download or with `cargo`                  |
 | `:Sqmeow health`         | Run the health check                                             |
 | `:Sqmeow messages`       | Show what the engine has been saying                             |
 
@@ -170,7 +196,7 @@ Everything lives under `:Sqmeow`, which completes its subcommands and their argu
 
 ## 🔌 Connections
 
-`:Sqmeow add` writes a connection to a JSON file under `stdpath('data')`, and everything the configured sources know about is listed in the drawer. Three sources ship with the plugin: inline connections from `setup()`, a JSON file, and a JSON environment variable.
+`:Sqmeow add` writes a connection to a JSON file under `core.path`, and everything the configured sources know about is listed in the drawer. Two sources ship with the plugin: a JSON file and a JSON environment variable. Connections are never declared in `setup()`, because a URL routinely carries a password and a Neovim configuration tends to live in a public dotfiles repository.
 
 Every connection has a name, and the name is what appears everywhere, so the sidebar reads `production` rather than `app@db.internal`. A saved URL is taken apart into the same fields it was built from, so editing shows the connection as it stands rather than a string to pick through.
 
@@ -200,11 +226,11 @@ Everywhere a URL is displayed, the password is masked. Set `redact_urls = false`
 
 ## 📄 Scratchpads
 
-`:Sqmeow scratch` opens a scratchpad for the current connection, an ordinary `sql` file under `stdpath('data')` that survives a restart. Every one you have written is listed in the drawer under its own heading. `<CR>` opens one in a real editing window rather than in the sidebar, `R` renames it, and `d` deletes it after asking. Both prompts start from the current name, so a stray keypress followed by `<Esc>` changes nothing.
+`:Sqmeow scratch` opens a scratchpad for the current connection, an ordinary `sql` file under `core.path` that survives a restart. Every one you have written is listed in the drawer under its own heading. `<CR>` opens one in a real editing window rather than in the sidebar, `R` renames it, and `d` deletes it after asking. Both prompts start from the current name, so a stray keypress followed by `<Esc>` changes nothing.
 
 ## 🕘 Query log
 
-Every finished query is written to a file of JSON lines under `stdpath('state')`, so the log outlives the session. It records the statement, the connection, the outcome and the duration, and not the rows, because a cached grid goes stale the moment the table changes.
+Every query you submit is written to a log under `core.path` together with the rows it returned, so both outlive the session. Only what you ran is recorded: a preview from the drawer, and everything the plugin asks the database for itself, stays out of it.
 
 ```
 v history                          3
@@ -213,9 +239,9 @@ v history                          3
     > delete from sessions where …  2d ago
 ```
 
-The drawer shows the twenty most recent, and `:Sqmeow log` opens that section. Choosing one puts its rows back on screen if the engine still holds them, which is true for anything run since Neovim started. Otherwise the statement opens in a buffer ready to run, since a log holds deletes as readily as selects and picking a line is not the same as asking for it to happen again.
+The drawer shows the twenty most recent, and `:Sqmeow log` opens that section. Choosing one shows the result that query returned, not the statement to run again: nothing is run, since a log holds deletes as readily as selects. A result from this session comes from the engine's memory, and an older one is read back from the copy saved with the log, with the winbar saying how long ago it ran. A query that failed shows its error.
 
-The same statement run twenty times is one line, and that line is its most recent run. `:Sqmeow log clear` empties the log, and so does `d` on the section in the drawer.
+Every run is an entry of its own, because two runs of the same select can answer differently. `:Sqmeow log clear` empties the log and deletes the saved results, and so does `d` on the section in the drawer. Saved results are readable by you only, and `query.persist_history = false` keeps the log and its results to the session.
 
 ## ⚙️ Configuration
 
@@ -232,14 +258,13 @@ require('sqmeow').setup({
   query = {
     max_rows = 100000,                 -- reached, a result is marked truncated rather than failed
     timeout_ms = 0,                    -- 0 disables the timeout
-    history_size = 32,                 -- results kept for reopening
-    persist_history = true,            -- false keeps the log to this session
-    history_limit = 500,               -- queries kept on disk
-    history_file = '',                 -- empty means stdpath('state')/sqmeow/history.jsonl
+    history_size = 32,                 -- results held in memory for showing again
+    persist_history = true,            -- false keeps the log and its results to this session
+    history_limit = 500,               -- queries kept in the log, each with its result
   },
   core = {
-    path = nil,                        -- absolute path to an engine of your own
-    auto_install = true,               -- download one on first use when it is missing
+    -- where the plugin keeps its files: the engine, connections.json, scratchpads, the query log
+    path = vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow'),
     log_level = 'warn',
   },
   redact_urls = true,                  -- mask the password in every URL the plugin displays
@@ -301,7 +326,19 @@ just docs        # regenerate doc/sqmeow.txt
 
 The PostgreSQL and MySQL tests report themselves skipped when those servers are not running, so `just test` works without Docker. It just covers less. `doc/sqmeow.txt` is generated, so change the annotation and run `just docs` rather than editing it by hand. CI fails a pull request that does not.
 
-The plugin finds an engine in three places, in this order: `core.path` from your configuration, the managed copy under `stdpath('data')`, and a local `cargo build` inside the plugin directory. The last one means a checkout works with no install step. Run `:checkhealth sqmeow` to see which engine is in use and whether it matches this plugin.
+### The result grid
+
+The grid is laid out by the plugin and drawn with `nui.line` and `nui.text`; `icons.grid` sets the characters it is drawn with — the separator between columns, the rule under the names, where the two meet, and the mark on a value too wide for its column.
+
+Not `nui.table`, which draws every other structured thing here. A nui table is either boxed in with a rule after every single row, or borderless with no column separators and no rule at all, and the characters cannot separate those cases: one `hor` slot draws the top rule, the header rule and each row's rule alike, and one `ver` slot is both the column separator and the outer edge. The grid wants a third thing.
+
+### What the engine does, and does not
+
+The engine connects to databases, runs statements, and holds the rows. It hands the plugin a slice of them on request, as values rather than as text, along with what each column holds and how wide its widest value is. Everything you see is drawn in Lua with nui.nvim.
+
+That last measurement is the one thing the plugin cannot work out for itself, because it is only ever sent one page: a column sized from the page on screen would change width as you paged, and the grid would appear to shift under you.
+
+The plugin finds an engine in two places, in this order: the installed copy under `core.path`, and a local `cargo build` inside the plugin directory. The last one means a checkout you are hacking on works with no install step, but note the order: an engine you installed earlier wins over one you just built by hand, so `require('sqmeow').install('cargo')` is how to put the build in its place. `:checkhealth sqmeow` says which one is running and warns when a different build is sitting in the checkout unused.
 
 Commit messages are the release notes, so write them as [conventional commits](https://www.conventionalcommits.org): `feat:` for anything a user would notice, `fix:` for a repair, and a `!` or a `BREAKING CHANGE:` trailer for something that changes how the plugin is used.
 

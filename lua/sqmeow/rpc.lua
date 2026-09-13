@@ -16,7 +16,7 @@ local M = {}
 M.version = '1.0.1' -- x-release-please-version
 
 --- Protocol revision this plugin speaks. An engine reporting anything else is refused.
-M.protocol_version = 1
+M.protocol_version = 2
 
 ---@class sqmeow.EngineInfo
 ---@field core_version string
@@ -102,21 +102,15 @@ function M.start()
 
   local path, source = install.resolve()
   if not path then
-    -- The install is never waited on. Starting one and then blocking here would freeze the editor
-    -- for as long as the download took, which on a slow connection is minutes of a window that
-    -- does not repaint. The call that found no engine fails instead, and the user is told when
-    -- there is one to try again with.
+    -- Nothing is installed from here. Downloading megabytes because a query was run is not a
+    -- decision this side gets to make, and blocking on it would freeze the editor for as long as
+    -- the download took. The call that found no engine fails, naming what to run.
     local step = install.installing()
     if step then
       return nil, 'the engine is ' .. step
     end
 
-    if not config.core.auto_install then
-      return nil, 'no engine binary found; run `:Sqmeow update` to download one'
-    end
-
-    install.ensure()
-    return nil, 'the engine is downloading'
+    return nil, 'no engine binary found; run `:Sqmeow install` or `require("sqmeow").install()`'
   end
 
   local spawned = vim.fn.jobstart({ path }, {
@@ -162,7 +156,7 @@ function M.start()
   end
 
   if handshake.protocol_version ~= M.protocol_version then
-    local message = ('engine speaks protocol %s, this plugin speaks %s; run `:Sqmeow update`'):format(
+    local message = ('engine speaks protocol %s, this plugin speaks %s; run `:Sqmeow install`'):format(
       handshake.protocol_version,
       M.protocol_version
     )
@@ -177,9 +171,9 @@ end
 
 --- Mirror the plugin's configuration into the engine.
 ---
---- The engine needs the row cap, the page size, and the column width because it is the side that
---- decides what a page looks like. Sending them rather than duplicating defaults means there is
---- one place a user changes them.
+--- Only the settings the engine acts on: how many rows it will hold, and how many finished results
+--- it keeps. Sending them rather than duplicating defaults means there is one place a user changes
+--- them.
 ---
 ---@return table|nil applied What the engine says it applied, after clamping.
 function M.configure()
@@ -188,17 +182,11 @@ function M.configure()
   end
 
   local config = require('sqmeow.config').get()
+  -- Two settings, because two is all the engine still decides. Everything else that used to travel
+  -- described how a result should look, and the engine no longer draws one.
   local ok, applied = pcall(vim.rpcrequest, channel, 'configure', {
     max_rows = config.query.max_rows,
     history_size = config.query.history_size,
-    page_size = config.ui.result.page_size,
-    max_column_width = config.ui.result.max_column_width,
-    -- The engine draws the grid, so the characters it draws it with have to travel with the rest
-    -- of the configuration rather than being read from Lua where the lines are never touched.
-    grid_vertical = config.icons.grid.vertical,
-    grid_horizontal = config.icons.grid.horizontal,
-    grid_cross = config.icons.grid.cross,
-    grid_ellipsis = config.icons.grid.ellipsis,
   })
 
   if not ok then

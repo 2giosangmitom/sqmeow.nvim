@@ -31,8 +31,8 @@ T['scratchpad']['falls back to a name when there is nothing usable left'] = func
   eq(editor.slug(''), 'scratch')
 end
 
-T['scratchpad']['lives under the data directory'] = function()
-  eq(editor.path('dev'):find(vim.fn.stdpath('data'), 1, true), 1)
+T['scratchpad']['lives under core.path'] = function()
+  eq(vim.fs.dirname(editor.path('dev')), require('sqmeow.paths').scratch())
 end
 
 T['scratchpad']['uses the current connection when given no name'] = function()

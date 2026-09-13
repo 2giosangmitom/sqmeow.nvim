@@ -4,6 +4,7 @@
 //! msgpack-rpc channel on stdin and stdout. Nothing may print to stdout: that stream is the
 //! protocol. Diagnostics go to stderr, where the editor can surface them or drop them.
 
+mod archive;
 mod args;
 mod core;
 mod session;

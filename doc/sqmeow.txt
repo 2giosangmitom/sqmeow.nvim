@@ -3,9 +3,9 @@
                                                                    *sqmeow.nvim*
 sqmeow.nvim, a database client for Neovim.
 
-A Lua frontend over a Rust engine. The engine owns connections, queries, and the layout of
-result grids; the plugin owns windows, buffers, and keymaps. Nothing in the plugin ever
-touches a row of data, which is what keeps a large result from stalling the editor.
+A Lua frontend over a Rust engine. The engine connects to databases, runs queries and holds
+their results; the plugin asks it for rows a page at a time and draws everything itself: the
+drawer, the grid, windows, buffers and keymaps.
 
 
 ------------------------------------------------------------------------------
@@ -60,22 +60,22 @@ worth being loud about.
                                                                 *sqmeow-history*
 The query log ~
 
-Every finished query is written to a file of JSON lines under `stdpath('state')`, so the log is
-still there after a restart. It holds the statement, which connection it ran on, how it went
-and how long it took. It does not hold the rows: a cached grid goes stale as soon as the table
-changes, and a statement you can see is cheap to run again.
+Every query you submit is written to a log under `core.path`, together with the rows it
+returned, so both are still there after a restart. Only what you ran is recorded: a preview from
+the drawer, and everything the plugin asks the database for itself, stays out of it.
 
 The drawer shows the most recent under `history`, and `:Sqmeow log` opens that section.
-Choosing one puts its rows back on screen when the engine still has them, which is true for
-anything run since Neovim started. Otherwise the statement opens in a buffer of its own, ready
-to run, because a log holds deletes as readily as selects and picking a line out of a list is
-not the same as asking for it to happen again.
+Choosing one shows the result that query returned, not the statement to run again. Nothing is
+run, because a log holds deletes as readily as selects and picking a line out of a list is not
+the same as asking for it to happen again. A result from this session comes from the engine's
+memory, and an older one is read back from the copy saved with the log, with the winbar saying
+how long ago it ran. A query that failed shows its error.
 
-The same statement run twenty times is one line, and the line is the most recent run of it.
+Every run is an entry of its own, because two runs of the same select can answer differently.
 
-`:Sqmeow log clear` empties the log, and so does `d` on the section in the drawer. Set
-`query.persist_history` to false to keep the log to the session, and `query.history_file` to
-put it somewhere else.
+`:Sqmeow log clear` empties the log and deletes the saved results, and so does `d` on the
+section in the drawer. Saved results are readable by their owner only. Set
+`query.persist_history` to false to keep the log and its results to the session.
 
 ------------------------------------------------------------------------------
                                                             *sqmeow.user_config*
@@ -99,6 +99,47 @@ Usage ~
     ui = { drawer = { width = 40 } },
   })
 <
+------------------------------------------------------------------------------
+                                                              *sqmeow.install()*
+                            `sqmeow.install`({opts})
+Install the engine binary.
+
+Nothing installs it on its own, so this is the call to put in a plugin manager's build hook,
+where fetching several megabytes happens at a moment you chose: >lua
+  {
+    '2giosangmitom/sqmeow.nvim',
+    dependencies = { 'MunifTanjim/nui.nvim' },
+    build = function()
+      require('sqmeow').install()
+    end,
+    opts = {},
+  }
+<
+With no argument it works out how to install on its own: a release build is downloaded with
+whichever tool the machine has, and cargo compiles the checkout if there is no release for this
+target or the download fails. Name a method to decide instead. `'cargo'` is how to run a commit
+that has not been released; `'curl'`, `'wget'` and `'powershell'` each name a download tool, for
+a machine where the detected one does not work: >lua
+  require('sqmeow').install('cargo')
+  require('sqmeow').install('wget')
+  require('sqmeow').install({ version = '1.0.2' })
+<
+Both ways put the engine in the same place, so switching between them replaces what was there
+rather than leaving two builds behind.
+
+Waits until the install is over, because a build hook that returned early would have the plugin
+manager report success over an engine that is not there yet. Pass a `callback` to be handed the
+result instead and not wait, which is what `:Sqmeow install` does from inside a session. The
+waiting uses |vim.wait()|, so the editor still redraws and the progress line still moves.
+
+Parameters ~
+{opts} `(string|table|nil)` A method name, or a table of `method`, `version`, `callback` and
+ `timeout` in milliseconds.
+Return ~
+`(boolean|nil)` ok Whether an engine was installed, or nil when a `callback` was given.
+Return ~
+`(string|nil)` err
+
 ------------------------------------------------------------------------------
                                                                  *sqmeow.stop()*
                                 `sqmeow.stop`()
@@ -127,21 +168,17 @@ is built, so the documented defaults cannot drift from the ones the code uses.
   sqmeow.config.defaults = {
     -- Where connections are loaded from, in order. Later sources do not shadow earlier ones; every
     -- source contributes, and a duplicate name is reported rather than silently dropped.
-    -- Types: 'file', 'env', 'memory'.
+    -- Types: 'file', 'env'. Connections are never declared here: a URL routinely carries a
+    -- password, and this table tends to live in a dotfiles repository. `:Sqmeow add` saves one.
     sources = {
       { type = 'file' },
       { type = 'env' },
     },
 
-    -- Connections declared inline. Equivalent to a `memory` source, and handy for a single database
-    -- that does not deserve a file.
-    connections = {},
-
     core = {
-      -- Absolute path to the engine binary. `nil` means the managed one.
-      path = nil,
-      -- Download the engine on first use when it is missing.
-      auto_install = true,
+      -- The directory the plugin keeps its files in: the installed engine, saved connections,
+      -- scratchpads, and the query log with the results it shows again.
+      path = vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow'),
       -- One of 'error', 'warn', 'info', 'debug', 'trace'.
       log_level = 'warn',
     },
@@ -150,7 +187,19 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       -- 'ide' is drawer left, editor top right, result bottom right.
       layout = 'ide',
       drawer = { width = 36, position = 'left' },
-      result = { height = 16, page_size = 100, max_column_width = 48 },
+      -- `column_icons` marks each column of the grid header with what it holds, or with the key it
+      -- is. Worth turning off in a terminal without a patched font, and in a very wide result where
+      -- the columns are better spent on values.
+      result = {
+        height = 16,
+        page_size = 100,
+        max_column_width = 48,
+        -- Marks each column of the grid header with what it holds, or with the key it is. Worth
+        -- turning off in a terminal without a patched font.
+        column_icons = true,
+        -- What a SQL `NULL` reads as. Distinct from an empty string, which is drawn as nothing.
+        null_text = 'NULL',
+      },
       border = 'rounded',
       winbar = true,
       persist_session = false,
@@ -161,14 +210,13 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       max_rows = 100000,
       -- Milliseconds before a query is cancelled. 0 disables the timeout.
       timeout_ms = 0,
-      -- Results kept for reopening from the call log.
+      -- Results the engine holds in memory, so showing a recent one again reads nothing from disk.
       history_size = 32,
-      -- Write finished queries to a file, so the log survives a restart.
+      -- Save the queries you run, and the rows they returned, under `core.path`, so the log and its
+      -- results survive a restart. False keeps both to the session.
       persist_history = true,
-      -- Queries kept in the log. The oldest are dropped once there are twice as many.
+      -- Queries kept in the log, each with its result. The oldest go once there are twice as many.
       history_limit = 500,
-      -- Where the log is written. Empty means `stdpath('state')/sqmeow/history.jsonl`.
-      history_file = '',
     },
 
     -- Every character the plugin draws that is not text. The defaults are Nerd Font glyphs, so a
@@ -209,10 +257,35 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       -- What sits before a drawer row: whether its children are showing, or that it has none.
       markers = { open = '', closed = '', leaf = ' ' },
 
-      -- What the engine draws the result grid with. The three separators are ignored unless they
-      -- are exactly one column wide, since a wider one would put the rule out of step with the
-      -- header above it. The ellipsis may be any width.
+      -- What the result grid is drawn with: between the columns, along the rule under their names,
+      -- where the two meet, and at the end of a value too wide for its column. Keep the three
+      -- separators one column wide, or the rule will be out of step with the header above it. The
+      -- ellipsis may be any width, since a truncated value is measured with it.
       grid = { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' },
+
+      -- What each column of the grid header is marked with, and what the drawer marks its columns
+      -- with. The first eight are classes rather than type names: three dialects spell the same
+      -- idea five ways between them, and an icon per spelling is a table nobody can read. The two
+      -- keys win over the class, because what rows are found by is the more useful thing to know.
+      -- Set one to an empty string to draw that kind of column plain.
+      types = {
+        text = '󰀬',
+        number = '󰎠',
+        boolean = '󰔡',
+        temporal = '󰃭',
+        json = '󰘦',
+        uuid = '󰯮',
+        binary = '󰈔',
+        unknown = '󰠵',
+        primary_key = '󰌆',
+        foreign_key = '󰌋',
+      },
+
+      -- Glyphs for particular type names, overriding the class they would fall in. The escape hatch
+      -- for anyone who wants `varchar` to look different from `text`: the classes above are coarse
+      -- on purpose, and this is how to disagree with where a line was drawn. Keyed by the database's
+      -- own name for the type, in any spelling and with or without its parameters.
+      type_names = {},
     },
 
     -- Merged by action name over the built-in mappings. Set an action to `false` to drop it.
@@ -536,7 +609,8 @@ arrive in the result buffer later, written by the engine itself.
 Parameters ~
 {sql} `(string)` One or more statements. Only the last one's rows are shown.
 {opts} `(table|nil)` `line` runs only the statement at that zero-based line; `source_buf` is
-the buffer an error should be reported in.
+the buffer an error should be reported in; `history = false` keeps the query out of the log,
+for SQL the plugin wrote rather than the user.
 Return ~
 `(integer|nil)` call_id
 Return ~
@@ -580,6 +654,17 @@ Return ~
 `(boolean)` stopped Whether there was a query to stop.
 
 ------------------------------------------------------------------------------
+                                                                   *turn_page()*
+                               `turn_page`({to})
+Move the result window to another page.
+
+Nothing is asked of the engine beyond the rows themselves: how many fit on a page and where the
+view has got to are this side's to know, so the arithmetic is here.
+
+Parameters ~
+{to} `(fun(offset: integer, size: integer, rows: integer): integer)`
+
+------------------------------------------------------------------------------
                                                         *sqmeow.api.next_page()*
                             `sqmeow.api.next_page`()
 Show the next page of the current result.
@@ -598,9 +683,6 @@ Show the first page of the current result.
                                                         *sqmeow.api.last_page()*
                             `sqmeow.api.last_page`()
 Show the last page of the current result.
-
-The offset comes from the row count the engine reported. The engine clamps anything past the
-end anyway, so the fallback below is safe even when no summary has arrived yet.
 
 ------------------------------------------------------------------------------
                                                              *sqmeow.api.open()*
@@ -621,6 +703,21 @@ Nothing is run again: the engine still holds the rows, so this only asks it to r
 
 Parameters ~
 {call_id} `(integer)` From the query log.
+
+------------------------------------------------------------------------------
+                                                          *sqmeow.api.restore()*
+                         `sqmeow.api.restore`({entry})
+Show a logged result the engine no longer holds, from the copy saved beside the log.
+
+Nothing is run. The engine reads the file and reports it as `call:state`, the way it reports a
+query, so the grid, paging, the row detail and exports all work on it as they did when it ran.
+
+Parameters ~
+{entry} `(table)` From the query log, with a saved result.
+Return ~
+`(integer|nil)` call_id
+Return ~
+`(string|nil)` error
 
 ------------------------------------------------------------------------------
                                                            *sqmeow.api.export()*

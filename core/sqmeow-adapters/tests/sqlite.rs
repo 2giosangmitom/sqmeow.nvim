@@ -4,7 +4,7 @@
 //! cleanup, and still exercises the real driver rather than a stand-in.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Error, RelationKind};
+use sqmeow_db::{Cell, Error, ForeignKey, KeyKind, RelationKind, TypeClass};
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -332,6 +332,128 @@ async fn a_column_with_no_declared_type_says_so() {
 
     let columns = backend.columns("main", "loose").await.unwrap();
     assert_eq!(columns[0].type_name, "any");
+}
+
+#[tokio::test]
+async fn marks_the_result_columns_that_are_keys() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table keyed_parent (id integer primary key)",
+    )
+    .await;
+    run(
+        &backend,
+        "create table keyed_child (
+            id integer primary key,
+            parent_id integer references keyed_parent(id),
+            note text
+        )",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select id, parent_id, note from keyed_child order by id",
+    )
+    .await;
+
+    let keys: Vec<KeyKind> = result.columns().iter().map(|column| column.key).collect();
+    assert_eq!(
+        keys,
+        vec![KeyKind::Primary, KeyKind::Foreign, KeyKind::None],
+        "columns: {:?}",
+        result.columns()
+    );
+}
+
+#[tokio::test]
+async fn a_result_column_that_is_an_expression_is_not_a_key() {
+    let backend = database().await;
+    run(&backend, "create table keyed_expr (id integer primary key)").await;
+
+    let result = run(
+        &backend,
+        "select count(*) as total, 1 as literal from keyed_expr",
+    )
+    .await;
+
+    for column in result.columns() {
+        assert_eq!(column.key, KeyKind::None, "{}", column.name);
+    }
+}
+
+#[tokio::test]
+async fn a_result_column_is_classified_by_its_declared_type() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table classed (words text, counted integer, at datetime, raw blob, loose)",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select words, counted, at, raw, loose from classed",
+    )
+    .await;
+
+    let classes: Vec<TypeClass> = result.columns().iter().map(|column| column.class).collect();
+    assert_eq!(
+        classes,
+        vec![
+            TypeClass::Text,
+            TypeClass::Number,
+            TypeClass::Temporal,
+            TypeClass::Binary,
+            // A column declared with no type at all, which is legal here and classifies as nothing.
+            TypeClass::Unknown,
+        ],
+        "columns: {:?}",
+        result.columns()
+    );
+}
+
+#[tokio::test]
+async fn a_drawer_column_names_what_it_references() {
+    let backend = database().await;
+    run(&backend, "create table fk_parent (id integer primary key)").await;
+    run(
+        &backend,
+        "create table fk_child (id integer primary key, parent_id integer references fk_parent(id))",
+    )
+    .await;
+
+    let columns = backend.columns("main", "fk_child").await.unwrap();
+    assert_eq!(columns[0].foreign_key, None);
+    assert_eq!(
+        columns[1].foreign_key,
+        Some(ForeignKey {
+            table: "fk_parent".into(),
+            column: "id".into(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_reference_with_no_named_column_points_at_the_rowid() {
+    let backend = database().await;
+    run(&backend, "create table rf_parent (id integer primary key)").await;
+    // SQLite lets a reference leave the column out, which means the other table's primary key.
+    run(
+        &backend,
+        "create table rf_child (id integer primary key, parent_id integer references rf_parent)",
+    )
+    .await;
+
+    let columns = backend.columns("main", "rf_child").await.unwrap();
+    assert_eq!(
+        columns[1].foreign_key,
+        Some(ForeignKey {
+            table: "rf_parent".into(),
+            column: "rowid".into(),
+        })
+    );
 }
 
 #[tokio::test]

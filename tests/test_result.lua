@@ -21,7 +21,15 @@ T['format_duration']['uses seconds above one'] = function()
   eq(result.format_duration(1500), '1.50s')
 end
 
-T['describe'] = MiniTest.new_set()
+T['describe'] = MiniTest.new_set({
+  hooks = {
+    -- `describe` reads the page size out of the configuration, so a case that changed it must not
+    -- leave that behind for the next one.
+    post_case = function()
+      require('sqmeow').setup({})
+    end,
+  },
+})
 
 T['describe']['says the plugin name when nothing has run'] = function()
   eq(result.describe(nil), 'sqmeow')
@@ -61,14 +69,14 @@ T['describe']['flags a truncated result'] = function()
 end
 
 T['describe']['shows the page only when there is more than one'] = function()
-  eq(
-    result.describe({ state = 'done', rows = 5, page = 1, pages = 1, elapsed_ms = 1 }),
-    '5 rows  1ms'
-  )
-  eq(
-    result.describe({ state = 'done', rows = 500, page = 2, pages = 5, elapsed_ms = 1 }),
-    '500 rows  page 2/5  1ms'
-  )
+  -- Which page is showing is no longer something the summary carries: the engine does not know how
+  -- tall this window is, so the count is worked out here from the row total and the page size.
+  -- That a *particular* page is named is covered end to end in `test_query.lua`, where paging is
+  -- real; here only the page size decides whether there is more than one page at all.
+  require('sqmeow').setup({ ui = { result = { page_size = 100 } } })
+
+  eq(result.describe({ state = 'done', rows = 5, elapsed_ms = 1 }), '5 rows  1ms')
+  eq(result.describe({ state = 'done', rows = 500, elapsed_ms = 1 }), '500 rows  page 1/5  1ms')
 end
 
 T['window'] = MiniTest.new_set()
@@ -125,34 +133,42 @@ T['buffer']['maps its keys buffer-locally, with descriptions'] = function()
   end
 end
 
-T['display columns'] = MiniTest.new_set()
+-- The display-column arithmetic these tests used to cover is gone: nui records where it put every
+-- cell, so `current_cell` asks it rather than measuring the line under the cursor. What is left to
+-- test here is the paging arithmetic, which is this side's own.
 
-T['display columns']['cut a slice out of a grid line'] = function()
-  --      0123456789...
-  local line = ' id │ name  │ score'
-  eq(result.display_slice(line, 1, 2), 'id')
-  eq(result.display_slice(line, 6, 5), 'name')
-  eq(result.display_slice(line, 14, 5), 'score')
+T['pages'] = MiniTest.new_set({
+  hooks = {
+    post_case = function()
+      require('sqmeow').setup({})
+    end,
+  },
+})
+
+T['pages']['is one page when a result fits'] = function()
+  require('sqmeow').setup({ ui = { result = { page_size = 100 } } })
+  local current, total = result.pages({ rows = 9 })
+  eq(current, 1)
+  eq(total, 1)
 end
 
-T['display columns']['count width, not bytes'] = function()
-  -- Each of these characters is two columns wide, so a byte offset would land mid-character.
-  local line = ' 名前 │ 東京都'
-  eq(result.display_slice(line, 1, 4), '名前')
-  eq(result.display_slice(line, 8, 6), '東京都')
+T['pages']['counts a partial last page'] = function()
+  require('sqmeow').setup({ ui = { result = { page_size = 4 } } })
+  local _, total = result.pages({ rows = 9 })
+  eq(total, 3)
 end
 
-T['display columns']['turn a display column into a byte offset'] = function()
-  local line = ' 名前 │ 東京都'
-  eq(result.byte_at(line, 0), 0)
-  eq(result.byte_at(line, 1), 1)
-  -- One space plus two three-byte characters.
-  eq(result.byte_at(line, 5), 7)
+T['pages']['says one page for a result with no rows'] = function()
+  require('sqmeow').setup({ ui = { result = { page_size = 4 } } })
+  local current, total = result.pages({ rows = 0 })
+  eq(current, 1)
+  eq(total, 1)
 end
 
-T['display columns']['stop at the end of a short line'] = function()
-  eq(result.display_slice(' id', 6, 5), '')
-  eq(result.byte_at(' id', 40), 3)
+T['pages']['says one page when nothing has run'] = function()
+  local current, total = result.pages(nil)
+  eq(current, 1)
+  eq(total, 1)
 end
 
 return T

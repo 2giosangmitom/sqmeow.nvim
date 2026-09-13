@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 
 use sqmeow_adapters::Backend;
 use sqmeow_db::{CatalogEntry, ResultSet};
-use sqmeow_render::{GridOptions, GridStylePatch, Layout};
 use tokio_util::sync::CancellationToken;
 
 /// Engine-side settings, mirrored from the plugin's configuration.
@@ -19,7 +18,6 @@ use tokio_util::sync::CancellationToken;
 pub struct Options {
     pub max_rows: usize,
     pub history_size: usize,
-    pub grid: GridOptions,
 }
 
 impl Default for Options {
@@ -27,7 +25,6 @@ impl Default for Options {
         Self {
             max_rows: 100_000,
             history_size: 32,
-            grid: GridOptions::default(),
         }
     }
 }
@@ -41,16 +38,6 @@ impl Options {
         if let Some(value) = other.history_size {
             self.history_size = value.max(1);
         }
-        if let Some(value) = other.page_size {
-            self.grid.page_size = value.max(1);
-        }
-        if let Some(value) = other.max_column_width {
-            self.grid.max_column_width = value.max(sqmeow_render::grid::MIN_COLUMN_WIDTH);
-        }
-        if let Some(value) = other.null_text {
-            self.grid.null_text = value;
-        }
-        self.grid.style.update(other.style);
     }
 }
 
@@ -59,10 +46,6 @@ impl Options {
 pub struct OptionsPatch {
     pub max_rows: Option<usize>,
     pub history_size: Option<usize>,
-    pub page_size: Option<usize>,
-    pub max_column_width: Option<usize>,
-    pub null_text: Option<String>,
-    pub style: GridStylePatch,
 }
 
 /// One open connection.
@@ -108,37 +91,16 @@ impl Connection {
     }
 }
 
-/// A finished result, kept so it can be paged and reopened.
+/// A finished result, kept so its rows can be read and reopened.
+///
+/// Which rows the editor is looking at is not recorded. The editor asks for the rows it wants and
+/// draws them, so where it has got to is its own business, and two windows on one result do not
+/// have to agree about it.
 #[derive(Debug)]
 pub struct Call {
     pub id: u64,
     pub conn_id: i64,
     pub result: ResultSet,
-    pub layout: Layout,
-    /// The row the current page starts at.
-    pub offset: usize,
-}
-
-impl Call {
-    /// Clamp an offset to a page boundary that exists.
-    ///
-    /// Paging past either end settles on the last or first page rather than emptying the view,
-    /// which is what `L` at the end of a result should do.
-    pub fn clamp_offset(&self, offset: usize, page_size: usize) -> usize {
-        if page_size == 0 || self.result.row_count() == 0 {
-            return 0;
-        }
-        let last_page = (self.result.page_count(page_size) - 1) * page_size;
-        offset.min(last_page)
-    }
-
-    /// Which page the current offset is, counting from one.
-    pub fn page_number(&self, page_size: usize) -> usize {
-        if page_size == 0 {
-            return 1;
-        }
-        self.offset / page_size + 1
-    }
 }
 
 /// The state one editor session owns.
@@ -153,7 +115,8 @@ pub struct Session {
 
 #[derive(Default)]
 struct History {
-    calls: HashMap<u64, Call>,
+    /// Shared, so a result can be saved to disk without holding the lock for as long as that takes.
+    calls: HashMap<u64, Arc<Call>>,
     /// Call ids oldest first, which is the order they are evicted in.
     order: VecDeque<u64>,
 }
@@ -262,32 +225,26 @@ impl Session {
     }
 
     /// Store a finished result, evicting the oldest once the history is full.
-    pub fn store_call(&self, call: Call) {
+    pub fn store_call(&self, call: Call) -> Arc<Call> {
         let limit = self.options().history_size.max(1);
         let mut history = self.calls.lock().expect("calls poisoned");
 
+        let call = Arc::new(call);
         history.order.push_back(call.id);
-        history.calls.insert(call.id, call);
+        history.calls.insert(call.id, Arc::clone(&call));
 
         while history.order.len() > limit {
             if let Some(evicted) = history.order.pop_front() {
                 history.calls.remove(&evicted);
             }
         }
+        call
     }
 
     /// Read a stored result.
     pub fn with_call<T>(&self, call_id: u64, read: impl FnOnce(&Call) -> T) -> Option<T> {
         let history = self.calls.lock().expect("calls poisoned");
-        history.calls.get(&call_id).map(read)
-    }
-
-    /// Move a stored result's page, returning the offset it settled on.
-    pub fn seek_call(&self, call_id: u64, offset: usize, page_size: usize) -> Option<usize> {
-        let mut history = self.calls.lock().expect("calls poisoned");
-        let call = history.calls.get_mut(&call_id)?;
-        call.offset = call.clamp_offset(offset, page_size);
-        Some(call.offset)
+        history.calls.get(&call_id).map(|call| read(call))
     }
 }
 
@@ -298,23 +255,14 @@ mod tests {
     use super::*;
 
     fn call(id: u64, rows: usize) -> Call {
-        let mut result = ResultSet::new(
-            "select n",
-            vec![Column {
-                name: "n".into(),
-                type_name: "INTEGER".into(),
-            }],
-        );
+        let mut result = ResultSet::new("select n", vec![Column::new("n", "INTEGER")]);
         for n in 0..rows {
             result.push_row(vec![Cell::Int(n as i64)]);
         }
-        let layout = Layout::measure(&result, &GridOptions::default());
         Call {
             id,
             conn_id: 1,
             result,
-            layout,
-            offset: 0,
         }
     }
 
@@ -379,55 +327,32 @@ mod tests {
     fn options_start_at_the_documented_defaults() {
         let options = Session::default().options();
         assert_eq!(options.max_rows, 100_000);
-        assert_eq!(options.grid.page_size, 100);
+        assert_eq!(options.history_size, 32);
     }
 
     #[test]
     fn configure_changes_only_what_it_names() {
         let session = Session::default();
         let options = session.configure(OptionsPatch {
-            page_size: Some(25),
+            history_size: Some(8),
             ..OptionsPatch::default()
         });
 
-        assert_eq!(options.grid.page_size, 25);
+        assert_eq!(options.history_size, 8);
+        // Untouched by a patch that did not name it.
         assert_eq!(options.max_rows, 100_000);
-        assert_eq!(options.grid.null_text, "NULL");
-    }
-
-    #[test]
-    fn configure_carries_the_grid_characters() {
-        let session = Session::default();
-        let options = session.configure(OptionsPatch {
-            style: GridStylePatch {
-                vertical: Some("!".to_owned()),
-                // Three columns wide, so it is dropped and the default rule survives.
-                cross: Some("-+-".to_owned()),
-                ..GridStylePatch::default()
-            },
-            ..OptionsPatch::default()
-        });
-
-        assert_eq!(options.grid.style.vertical, "!");
-        assert_eq!(options.grid.style.cross, "┼");
     }
 
     #[test]
     fn configure_refuses_nonsense_values() {
         let session = Session::default();
         let options = session.configure(OptionsPatch {
-            page_size: Some(0),
             history_size: Some(0),
-            max_column_width: Some(1),
             ..OptionsPatch::default()
         });
 
-        assert_eq!(options.grid.page_size, 1);
+        // Clamped rather than rejected, which is why `configure` echoes what it applied.
         assert_eq!(options.history_size, 1);
-        assert_eq!(
-            options.grid.max_column_width,
-            sqmeow_render::grid::MIN_COLUMN_WIDTH
-        );
     }
 
     #[test]
@@ -464,33 +389,16 @@ mod tests {
     }
 
     #[test]
-    fn paging_stops_at_the_last_page() {
+    fn a_stored_result_keeps_every_row_for_the_editor_to_ask_for() {
+        // Where the editor has got to is not recorded here any more: it asks for the rows it wants
+        // and draws them, so two windows on one result need not agree about a page.
         let session = Session::default();
         session.store_call(call(1, 250));
 
-        assert_eq!(session.seek_call(1, 100, 100), Some(100));
-        // Past the end settles on the last page rather than emptying the view.
-        assert_eq!(session.seek_call(1, 9_000, 100), Some(200));
-    }
-
-    #[test]
-    fn paging_an_empty_result_stays_at_the_start() {
-        let session = Session::default();
-        session.store_call(call(1, 0));
-        assert_eq!(session.seek_call(1, 500, 100), Some(0));
-    }
-
-    #[test]
-    fn paging_an_unknown_call_is_none() {
-        assert_eq!(Session::default().seek_call(99, 0, 100), None);
-    }
-
-    #[test]
-    fn page_numbers_count_from_one() {
-        let mut record = call(1, 250);
-        assert_eq!(record.page_number(100), 1);
-        record.offset = 200;
-        assert_eq!(record.page_number(100), 3);
+        assert_eq!(
+            session.with_call(1, |call| call.result.row_count()),
+            Some(250)
+        );
     }
 
     #[test]

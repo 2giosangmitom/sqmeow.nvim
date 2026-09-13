@@ -18,21 +18,17 @@ local M = {}
 M.defaults = {
   -- Where connections are loaded from, in order. Later sources do not shadow earlier ones; every
   -- source contributes, and a duplicate name is reported rather than silently dropped.
-  -- Types: 'file', 'env', 'memory'.
+  -- Types: 'file', 'env'. Connections are never declared here: a URL routinely carries a
+  -- password, and this table tends to live in a dotfiles repository. `:Sqmeow add` saves one.
   sources = {
     { type = 'file' },
     { type = 'env' },
   },
 
-  -- Connections declared inline. Equivalent to a `memory` source, and handy for a single database
-  -- that does not deserve a file.
-  connections = {},
-
   core = {
-    -- Absolute path to the engine binary. `nil` means the managed one.
-    path = nil,
-    -- Download the engine on first use when it is missing.
-    auto_install = true,
+    -- The directory the plugin keeps its files in: the installed engine, saved connections,
+    -- scratchpads, and the query log with the results it shows again.
+    path = vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow'),
     -- One of 'error', 'warn', 'info', 'debug', 'trace'.
     log_level = 'warn',
   },
@@ -41,7 +37,19 @@ M.defaults = {
     -- 'ide' is drawer left, editor top right, result bottom right.
     layout = 'ide',
     drawer = { width = 36, position = 'left' },
-    result = { height = 16, page_size = 100, max_column_width = 48 },
+    -- `column_icons` marks each column of the grid header with what it holds, or with the key it
+    -- is. Worth turning off in a terminal without a patched font, and in a very wide result where
+    -- the columns are better spent on values.
+    result = {
+      height = 16,
+      page_size = 100,
+      max_column_width = 48,
+      -- Marks each column of the grid header with what it holds, or with the key it is. Worth
+      -- turning off in a terminal without a patched font.
+      column_icons = true,
+      -- What a SQL `NULL` reads as. Distinct from an empty string, which is drawn as nothing.
+      null_text = 'NULL',
+    },
     border = 'rounded',
     winbar = true,
     persist_session = false,
@@ -52,14 +60,13 @@ M.defaults = {
     max_rows = 100000,
     -- Milliseconds before a query is cancelled. 0 disables the timeout.
     timeout_ms = 0,
-    -- Results kept for reopening from the call log.
+    -- Results the engine holds in memory, so showing a recent one again reads nothing from disk.
     history_size = 32,
-    -- Write finished queries to a file, so the log survives a restart.
+    -- Save the queries you run, and the rows they returned, under `core.path`, so the log and its
+    -- results survive a restart. False keeps both to the session.
     persist_history = true,
-    -- Queries kept in the log. The oldest are dropped once there are twice as many.
+    -- Queries kept in the log, each with its result. The oldest go once there are twice as many.
     history_limit = 500,
-    -- Where the log is written. Empty means `stdpath('state')/sqmeow/history.jsonl`.
-    history_file = '',
   },
 
   -- Every character the plugin draws that is not text. The defaults are Nerd Font glyphs, so a
@@ -100,10 +107,35 @@ M.defaults = {
     -- What sits before a drawer row: whether its children are showing, or that it has none.
     markers = { open = '', closed = '', leaf = ' ' },
 
-    -- What the engine draws the result grid with. The three separators are ignored unless they
-    -- are exactly one column wide, since a wider one would put the rule out of step with the
-    -- header above it. The ellipsis may be any width.
+    -- What the result grid is drawn with: between the columns, along the rule under their names,
+    -- where the two meet, and at the end of a value too wide for its column. Keep the three
+    -- separators one column wide, or the rule will be out of step with the header above it. The
+    -- ellipsis may be any width, since a truncated value is measured with it.
     grid = { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' },
+
+    -- What each column of the grid header is marked with, and what the drawer marks its columns
+    -- with. The first eight are classes rather than type names: three dialects spell the same
+    -- idea five ways between them, and an icon per spelling is a table nobody can read. The two
+    -- keys win over the class, because what rows are found by is the more useful thing to know.
+    -- Set one to an empty string to draw that kind of column plain.
+    types = {
+      text = '󰀬',
+      number = '󰎠',
+      boolean = '󰔡',
+      temporal = '󰃭',
+      json = '󰘦',
+      uuid = '󰯮',
+      binary = '󰈔',
+      unknown = '󰠵',
+      primary_key = '󰌆',
+      foreign_key = '󰌋',
+    },
+
+    -- Glyphs for particular type names, overriding the class they would fall in. The escape hatch
+    -- for anyone who wants `varchar` to look different from `text`: the classes above are coarse
+    -- on purpose, and this is how to disagree with where a line was drawn. Keyed by the database's
+    -- own name for the type, in any spelling and with or without its parameters.
+    type_names = {},
   },
 
   -- Merged by action name over the built-in mappings. Set an action to `false` to drop it.
@@ -120,13 +152,9 @@ M.current = vim.deepcopy(M.defaults)
 -- Options whose shape is the user's to decide, so only "is it a table" is checked.
 local freeform = {
   ['sources'] = true,
-  ['connections'] = true,
   ['keymaps'] = true,
-}
-
--- Options with no usable default to infer a type from.
-local nullable = {
-  ['core.path'] = 'string',
+  -- Keyed by whatever the database calls its types, so the keys cannot be known in advance.
+  ['icons.type_names'] = true,
 }
 
 local function join(path, key)
@@ -143,18 +171,11 @@ local function validate(user, defaults, path, errors)
     local where = join(path, key)
     local default = defaults[key]
 
-    if default == nil and not nullable[where] then
+    if default == nil then
       table.insert(errors, ('unknown option `%s`'):format(where))
     elseif freeform[where] then
       if type(value) ~= 'table' then
         table.insert(errors, ('`%s` must be a table, got %s'):format(where, type(value)))
-      end
-    elseif nullable[where] then
-      if type(value) ~= nullable[where] then
-        table.insert(
-          errors,
-          ('`%s` must be a %s, got %s'):format(where, nullable[where], type(value))
-        )
       end
     elseif type(default) == 'table' and not vim.islist(default) then
       validate(value, default, where, errors)

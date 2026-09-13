@@ -312,21 +312,32 @@ M.subcommands = {
     end,
   },
 
-  update = {
-    desc = 'Download the engine this plugin needs',
+  install = {
+    desc = 'Install the engine this plugin needs, by download or with cargo',
+    complete = function(lead)
+      return vim.tbl_filter(function(method)
+        return method:find(lead, 1, true) == 1
+      end, require('sqmeow.install').methods)
+    end,
     run = function(args)
       -- Nothing is said here, and nothing is waited for: the install reports each step it takes
-      -- and calls back when it is done, and the editor is usable throughout.
-      require('sqmeow.install').ensure({ force = true, version = args[1] }, function(path)
-        if not path then
-          return
-        end
+      -- and calls back when it is done, and the editor is usable throughout. A build hook wants
+      -- the opposite and calls `require('sqmeow').install()`, which waits.
+      local method = args[1]
+      require('sqmeow.install').install({
+        method = method ~= '' and method or nil,
+        version = args[2],
+        callback = function(path)
+          if not path then
+            return
+          end
 
-        -- The old one is still running and still speaking the old protocol, so it has to go.
-        require('sqmeow.rpc').stop()
-        require('sqmeow.state').reset()
-        require('sqmeow.ui.drawer').reset()
-      end)
+          -- The old one is still running and still speaking the old protocol, so it has to go.
+          require('sqmeow.rpc').stop()
+          require('sqmeow.state').reset()
+          require('sqmeow.ui.drawer').reset()
+        end,
+      })
     end,
   },
 

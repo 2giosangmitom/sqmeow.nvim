@@ -1399,7 +1399,6 @@ dependencies = [
  "rmpv",
  "sqmeow-adapters",
  "sqmeow-db",
- "sqmeow-render",
  "sqmeow-rpc",
  "tokio",
  "tokio-util",
@@ -1411,18 +1410,11 @@ dependencies = [
 name = "sqmeow-db"
 version = "1.0.1"
 dependencies = [
+ "serde_json",
  "thiserror",
  "tokio",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "sqmeow-render"
-version = "1.0.1"
-dependencies = [
- "serde_json",
- "sqmeow-db",
  "unicode-width",
 ]
 

@@ -3,19 +3,14 @@
 --- A grid is the wrong shape for a wide table or a long text column: the value is either truncated
 --- or off the side of the window. This shows one row as a list, with each value whole, including
 --- the line breaks a grid cell has to flatten.
+---
+--- The lines are laid out here rather than by `nui.table`, which is what draws the grid. A table
+--- puts each row on one line, and a value holding line breaks is exactly what this view exists to
+--- show whole, so the one component that would otherwise fit is the one that cannot.
 
 local M = {}
 
-local buf = nil
-local win = nil
-
-local function valid_buf()
-  return buf ~= nil and vim.api.nvim_buf_is_valid(buf)
-end
-
-local function valid_win()
-  return win ~= nil and vim.api.nvim_win_is_valid(win)
-end
+local split = nil
 
 --- Lay a row out as lines.
 ---
@@ -49,24 +44,36 @@ function M.lines(columns)
   return lines
 end
 
---- The detail buffer, created on first use.
----@return integer
-function M.buffer()
-  if valid_buf() then
-    return buf
+--- The split the row is shown in, or nil with a message when nui is not installed.
+local function build()
+  local ok, Split = pcall(require, 'nui.split')
+  if not ok then
+    return nil, 'sqmeow: the row detail needs nui.nvim (MunifTanjim/nui.nvim)'
   end
 
-  buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(buf, 'sqmeow://row')
+  return Split({
+    relative = 'editor',
+    position = 'right',
+    size = '40%',
+    buf_options = {
+      buftype = 'nofile',
+      bufhidden = 'hide',
+      swapfile = false,
+      filetype = 'sqmeow-row',
+    },
+    win_options = {
+      number = false,
+      relativenumber = false,
+      signcolumn = 'no',
+      wrap = false,
+    },
+  })
+end
 
-  vim.bo[buf].buftype = 'nofile'
-  vim.bo[buf].bufhidden = 'hide'
-  vim.bo[buf].swapfile = false
-  vim.bo[buf].filetype = 'sqmeow-row'
-  vim.bo[buf].modifiable = false
-
-  vim.keymap.set('n', 'q', M.close, { buffer = buf, nowait = true, desc = 'sqmeow: Close' })
-  return buf
+--- The detail buffer, or nil when the view has never been opened.
+---@return integer|nil
+function M.buffer()
+  return split and split.bufnr or nil
 end
 
 --- Show one row of the current result.
@@ -84,42 +91,42 @@ function M.open(row)
     return
   end
 
-  local lines = M.lines(columns)
-  vim.bo[M.buffer()].modifiable = true
-  vim.api.nvim_buf_set_lines(M.buffer(), 0, -1, false, lines)
-  vim.bo[M.buffer()].modifiable = false
-
-  if not valid_win() then
-    local previous = vim.api.nvim_get_current_win()
-    vim.cmd('vertical rightbelow split')
-    win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(win, M.buffer())
-
-    vim.wo[win].number = false
-    vim.wo[win].relativenumber = false
-    vim.wo[win].signcolumn = 'no'
-    vim.wo[win].wrap = false
-
-    if vim.api.nvim_win_is_valid(previous) then
-      vim.api.nvim_set_current_win(previous)
+  if not split then
+    local built, build_err = build()
+    if not built then
+      return vim.notify(build_err, vim.log.levels.ERROR)
     end
+    split = built
   end
 
-  vim.wo[win].winbar = ('%%#SqmeowWinbar# row %d '):format(row + 1)
+  local previous = vim.api.nvim_get_current_win()
+  split:mount()
+  split:map('n', 'q', M.close, { nowait = true })
+
+  vim.bo[split.bufnr].modifiable = true
+  vim.api.nvim_buf_set_lines(split.bufnr, 0, -1, false, M.lines(columns))
+  vim.bo[split.bufnr].modifiable = false
+
+  vim.wo[split.winid].winbar = ('%%#SqmeowWinbar# row %d '):format(row + 1)
+
+  -- Opening a detail should not steal the cursor from the grid it was opened from.
+  if vim.api.nvim_win_is_valid(previous) then
+    vim.api.nvim_set_current_win(previous)
+  end
 end
 
 --- Hide the detail window.
 function M.close()
-  if valid_win() then
-    vim.api.nvim_win_close(win, true)
+  if split then
+    split:unmount()
   end
-  win = nil
+  split = nil
 end
 
 --- Whether the detail window is showing.
 ---@return boolean
 function M.is_open()
-  return valid_win()
+  return split ~= nil and split.winid ~= nil and vim.api.nvim_win_is_valid(split.winid)
 end
 
 return M

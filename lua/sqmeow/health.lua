@@ -16,6 +16,7 @@ end
 
 local function check_config()
   vim.health.start('configuration')
+  vim.health.info('files are kept in ' .. require('sqmeow.paths').root())
   local errors = require('sqmeow.config').validate(require('sqmeow').user_config or {})
   local keymaps = require('sqmeow.keymap').problems()
 
@@ -46,10 +47,11 @@ local function check_engine()
       return
     end
 
-    vim.health.error(
-      'no engine binary found',
-      { 'Run `:Sqmeow update` to download one', 'Or build one with `cargo build --release`' }
-    )
+    vim.health.error('no engine binary found', {
+      'Run `:Sqmeow install` to get one',
+      'Or `require("sqmeow").install("cargo")` to build the checkout',
+      "Nothing installs it on its own; put it in your plugin manager's build hook",
+    })
     return
   end
 
@@ -59,6 +61,20 @@ local function check_engine()
     return
   end
   vim.health.ok(('sqmeow-core %s (%s)\n%s'):format(version, source, path))
+
+  -- A checkout build that is not the one running is worth saying out loud. `resolve` prefers the
+  -- installed engine, so someone who ran `cargo build` by hand and expected to be testing it is
+  -- otherwise looking at their change having no effect with nothing anywhere to explain why.
+  local dev = install.dev_path()
+  if dev and dev ~= path then
+    local other = install.version(dev)
+    if other and other ~= version then
+      vim.health.warn(('a different engine is built in this checkout: %s %s'):format(other, dev), {
+        ('The one above is being used instead, because %s comes first'):format(source),
+        'Run `require("sqmeow").install("cargo")` to install the checkout build',
+      })
+    end
+  end
 
   local channel, start_err = rpc.start()
   if not channel then
@@ -131,15 +147,15 @@ local function check_open()
   end
 end
 
---- The one plugin sqmeow can use, and does not need.
+--- The one plugin sqmeow cannot do without.
 local function check_dependencies()
   vim.health.start('dependencies')
 
   if require('sqmeow.ui.form').available() then
-    vim.health.ok('nui.nvim: the connection dialog is available')
+    vim.health.ok('nui.nvim is installed')
   else
-    vim.health.warn(
-      'nui.nvim is not installed, so `:Sqmeow add` cannot open',
+    vim.health.error(
+      'nui.nvim is not installed, so the drawer, result grid, row detail, help and `:Sqmeow add` cannot open',
       { 'install MunifTanjim/nui.nvim' }
     )
   end
@@ -147,6 +163,14 @@ local function check_dependencies()
   -- There is no way to ask a terminal whether it can draw a glyph, so this says where to look
   -- rather than claiming an answer. A wrong icon is visible the moment the drawer opens.
   vim.health.info('icons need a Nerd Font; set `icons` if boxes appear in the drawer')
+  -- Worth naming separately: the grid's glyphs are measured to lay out the columns, so a terminal
+  -- that draws one wider than it was measured misaligns the whole grid rather than looking odd.
+  if require('sqmeow.config').get().ui.result.column_icons then
+    vim.health.info(
+      'the result grid is marking its columns; '
+        .. 'set `ui.result.column_icons = false` if the grid looks out of step'
+    )
+  end
 end
 
 --- Which dialect a URL scheme belongs to, or nil if none does.

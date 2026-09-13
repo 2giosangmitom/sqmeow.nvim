@@ -15,7 +15,6 @@ path = "src/main.rs"
 sqmeow-rpc.workspace = true
 sqmeow-db.workspace = true
 sqmeow-adapters.workspace = true
-sqmeow-render.workspace = true
 
 rmpv.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "sync", "time"] }

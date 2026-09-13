@@ -1,12 +1,18 @@
---- Queries that outlive the session.
+--- The queries the user ran, and what they returned.
 ---
---- Every finished call is written to a file of JSON lines, so the log is still there tomorrow. It
---- holds what was run and how it went, not the rows: a cached grid goes stale the moment the table
---- changes, and re-running a statement you can see is both cheaper and honest.
+--- Only what the user submits is recorded: a statement run from a buffer, a selection, or the
+--- command line. What the plugin asks on its own behalf is not, whether that is the engine reading
+--- a schema for the drawer or a preview of a table, because nobody ran it, and a log full of it
+--- buries what somebody did.
 ---
---- The file is appended to, one line per call, which is why it is JSON lines rather than a JSON
---- array: appending needs no read of what is already there and no rewrite, so two editors writing
---- at once cannot lose each other's work.
+--- Every run is an entry of its own. A run that returned rows keeps them in a file beside the log,
+--- written by the engine, so choosing an entry shows the result the query had then rather than
+--- handing back the statement to run again. The same select run twice is two entries, because the
+--- two runs can have answered differently and each answer is worth finding again.
+---
+--- The log itself is appended to, one line per call, which is why it is JSON lines rather than a
+--- JSON array: appending needs no read of what is already there and no rewrite, so two editors
+--- writing at once cannot lose each other's work.
 
 local M = {}
 
@@ -17,22 +23,54 @@ local M = {}
 M.session = ('%d.%d'):format(vim.uv.os_getpid(), vim.uv.hrtime())
 
 -- Entries in the order they were run, with the path and the state of the file they were read
--- from. Both are checked before the list is served, so changing the configured path, or another
--- editor appending to the same file, is noticed rather than served stale.
+-- from. Both are checked before the list is served, so changing `core.path`, or another editor
+-- appending to the same file, is noticed rather than served stale.
 local cache = { path = nil, entries = {}, stamp = nil }
 
---- Where the history is kept.
----
---- Under `stdpath('state')` rather than `stdpath('data')`: it is a record of what happened here,
---- not something the user would carry to another machine.
----
+-- Counts the result files this Neovim has named, so two queries in the same second get two.
+local named = 0
+
+--- Where the log is kept.
 ---@return string
 function M.path()
-  local configured = require('sqmeow.config').get().query.history_file
-  if configured ~= '' then
-    return vim.fs.normalize(configured)
+  return require('sqmeow.paths').history()
+end
+
+--- A new file for the engine to save one result in.
+---
+--- Named by time, process and a counter, so neither two queries in one second nor two editors
+--- sharing the directory can be handed the same name.
+---
+---@return string
+function M.result_path()
+  named = named + 1
+  return vim.fs.joinpath(
+    require('sqmeow.paths').results(),
+    ('%d-%d-%d.msgpack'):format(os.time(), vim.uv.os_getpid(), named)
+  )
+end
+
+--- Whether a path is one of the saved results.
+---
+--- Checked before a file is read back or deleted on the log's say-so, because the log is a text
+--- file anyone can edit, and a line naming some other file is not a reason to delete that file.
+---
+---@param path any
+---@return boolean
+local function owned(path)
+  if type(path) ~= 'string' then
+    return false
   end
-  return vim.fs.joinpath(vim.fn.stdpath('state'), 'sqmeow', 'history.jsonl')
+  local directory = require('sqmeow.paths').results() .. '/'
+  return vim.fs.normalize(path):sub(1, #directory) == directory
+end
+
+--- Delete the result an entry kept, if it kept one.
+---@param entry table
+local function forget(entry)
+  if owned(entry.result) then
+    pcall(vim.fn.delete, entry.result)
+  end
 end
 
 --- Read the file, skipping anything in it that is not an entry.
@@ -88,7 +126,7 @@ local function loaded()
   return cache.entries
 end
 
---- Rewrite the file with the newest entries only.
+--- Rewrite the file with the newest entries only, and delete the results of the rest.
 ---
 --- Through a temporary file and a rename, so an editor reading the log while it is being trimmed
 --- sees either the old file or the new one and never half of either.
@@ -101,7 +139,11 @@ local function trim(limit)
     return
   end
 
-  cache.entries = vim.list_slice(cache.entries, #cache.entries - limit + 1, #cache.entries)
+  local dropped = #cache.entries - limit
+  for index = 1, dropped do
+    forget(cache.entries[index])
+  end
+  cache.entries = vim.list_slice(cache.entries, dropped + 1, #cache.entries)
 
   local temp = cache.path .. '.tmp'
   local lines = vim.tbl_map(function(entry)
@@ -138,13 +180,18 @@ local function write(entry)
   cache.stamp = stamp(cache.path)
 end
 
---- Record a finished call.
+--- Record a query the user ran, once it has stopped running.
 ---
---- Called for everything that stops running, including a failure and a cancellation, because what
---- went wrong is as much worth finding again as what worked.
+--- Called for everything that stops, including a failure and a cancellation, because what went
+--- wrong is as much worth finding again as what worked. A call marked `history = false` is left
+--- out: that is SQL the plugin wrote, or a logged result being shown again.
 ---
 ---@param summary sqmeow.CallSummary
 function M.append(summary)
+  if summary.history == false then
+    return
+  end
+
   local statement = summary.statement
   if type(statement) ~= 'string' or vim.trim(statement) == '' then
     return
@@ -152,6 +199,14 @@ function M.append(summary)
 
   local query = require('sqmeow.config').get().query
   local connection = require('sqmeow.state').connections[summary.conn_id]
+
+  -- The engine saves a result only once it has finished with columns to save, so that is when
+  -- the entry points at one. A statement that changed rows without returning any has nothing to
+  -- show beyond what the entry says.
+  local kept = summary.state == 'done'
+    and summary.archive
+    and summary.columns
+    and #summary.columns > 0
 
   local entry = {
     at = os.time(),
@@ -161,9 +216,11 @@ function M.append(summary)
     dialect = connection and connection.dialect or nil,
     statement = statement,
     state = summary.state,
+    error = summary.error,
     rows = summary.rows,
     affected = summary.affected,
     elapsed_ms = summary.elapsed_ms,
+    result = kept and summary.archive or nil,
   }
 
   table.insert(loaded(), entry)
@@ -174,15 +231,12 @@ function M.append(summary)
   else
     -- Nothing is written, so nothing trims the file. The list still has to stop growing.
     while #cache.entries > query.history_limit do
-      table.remove(cache.entries, 1)
+      forget(table.remove(cache.entries, 1))
     end
   end
 end
 
---- The queries to show, newest first.
----
---- One row per statement: running the same select twenty times while working something out should
---- leave one line to come back to, not twenty.
+--- The queries to show, newest first, one per run.
 ---
 ---@param opts table|nil `connection` narrows to one name, `limit` caps the list.
 ---@return table[]
@@ -190,19 +244,14 @@ function M.entries(opts)
   opts = opts or {}
 
   local all = loaded()
-  local seen = {}
   local newest = {}
 
   for index = #all, 1, -1 do
     local entry = all[index]
     if not opts.connection or entry.connection == opts.connection then
-      local key = ('%s\0%s'):format(entry.connection or '', entry.statement)
-      if not seen[key] then
-        seen[key] = true
-        table.insert(newest, entry)
-        if opts.limit and #newest >= opts.limit then
-          break
-        end
+      table.insert(newest, entry)
+      if opts.limit and #newest >= opts.limit then
+        break
       end
     end
   end
@@ -210,7 +259,7 @@ function M.entries(opts)
   return newest
 end
 
---- Whether the engine can still put this call's rows back on screen.
+--- Whether the engine running now still holds this call's rows in memory.
 ---
 --- True only for a call this Neovim made: after a restart the engine has a new set of ids, and the
 --- results the old ones named are gone with it.
@@ -230,11 +279,20 @@ function M.reopenable(entry)
   return false
 end
 
---- Forget everything, on disk and in memory.
+--- Whether this entry's result was saved and is still there to read.
+---
+---@param entry table
+---@return boolean
+function M.saved(entry)
+  return owned(entry.result) and vim.uv.fs_stat(entry.result) ~= nil
+end
+
+--- Forget everything, on disk and in memory, results included.
 ---@return boolean cleared
 function M.clear()
   local path = M.path()
   local cleared = pcall(vim.fn.delete, path)
+  pcall(vim.fn.delete, require('sqmeow.paths').results(), 'rf')
   cache = { path = path, entries = {}, stamp = stamp(path) }
   return cleared
 end

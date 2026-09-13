@@ -3,6 +3,8 @@
 //! One shape for every database, so the drawer draws a tree without knowing which one it is
 //! looking at. What differs between dialects is the query that fills these in, not what comes out.
 
+use crate::types::{ForeignKey, KeyKind, TypeClass};
+
 /// What kind of thing a relation is.
 ///
 /// The drawer shows tables and views differently, and the distinction matters when offering
@@ -93,11 +95,71 @@ pub struct ColumnNode {
     pub type_name: String,
     pub nullable: bool,
     pub primary_key: bool,
+    /// What this column points at, when it points at anything.
+    pub foreign_key: Option<ForeignKey>,
+}
+
+impl ColumnNode {
+    /// What kind of value this column holds, for the icon the drawer draws beside it.
+    pub fn class(&self) -> TypeClass {
+        TypeClass::from_type_name(&self.type_name)
+    }
+
+    /// Which key this column is, preferring the primary one.
+    ///
+    /// A column can be both: the child half of a composite primary key is often a foreign key as
+    /// well. The primary key wins, because it is the stronger statement about the row.
+    pub fn key(&self) -> KeyKind {
+        if self.primary_key {
+            KeyKind::Primary
+        } else if self.foreign_key.is_some() {
+            KeyKind::Foreign
+        } else {
+            KeyKind::None
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn column(type_name: &str) -> ColumnNode {
+        ColumnNode {
+            name: "x".into(),
+            type_name: type_name.into(),
+            nullable: true,
+            primary_key: false,
+            foreign_key: None,
+        }
+    }
+
+    #[test]
+    fn a_column_classifies_by_its_declared_type() {
+        assert_eq!(column("character varying(10)").class(), TypeClass::Text);
+        assert_eq!(column("bigint").class(), TypeClass::Number);
+    }
+
+    #[test]
+    fn a_column_with_no_key_is_not_one() {
+        assert_eq!(column("int4").key(), KeyKind::None);
+    }
+
+    #[test]
+    fn the_primary_key_wins_over_a_foreign_one() {
+        // The child half of a composite primary key is often a foreign key as well, and the
+        // primary key is the stronger statement about the row.
+        let mut both = column("int4");
+        both.primary_key = true;
+        both.foreign_key = Some(ForeignKey {
+            table: "authors".into(),
+            column: "id".into(),
+        });
+        assert_eq!(both.key(), KeyKind::Primary);
+
+        both.primary_key = false;
+        assert_eq!(both.key(), KeyKind::Foreign);
+    }
 
     #[test]
     fn relation_kinds_have_names_for_the_interface() {
