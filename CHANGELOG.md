@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.0.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v1.0.2...v2.0.0) (2026-09-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* `:Sqmeow` opens only the drawer and the result window, and `:Sqmeow scratch` and `api.scratchpad()` now prompt for a name instead of opening a scratchpad named after the connection.
+* drop layout config, ship only one
+* protocol version 2. `core.path` is now the plugin's data directory, not a path to the engine binary. The `connections`, `core.auto_install`, `query.history_file` and `ui.result.border` options are removed. nui.nvim is required.
+
+### Features
+
+* add MongoDB support ([9bb5800](https://github.com/2giosangmitom/sqmeow.nvim/commit/9bb5800ad8f36b0015395540c0cef1e50479efae))
+* add Redis adapter ([3118be4](https://github.com/2giosangmitom/sqmeow.nvim/commit/3118be4ac2099907438cf5de4e2070abd0a34e1d))
+* add Redis adapter ([0b69f5b](https://github.com/2giosangmitom/sqmeow.nvim/commit/0b69f5b6b4b26ba911ab725f4a54f6321d6c6d43))
+* auto history reload ([9c493c7](https://github.com/2giosangmitom/sqmeow.nvim/commit/9c493c74ebdd9b6bc5f2778b2b765053d55b6286))
+* connection string, row detail popup and key marks ([b36376e](https://github.com/2giosangmitom/sqmeow.nvim/commit/b36376e67047216abca32c88e773b057261f14e6))
+* create scratchpads on demand from the drawer ([1110c80](https://github.com/2giosangmitom/sqmeow.nvim/commit/1110c80698ac95e69f3148fb71de01aed528acf0))
+* draw results in Lua and keep query results in the log ([7b8c8c9](https://github.com/2giosangmitom/sqmeow.nvim/commit/7b8c8c988587b94dbae5e5ea3d109ac7c7a460f3))
+* drop layout config, ship only one ([df02005](https://github.com/2giosangmitom/sqmeow.nvim/commit/df02005e5bb9b1b5825350085f78ae67af2de9d5))
+* drop render crate and move rendering works to lua ([d84b293](https://github.com/2giosangmitom/sqmeow.nvim/commit/d84b293b7b83f8d4a1efd967ef1cad678ea3979a))
+* export dialog replaces result yanks ([6f95e97](https://github.com/2giosangmitom/sqmeow.nvim/commit/6f95e971104a5169b4fe469a798500ccda8c9670))
+* improve connect db UX ([4b300ef](https://github.com/2giosangmitom/sqmeow.nvim/commit/4b300ef5f5afb198b42f29e28b41e8d715005e9c))
+* list every database when the database field is empty ([e6685d2](https://github.com/2giosangmitom/sqmeow.nvim/commit/e6685d2e421d1e4e3e8242f998b70cd576fa2d40))
+* list every database when the database field is empty ([fad0b95](https://github.com/2giosangmitom/sqmeow.nvim/commit/fad0b952bcd6c377958679b6589948f6421aad46))
+* **redis:** show JSON documents and test against Dragonfly ([57915a4](https://github.com/2giosangmitom/sqmeow.nvim/commit/57915a41b54e15df2b5143af3bfe3b9cda804006))
+* remove bold highlight, show active db on winbar of result buf ([cc647b1](https://github.com/2giosangmitom/sqmeow.nvim/commit/cc647b188956e20d3d4a3813f4ebf932d85075db))
+
+
+### Fixes
+
+* **mysql:** show TIMESTAMP columns instead of an unsupported cell ([5ec3b4b](https://github.com/2giosangmitom/sqmeow.nvim/commit/5ec3b4bbfb00a920227e6e8d8b6dbfe7a62ba079))
+* resolve lua-language-server diagnostics ([6b816c2](https://github.com/2giosangmitom/sqmeow.nvim/commit/6b816c22a94015dceffd7f91cb3902428844f8de))
+
+
+### Refactoring
+
+* improve codebase architecture ([0f25d95](https://github.com/2giosangmitom/sqmeow.nvim/commit/0f25d95a7d138299a033cbca46483727b8347c49))
+
+
+### Documentation
+
+* list the supported databases in the README ([fdae64d](https://github.com/2giosangmitom/sqmeow.nvim/commit/fdae64d1979d7eeda4fa5da369328fe63f50f885))
+* update README ([b0ad5ad](https://github.com/2giosangmitom/sqmeow.nvim/commit/b0ad5adb922d2cbaf95876d3dd1d07570bb20ab4))
+* update README ([116d20a](https://github.com/2giosangmitom/sqmeow.nvim/commit/116d20ae674c146ed6e3e982920f9209ca8743e6))
+
 ## [1.0.2](https://github.com/2giosangmitom/sqmeow.nvim/compare/v1.0.1...v1.0.2) (2026-09-12)
 
 

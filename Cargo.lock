@@ -2211,7 +2211,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-adapters"
-version = "1.0.2"
+version = "2.0.0"
 dependencies = [
  "futures-util",
  "mongodb",
@@ -2226,7 +2226,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-core"
-version = "1.0.2"
+version = "2.0.0"
 dependencies = [
  "rmpv",
  "sqmeow-adapters",
@@ -2240,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-db"
-version = "1.0.2"
+version = "2.0.0"
 dependencies = [
  "csv",
  "serde_json",
@@ -2253,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-rpc"
-version = "1.0.2"
+version = "2.0.0"
 dependencies = [
  "rmpv",
  "thiserror",

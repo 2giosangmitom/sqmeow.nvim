@@ -13,7 +13,7 @@ local M = {}
 ---
 --- It also names the release |sqmeow.install| downloads an engine from, so it has to move
 --- with the tag. release-please bumps it, finding the line by the annotation.
-M.version = '1.0.2' -- x-release-please-version
+M.version = '2.0.0' -- x-release-please-version
 
 ---@class sqmeow.EngineInfo
 ---@field core_version string
