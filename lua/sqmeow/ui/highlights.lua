@@ -32,12 +32,17 @@ M.links = {
   SqmeowFormValue = 'Normal',
   SqmeowFormEdit = 'Visual',
 
+  -- The row detail: a column's name, then its type.
+  SqmeowDetailName = 'Identifier',
+  SqmeowDetailType = 'Type',
+
   SqmeowIconConnection = 'Directory',
   SqmeowIconSchema = 'Directory',
   SqmeowIconTable = 'Type',
   SqmeowIconView = 'Special',
   SqmeowIconColumn = 'Identifier',
   SqmeowIconScratchpad = 'String',
+  SqmeowIconElapsed = 'Special',
   SqmeowIconQuery = 'Function',
   SqmeowIconHistory = 'Statement',
 

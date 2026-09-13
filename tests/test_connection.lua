@@ -58,11 +58,12 @@ T['create']['asks which database first'] = function()
   connection.create()
 
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  eq(#lines, 4)
+  eq(#lines, 5)
   MiniTest.expect.no_equality(lines[1]:find('PostgreSQL'), nil)
   MiniTest.expect.no_equality(lines[2]:find('MySQL'), nil)
   MiniTest.expect.no_equality(lines[3]:find('Redis'), nil)
   MiniTest.expect.no_equality(lines[4]:find('SQLite'), nil)
+  MiniTest.expect.no_equality(lines[5]:find('Connection string'), nil)
 end
 
 T['create']['asks for a name and offers none'] = function()
@@ -84,6 +85,41 @@ T['create']['refuses to save without a name'] = function()
   vim.wait(50)
 
   -- Still open, because there is nothing to call the connection yet.
+  MiniTest.expect.no_equality(#rows(), 0)
+  eq(file.load({ path = scratch }), {})
+end
+
+T['from a url'] = MiniTest.new_set()
+
+T['from a url']['saves the url as typed and connects'] = function()
+  local api = require('sqmeow.api')
+  local connect = api.connect
+  local connected
+  api.connect = function(url, opts)
+    connected = { url = url, name = opts.name }
+  end
+  MiniTest.finally(function()
+    api.connect = connect
+  end)
+
+  -- A template for the password is kept whole, which the form of separate fields cannot do.
+  local url = 'postgres://app:{{ env "PGPASSWORD" }}@db.internal/shop'
+  connection.from_url({ name = 'shop', url = url })
+  eq(rows(), { 'Name shop', 'URL ' .. url })
+  press('<C-s>')
+  vim.wait(50)
+
+  local saved = file.load({ path = scratch })
+  eq(#saved, 1)
+  eq({ saved[1].name, saved[1].url }, { 'shop', url })
+  eq(connected, { url = url, name = 'shop' })
+end
+
+T['from a url']['refuses a url for a database the plugin does not speak'] = function()
+  connection.from_url({ name = 'warehouse', url = 'oracle://host/db' })
+  press('<C-s>')
+  vim.wait(50)
+
   MiniTest.expect.no_equality(#rows(), 0)
   eq(file.load({ path = scratch }), {})
 end

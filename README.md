@@ -59,7 +59,7 @@ To track the latest commit instead of a release, drop `version` and use `install
 ## ⚡ Usage
 
 1. `:Sqmeow` opens the drawer and the result window. Run it again to restore your layout.
-2. `:Sqmeow add` (or `A` in the drawer) opens a form to add a connection. Leave the database empty to list every database on the server.
+2. `:Sqmeow add` (or `A` in the drawer) opens a form to add a connection. Leave the database empty to list every database on the server, or choose **Connection string** to paste a whole URL.
 3. `<CR>` on a connection in the drawer opens it. `u` makes it the one queries run against, and `a` creates a scratchpad for it.
 4. Write SQL in the scratchpad and press `<CR>` to run the statement under the cursor, or a visual selection. Errors show as diagnostics. On a Redis connection, write one command per line; the drawer lists keys by type.
 

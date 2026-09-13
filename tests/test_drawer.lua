@@ -294,9 +294,8 @@ T['tree']['expands a relation into its columns'] = function()
   line_matching('score')
 
   local text = table.concat(lines(), '\n')
-  -- The icon before the name says it is the primary key, so the words no longer do.
-  eq(text:find('K id%s+INTEGER') ~= nil, true)
-  eq(text:find('id%s+INTEGER%s+primary key') ~= nil, false)
+  -- A key says so in two letters beside its type.
+  eq(text:find('K id%s+INTEGER %(PK%)') ~= nil, true)
   eq(text:find('t name%s+TEXT%s+not null') ~= nil, true)
   eq(text:find('n score%s+REAL') ~= nil, true)
 end
@@ -313,13 +312,12 @@ T['tree']['marks a column with what it holds'] = function()
   eq(vim.tbl_contains(groups, 'SqmeowIconTypeNumber'), true)
 end
 
-T['tree']['names what a foreign key points at'] = function()
+T['tree']['marks a foreign key'] = function()
   open_relation('Tables', 'posts')
   line_matching('author_id')
 
   local text = table.concat(lines(), '\n')
-  -- The one thing about a column an icon cannot say, and what a reader following a relation wants.
-  eq(text:find('k author_id%s+INTEGER%s+→ people%.id') ~= nil, true)
+  eq(text:find('k author_id%s+INTEGER %(FK%)') ~= nil, true)
 end
 
 T['tree']['leaves a blank marker unmarked'] = function()

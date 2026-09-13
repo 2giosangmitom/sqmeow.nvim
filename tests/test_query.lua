@@ -636,6 +636,24 @@ T['row detail']['refuses a row past the end'] = function()
   eq(err ~= nil, true)
 end
 
+T['row detail']['opens the row in a popup that q closes'] = function()
+  run('select id, name from people order by id')
+  local detail = require('sqmeow.ui.detail')
+  detail.open(0)
+  MiniTest.finally(detail.close)
+
+  local buf = vim.api.nvim_get_current_buf()
+  eq(vim.bo[buf].filetype, 'sqmeow-row')
+  -- A float. nui places it inside its border window, so it is relative to that window.
+  eq(vim.api.nvim_win_get_config(0).relative ~= '', true)
+  local shown = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  eq(#shown, 2)
+  eq(shown[2]:find('^name%s+%S+%s+alice$') ~= nil, true)
+
+  vim.api.nvim_feedkeys('q', 'x', false)
+  eq(vim.api.nvim_buf_is_valid(buf), false)
+end
+
 T['choosing a connection'] = MiniTest.new_set({
   hooks = {
     pre_case = function()

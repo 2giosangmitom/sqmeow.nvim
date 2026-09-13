@@ -33,6 +33,7 @@ M.highlights = {
   scratchpad = 'SqmeowIconScratchpad',
   query = 'SqmeowIconQuery',
   history = 'SqmeowIconHistory',
+  elapsed = 'SqmeowIconElapsed',
   connected = 'SqmeowConnected',
   connecting = 'SqmeowConnecting',
   error = 'SqmeowConnectionError',

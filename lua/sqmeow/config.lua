@@ -86,6 +86,8 @@ M.defaults = {
     scratchpad = '󰈙',
     query = '󰐊',
     history = '󰋚',
+    -- Before how long a query took, in the result's winbar. An empty string leaves it out.
+    elapsed = '󱎫',
 
     -- Beside a connection, saying what state it is in. One glyph in four colours: the difference
     -- is `SqmeowConnected`, `SqmeowConnecting`, `SqmeowConnectionError` and `SqmeowDisconnected`,

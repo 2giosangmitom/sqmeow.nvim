@@ -91,7 +91,8 @@ end
 ---
 ---@param summary sqmeow.CallSummary|nil
 ---@return string
-function M.describe(summary)
+---@param highlight boolean|nil Colour the icons with winbar markup, for drawing in a winbar.
+function M.describe(summary, highlight)
   if not summary then
     return 'sqmeow'
   end
@@ -128,7 +129,13 @@ function M.describe(summary)
     table.insert(parts, ('page %d/%d'):format(current, total))
   end
   if summary.elapsed_ms then
-    table.insert(parts, M.format_duration(summary.elapsed_ms))
+    local elapsed = M.format_duration(summary.elapsed_ms)
+    local icon, group = require('sqmeow.icons').get('elapsed')
+    if icon ~= '' then
+      icon = highlight and ('%%#%s#%s%%*'):format(group, icon) or icon
+      elapsed = icon .. ' ' .. elapsed
+    end
+    table.insert(parts, elapsed)
   end
   -- A result from the log is what the query returned then, and the table may say otherwise now.
   if summary.ran_at then
@@ -693,6 +700,9 @@ function M.actions.yank_page()
   })
 end
 
+--- Cut text to a display width, ending in `marker` when anything was cut. The row detail uses it too.
+M.truncate = truncate
+
 --- Write the whole result to a file.
 function M.actions.export()
   require('sqmeow.api').export()
@@ -785,7 +795,7 @@ function M.update_winbar(summary)
   local label = connection and ('%s (%s)'):format(connection.name, connection.dialect or '?')
     or 'not connected'
 
-  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s'):format(label, M.describe(summary))
+  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s'):format(label, M.describe(summary, true))
 end
 
 return M

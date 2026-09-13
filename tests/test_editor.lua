@@ -101,33 +101,59 @@ end
 
 T['row detail'] = MiniTest.new_set()
 
-T['row detail']['lines up names and values'] = function()
-  local lines = detail.lines({
-    { name = 'id', value = '1', is_null = false },
-    { name = 'name', value = 'alice', is_null = false },
-  })
+--- What each line of the detail reads as.
+local function texts(lines)
+  return vim.tbl_map(function(line)
+    return line:content()
+  end, lines)
+end
 
-  eq(lines, { 'id    1', 'name  alice' })
+T['row detail']['lines up names, types and values'] = function()
+  local lines = detail.lines({
+    { name = 'id', declared_type = 'uuid', key = 'primary_key', value = '1', is_null = false },
+    {
+      name = 'owner',
+      declared_type = 'integer',
+      key = 'foreign_key',
+      value = '7',
+      is_null = false,
+    },
+  }, 80)
+
+  eq(texts(lines), { 'id     uuid (PK)     1', 'owner  integer (FK)  7' })
 end
 
 T['row detail']['shows null as null'] = function()
-  local lines = detail.lines({ { name = 'v', value = '', is_null = true } })
-  eq(lines, { 'v  NULL' })
+  local lines =
+    detail.lines({ { name = 'v', declared_type = 'text', value = '', is_null = true } }, 80)
+  eq(texts(lines), { 'v  text  NULL' })
 end
 
-T['row detail']['indents a value that runs over several lines'] = function()
-  -- Room for the whole value is the reason this view exists, so a line break is kept rather than
-  -- escaped the way a grid cell has to.
+T['row detail']['keeps each value to one line that fits'] = function()
   local lines = detail.lines({
-    { name = 'note', value = 'first\nsecond', is_null = false },
-    { name = 'id', value = '1', is_null = false },
-  })
+    { name = 'note', declared_type = 'text', value = 'first\nsecond line', is_null = false },
+  }, 20)
 
-  eq(lines, { 'note  first', '      second', 'id    1' })
+  eq(texts(lines), { 'note  text  first s' .. require('sqmeow.config').get().icons.grid.ellipsis })
+end
+
+T['row detail']['cuts a long type short but keeps its key'] = function()
+  local lines = detail.lines({
+    {
+      name = 'k',
+      declared_type = 'character varying(255)',
+      key = 'primary_key',
+      value = 'x',
+      is_null = false,
+    },
+  }, 80)
+
+  local ellipsis = require('sqmeow.config').get().icons.grid.ellipsis
+  eq(texts(lines), { 'k  character ' .. ellipsis .. ' (PK)  x' })
 end
 
 T['row detail']['handles a row with no columns'] = function()
-  eq(detail.lines({}), {})
+  eq(detail.lines({}, 80), {})
 end
 
 T['diagnostics'] = MiniTest.new_set({

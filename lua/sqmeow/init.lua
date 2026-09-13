@@ -27,6 +27,9 @@
 --- will call this database from now on, so it is yours to choose. The URL is never shown. >lua
 ---   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
 --- <
+--- The menu's last choice, `Connection string`, asks for a name and a whole URL instead, saved as
+--- typed, so a password template such as `{{ env "PGPASSWORD" }}` needs no escaping.
+---
 --- The database may be left empty to reach every database on the server. MySQL and MariaDB then
 --- list each one where a schema would be. PostgreSQL lists the cluster's databases, and `<CR>` on
 --- one opens it as a connection of its own, named `connection/database` and drawn inside the

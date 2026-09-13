@@ -147,14 +147,9 @@ local function annotate(node)
     return implied[node.kind] and '' or node.kind
   end
 
-  local parts = { node.type_name }
-  -- What a foreign key points at, which is the one thing about a column the icon cannot say and a
-  -- reader following a relation is looking for.
-  if node.references then
-    table.insert(parts, '→ ' .. node.references)
-  end
-  -- No "primary key" here any more: the icon beside the name carries it, and repeating it in words
-  -- spends a third of the drawer's width saying the same thing twice.
+  -- A key says so in two letters beside its type, the same way the row detail does.
+  local key = node.primary_key and ' (PK)' or node.references and ' (FK)' or ''
+  local parts = { node.type_name .. key }
   if not node.primary_key and not node.nullable then
     table.insert(parts, 'not null')
   end
