@@ -270,6 +270,20 @@ T['mysql']['keeps a plain EXPLAIN, which is a table, as a grid'] = function()
   eq(header()[1]:find('│', 1, true) ~= nil, true)
 end
 
+T['mysql']['shows catalog names as text rather than bytes'] = function()
+  run('drop table if exists catalogued')
+  run('create table catalogued (id int primary key)')
+  MiniTest.finally(function()
+    run('drop table if exists catalogued')
+  end)
+
+  -- MySQL answers these in columns it marks binary, though what they hold is names.
+  eq(run("show tables like 'catalogued'").state, 'done')
+  eq(vim.trim(lines()[1]), 'catalogued')
+  run('describe catalogued')
+  eq(lines()[1]:find('int', 1, true) ~= nil and lines()[1]:find('PRI', 1, true) ~= nil, true)
+end
+
 T['postgres cluster'] = MiniTest.new_set({
   hooks = {
     pre_case = function()

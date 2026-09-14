@@ -36,7 +36,12 @@ impl SqliteAdapter {
     /// shares one session. Otherwise `BEGIN`, a temporary table, or a pragma would apply to a
     /// connection the next statement might not get.
     pub async fn connect(url: &str) -> Result<Self> {
-        let options = SqliteConnectOptions::from_str(url).map_err(Error::driver)?;
+        // Preparing a statement is how a result learns its columns, and a cached statement keeps
+        // the columns its table had when it was first prepared, so after an `ALTER TABLE` a
+        // `select *` would leave the new column out.
+        let options = SqliteConnectOptions::from_str(url)
+            .map_err(Error::driver)?
+            .statement_cache_capacity(0);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             // sqlx retries a refused connection until this expires. A mistyped host should say so
@@ -123,7 +128,7 @@ impl Adapter for SqliteAdapter {
     }
 
     async fn apply(&self, statements: &[String]) -> Result<()> {
-        stream::transact(&self.pool, statements).await
+        stream::transact(&self.pool, statements, |outcome| outcome.rows_affected()).await
     }
 
     async fn execute(
@@ -133,7 +138,7 @@ impl Adapter for SqliteAdapter {
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
         let (columns, source) = self.columns(statement).await;
-        let mut result = stream::execute(
+        let outcome = stream::execute(
             &self.pool,
             statement,
             columns,
@@ -142,7 +147,11 @@ impl Adapter for SqliteAdapter {
             |outcome| outcome.rows_affected(),
             decode_cell,
         )
-        .await?;
+        .await;
+        if stream::may_change_schema(statement) {
+            self.keys.forget();
+        }
+        let mut result = outcome?;
         result.set_source(source);
         Ok(result)
     }

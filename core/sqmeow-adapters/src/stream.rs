@@ -204,23 +204,83 @@ impl TableKeys {
 /// Run statements in one transaction, rolling all of them back when any fails.
 ///
 /// The error names the statement that failed, since the user approved several and needs to know
-/// which one the database refused.
+/// which one the database refused. A planned `UPDATE` or `DELETE` finds its row by key, so one that
+/// finds none means the row changed or went away since it was read: that fails too, rather than
+/// passing as a change that was made. `affected` reads the driver's row count.
 // ponytail: sqlx tracks its own transactions, not a `BEGIN` the user typed into a scratchpad on
 // this same connection; applying then would commit theirs. Check `pg_current_xact_id_if_assigned`
 // or `@@in_transaction` first if that bites.
-pub(crate) async fn transact<DB>(pool: &Pool<DB>, statements: &[String]) -> Result<()>
+pub(crate) async fn transact<DB>(
+    pool: &Pool<DB>,
+    statements: &[String],
+    affected: impl Fn(&DB::QueryResult) -> u64,
+) -> Result<()>
 where
     DB: Database,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
 {
     let mut transaction = pool.begin().await.map_err(Error::driver)?;
     for statement in statements {
-        sqlx::raw_sql(AssertSqlSafe(statement.clone()))
+        let outcome = sqlx::raw_sql(AssertSqlSafe(statement.clone()))
             .execute(&mut *transaction)
             .await
             .map_err(|error| Error::driver(format!("{error}\nin: {statement}")))?;
+        // The planner spells these in capitals; a statement it did not write is not checked.
+        if (statement.starts_with("UPDATE ") || statement.starts_with("DELETE "))
+            && affected(&outcome) == 0
+        {
+            return Err(Error::driver(format!(
+                "no row had that key any more, so nothing was changed\nin: {statement}"
+            )));
+        }
     }
     transaction.commit().await.map_err(Error::driver)
+}
+
+/// Whether a statement may have changed a table an adapter holds a picture of, which must then be
+/// read again.
+///
+/// Anything but the statements that only read or write rows: `CREATE`, `ALTER` and `DROP` plainly,
+/// but also a `ROLLBACK` that undoes one, or a `DO` block or a `CALL` that runs one. Reading a
+/// table again costs one catalog query; a stale picture edits the wrong column.
+pub(crate) fn may_change_schema(statement: &str) -> bool {
+    let mut rest = statement.trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
+            rest = after
+                .split_once('\n')
+                .map_or("", |(_, tail)| tail)
+                .trim_start();
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            rest = after
+                .split_once("*/")
+                .map_or("", |(_, tail)| tail)
+                .trim_start();
+        } else {
+            break;
+        }
+    }
+    let word: String = rest
+        .chars()
+        .take_while(|character| character.is_alphabetic())
+        .collect();
+    !matches!(
+        word.to_lowercase().as_str(),
+        "select"
+            | "with"
+            | "values"
+            | "table"
+            | "show"
+            | "explain"
+            | "describe"
+            | "desc"
+            | "insert"
+            | "update"
+            | "delete"
+            | "replace"
+            | "merge"
+            | "set"
+    )
 }
 
 /// Last resort for a value no decoder claimed: its text, else its bytes, else its type's name.
@@ -274,6 +334,13 @@ where
 pub(crate) struct TableKeys(Mutex<HashMap<String, HashMap<String, KeyKind>>>);
 
 impl TableKeys {
+    /// Forget every table, so each is read again the next time a result comes from it.
+    pub(crate) fn forget(&self) {
+        if let Ok(mut known) = self.0.lock() {
+            known.clear();
+        }
+    }
+
     /// Mark the result columns that are keys in the table they came from, reading each table not
     /// seen before with `read`.
     ///
@@ -319,6 +386,35 @@ impl TableKeys {
             {
                 column.key = *kind;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::may_change_schema;
+
+    #[test]
+    fn only_statements_that_read_or_write_rows_keep_the_schema() {
+        for statement in [
+            "select 1",
+            "  WITH x AS (select 1) select * from x",
+            "-- a note\nupdate t set a = 1",
+            "/* a note */ insert into t values (1)",
+            "show tables",
+        ] {
+            assert!(!may_change_schema(statement), "{statement}");
+        }
+        for statement in [
+            "alter table t add column c int",
+            "DROP TABLE t",
+            "create index i on t (a)",
+            "rollback",
+            "do $$ begin end $$",
+            "call p()",
+            "-- only a note",
+        ] {
+            assert!(may_change_schema(statement), "{statement}");
         }
     }
 }

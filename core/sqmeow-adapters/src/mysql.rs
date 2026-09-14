@@ -6,9 +6,13 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
-use sqlx::{Decode, MySql, Row, Statement as _, Type, TypeInfo, ValueRef, types};
+use sqlx::mysql::{MySqlConnectOptions, MySqlConnection, MySqlPool, MySqlPoolOptions, MySqlRow};
+use sqlx::{
+    AssertSqlSafe, Connection, Decode, MySql, Row, Statement as _, Type, TypeInfo, ValueRef, types,
+};
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
     ResultSet, RoutineNode, SchemaNode, Source,
@@ -25,6 +29,10 @@ pub struct MySqlAdapter {
     pool: MySqlPool,
     /// Which columns of a table are keys, read from `information_schema` a whole table at a time.
     keys: TableKeys,
+    /// How the pool connects, for the second connection that stops a cancelled query.
+    options: MySqlConnectOptions,
+    /// The server's id for the pool's one connection, which is what `KILL QUERY` names.
+    connection_id: Arc<AtomicU64>,
 }
 
 impl MySqlAdapter {
@@ -33,13 +41,31 @@ impl MySqlAdapter {
     /// One pooled connection, so a transaction, a `SET` or a temporary table is still there for
     /// the next statement the user runs.
     pub async fn connect(url: &str) -> Result<Self> {
-        let options = MySqlConnectOptions::from_str(url).map_err(Error::driver)?;
+        // Preparing a statement is how a result learns its columns, and a cached statement keeps
+        // the columns its table had when it was first prepared, so after an `ALTER TABLE` a
+        // `select *` would leave the new column out.
+        let options = MySqlConnectOptions::from_str(url)
+            .map_err(Error::driver)?
+            .statement_cache_capacity(0);
+        let connection_id = Arc::new(AtomicU64::new(0));
         let pool = crate::connect_retrying(|| {
+            let connection_id = connection_id.clone();
             MySqlPoolOptions::new()
                 .max_connections(1)
                 // sqlx retries a refused connection until this expires. A mistyped host should
                 // say so while the user still remembers typing it, not half a minute later.
                 .acquire_timeout(crate::CONNECT_TIMEOUT)
+                // Read on every connect, since the pool opens a new session after losing one.
+                .after_connect(move |connection, _| {
+                    let connection_id = connection_id.clone();
+                    Box::pin(async move {
+                        let id: u64 = sqlx::query_scalar("select connection_id()")
+                            .fetch_one(&mut *connection)
+                            .await?;
+                        connection_id.store(id, Ordering::Relaxed);
+                        Ok(())
+                    })
+                })
                 .connect_with(options.clone())
         })
         .await
@@ -48,7 +74,30 @@ impl MySqlAdapter {
         Ok(Self {
             pool,
             keys: TableKeys::default(),
+            options,
+            connection_id,
         })
+    }
+
+    /// Stop the query the session is running, from a connection of its own.
+    ///
+    /// Dropping a query only stops reading its rows. The server goes on running it, and the session
+    /// cannot take the next statement until it ends, which for a long query is a long wait.
+    async fn stop_running(&self) {
+        let id = self.connection_id.load(Ordering::Relaxed);
+        let stop = async {
+            let mut connection = MySqlConnection::connect_with(&self.options).await?;
+            // `KILL` cannot be prepared, and the id is a number this adapter read itself.
+            sqlx::raw_sql(AssertSqlSafe(format!("kill query {id}")))
+                .execute(&mut connection)
+                .await?;
+            connection.close().await
+        };
+        match tokio::time::timeout(crate::STOP_TIMEOUT, stop).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::debug!(%error, "could not stop a cancelled query"),
+            Err(_) => tracing::debug!("stopping a cancelled query took too long"),
+        }
     }
 
     /// What a statement's result looks like, with the columns that are keys marked.
@@ -143,7 +192,7 @@ impl Adapter for MySqlAdapter {
     }
 
     async fn apply(&self, statements: &[String]) -> Result<()> {
-        stream::transact(&self.pool, statements).await
+        stream::transact(&self.pool, statements, |outcome| outcome.rows_affected()).await
     }
 
     async fn execute(
@@ -153,7 +202,7 @@ impl Adapter for MySqlAdapter {
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
         let (columns, source) = self.columns(statement).await;
-        let mut result = stream::execute(
+        let outcome = stream::execute(
             &self.pool,
             statement,
             columns,
@@ -162,7 +211,14 @@ impl Adapter for MySqlAdapter {
             |outcome| outcome.rows_affected(),
             decode_cell,
         )
-        .await?;
+        .await;
+        if matches!(outcome, Err(Error::Cancelled)) {
+            self.stop_running().await;
+        }
+        if stream::may_change_schema(statement) {
+            self.keys.forget();
+        }
+        let mut result = outcome?;
         result.set_source(source);
         Ok(result)
     }
@@ -353,9 +409,47 @@ fn decode_cell(row: &MySqlRow, index: usize) -> Cell {
             |value: types::chrono::DateTime<types::chrono::Utc>| Cell::Timestamp(value.to_string()),
         ),
         "YEAR" => scalar(row, index, &type_name, |value: u16| Cell::Int(value.into())),
-        "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" | "BINARY" | "VARBINARY" | "BIT"
-        | "GEOMETRY" => scalar(row, index, &type_name, |value: Vec<u8>| Cell::bytes(&value)),
+        "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" | "BINARY" | "VARBINARY" => {
+            scalar(row, index, &type_name, binary)
+        }
+        "GEOMETRY" => scalar(row, index, &type_name, |value: Vec<u8>| Cell::bytes(&value)),
+        "BIT" => bits(row, index, &type_name),
         _ => text_or_bytes(row, index, &type_name),
+    }
+}
+
+/// Bytes that read as text, shown as text.
+///
+/// MySQL marks a column binary when its collation is, and the data dictionary names things in a
+/// binary collation, so `SHOW TABLES`, `DESCRIBE` and `information_schema` answer in "binary"
+/// columns holding plain names. sqlx keeps the collation that tells the two apart to itself.
+// ponytail: a real BLOB holding printable UTF-8 shows as text too; check for collation 63 (binary)
+// instead if sqlx ever exposes it.
+fn binary(bytes: Vec<u8>) -> Cell {
+    match String::from_utf8(bytes) {
+        Ok(text)
+            if !text.chars().any(|character| {
+                character.is_control() && !matches!(character, '\n' | '\r' | '\t')
+            }) =>
+        {
+            Cell::Text(text)
+        }
+        Ok(text) => Cell::bytes(text.as_bytes()),
+        Err(error) => Cell::bytes(error.as_bytes()),
+    }
+}
+
+/// A `BIT` column as the number its bits spell, which is how MySQL compares one.
+fn bits(row: &MySqlRow, index: usize, type_name: &str) -> Cell {
+    // sqlx decodes nothing from a `BIT`, so its bytes are taken without asking.
+    match row.try_get_unchecked::<Vec<u8>, _>(index) {
+        Ok(bytes) if bytes.len() <= 8 => {
+            let value = bytes
+                .iter()
+                .fold(0u64, |value, byte| (value << 8) | u64::from(*byte));
+            i64::try_from(value).map_or_else(|_| Cell::Decimal(value.to_string()), Cell::Int)
+        }
+        _ => text_or_bytes(row, index, type_name),
     }
 }
 

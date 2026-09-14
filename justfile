@@ -64,6 +64,11 @@ db-down:
 test-lua: build-debug
     #!/usr/bin/env bash
     set -euo pipefail
+    # The plugin loads a release build before a debug one, so one left over from `just build` is
+    # what the suite would test. Keep it current rather than testing an old engine.
+    if [ -x target/release/sqmeow-core ]; then
+        cargo build --release
+    fi
     # Each server is checked on its own: one of them being down should skip its own cases, not
     # point the other dialect's tests at a port with nothing behind it.
     if [ -n "$(docker compose ps --status running --quiet postgres 2>/dev/null)" ]; then

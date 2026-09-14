@@ -192,7 +192,7 @@ impl Core {
         let mut statements = match connection.backend.dialect() {
             Dialect::Redis => sql::split_lines(&source),
             Dialect::MongoDb => sql::split_documents(&source),
-            _ => sql::split(&source),
+            dialect => sql::split(&source, dialect),
         };
         if statements.is_empty() {
             return reply.err("there is no statement to run");

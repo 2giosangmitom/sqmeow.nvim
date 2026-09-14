@@ -20,6 +20,9 @@ use tokio_util::sync::CancellationToken;
 /// How long to keep trying to open a connection before giving up.
 pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// How long to spend telling a server to stop a cancelled query before leaving it be.
+pub(crate) const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Open a pool, trying again while the server resets connections, until `CONNECT_TIMEOUT`.
 ///
 /// sqlx retries a refused connection itself, but not one reset or cut off mid-handshake, which is
