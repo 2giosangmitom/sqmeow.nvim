@@ -124,6 +124,8 @@ T['parse']['reads a sqlite path in each of its spellings'] = function()
   eq(url.parse('sqlite:app.db').path, 'app.db')
   eq(url.parse('sqlite://app.db').path, 'app.db')
   eq(url.parse('sqlite:///var/app.db').path, '/var/app.db')
+  eq(url.parse('duckdb:///var/app.duckdb').path, '/var/app.duckdb')
+  eq(url.parse('duckdb:app.duckdb').dialect, 'duckdb')
 end
 
 T['parse']['recognises the alternative scheme names'] = function()
@@ -193,6 +195,7 @@ end
 
 T['build']['writes a sqlite path with no authority'] = function()
   eq(url.build('sqlite', { path = '/var/app.db' }), 'sqlite:/var/app.db')
+  eq(url.build('duckdb', { path = 'app.duckdb' }), 'duckdb:app.duckdb')
 end
 
 T['build']['says what is missing rather than writing a url that cannot work'] = function()

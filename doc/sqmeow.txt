@@ -179,6 +179,7 @@ Default configuration.
       postgres = '',
       mysql = '',
       sqlite = '',
+      duckdb = '󰇥',
       redis = '',
       mongodb = '',
 

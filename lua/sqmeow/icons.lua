@@ -38,6 +38,7 @@ M.highlights = {
   postgres = 'SqmeowIconPostgres',
   mysql = 'SqmeowIconMysql',
   sqlite = 'SqmeowIconSqlite',
+  duckdb = 'SqmeowIconDuckdb',
   redis = 'SqmeowIconRedis',
   mongodb = 'SqmeowIconMongodb',
 

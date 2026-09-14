@@ -40,7 +40,7 @@ end
 ---@param url string
 ---@return string
 function M.label(url)
-  if url:match('^sqlite:') or url:match('^file:') then
+  if url:match('^sqlite:') or url:match('^file:') or url:match('^duckdb:') then
     local path = url:gsub('^%w+:/?/?', ''):gsub('%?.*$', '')
     if path == '' or path == ':memory:' then
       return 'memory'
@@ -104,7 +104,7 @@ function M.parse(url)
     return nil
   end
 
-  if dialect == 'sqlite' then
+  if dialect == 'sqlite' or dialect == 'duckdb' then
     -- `sqlite:///path` is an absolute path.
     local path = rest:gsub('^//', ''):gsub('%?.*$', '')
     return { dialect = dialect, path = path }
@@ -150,10 +150,10 @@ function M.build(dialect, values)
     return vim.trim(values[key] or '')
   end
 
-  if dialect == 'sqlite' then
+  if dialect == 'sqlite' or dialect == 'duckdb' then
     local path = value('path')
     if path == '' then
-      return nil, 'a SQLite connection needs a file'
+      return nil, ('a %s connection needs a file'):format(spec.label)
     end
     return ('%s:%s'):format(spec.scheme, path)
   end

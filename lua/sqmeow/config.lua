@@ -89,6 +89,7 @@ M.defaults = {
     postgres = '',
     mysql = '',
     sqlite = '',
+    duckdb = '󰇥',
     redis = '',
     mongodb = '',
 
