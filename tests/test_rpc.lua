@@ -1,5 +1,6 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
+local helpers = dofile('tests/helpers.lua')
 local rpc = require('sqmeow.rpc')
 
 local T = MiniTest.new_set({
@@ -38,7 +39,7 @@ T['engine']['reports an unknown method without dying'] = function()
   local result, err = rpc.request('no_such_method')
   eq(result, nil)
   eq(err ~= nil, true)
-  eq(assert(err, 'there should be an error'):find('no_such_method', 1, true) ~= nil, true)
+  helpers.contains(assert(err, 'there should be an error'), 'no_such_method')
   -- The channel survives a rejected call.
   eq(rpc.request('ping'), 'pong')
 end

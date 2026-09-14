@@ -33,11 +33,14 @@ end
 T['move everything that reads them'] = function()
   config.apply({ core = { path = '/srv/sqmeow' } })
   local install = require('sqmeow.install')
+  local file = require('sqmeow.sources.file')
+  local editor = require('sqmeow.ui.editor')
+  local history = require('sqmeow.history')
 
   eq(install.managed_path(), '/srv/sqmeow/bin/' .. install.binary)
-  eq(require('sqmeow.sources.file').default_path(), '/srv/sqmeow/connections.json')
-  eq(require('sqmeow.ui.editor').directory(), '/srv/sqmeow/scratch')
-  eq(require('sqmeow.history').path(), '/srv/sqmeow/history/log.jsonl')
+  eq(file.default_path(), '/srv/sqmeow/connections.json')
+  eq(editor.directory(), '/srv/sqmeow/scratch')
+  eq(history.path(), '/srv/sqmeow/history/log.jsonl')
 end
 
 return T

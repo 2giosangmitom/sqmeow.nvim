@@ -15,6 +15,10 @@ T['qualify']['names a redis key by itself'] = function()
   eq(sql.qualify('redis', { 'db0', 'user:1' }), 'user:1')
 end
 
+T['qualify']['names a mongodb collection by itself'] = function()
+  eq(sql.qualify('mongodb', { 'shop', 'orders' }), 'orders')
+end
+
 T['read_key'] = MiniTest.new_set()
 
 T['read_key']['reads each type with its own command'] = function()
@@ -33,10 +37,6 @@ end
 
 T['read_key']['has nothing for a group that is not a type'] = function()
   eq(sql.read_key('tables', 'users', 1), nil)
-end
-
-T['qualify']['names a mongodb collection by itself'] = function()
-  eq(sql.qualify('mongodb', { 'shop', 'orders' }), 'orders')
 end
 
 T['select_from'] = MiniTest.new_set()

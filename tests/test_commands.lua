@@ -108,12 +108,8 @@ T['execute without words runs the buffer, or the lines a range covers'] = functi
     table.insert(called, 'selection')
   end)
 
-  local buf = vim.api.nvim_create_buf(false, true)
+  local buf = helpers.temp_buf({ 'select 1;', 'select 2;' })
   vim.api.nvim_set_current_buf(buf)
-  MiniTest.finally(function()
-    vim.api.nvim_buf_delete(buf, { force = true })
-  end)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'select 1;', 'select 2;' })
 
   vim.cmd('Sqmeow execute')
   vim.cmd('1,2Sqmeow execute')

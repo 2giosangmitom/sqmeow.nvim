@@ -289,18 +289,16 @@ function M.execute(sql, opts)
     return nil, err
   end
 
-  -- The SQL and the buffer it came from are the plugin's to remember: the engine has no reason to
-  -- send back text the editor already has, and an error needs somewhere to be shown.
+  -- The SQL is the plugin's to remember: the engine has no reason to send back text the editor
+  -- already has.
   state.call = {
     call_id = call_id,
     conn_id = connection.id,
     state = 'executing',
     statement = sql,
-    source_buf = opts.source_buf,
     history = recorded,
     archive = archive,
   }
-  require('sqmeow.diagnostics').clear(opts.source_buf)
   result.update_winbar(state.call)
   return call_id
 end

@@ -22,7 +22,7 @@ local utils = require('sqmeow.utils')
 ---@field on_submit fun(values: table<string, string>)
 ---@field on_cancel nil|fun()
 ---@field on_change nil|fun(values: table<string, string>, key: string) May adjust other values.
----@field preview nil|{ title: string, lines: string[]|fun(values: table<string, string>): string[], filetype: nil|string|fun(values: table<string, string>): string } Read-only pane below. Given as functions, the lines and filetype are worked out again whenever a value changes.
+---@field preview nil|{ title: string, lines: string[]|(fun(values: table<string, string>): string[]), filetype: nil|string|(fun(values: table<string, string>): string) } Read-only pane below. Given as functions, the lines and filetype are worked out again whenever a value changes.
 
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow-form')
 
@@ -128,14 +128,15 @@ function M.open(spec)
 
   -- With a preview the dialog grows into a column: the fields on top, the preview filling the rest.
   local layout, preview
-  if spec.preview then
+  local preview_spec = spec.preview
+  if preview_spec then
     preview = window({
       focusable = false,
       buf_options = {
-        filetype = type(spec.preview.filetype) == 'string' and spec.preview.filetype or nil,
+        filetype = type(preview_spec.filetype) == 'string' and preview_spec.filetype or nil,
       },
       win_options = { wrap = false },
-    }, spec.preview.title)
+    }, preview_spec.title)
     layout = parts.Layout(
       {
         relative = 'editor',
@@ -155,11 +156,12 @@ function M.open(spec)
   --- Fill the preview from the spec, working its lines and filetype out from the values when it
   --- gives them as functions.
   local function show_preview()
-    if not (preview and preview.bufnr and vim.api.nvim_buf_is_valid(preview.bufnr)) then
+    local source = spec.preview
+    if not (source and preview and preview.bufnr and vim.api.nvim_buf_is_valid(preview.bufnr)) then
       return
     end
-    local source = spec.preview
-    local lines = type(source.lines) == 'function' and source.lines(values) or source.lines
+    local rendered = source.lines
+    local lines = type(rendered) == 'function' and rendered(values) or rendered --[[@as string[] ]]
     vim.bo[preview.bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(preview.bufnr, 0, -1, false, lines)
     vim.bo[preview.bufnr].modifiable = false

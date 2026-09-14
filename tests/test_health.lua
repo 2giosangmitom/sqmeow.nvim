@@ -5,6 +5,13 @@ local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
 local config = require('sqmeow.config')
 local health = require('sqmeow.health')
+local rpc = require('sqmeow.rpc')
+local state = require('sqmeow.state')
+
+--- Read connections from the environment, and nothing else.
+local function use_env()
+  config.apply({ sources = { { type = 'env' } } })
+end
 
 --- Run the check, and answer with each section's lines as `level: message`, keyed by section.
 local function report()
@@ -32,8 +39,8 @@ local T = MiniTest.new_set({
     post_case = function()
       config.apply({})
       vim.env.SQMEOW_CONNECTIONS = nil
-      require('sqmeow.rpc').stop()
-      require('sqmeow.state').reset()
+      rpc.stop()
+      state.reset()
     end,
   },
 })
@@ -43,7 +50,7 @@ T['reports the engine, its adapters, the configuration and nui.nvim'] = function
 
   eq(sections.configuration[#sections.configuration], 'ok: configuration is valid')
   local engine = table.concat(sections.engine, '\n')
-  eq(engine:find('ok: sqmeow-core', 1, true) ~= nil, true)
+  helpers.contains(engine, 'ok: sqmeow-core')
   for _, dialect in ipairs({ 'sqlite', 'postgres', 'mysql', 'redis', 'mongodb' }) do
     eq({ dialect, engine:find(dialect, 1, true) ~= nil }, { dialect, true })
   end
@@ -57,18 +64,18 @@ T['flags a connection no adapter handles'] = function()
     { name = 'fine', url = 'sqlite://fine.db' },
     { name = 'odd', url = 'cassandra://host/space' },
   })
-  config.apply({ sources = { { type = 'env' } } })
+  use_env()
 
   local connections = report().connections
   eq(#connections, 2)
   eq(starts(connections[1], 'ok: fine  sqlite://fine.db'), true)
   eq(starts(connections[2], 'error: odd'), true)
-  eq(connections[2]:find('no adapter handles the `cassandra` scheme', 1, true) ~= nil, true)
+  helpers.contains(connections[2], 'no adapter handles the `cassandra` scheme')
 end
 
 T['warns about a source that cannot be read'] = function()
   vim.env.SQMEOW_CONNECTIONS = 'not json'
-  config.apply({ sources = { { type = 'env' } } })
+  use_env()
 
   local connections = report().connections
   eq(starts(connections[1], 'warn: SQMEOW_CONNECTIONS does not hold valid JSON'), true)

@@ -220,7 +220,7 @@ end
 
 --- What a cell holds now: its staged value, or what the result holds for it.
 ---
----@param call table
+---@param call sqmeow.CallSummary
 ---@param target { row: integer|nil, insert: integer|nil }
 ---@param column integer
 ---@return string|nil text Nil for `NULL`.
@@ -281,7 +281,7 @@ end
 function M.edit_cell(target)
   local call = require('sqmeow.state').call
   local described = call and call.columns and call.columns[target.column + 1]
-  if not (described and described.editable) then
+  if not (call and described and described.editable) then
     return utils.notify(('`%s` cannot be edited'):format(target.name), vim.log.levels.WARN)
   end
 

@@ -1,6 +1,9 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
+local helpers = dofile('tests/helpers.lua')
 local result = require('sqmeow.ui.result')
+local icons = require('sqmeow.icons')
+local sqmeow = require('sqmeow')
 
 local T = MiniTest.new_set({
   hooks = {
@@ -27,7 +30,7 @@ T['describe'] = MiniTest.new_set({
     -- `describe` reads the page size out of the configuration, so a case that changed it must not
     -- leave that behind for the next one.
     post_case = function()
-      require('sqmeow').setup({})
+      sqmeow.setup({})
     end,
   },
 })
@@ -50,7 +53,7 @@ end
 
 --- How long a query took, as `describe` writes it: behind the configured icon.
 local function took(ms)
-  return require('sqmeow.icons').get('elapsed') .. ' ' .. ms
+  return icons.get('elapsed') .. ' ' .. ms
 end
 
 T['describe']['counts rows, singular and plural'] = function()
@@ -71,17 +74,17 @@ end
 
 T['describe']['colours the time icon only for a winbar'] = function()
   local summary = { state = 'done', rows = 1, elapsed_ms = 4 }
-  local icon = require('sqmeow.icons').get('elapsed')
+  local icon = icons.get('elapsed')
   eq(result.describe(summary, true), ('1 row  %%#SqmeowIconElapsed#%s%%* 4ms'):format(icon))
 
   -- Without a glyph, the time stands alone.
-  require('sqmeow').setup({ icons = { elapsed = '' } })
+  sqmeow.setup({ icons = { elapsed = '' } })
   eq(result.describe(summary, true), '1 row  4ms')
 end
 
 T['describe']['flags a truncated result'] = function()
   local text = result.describe({ state = 'done', rows = 100, truncated = true, elapsed_ms = 2 })
-  eq(text:find('truncated', 1, true) ~= nil, true)
+  helpers.contains(text, 'truncated')
 end
 
 T['describe']['shows the page only when there is more than one'] = function()
@@ -89,7 +92,7 @@ T['describe']['shows the page only when there is more than one'] = function()
   -- tall this window is, so the count is worked out here from the row total and the page size.
   -- That a *particular* page is named is covered end to end in `test_query.lua`, where paging is
   -- real; here only the page size decides whether there is more than one page at all.
-  require('sqmeow').setup({ ui = { result = { page_size = 100 } } })
+  sqmeow.setup({ ui = { result = { page_size = 100 } } })
 
   eq(result.describe({ state = 'done', rows = 5, elapsed_ms = 1 }), '5 rows  ' .. took('1ms'))
   eq(
@@ -139,13 +142,7 @@ T['buffer']['is a scratch buffer nobody can type into'] = function()
 end
 
 T['buffer']['maps its keys buffer-locally, with descriptions'] = function()
-  local buf = result.buffer()
-  local maps = vim.api.nvim_buf_get_keymap(buf, 'n')
-
-  local seen = {}
-  for _, map in ipairs(maps) do
-    seen[map.lhs] = map.desc
-  end
+  local seen = helpers.buf_maps(result.buffer())
 
   for _, key in ipairs({ 'L', 'H', 'q' }) do
     eq(type(seen[key]), 'string')
@@ -159,26 +156,26 @@ end
 T['pages'] = MiniTest.new_set({
   hooks = {
     post_case = function()
-      require('sqmeow').setup({})
+      sqmeow.setup({})
     end,
   },
 })
 
 T['pages']['is one page when a result fits'] = function()
-  require('sqmeow').setup({ ui = { result = { page_size = 100 } } })
+  sqmeow.setup({ ui = { result = { page_size = 100 } } })
   local current, total = result.pages({ state = 'done', rows = 9 })
   eq(current, 1)
   eq(total, 1)
 end
 
 T['pages']['counts a partial last page'] = function()
-  require('sqmeow').setup({ ui = { result = { page_size = 4 } } })
+  sqmeow.setup({ ui = { result = { page_size = 4 } } })
   local _, total = result.pages({ state = 'done', rows = 9 })
   eq(total, 3)
 end
 
 T['pages']['says one page for a result with no rows'] = function()
-  require('sqmeow').setup({ ui = { result = { page_size = 4 } } })
+  sqmeow.setup({ ui = { result = { page_size = 4 } } })
   local current, total = result.pages({ state = 'done', rows = 0 })
   eq(current, 1)
   eq(total, 1)

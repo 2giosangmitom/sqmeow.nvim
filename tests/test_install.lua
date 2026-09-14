@@ -2,6 +2,14 @@ local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
 local install = require('sqmeow.install')
+local config = require('sqmeow.config')
+local paths = require('sqmeow.paths')
+local rpc = require('sqmeow.rpc')
+
+--- Swallow notifications for the rest of the case.
+local function silence()
+  helpers.stub(vim, 'notify', function() end)
+end
 
 local T = MiniTest.new_set()
 
@@ -28,18 +36,13 @@ T['manifest_url']['points at the release for a version'] = function()
 end
 
 T['manifest_url']['defaults to the version this plugin was built against'] = function()
-  local version = require('sqmeow.rpc').version
-  eq(install.manifest_url():find('/v' .. version .. '/', 1, true) ~= nil, true)
+  helpers.contains(install.manifest_url(), '/v' .. rpc.version .. '/')
 end
 
 T['checksum'] = MiniTest.new_set()
 
 T['checksum']['is the SHA-256 of the file contents'] = function()
-  local path = vim.fn.tempname()
-  vim.fn.writefile({ 'sqmeow' }, path)
-  MiniTest.finally(function()
-    vim.fn.delete(path)
-  end)
+  local path = helpers.temp_file({ 'sqmeow' })
 
   -- `writefile` adds the trailing newline, so this is the digest of "sqmeow\n".
   eq(install.checksum(path), vim.fn.sha256('sqmeow\n'))
@@ -54,7 +57,6 @@ end
 T['resolve'] = MiniTest.new_set()
 
 T['resolve']['finds the engine installed under core.path'] = function()
-  local config = require('sqmeow.config')
   local root = vim.fn.tempname()
   config.apply({ core = { path = root } })
   MiniTest.finally(function()
@@ -83,7 +85,7 @@ T['managed_path'] = MiniTest.new_set()
 
 T['managed_path']['is under core.path, not the plugin'] = function()
   local path = install.managed_path()
-  eq(vim.fs.dirname(path), require('sqmeow.paths').bin())
+  eq(vim.fs.dirname(path), paths.bin())
   eq(vim.fs.basename(path), install.binary)
 end
 
@@ -115,7 +117,7 @@ end
 T['install'] = MiniTest.new_set()
 
 T['install']['builds with cargo when asked for it'] = function()
-  helpers.stub(vim, 'notify', function() end)
+  silence()
 
   local downloaded = false
   helpers.stub(install, 'download', function(_, callback)
@@ -135,7 +137,7 @@ T['install']['builds with cargo when asked for it'] = function()
 end
 
 T['install']['falls back to cargo only when no method was named'] = function()
-  helpers.stub(vim, 'notify', function() end)
+  silence()
 
   local built = false
   helpers.stub(install, 'download', function(_, callback)
@@ -158,17 +160,17 @@ T['install']['falls back to cargo only when no method was named'] = function()
 end
 
 T['install']['refuses a method it does not have'] = function()
-  helpers.stub(vim, 'notify', function() end)
+  silence()
 
   local ok, err = install.install('bitsadmin')
   eq(ok, false)
-  eq(assert(err, 'there should be an error'):find('bitsadmin', 1, true) ~= nil, true)
+  helpers.contains(assert(err, 'there should be an error'), 'bitsadmin')
   -- The message lists what it does take, since the point of naming one is that detection was wrong.
-  eq(assert(err, 'there should be an error'):find('cargo', 1, true) ~= nil, true)
+  helpers.contains(assert(err, 'there should be an error'), 'cargo')
 end
 
 T['install']['answers through a callback without waiting'] = function()
-  helpers.stub(vim, 'notify', function() end)
+  silence()
 
   local release
   helpers.stub(install, 'download', function(_, callback)
@@ -193,7 +195,7 @@ T['install']['answers through a callback without waiting'] = function()
 end
 
 T['install']['turns away a second install while one is running'] = function()
-  helpers.stub(vim, 'notify', function() end)
+  silence()
 
   local nested, release
   helpers.stub(install, 'download', function(_, callback)
@@ -226,14 +228,14 @@ T['install']['turns away a second install while one is running'] = function()
 end
 
 T['install']['gives up rather than waiting for ever'] = function()
-  helpers.stub(vim, 'notify', function() end)
+  silence()
 
   -- A download that never answers, which is what a hung connection looks like from here.
   helpers.stub(install, 'download', function() end)
 
   local ok, err = install.install({ timeout = 50 })
   eq(ok, false)
-  eq(assert(err, 'there should be an error'):find('timed out', 1, true) ~= nil, true)
+  helpers.contains(assert(err, 'there should be an error'), 'timed out')
   -- The guard must come back down, or a timeout would cost the user their session: every later
   -- install would be turned away as a duplicate of one that is never going to finish.
   eq(install.installing(), nil)
@@ -242,7 +244,7 @@ end
 T['installing'] = MiniTest.new_set()
 
 T['installing']['names the step, so a caller can say what is holding it up'] = function()
-  helpers.stub(vim, 'notify', function() end)
+  silence()
   eq(install.installing(), nil)
 
   local release

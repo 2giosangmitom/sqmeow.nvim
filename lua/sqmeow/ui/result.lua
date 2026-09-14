@@ -501,6 +501,21 @@ local function draw()
   vim.bo[handle].modifiable = true
   vim.api.nvim_buf_clear_namespace(handle, NAMESPACE, 0, -1)
 
+  -- A failed query's error is shown here, where its rows would have been, and nowhere else.
+  if call and call.state == 'error' then
+    spans = {}
+    local lines = vim.split(call.error or 'the query failed', '\n')
+    vim.api.nvim_buf_set_lines(handle, 0, -1, false, lines)
+    for row, text in ipairs(lines) do
+      vim.api.nvim_buf_set_extmark(handle, NAMESPACE, row - 1, 0, {
+        end_col = #text,
+        hl_group = 'SqmeowError',
+      })
+    end
+    vim.bo[handle].modifiable = false
+    return
+  end
+
   if not (call and call.columns and #call.columns > 0) then
     spans = {}
     vim.api.nvim_buf_set_lines(handle, 0, -1, false, {})
@@ -917,7 +932,7 @@ end
 --- does in the split, and nothing about the grid changes but the room it has.
 ---@return integer|nil win
 function M.open_float()
-  if M.is_float() then
+  if win and M.is_float() then
     vim.api.nvim_set_current_win(win)
     return win
   end
@@ -931,7 +946,7 @@ function M.open_float()
   local layout = require('sqmeow.ui.layout')
   layout.remember()
   local cursor
-  if utils.shows(win, buf) then
+  if win and utils.shows(win, buf) then
     cursor = vim.api.nvim_win_get_cursor(win)
     layout.close_window(win)
   end
@@ -976,13 +991,14 @@ function M.toggle_float()
   if not M.is_float() then
     return M.open_float()
   end
+  assert(popup and win, 'a float is open, so it has a popup and a window')
 
   local cursor = vim.api.nvim_win_get_cursor(win)
   local closing = popup
   popup, win = nil, nil
   closing:unmount()
 
-  M.open()
+  win = M.open()
   vim.api.nvim_set_current_win(win)
   pcall(vim.api.nvim_win_set_cursor, win, cursor)
 end
@@ -1257,8 +1273,10 @@ function M.actions.add_row()
     return
   end
   require('sqmeow.ui.edit').add_row()
-  local last = vim.api.nvim_buf_line_count(M.buffer())
-  vim.api.nvim_win_set_cursor(win, { last, 0 })
+  if win then
+    local last = vim.api.nvim_buf_line_count(M.buffer())
+    vim.api.nvim_win_set_cursor(win, { last, 0 })
+  end
 end
 
 function M.actions.delete_row()
@@ -1311,7 +1329,7 @@ end
 --- A grid already in its float stays there: the float is where the user put it.
 ---@return integer win
 function M.open()
-  if utils.shows(win, buf) then
+  if win and utils.shows(win, buf) then
     return win
   end
   if popup then

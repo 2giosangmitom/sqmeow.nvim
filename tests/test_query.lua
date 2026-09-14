@@ -3,6 +3,7 @@ local MiniTest = require('mini.test')
 -- grid into the buffer. This is the test that catches a break anywhere along that path.
 
 local eq = MiniTest.expect.equality
+local helpers = dofile('tests/helpers.lua')
 local api = require('sqmeow.api')
 local rpc = require('sqmeow.rpc')
 local state = require('sqmeow.state')
@@ -10,33 +11,10 @@ local result = require('sqmeow.ui.result')
 
 local TIMEOUT = 5000
 
---- Ask for a connection and wait for the engine to say how it went.
----
---- A connection that fails is dropped from the mirrored state, so "settled" means either the entry
---- reports a final state or it is gone.
-local function connect(url, name)
-  local id = assert(api.connect(url, { name = name }), 'the engine should accept the connection')
-  local settled = vim.wait(TIMEOUT, function()
-    local connection = state.connections[id]
-    return connection == nil or connection.state ~= 'connecting'
-  end, 10)
-  assert(settled, 'the connection should settle')
-  return id
-end
-
---- Run SQL and wait for the engine to finish with it.
-local function run(sql)
-  local call_id = api.execute(sql)
-  if not call_id then
-    return nil
-  end
-
-  local settled = vim.wait(TIMEOUT, function()
-    return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
-  end, 10)
-  assert(settled, 'the query should settle: ' .. sql)
-  return state.call
-end
+local run = helpers.run
+local grid = helpers.result_lines
+local header = helpers.result_header
+local lines = helpers.result_rows
 
 --- Turn a page and wait for the engine to repaint.
 --- Turn a page and answer with where the grid ended up.
@@ -47,11 +25,6 @@ local function page(action)
   action()
   local current, total = result.pages(state.call)
   return { page = current, pages = total, offset = result.offset() }
-end
-
---- Everything the grid buffer holds: the column names, the rule, and the rows.
-local function grid()
-  return vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false)
 end
 
 --- Apply the configuration this suite runs on.
@@ -67,32 +40,7 @@ end
 
 --- Every extmark the engine put on one line, as `{ group, from, to }` in column order.
 local function marks_on(line)
-  local found = vim.api.nvim_buf_get_extmarks(
-    result.buffer(),
-    vim.api.nvim_create_namespace('sqmeow'),
-    { line - 1, 0 },
-    { line - 1, -1 },
-    { details = true }
-  )
-
-  local spans = vim.tbl_map(function(mark)
-    return { group = mark[4].hl_group, from = mark[3], to = mark[4].end_col }
-  end, found)
-  table.sort(spans, function(left, right)
-    return left.from < right.from
-  end)
-  return spans
-end
-
---- The column names and the rule under them, which the grid begins with.
---- The column names and the rule under them, which the grid opens with.
-local function header()
-  return vim.list_slice(grid(), 1, 2)
-end
-
---- The data rows, with the header dropped.
-local function lines()
-  return vim.list_slice(grid(), 3)
+  return helpers.marks_on(result.buffer(), 'sqmeow', line)
 end
 
 -- The connection everything but the last group runs on, and the buffer the suite starts in.
@@ -103,7 +51,7 @@ local T = MiniTest.new_set({
     pre_once = function()
       setup()
       home = vim.api.nvim_get_current_buf()
-      primary = connect('sqlite::memory:', 'first')
+      primary = helpers.connect('sqlite::memory:', { name = 'first' })
       run('create table people (id integer primary key, name text, score real, avatar blob)')
       run([[insert into people (id, name, score, avatar) values
               (1, 'alice', 9.5, x'deadbeef'),
@@ -126,7 +74,7 @@ T['connecting']['reports the dialect it found'] = function()
 end
 
 T['connecting']['reports a url it cannot open'] = function()
-  local id = connect('cassandra://localhost/x')
+  local id = helpers.connect('cassandra://localhost/x')
   -- A failed connection is forgotten rather than left in the list as a thing to pick.
   eq(state.connections[id], nil)
 end
@@ -214,13 +162,7 @@ T['errors'] = MiniTest.new_set()
 T['errors']['report the database message'] = function()
   local summary = assert(run('select nope from people'))
   eq(summary.state, 'error')
-  eq(summary.error:find('nope', 1, true) ~= nil, true)
-end
-
-T['errors']['carry the line the statement started on'] = function()
-  local summary = assert(run('select 1;\nselect nope from people'))
-  eq(summary.state, 'error')
-  eq(summary.start_line, 1)
+  helpers.contains(summary.error, 'nope')
 end
 
 T['errors']['leave the connection usable'] = function()
@@ -301,20 +243,7 @@ T['column icons'] = MiniTest.new_set({
       -- ASCII glyphs, so an expectation can be read and a width can be counted.
       setup({
         ui = { result = { column_icons = true } },
-        icons = {
-          types = {
-            text = 't',
-            number = 'n',
-            boolean = 'b',
-            temporal = 'd',
-            json = 'j',
-            uuid = 'u',
-            binary = 'y',
-            unknown = '?',
-            primary_key = 'K',
-            foreign_key = 'k',
-          },
-        },
+        icons = { types = helpers.ascii_icons() },
       })
     end,
     post_case = function()
@@ -339,8 +268,8 @@ T['column icons']['does not call an expression a key'] = function()
   -- `count(*)` comes from no table at all, so whatever its type is classified as, it cannot be
   -- anyone's primary or foreign key. This is the case that would break if a column's origin were
   -- guessed from its name rather than read from the statement.
-  eq(header()[1]:find('K', 1, true), nil)
-  eq(header()[1]:find('k', 1, true), nil)
+  helpers.absent(header()[1], 'K')
+  helpers.absent(header()[1], 'k')
 end
 
 T['column icons']['does not widen a column its values already fill'] = function()
@@ -466,9 +395,9 @@ T['statement under the cursor'] = MiniTest.new_set({
 local function statement_at(line)
   vim.api.nvim_win_set_cursor(0, { line, 0 })
   local call_id = assert(api.execute_statement())
-  assert(vim.wait(TIMEOUT, function()
+  helpers.wait_for('the statement should run', function()
     return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
-  end, 10))
+  end, TIMEOUT)
   return header()[1]
 end
 
@@ -489,9 +418,9 @@ end
 T['statement under the cursor']['runs one statement, not the whole buffer'] = function()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   local call_id = assert(api.execute_statement())
-  assert(vim.wait(TIMEOUT, function()
+  helpers.wait_for('the statement should run', function()
     return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
-  end, 10))
+  end, TIMEOUT)
   eq(state.call.rows, 1)
 end
 
@@ -503,30 +432,32 @@ T['errors in a buffer'] = MiniTest.new_set({
   },
 })
 
-T['errors in a buffer']['become a diagnostic on the failing statement'] = function()
-  local diagnostics = require('sqmeow.diagnostics')
+T['errors in a buffer']['show in the result buffer rather than as diagnostics'] = function()
+  local messages = {}
+  helpers.stub(vim, 'notify', function(message)
+    table.insert(messages, message)
+  end)
 
   vim.cmd('enew')
   local buf = vim.api.nvim_get_current_buf()
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'select 1;', 'select nope_at_all;' })
 
   local call_id = assert(api.execute_buffer())
-  assert(vim.wait(TIMEOUT, function()
+  helpers.wait_for('the error should arrive', function()
     return state.call ~= nil and state.call.call_id == call_id and state.call.state == 'error'
-  end, 10))
+  end, TIMEOUT)
 
-  local found = vim.diagnostic.get(buf, { namespace = diagnostics.namespace })
-  eq(#found, 1)
-  eq(found[1].lnum, 1)
-  eq(found[1].message:find('nope_at_all', 1, true) ~= nil, true)
+  helpers.contains(table.concat(grid(), '\n'), 'nope_at_all')
+  eq(vim.diagnostic.get(buf), {})
+  eq(messages, {})
 
-  -- A query that works clears the error it replaced.
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'select 1;' })
+  -- A query that works replaces the error with its rows.
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'select 1 as ok;' })
   local ok_id = assert(api.execute_buffer())
-  assert(vim.wait(TIMEOUT, function()
+  helpers.wait_for('the query should settle', function()
     return state.call ~= nil and state.call.call_id == ok_id and state.call.state == 'done'
-  end, 10))
-  eq(#vim.diagnostic.get(buf, { namespace = diagnostics.namespace }), 0)
+  end, TIMEOUT)
+  helpers.absent(table.concat(grid(), '\n'), 'nope_at_all')
 end
 
 T['exporting'] = MiniTest.new_set({
@@ -539,12 +470,9 @@ T['exporting'] = MiniTest.new_set({
 
 --- Wait for the engine to write a file and hand back what it holds.
 local function written(path)
-  assert(
-    vim.wait(TIMEOUT, function()
-      return vim.uv.fs_stat(path) ~= nil
-    end, 10),
-    'the file should be written'
-  )
+  helpers.wait_for('the file should be written', function()
+    return vim.uv.fs_stat(path) ~= nil
+  end, TIMEOUT)
   return table.concat(vim.fn.readfile(path, 'b'), '\n')
 end
 
@@ -572,9 +500,9 @@ T['exporting']['exports a visual selection from the dialog'] = function()
   -- Include headers is the fourth field, and editing a checkbox clears it.
   vim.api.nvim_feedkeys(vim.keycode('4G<CR><C-s>'), 'mx', false)
 
-  assert(vim.wait(TIMEOUT, function()
+  helpers.wait_for('the file should be written', function()
     return vim.fn.glob(dir .. '/*.csv') ~= ''
-  end, 10))
+  end, TIMEOUT)
   eq(written(vim.fn.glob(dir .. '/*.csv')), '1,alice\n2,bob\n')
 
   vim.cmd.cd(cwd)
@@ -612,11 +540,11 @@ T['exporting']['the dialog follows the format and asks before overwriting'] = fu
   -- parse, because the file is empty for a moment while the engine writes it.
   vim.api.nvim_feedkeys(vim.keycode('<C-s>'), 'mx', false)
   local decoded
-  assert(vim.wait(TIMEOUT, function()
+  helpers.wait_for('the file should parse', function()
     local ok, value = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), '\n'))
     decoded = ok and value or nil
     return decoded ~= nil
-  end, 10))
+  end, TIMEOUT)
   eq(decoded[1].name, 'alice')
 
   vim.cmd.cd(cwd)
@@ -636,11 +564,15 @@ T['exporting']['writes the whole result to a file'] = function()
 end
 
 T['exporting']['reports a path it cannot write'] = function()
+  local messages = {}
+  helpers.stub(vim, 'notify', function(message)
+    table.insert(messages, message)
+  end)
   api.export({ format = 'csv', path = '/nonexistent/dir/out.csv' })
   -- Nothing is written and nothing crashes; the failure arrives as a notification.
-  vim.wait(300, function()
-    return false
-  end, 10)
+  helpers.wait_for('the failure should be reported', function()
+    return table.concat(messages, '\n'):find('could not write', 1, true) ~= nil
+  end)
 end
 
 T['row detail'] = MiniTest.new_set()
@@ -648,7 +580,7 @@ T['row detail'] = MiniTest.new_set()
 T['row detail']['reads one row from the engine'] = function()
   run('select id, name from people order by id')
 
-  local columns = require('sqmeow.rpc').request('row', { call_id = state.call.call_id, row = 0 })
+  local columns = rpc.request('row', { call_id = state.call.call_id, row = 0 })
   eq(#columns, 2)
   eq(columns[1].name, 'id')
   eq(columns[1].value, '1')
@@ -659,14 +591,14 @@ end
 T['row detail']['says a null is a null'] = function()
   run('select name from people where id = 3')
 
-  local columns = require('sqmeow.rpc').request('row', { call_id = state.call.call_id, row = 0 })
+  local columns = rpc.request('row', { call_id = state.call.call_id, row = 0 })
   eq(columns[1].is_null, true)
 end
 
 T['row detail']['refuses a row past the end'] = function()
   run('select id from people')
 
-  local columns, err = require('sqmeow.rpc').request('row', {
+  local columns, err = rpc.request('row', {
     call_id = state.call.call_id,
     row = 99,
   })
@@ -695,7 +627,7 @@ end
 T['choosing a connection'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
-      second = connect('sqlite::memory:', 'second')
+      second = helpers.connect('sqlite::memory:', { name = 'second' })
     end,
     post_case = function()
       api.disconnect(second)
@@ -723,9 +655,9 @@ local function run_bound(name, sql)
     return nil
   end
 
-  vim.wait(TIMEOUT, function()
+  helpers.wait_for('the query should settle', function()
     return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
-  end, 10)
+  end, TIMEOUT)
   return state.call
 end
 
@@ -763,7 +695,7 @@ T['choosing a connection']['names the result after the connection it came from']
   result.update_winbar(state.call)
 
   local winbar = vim.wo[result.open()].winbar
-  eq(winbar:find('second', 1, true) ~= nil, true)
+  helpers.contains(winbar, 'second')
 end
 
 return T

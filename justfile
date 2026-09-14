@@ -19,6 +19,7 @@ lint-rust:
 lint-lua:
     stylua --check .
     selene lua plugin tests
+    lua-language-server --check=. --checklevel=Warning
 
 fmt:
     cargo fmt --all

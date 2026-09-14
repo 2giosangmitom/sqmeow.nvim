@@ -7,28 +7,18 @@ local file = require('sqmeow.sources.file')
 
 local scratch = vim.fs.joinpath(vim.fn.tempname(), 'connections.json')
 
-local function close_floats()
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    -- Closing a dialog takes its border window with it, so a handle from this list may already be
-    -- gone by the time the loop reaches it.
-    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_config(win).relative ~= '' then
-      pcall(vim.api.nvim_win_close, win, true)
-    end
-  end
-end
-
 --- The dialog's lines, without the padding that lines the values up.
 ---@return string[]
 local function rows()
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local buf = vim.api.nvim_win_get_buf(win)
-    if vim.bo[buf].filetype == 'sqmeow-form' then
-      return vim.tbl_map(function(line)
-        return (vim.trim(line):gsub('%s%s+', ' '))
-      end, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
-    end
+  local win = helpers.find_win(function(_, buf)
+    return vim.bo[buf].filetype == 'sqmeow-form'
+  end)
+  if not win then
+    return {}
   end
-  return {}
+  return vim.tbl_map(function(line)
+    return (vim.trim(line):gsub('%s%s+', ' '))
+  end, vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false))
 end
 
 --- Press a key that the dialog bound, the way a user would.
@@ -46,7 +36,7 @@ local T = MiniTest.new_set({
       config.apply({ sources = { { type = 'file', path = scratch } } })
     end,
     post_case = function()
-      close_floats()
+      helpers.close_floats()
       config.apply({})
       pcall(vim.fn.delete, scratch)
     end,
@@ -60,12 +50,12 @@ T['create']['asks which database first'] = function()
 
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   eq(#lines, 6)
-  MiniTest.expect.no_equality(lines[1]:find('PostgreSQL'), nil)
-  MiniTest.expect.no_equality(lines[2]:find('MySQL'), nil)
-  MiniTest.expect.no_equality(lines[3]:find('Redis'), nil)
-  MiniTest.expect.no_equality(lines[4]:find('MongoDB'), nil)
-  MiniTest.expect.no_equality(lines[5]:find('SQLite'), nil)
-  MiniTest.expect.no_equality(lines[6]:find('Connection string'), nil)
+  helpers.contains(lines[1], 'PostgreSQL')
+  helpers.contains(lines[2], 'MySQL')
+  helpers.contains(lines[3], 'Redis')
+  helpers.contains(lines[4], 'MongoDB')
+  helpers.contains(lines[5], 'SQLite')
+  helpers.contains(lines[6], 'Connection string')
 end
 
 T['create']['asks for a name and offers none'] = function()

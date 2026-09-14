@@ -1,11 +1,31 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
+local helpers = dofile('tests/helpers.lua')
+local api = require('sqmeow.api')
+local config = require('sqmeow.config')
 local editor = require('sqmeow.ui.editor')
 local detail = require('sqmeow.ui.detail')
-local diagnostics = require('sqmeow.diagnostics')
+local drawer = require('sqmeow.ui.drawer')
 local layout = require('sqmeow.ui.layout')
 local log = require('sqmeow.ui.log')
+local paths = require('sqmeow.paths')
+local result = require('sqmeow.ui.result')
 local state = require('sqmeow.state')
+
+--- A tab page of its own, closed when the case ends.
+local function tabpage()
+  vim.cmd('tabnew')
+  MiniTest.finally(function()
+    vim.cmd('tabclose')
+  end)
+end
+
+--- A connected fixture the editor can open scratchpads for.
+local function use_connection(name, url, extra)
+  state.add_connection(
+    vim.tbl_extend('force', { id = 1, name = name, url = url, state = 'connected' }, extra or {})
+  )
+end
 
 local T = MiniTest.new_set()
 
@@ -27,19 +47,19 @@ T['scratchpad']['keeps a file in a folder named after its connection'] = functio
 end
 
 T['scratchpad']['gives a mongodb connection a json file'] = function()
-  state.add_connection({ id = 1, name = 'docs', url = 'mongodb://h/app', state = 'connected' })
+  use_connection('docs', 'mongodb://h/app')
   eq(vim.fs.basename(editor.path('docs', 'orders')), 'orders.json')
   eq(vim.bo[assert(editor.create('docs', 'orders'))].filetype, 'json')
 end
 
 T['scratchpad']['gives a redis connection a redis file'] = function()
-  state.add_connection({ id = 1, name = 'cache', url = 'redis://h/0', state = 'connected' })
+  use_connection('cache', 'redis://h/0')
   eq(vim.fs.basename(editor.path('cache', 'keys')), 'keys.redis')
 end
 
 T['scratchpad']['opens with the filetype its connection speaks'] = function()
-  state.add_connection({ id = 1, name = 'cache', url = 'redis://h/0', state = 'connected' })
-  state.add_connection({ id = 2, name = 'shop', url = 'sqlite://x.db', state = 'connected' })
+  use_connection('cache', 'redis://h/0')
+  use_connection('shop', 'sqlite://x.db', { id = 2 })
 
   local redis = assert(editor.create('cache', 'keys'))
   eq(vim.bo[redis].filetype, 'redis')
@@ -48,7 +68,7 @@ T['scratchpad']['opens with the filetype its connection speaks'] = function()
 end
 
 T['scratchpad']['is written as soon as it is created, so it is listed'] = function()
-  state.add_connection({ id = 1, name = 'shop', url = 'sqlite://x.db', state = 'connected' })
+  use_connection('shop', 'sqlite://x.db')
   editor.create('shop', 'orders')
 
   local pads = editor.list()
@@ -63,7 +83,7 @@ T['scratchpad']['refuses to be created without a name'] = function()
 end
 
 T['scratchpad']['keeps its folder and extension when renamed'] = function()
-  state.add_connection({ id = 1, name = 'cache', url = 'redis://h/0', state = 'connected' })
+  use_connection('cache', 'redis://h/0')
   editor.create('cache', 'keys')
 
   local renamed = editor.rename(editor.path('cache', 'keys'), 'sessions')
@@ -82,27 +102,21 @@ T['scratchpad']['falls back to a name when there is nothing usable left'] = func
 end
 
 T['scratchpad']['lives under core.path'] = function()
-  eq(vim.fs.dirname(vim.fs.dirname(editor.path('dev', 'x'))), require('sqmeow.paths').scratch())
+  eq(vim.fs.dirname(vim.fs.dirname(editor.path('dev', 'x'))), paths.scratch())
 end
 
 T['scratchpad']['marks the buffers it attaches to'] = function()
-  local buf = vim.api.nvim_create_buf(false, true)
+  local buf = helpers.temp_buf()
   eq(editor.is_scratchpad(buf), false)
 
   editor.attach(buf)
   eq(editor.is_scratchpad(buf), true)
 
-  local maps = vim.api.nvim_buf_get_keymap(buf, 'n')
-  local seen = {}
-  for _, map in ipairs(maps) do
-    seen[map.lhs] = true
-  end
-  eq(seen['<CR>'], true)
+  local seen = helpers.buf_maps(buf)
+  eq(seen['<CR>'] ~= nil, true)
   -- An editing buffer keeps its own motions.
   eq(seen['?'], nil)
   eq(seen['q'], nil)
-
-  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 T['row detail'] = MiniTest.new_set()
@@ -140,7 +154,7 @@ T['row detail']['keeps each value to one line that fits'] = function()
     { name = 'note', declared_type = 'text', value = 'first\nsecond line', is_null = false },
   }, 20)
 
-  eq(texts(lines), { 'note  text  first s' .. require('sqmeow.config').get().icons.grid.ellipsis })
+  eq(texts(lines), { 'note  text  first s' .. config.get().icons.grid.ellipsis })
 end
 
 T['row detail']['cuts a long type short but keeps its key'] = function()
@@ -154,57 +168,12 @@ T['row detail']['cuts a long type short but keeps its key'] = function()
     },
   }, 80)
 
-  local ellipsis = require('sqmeow.config').get().icons.grid.ellipsis
+  local ellipsis = config.get().icons.grid.ellipsis
   eq(texts(lines), { 'k  character ' .. ellipsis .. ' (PK)  x' })
 end
 
 T['row detail']['handles a row with no columns'] = function()
   eq(detail.lines({}, 80), {})
-end
-
-T['diagnostics'] = MiniTest.new_set({
-  hooks = {
-    post_case = function()
-      vim.diagnostic.reset(diagnostics.namespace)
-    end,
-  },
-})
-
-T['diagnostics']['sit on the lines the statement occupies'] = function()
-  local built = diagnostics.build({ error = 'no such column', start_line = 2, end_line = 4 })
-
-  eq(built.lnum, 2)
-  eq(built.end_lnum, 4)
-  eq(built.severity, vim.diagnostic.severity.ERROR)
-  eq(built.message, 'no such column')
-  eq(built.source, 'sqmeow')
-end
-
-T['diagnostics']['default to the first line when the engine sent no range'] = function()
-  local built = diagnostics.build({ error = 'broken' })
-  eq(built.lnum, 0)
-  eq(built.end_lnum, 0)
-end
-
-T['diagnostics']['land in the buffer the query came from'] = function()
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'select 1;', 'select nope;' })
-
-  diagnostics.set(buf, { error = 'no such column: nope', start_line = 1, end_line = 1 })
-  local found = vim.diagnostic.get(buf, { namespace = diagnostics.namespace })
-
-  eq(#found, 1)
-  eq(found[1].lnum, 1)
-
-  diagnostics.clear(buf)
-  eq(#vim.diagnostic.get(buf, { namespace = diagnostics.namespace }), 0)
-  vim.api.nvim_buf_delete(buf, { force = true })
-end
-
-T['diagnostics']['do nothing without a buffer to show them in'] = function()
-  diagnostics.set(nil, { error = 'broken' })
-  diagnostics.clear(nil)
-  diagnostics.set(9999, { error = 'broken' })
 end
 
 T['query log'] = MiniTest.new_set({
@@ -228,14 +197,14 @@ T['query log']['keeps the newest first'] = function()
 end
 
 T['query log']['forgets more than the engine holds'] = function()
-  require('sqmeow.config').apply({ query = { history_size = 2 } })
+  config.apply({ query = { history_size = 2 } })
   for id = 1, 5 do
     state.record_call({ call_id = id, state = 'done', rows = 0 })
   end
 
   eq(#state.calls, 2)
   eq(state.calls[1].call_id, 5)
-  require('sqmeow.config').apply({})
+  config.apply({})
 end
 
 T['query log']['describes what happened'] = function()
@@ -246,28 +215,28 @@ T['query log']['describes what happened'] = function()
     statement = 'select *\n  from people',
   })
 
-  eq(row:find('3 rows', 1, true) ~= nil, true)
-  eq(row:find('12ms', 1, true) ~= nil, true)
+  helpers.contains(row, '3 rows')
+  helpers.contains(row, '12ms')
   -- The statement is flattened to one line, because a picker row is one line.
-  eq(row:find('select * from people', 1, true) ~= nil, true)
+  helpers.contains(row, 'select * from people')
 end
 
 T['query log']['describes an error and a cancellation'] = function()
-  eq(log.describe({ state = 'error', statement = 'x' }):find('error', 1, true) ~= nil, true)
-  eq(log.describe({ state = 'cancelled', statement = 'x' }):find('cancelled', 1, true) ~= nil, true)
+  helpers.contains(log.describe({ state = 'error', statement = 'x' }), 'error')
+  helpers.contains(log.describe({ state = 'cancelled', statement = 'x' }), 'cancelled')
 end
 
 T['query log']['describes a statement that changed rows'] = function()
   local row = log.describe({ state = 'done', rows = 0, affected = 4, statement = 'update t' })
-  eq(row:find('4 affected', 1, true) ~= nil, true)
+  helpers.contains(row, '4 affected')
 end
 
 T['layout'] = MiniTest.new_set({
   hooks = {
     post_case = function()
       layout.forget()
-      require('sqmeow.ui.result').close()
-      require('sqmeow.ui.drawer').close()
+      result.close()
+      drawer.close()
     end,
   },
 })
@@ -283,7 +252,7 @@ end
 
 T['layout']['does not overwrite what it already recorded'] = function()
   layout.remember()
-  require('sqmeow.ui.result').open()
+  result.open()
   layout.remember()
 
   -- The second call must not capture a layout that already includes a plugin window.
@@ -294,31 +263,31 @@ T['layout']['puts the windows back when the last one closes'] = function()
   local before = vim.fn.winrestcmd()
   local windows = #vim.api.nvim_list_wins()
 
-  require('sqmeow.ui.result').open()
+  result.open()
   eq(#vim.api.nvim_list_wins() > windows, true)
 
-  require('sqmeow.ui.result').close()
+  result.close()
   eq(#vim.api.nvim_list_wins(), windows)
   eq(vim.fn.winrestcmd(), before)
   eq(layout.is_remembered(), false)
 end
 
 T['layout']['waits for the last window before restoring'] = function()
-  require('sqmeow.ui.drawer').open()
-  require('sqmeow.ui.result').open()
+  drawer.open()
+  result.open()
 
-  require('sqmeow.ui.result').close()
+  result.close()
   -- The drawer is still up, so the recorded layout is still needed.
   eq(layout.is_remembered(), true)
 
-  require('sqmeow.ui.drawer').close()
+  drawer.close()
 end
 
 T['knowing where a query goes'] = MiniTest.new_set({
   hooks = {
     post_case = function()
       state.reset()
-      require('sqmeow.config').apply({})
+      config.apply({})
       vim.cmd('silent! %bwipeout!')
       -- Scratchpads written here must not be left for the drawer's cases to count.
       vim.fn.delete(editor.directory(), 'rf')
@@ -329,38 +298,34 @@ T['knowing where a query goes'] = MiniTest.new_set({
 --- The winbar of the window showing a buffer, or nil when it has none.
 ---@return string|nil
 local function winbar(buf)
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if vim.api.nvim_win_get_buf(win) == buf then
-      return vim.wo[win].winbar
-    end
-  end
-  return nil
+  local win = helpers.find_win(function(candidate)
+    return vim.api.nvim_win_get_buf(candidate) == buf
+  end)
+  return win and vim.wo[win].winbar or nil
 end
 
 T['knowing where a query goes']['ties a scratchpad to the connection whose folder it is in'] = function()
-  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
+  use_connection('orders', 'sqlite://x.db')
 
   local buf = editor.create('orders', 'monthly')
   eq(vim.b[buf].sqmeow_connection, 'orders')
 end
 
 T['knowing where a query goes']['still ties a file from before folders by its name'] = function()
-  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
+  use_connection('orders', 'sqlite://x.db')
 
-  vim.fn.mkdir(editor.directory(), 'p')
   local path = vim.fs.joinpath(editor.directory(), 'orders.sql')
-  vim.fn.writefile({ 'select 1' }, path)
+  helpers.writefile(path, { 'select 1' })
 
   local buf = editor.open_path(path)
   eq(vim.b[buf].sqmeow_connection, 'orders')
 end
 
 T['knowing where a query goes']['leaves a file that names no connection alone'] = function()
-  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
+  use_connection('orders', 'sqlite://x.db')
 
-  vim.fn.mkdir(editor.directory(), 'p')
   local path = vim.fs.joinpath(editor.directory(), 'notes.sql')
-  vim.fn.writefile({ 'select 1' }, path)
+  helpers.writefile(path, { 'select 1' })
   MiniTest.finally(function()
     vim.fn.delete(path)
   end)
@@ -370,30 +335,24 @@ T['knowing where a query goes']['leaves a file that names no connection alone'] 
 end
 
 T['knowing where a query goes']['says so above the scratchpad'] = function()
-  state.add_connection({
-    id = 1,
-    name = 'orders',
-    url = 'postgres://x/orders',
-    dialect = 'postgres',
-    state = 'connected',
-  })
+  use_connection('orders', 'postgres://x/orders', { dialect = 'postgres' })
 
   local buf = editor.create('orders', 'monthly')
-  eq(winbar(buf):find('orders (postgres)', 1, true) ~= nil, true)
+  helpers.contains(winbar(buf), 'orders (postgres)')
 end
 
 T['knowing where a query goes']['says what is wrong when the connection is closed'] = function()
-  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
+  use_connection('orders', 'sqlite://x.db')
   local buf = editor.create('orders', 'monthly')
   state.remove_connection(1)
   editor.update_winbar()
 
-  eq(winbar(buf):find('`orders` is not open', 1, true) ~= nil, true)
+  helpers.contains(winbar(buf), '`orders` is not open')
 end
 
 T['knowing where a query goes']['draws no winbar when the option is off'] = function()
-  require('sqmeow.config').apply({ ui = { winbar = false } })
-  state.add_connection({ id = 1, name = 'orders', url = 'sqlite://x.db', state = 'connected' })
+  config.apply({ ui = { winbar = false } })
+  use_connection('orders', 'sqlite://x.db')
 
   local buf = editor.create('orders', 'monthly')
   eq(winbar(buf), '')
@@ -402,8 +361,8 @@ end
 T['opening everything'] = MiniTest.new_set({
   hooks = {
     post_case = function()
-      require('sqmeow.ui.result').close()
-      require('sqmeow.ui.drawer').close()
+      result.close()
+      drawer.close()
       layout.forget()
     end,
   },
@@ -411,28 +370,28 @@ T['opening everything'] = MiniTest.new_set({
 
 T['opening everything']['puts up the drawer and the result, and creates no scratchpad'] = function()
   local before = #editor.list()
-  require('sqmeow.api').open_all()
+  api.open_all()
 
-  eq(require('sqmeow.ui.drawer').is_open(), true)
-  eq(require('sqmeow.ui.result').is_open(), true)
+  eq(drawer.is_open(), true)
+  eq(result.is_open(), true)
   -- Scratchpads are made when someone asks for one, never as a side effect of opening the client.
   eq(editor.is_scratchpad(), false)
   eq(#editor.list(), before)
 end
 
 T['opening everything']['closes it all again'] = function()
-  require('sqmeow.api').open_all()
-  require('sqmeow.api').toggle()
+  api.open_all()
+  api.toggle()
 
-  eq(require('sqmeow.ui.drawer').is_open(), false)
-  eq(require('sqmeow.ui.result').is_open(), false)
+  eq(drawer.is_open(), false)
+  eq(result.is_open(), false)
 end
 
 T['editing window'] = MiniTest.new_set({
   hooks = {
     post_case = function()
-      require('sqmeow.ui.result').close()
-      require('sqmeow.ui.drawer').close()
+      result.close()
+      drawer.close()
       layout.forget()
     end,
   },
@@ -444,7 +403,6 @@ T['editing window']['is the current one when it can hold a file'] = function()
 end
 
 T['editing window']['is never the drawer'] = function()
-  local drawer = require('sqmeow.ui.drawer')
   local sidebar = drawer.open()
   vim.api.nvim_set_current_win(sidebar)
 
@@ -452,7 +410,6 @@ T['editing window']['is never the drawer'] = function()
 end
 
 T['editing window']['is never the result grid'] = function()
-  local result = require('sqmeow.ui.result')
   local grid = result.open()
   vim.api.nvim_set_current_win(grid)
 
@@ -460,10 +417,7 @@ T['editing window']['is never the result grid'] = function()
 end
 
 T['editing window']['is made when every window in the tab belongs to the plugin'] = function()
-  vim.cmd('tabnew')
-  MiniTest.finally(function()
-    vim.cmd('tabclose')
-  end)
+  tabpage()
 
   -- The one window in this tab holds a plugin surface, so there is nowhere for a file to go.
   -- Wiped afterwards: a stray buffer claiming to be one of ours is a plausible fallback for
@@ -485,10 +439,7 @@ end
 T['editing window']['stays in the tab it was asked from'] = function()
   local elsewhere = vim.api.nvim_get_current_win()
 
-  vim.cmd('tabnew')
-  MiniTest.finally(function()
-    vim.cmd('tabclose')
-  end)
+  tabpage()
 
   eq(layout.editing_window() ~= elsewhere, true)
 end
@@ -496,13 +447,10 @@ end
 T['closing'] = MiniTest.new_set()
 
 T['closing']['empties the window rather than throwing when it is the last one'] = function()
-  vim.cmd('tabnew')
-  MiniTest.finally(function()
-    vim.cmd('tabclose')
-  end)
+  tabpage()
 
   local win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(win, require('sqmeow.ui.result').buffer())
+  vim.api.nvim_win_set_buf(win, result.buffer())
 
   -- Neovim refuses to close the last window in a tab, and `q` in a result grid should not throw.
   layout.close_window(win)
@@ -512,10 +460,7 @@ T['closing']['empties the window rather than throwing when it is the last one'] 
 end
 
 T['closing']['closes the window when there is another'] = function()
-  vim.cmd('tabnew')
-  MiniTest.finally(function()
-    vim.cmd('tabclose')
-  end)
+  tabpage()
 
   vim.cmd('split')
   local win = vim.api.nvim_get_current_win()
@@ -527,14 +472,13 @@ end
 T['surfaces'] = MiniTest.new_set({
   hooks = {
     post_case = function()
-      require('sqmeow.ui.result').close()
+      result.close()
       layout.forget()
     end,
   },
 })
 
 T['surfaces']['count as closed once something else takes their window'] = function()
-  local result = require('sqmeow.ui.result')
   local win = result.open()
   eq(result.is_open(), true)
 
@@ -546,7 +490,6 @@ T['surfaces']['count as closed once something else takes their window'] = functi
 end
 
 T['surfaces']['open a window of their own rather than taking one back'] = function()
-  local result = require('sqmeow.ui.result')
   local taken = result.open()
   vim.api.nvim_win_set_buf(taken, vim.api.nvim_create_buf(false, true))
 
@@ -617,7 +560,7 @@ T['rename']['refuses a name already taken'] = function()
 
   local renamed, err = editor.rename(path, 'taken')
   eq(renamed, nil)
-  eq(assert(err, 'there should be an error'):find('already a scratchpad') ~= nil, true)
+  helpers.contains(assert(err, 'there should be an error'), 'already a scratchpad')
   eq(vim.uv.fs_stat(path) ~= nil, true)
 end
 
@@ -629,22 +572,18 @@ T['rename']['does nothing when the name has not changed'] = function()
 end
 
 T['rename']['refuses a path outside the scratchpad directory'] = function()
-  local elsewhere = vim.fn.tempname()
-  vim.fn.writefile({ 'important' }, elsewhere)
-  MiniTest.finally(function()
-    vim.fn.delete(elsewhere)
-  end)
+  local elsewhere = helpers.temp_file({ 'important' })
 
   local renamed, err = editor.rename(elsewhere, 'mine')
   eq(renamed, nil)
-  eq(assert(err, 'there should be an error'):find('is not a scratchpad') ~= nil, true)
+  helpers.contains(assert(err, 'there should be an error'), 'is not a scratchpad')
   eq(vim.uv.fs_stat(elsewhere) ~= nil, true)
 end
 
 T['rename']['says so when there is nothing there'] = function()
   local renamed, err = editor.rename(vim.fs.joinpath(editor.directory(), 'absent.sql'), 'other')
   eq(renamed, nil)
-  eq(assert(err, 'there should be an error'):find('there is no scratchpad') ~= nil, true)
+  helpers.contains(assert(err, 'there should be an error'), 'there is no scratchpad')
 end
 
 T['rename']['carries an open buffer over to the new name'] = function()
@@ -672,16 +611,14 @@ T['remove'] = MiniTest.new_set({
 })
 
 T['remove']['deletes the file'] = function()
-  local path = vim.fs.joinpath(editor.directory(), 'doomed.sql')
-  vim.fn.writefile({ 'select 1' }, path)
+  local path = scratchpad('doomed')
 
   eq(editor.remove(path), true)
   eq(vim.uv.fs_stat(path), nil)
 end
 
 T['remove']['unloads the buffer, so a later write cannot bring it back'] = function()
-  local path = vim.fs.joinpath(editor.directory(), 'loaded.sql')
-  vim.fn.writefile({ 'select 1' }, path)
+  local path = scratchpad('loaded')
 
   local buf = editor.open_path(path)
   eq(editor.remove(path), true)
@@ -689,36 +626,25 @@ T['remove']['unloads the buffer, so a later write cannot bring it back'] = funct
 end
 
 T['remove']['refuses a path outside the scratchpad directory'] = function()
-  local elsewhere = vim.fn.tempname()
-  vim.fn.writefile({ 'important' }, elsewhere)
-  MiniTest.finally(function()
-    vim.fn.delete(elsewhere)
-  end)
+  local elsewhere = helpers.temp_file({ 'important' })
 
   local removed, err = editor.remove(elsewhere)
   eq(removed, false)
-  eq(assert(err, 'there should be an error'):find('is not a scratchpad') ~= nil, true)
+  helpers.contains(assert(err, 'there should be an error'), 'is not a scratchpad')
   eq(vim.uv.fs_stat(elsewhere) ~= nil, true)
 end
 
 T['remove']['says so when there is nothing there'] = function()
   local removed, err = editor.remove(vim.fs.joinpath(editor.directory(), 'absent.sql'))
   eq(removed, false)
-  eq(assert(err, 'there should be an error'):find('there is no scratchpad') ~= nil, true)
+  helpers.contains(assert(err, 'there should be an error'), 'there is no scratchpad')
 end
 
 T['list'] = MiniTest.new_set()
 
 T['list']['names the saved files without their extension, newest first'] = function()
-  vim.fn.mkdir(editor.directory(), 'p')
-  for _, name in ipairs({ 'older', 'newer' }) do
-    vim.fn.writefile({ 'select 1' }, vim.fs.joinpath(editor.directory(), name .. '.sql'))
-  end
-  MiniTest.finally(function()
-    for _, name in ipairs({ 'older', 'newer' }) do
-      vim.fn.delete(vim.fs.joinpath(editor.directory(), name .. '.sql'))
-    end
-  end)
+  scratchpad('older')
+  scratchpad('newer')
 
   local names = vim.tbl_map(function(pad)
     return pad.name

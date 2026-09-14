@@ -21,15 +21,15 @@ local M = {}
 ---@field conn_id integer|nil Absent when the database it ran on is not open.
 ---@field state 'executing'|'done'|'error'|'cancelled'
 ---@field rows integer|nil How many rows the engine is holding.
+---@field view_rows integer|nil How many rows the current view holds. Absent when nothing is filtered or sorted.
 ---@field columns sqmeow.ResultColumn[]|nil One per column, in order.
 ---@field affected integer|nil
 ---@field truncated boolean|nil
 ---@field elapsed_ms integer|nil
 ---@field error string|nil
----@field start_line integer|nil For an error, the zero-based line the failing statement starts on.
----@field end_line integer|nil For an error, the zero-based line the failing statement ends on.
----@field source_buf integer|nil The buffer the SQL came from, where an error is reported.
 ---@field statement string|nil The SQL as submitted. The plugin's own record; the engine never sends it.
+---@field sql string|nil The statement the rows came from, as the engine reports it.
+---@field source sqmeow.ResultSource|nil Where the rows are stored, when they trace back to one relation.
 ---@field history boolean|nil False for a call that stays out of the query log.
 ---@field archive string|nil Where the engine was asked to save the rows for the log.
 ---@field connection string|nil For a result shown from the log, the database it ran on.
@@ -40,11 +40,16 @@ local M = {}
 ---
 --- `widest` is measured over every row rather than over the page on screen, which is what lets the
 --- grid pin a column's width and not have it shift as the user pages.
+---@class sqmeow.ResultSource Where a result's rows are stored.
+---@field kind string What the relation is, as the engine names it.
+---@field name string
+
 ---@class sqmeow.ResultColumn
 ---@field name string
 ---@field type_name string
 ---@field class string One of the type classes the icons are keyed by.
 ---@field key string|nil `primary_key` or `foreign_key`, absent when the column is neither.
+---@field editable boolean|nil Present when the column can be written back to where it is stored.
 ---@field widest integer Display columns taken by the widest value, `NULL`s excluded.
 ---@field nulls boolean Whether any value in the column is `NULL`.
 ---@field numeric boolean Whether every value is a number, which decides alignment.
