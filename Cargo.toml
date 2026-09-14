@@ -58,7 +58,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
-lto = "thin"
+opt-level = "z"
+lto = true
 codegen-units = 1
 strip = true
+# A panic stays in the request task that raised it instead of ending every connection.
 panic = "unwind"
+
+# Most of the binary is DuckDB's C++, whose queries run about twice as slow when built for size.
+[profile.release.package.libduckdb-sys]
+opt-level = 3
