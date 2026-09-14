@@ -45,9 +45,7 @@ async fn opens_an_in_memory_database() {
 
 #[tokio::test]
 async fn refuses_an_unknown_scheme() {
-    let error = Backend::connect("cassandra://localhost/x")
-        .await
-        .unwrap_err();
+    let error = Backend::connect("oracle://localhost/x").await.unwrap_err();
     assert!(matches!(error, Error::UnsupportedUrl(_)), "{error}");
 }
 
