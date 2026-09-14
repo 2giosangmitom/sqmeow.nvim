@@ -82,6 +82,21 @@ M.list = {
     },
   },
   {
+    id = 'scylla',
+    -- Cassandra speaks the same CQL, so they are one choice.
+    label = 'ScyllaDB or Cassandra',
+    scheme = 'scylla',
+    port = 9042,
+    fields = {
+      { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
+      { key = 'port', label = 'Port', optional = true, hint = '9042' },
+      -- Left empty, the drawer lists every keyspace.
+      { key = 'database', label = 'Keyspace', optional = true, hint = 'all' },
+      { key = 'user', label = 'User', optional = true },
+      { key = 'password', label = 'Password', mask = true, optional = true },
+    },
+  },
+  {
     id = 'sqlite',
     label = 'SQLite',
     scheme = 'sqlite',
@@ -104,6 +119,7 @@ local aliases = {
   valkey = 'redis',
   valkeys = 'redis',
   ['mongodb+srv'] = 'mongodb',
+  cassandra = 'scylla',
   sqlite3 = 'sqlite',
   file = 'sqlite',
 }

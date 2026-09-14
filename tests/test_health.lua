@@ -51,7 +51,7 @@ T['reports the engine, its adapters, the configuration and nui.nvim'] = function
   eq(sections.configuration[#sections.configuration], 'ok: configuration is valid')
   local engine = table.concat(sections.engine, '\n')
   helpers.contains(engine, 'ok: sqmeow-core')
-  for _, dialect in ipairs({ 'sqlite', 'duckdb', 'postgres', 'mysql', 'redis', 'mongodb' }) do
+  for _, dialect in ipairs({ 'sqlite', 'duckdb', 'postgres', 'mysql', 'redis', 'mongodb', 'scylla' }) do
     eq({ dialect, engine:find(dialect, 1, true) ~= nil }, { dialect, true })
   end
   eq(sections.dependencies[1], 'ok: nui.nvim is installed')
@@ -62,7 +62,7 @@ end
 T['flags a connection no adapter handles'] = function()
   vim.env.SQMEOW_CONNECTIONS = vim.json.encode({
     { name = 'fine', url = 'sqlite://fine.db' },
-    { name = 'odd', url = 'cassandra://host/space' },
+    { name = 'odd', url = 'oracle://host/space' },
   })
   use_env()
 
@@ -70,7 +70,7 @@ T['flags a connection no adapter handles'] = function()
   eq(#connections, 2)
   eq(starts(connections[1], 'ok: fine  sqlite://fine.db'), true)
   eq(starts(connections[2], 'error: odd'), true)
-  helpers.contains(connections[2], 'no adapter handles the `cassandra` scheme')
+  helpers.contains(connections[2], 'no adapter handles the `oracle` scheme')
 end
 
 T['warns about a source that cannot be read'] = function()
@@ -89,6 +89,8 @@ T['knows the dialect of every scheme the engine accepts'] = function()
     sqlite3 = 'sqlite',
     file = 'sqlite',
     duckdb = 'duckdb',
+    scylla = 'scylla',
+    cassandra = 'scylla',
     postgres = 'postgres',
     postgresql = 'postgres',
     PostgreSQL = 'postgres',
@@ -104,7 +106,7 @@ T['knows the dialect of every scheme the engine accepts'] = function()
   for scheme, dialect in pairs(schemes) do
     eq({ scheme, health.dialect_of(scheme) }, { scheme, dialect })
   end
-  eq(health.dialect_of('cassandra'), nil)
+  eq(health.dialect_of('oracle'), nil)
 end
 
 return T

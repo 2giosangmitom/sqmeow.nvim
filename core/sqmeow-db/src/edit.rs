@@ -3,6 +3,7 @@
 use crate::adapter::Dialect;
 use crate::error::{Error, Result};
 use crate::result::ResultSet;
+use crate::types::TypeClass;
 use crate::value::Cell;
 
 /// Where a result's rows are stored, for a result whose rows can be written back.
@@ -174,6 +175,14 @@ pub fn sql_plan(
         Ok(parts.join(" AND "))
     };
 
+    // CQL writes a missing row instead of failing, so each change checks the row is there.
+    let exists = if dialect == Dialect::Scylla {
+        " IF EXISTS"
+    } else {
+        ""
+    };
+    let type_name = |index: usize| result.columns()[index].type_name.as_str();
+
     let mut statements = Vec::new();
     for (row, cells) in changes.live_updates() {
         let sets = cells
@@ -182,18 +191,21 @@ pub fn sql_plan(
                 Ok(format!(
                     "{} = {}",
                     column(*index)?,
-                    value_literal(dialect, value.as_deref())
+                    value_literal(dialect, type_name(*index), value.as_deref())
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
         statements.push(format!(
-            "UPDATE {table} SET {} WHERE {}",
+            "UPDATE {table} SET {} WHERE {}{exists}",
             sets.join(", "),
             locate(*row)?
         ));
     }
     for row in &changes.deletes {
-        statements.push(format!("DELETE FROM {table} WHERE {}", locate(*row)?));
+        statements.push(format!(
+            "DELETE FROM {table} WHERE {}{exists}",
+            locate(*row)?
+        ));
     }
     for cells in &changes.inserts {
         if cells.is_empty() {
@@ -209,7 +221,7 @@ pub fn sql_plan(
             .collect::<Result<Vec<_>>>()?;
         let values: Vec<String> = cells
             .iter()
-            .map(|(_, value)| value_literal(dialect, value.as_deref()))
+            .map(|(index, value)| value_literal(dialect, type_name(*index), value.as_deref()))
             .collect();
         statements.push(format!(
             "INSERT INTO {table} ({}) VALUES ({})",
@@ -220,11 +232,32 @@ pub fn sql_plan(
     Ok(statements)
 }
 
-/// A value the user typed, as a SQL literal.
-pub fn value_literal(dialect: Dialect, value: Option<&str>) -> String {
+/// A value the user typed, as a SQL literal for a column of `type_name`.
+pub fn value_literal(dialect: Dialect, type_name: &str, value: Option<&str>) -> String {
     match value {
         None => "NULL".to_owned(),
+        // CQL does not read a quoted string as a number, a boolean, a uuid or a blob.
+        Some(text) if dialect == Dialect::Scylla && is_bare_literal(type_name, text) => {
+            text.to_owned()
+        }
         Some(text) => quote_text(dialect, text),
+    }
+}
+
+/// Whether text is a valid unquoted literal for a column of `type_name`.
+fn is_bare_literal(type_name: &str, text: &str) -> bool {
+    match TypeClass::from_type_name(type_name) {
+        TypeClass::Number => text.parse::<f64>().is_ok(),
+        TypeClass::Boolean => {
+            text.eq_ignore_ascii_case("true") || text.eq_ignore_ascii_case("false")
+        }
+        TypeClass::Uuid => {
+            !text.is_empty() && text.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+        }
+        TypeClass::Binary => text
+            .strip_prefix("0x")
+            .is_some_and(|hex| hex.chars().all(|c| c.is_ascii_hexdigit())),
+        _ => false,
     }
 }
 
@@ -256,6 +289,7 @@ fn cell_literal(dialect: Dialect, cell: &Cell) -> Result<String> {
             let hex: String = head.iter().map(|byte| format!("{byte:02x}")).collect();
             match dialect {
                 Dialect::Postgres => format!("'\\x{hex}'"),
+                Dialect::Scylla => format!("0x{hex}"),
                 // DuckDB reads `X'ab'` as text, and `\x` escapes one byte at a time.
                 Dialect::DuckDb => {
                     let escaped: String =
@@ -265,6 +299,7 @@ fn cell_literal(dialect: Dialect, cell: &Cell) -> Result<String> {
                 _ => format!("X'{hex}'"),
             }
         }
+        Cell::Uuid(text) if dialect == Dialect::Scylla => text.clone(),
         other => quote_text(dialect, &other.text("")),
     })
 }
@@ -391,6 +426,55 @@ mod tests {
             r"'\xab\x63'"
         );
         assert!(cell_literal(Dialect::Sqlite, &Cell::bytes(&[0; 200])).is_err());
+    }
+
+    #[test]
+    fn a_cql_plan_writes_typed_literals_and_checks_the_row_exists() {
+        let id = "5b6962dd-3f90-4c93-8f61-eabfa4a803e2";
+        let mut result = ResultSet::new(
+            "select id, n, label from t",
+            vec![
+                Column::new("id", "uuid").with_origin("id"),
+                Column::new("n", "int").with_origin("n"),
+                Column::new("label", "text").with_origin("label"),
+            ],
+        );
+        result.push_row(vec![Cell::Uuid(id.into()), Cell::Int(1), Cell::Null]);
+        result.set_source(Some(Source::Table {
+            schema: Some("ks".into()),
+            name: "t".into(),
+            key: vec![0],
+        }));
+
+        let update = Changes {
+            updates: vec![(0, vec![(1, Some("42".into())), (2, Some("42".into()))])],
+            ..Changes::default()
+        };
+        assert_eq!(
+            sql_plan(Dialect::Scylla, quote, &result, &update).unwrap(),
+            vec![format!(
+                r#"UPDATE "ks"."t" SET "n" = 42, "label" = '42' WHERE "id" = {id} IF EXISTS"#
+            )]
+        );
+        let delete = Changes {
+            deletes: vec![0],
+            ..Changes::default()
+        };
+        assert_eq!(
+            sql_plan(Dialect::Scylla, quote, &result, &delete).unwrap(),
+            vec![format!(
+                r#"DELETE FROM "ks"."t" WHERE "id" = {id} IF EXISTS"#
+            )]
+        );
+        // Anything that is not a valid literal stays quoted.
+        assert_eq!(
+            value_literal(Dialect::Scylla, "int", Some("1; x")),
+            "'1; x'"
+        );
+        assert_eq!(
+            cell_literal(Dialect::Scylla, &Cell::bytes(&[0xab])).unwrap(),
+            "0xab"
+        );
     }
 
     #[test]

@@ -805,6 +805,15 @@ async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>
         .count();
     let functions = routines.len() - procedures;
 
+    // CQL has user-defined functions and aggregates, but no procedures.
+    if connection.backend.dialect() == Dialect::Scylla {
+        return Ok(vec![
+            group_node("tables", "Tables", "tables", tables),
+            group_node("views", "Views", "views", views),
+            group_node("functions", "Functions", "functions", functions),
+        ]);
+    }
+
     Ok(vec![
         group_node("tables", "Tables", "tables", tables),
         group_node("views", "Views", "views", views),

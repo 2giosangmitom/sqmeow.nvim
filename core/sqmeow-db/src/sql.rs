@@ -136,6 +136,8 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
     let mut creating: Option<bool> = None;
     let mut routine = false;
     let mut body_depth = 0usize;
+    // Inside a CQL `BEGIN BATCH`, which ends at `APPLY BATCH`.
+    let mut batch = false;
 
     let mut start = 0usize;
     let mut line = 0usize;
@@ -178,6 +180,11 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                     index += 2;
                     continue;
                 }
+                '/' if dialect == Dialect::Scylla && peek!(1) == Some('/') => {
+                    mode = Mode::LineComment;
+                    index += 2;
+                    continue;
+                }
                 '#' if dialect == Dialect::MySql => {
                     mode = Mode::LineComment;
                     index += 1;
@@ -194,7 +201,7 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                 }
                 '`' => mode = Mode::Backtick,
                 // A `$` inside a word is part of an identifier, such as `price$usd`, not a tag.
-                '$' if dialect == Dialect::Postgres
+                '$' if matches!(dialect, Dialect::Postgres | Dialect::Scylla)
                     && !index
                         .checked_sub(1)
                         .is_some_and(|before| is_word(chars[before])) =>
@@ -205,7 +212,7 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                         continue;
                     }
                 }
-                ';' if body_depth == 0 => {
+                ';' if body_depth == 0 && !batch => {
                     push(
                         &mut statements,
                         dialect,
@@ -230,7 +237,11 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                     let mut end = word_end(&chars, index);
                     let word = chars[index..end].iter().collect::<String>().to_lowercase();
                     match word.as_str() {
-                        _ if creating.is_none() => creating = Some(word == "create"),
+                        _ if creating.is_none() => {
+                            creating = Some(word == "create");
+                            batch = dialect == Dialect::Scylla && word == "begin";
+                        }
+                        "apply" if batch => batch = false,
                         "trigger" | "procedure" | "function" | "event"
                             if creating == Some(true) =>
                         {
@@ -374,7 +385,11 @@ fn split_comments_only(text: &str, dialect: Dialect) -> bool {
         }
         let line_comment = rest
             .strip_prefix("--")
-            .or_else(|| rest.strip_prefix('#').filter(|_| dialect == Dialect::MySql));
+            .or_else(|| rest.strip_prefix('#').filter(|_| dialect == Dialect::MySql))
+            .or_else(|| {
+                rest.strip_prefix("//")
+                    .filter(|_| dialect == Dialect::Scylla)
+            });
         if let Some(after) = line_comment {
             rest = after
                 .split_once('\n')
@@ -766,5 +781,17 @@ mod tests {
         assert_eq!(statements[0].end_line, 0);
         assert_eq!(statements[1].start_line, 2);
         assert_eq!(statements[1].end_line, 3);
+    }
+
+    #[test]
+    fn a_cql_batch_and_function_body_are_one_statement_each() {
+        let input = "BEGIN BATCH\n  INSERT INTO t (a) VALUES (1);\n  INSERT INTO t (a) VALUES (2);\nAPPLY BATCH;\n\
+                     CREATE FUNCTION f(x int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS $$ return x; $$;\n\
+                     // a note\nselect * from t;\n// only a note";
+        let statements = split(input, Dialect::Scylla);
+        assert_eq!(statements.len(), 3, "{statements:?}");
+        assert!(statements[0].sql.ends_with("APPLY BATCH"));
+        assert!(statements[1].sql.ends_with("$$ return x; $$"));
+        assert!(statements[2].sql.ends_with("select * from t"));
     }
 }

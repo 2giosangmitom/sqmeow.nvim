@@ -41,6 +41,7 @@ M.highlights = {
   duckdb = 'SqmeowIconDuckdb',
   redis = 'SqmeowIconRedis',
   mongodb = 'SqmeowIconMongodb',
+  scylla = 'SqmeowIconScylla',
 
   -- What a column holds, or the key it is.
   text = 'SqmeowIconTypeText',

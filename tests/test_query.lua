@@ -65,7 +65,7 @@ T['connecting']['reports the dialect it found'] = function()
 end
 
 T['connecting']['reports a url it cannot open'] = function()
-  local id = helpers.connect('cassandra://localhost/x')
+  local id = helpers.connect('oracle://localhost/x')
   -- A failed connection is forgotten rather than left in the list as a thing to pick.
   eq(state.connections[id], nil)
 end

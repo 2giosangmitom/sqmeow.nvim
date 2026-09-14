@@ -64,6 +64,7 @@ M.links = {
   SqmeowIconDuckdb = 'Constant',
   SqmeowIconRedis = 'Constant',
   SqmeowIconMongodb = 'String',
+  SqmeowIconScylla = 'Constant',
   SqmeowIconKey = 'Identifier',
 }
 

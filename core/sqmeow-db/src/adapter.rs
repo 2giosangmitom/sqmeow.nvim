@@ -21,6 +21,8 @@ pub enum Dialect {
     /// Database commands written as Extended JSON documents, and collections where others have
     /// tables.
     MongoDb,
+    /// CQL, spoken by ScyllaDB and Apache Cassandra.
+    Scylla,
 }
 
 impl Dialect {
@@ -33,6 +35,7 @@ impl Dialect {
             Self::MySql => "mysql",
             Self::Redis => "redis",
             Self::MongoDb => "mongodb",
+            Self::Scylla => "scylla",
         }
     }
 
@@ -52,6 +55,7 @@ impl Dialect {
             "redis" | "rediss" | "valkey" | "valkeys" => Some(Self::Redis),
             // `+srv` finds the hosts through DNS, which is the driver's business too.
             "mongodb" | "mongodb+srv" => Some(Self::MongoDb),
+            "scylla" | "cassandra" => Some(Self::Scylla),
             _ => None,
         }
     }
@@ -140,6 +144,9 @@ mod tests {
         for url in ["mongodb://h/app", "mongodb+srv://cluster.example.net/app"] {
             assert_eq!(Dialect::from_url(url), Some(Dialect::MongoDb), "{url}");
         }
+        for url in ["scylla://h/ks", "cassandra://h"] {
+            assert_eq!(Dialect::from_url(url), Some(Dialect::Scylla), "{url}");
+        }
     }
 
     #[test]
@@ -152,7 +159,7 @@ mod tests {
 
     #[test]
     fn an_unknown_scheme_is_rejected() {
-        assert_eq!(Dialect::from_url("cassandra://localhost"), None);
+        assert_eq!(Dialect::from_url("oracle://localhost"), None);
         assert_eq!(Dialect::from_url("not a url"), None);
         assert_eq!(Dialect::from_url(""), None);
     }

@@ -92,6 +92,7 @@ M.defaults = {
     duckdb = '󰇥',
     redis = '',
     mongodb = '',
+    scylla = '󰆼',
 
     -- What sits before a drawer row: whether its children are showing, or that it has none.
     markers = { open = '', closed = '', leaf = ' ' },

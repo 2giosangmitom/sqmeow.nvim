@@ -250,4 +250,9 @@ T['build']['refuses a port on a mongodb srv address'] = function()
   eq(err, 'a MongoDB SRV address takes no port')
 end
 
+T['build']['writes a scylla keyspace where a database would be'] = function()
+  eq(url.build('scylla', { host = 'h', database = 'shop' }), 'scylla://h/shop')
+  eq(url.parse('cassandra://u:p@h:9042/shop').dialect, 'scylla')
+end
+
 return T

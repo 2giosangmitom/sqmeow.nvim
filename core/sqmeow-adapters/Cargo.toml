@@ -13,7 +13,9 @@ sqmeow-db.workspace = true
 duckdb.workspace = true
 futures-util.workspace = true
 mongodb.workspace = true
+percent-encoding.workspace = true
 redis.workspace = true
+scylla.workspace = true
 serde_json.workspace = true
 sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
