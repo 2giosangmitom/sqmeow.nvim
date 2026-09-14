@@ -1,7 +1,9 @@
 //! The DuckDB adapter against a real in-memory database.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Changes, Error, ForeignKey, KeyKind, RelationKind, Source, TypeClass};
+use sqmeow_db::{
+    Cell, Changes, Error, ForeignKey, KeyKind, RelationKind, Source, Table, TypeClass,
+};
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -197,15 +199,14 @@ async fn a_plain_select_from_a_table_is_edited_by_its_key() {
 
     assert_eq!(
         result.source(),
-        Some(&Source::Table {
+        Some(&Source::Tables(vec![Table {
             schema: Some("main".into()),
             name: "people".into(),
             key: vec![0],
-        })
+            columns: vec![(0, "id".into()), (1, "name".into())],
+        }]))
     );
     assert_eq!(result.columns()[0].key, KeyKind::Primary);
-    assert_eq!(result.columns()[1].origin.as_deref(), Some("name"));
-    assert_eq!(result.columns()[2].origin, None);
 
     let changes = Changes {
         updates: vec![(0, vec![(1, Some("ann".into()))])],
@@ -233,7 +234,7 @@ async fn every_spelling_of_one_table_is_editable() {
     ] {
         let result = run(&backend, sql).await;
         assert!(
-            matches!(result.source(), Some(Source::Table { name, key, .. }) if name == "people" && key == &[0]),
+            matches!(result.source(), Some(Source::Tables(tables)) if tables[0].name == "people" && tables[0].key == [0]),
             "{sql}: {:?}",
             result.source()
         );
@@ -304,4 +305,53 @@ async fn a_row_gone_since_it_was_read_is_not_written() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("no row had that key"), "{error}");
+}
+
+#[tokio::test]
+async fn a_join_is_edited_through_each_table_key() {
+    let backend = people().await;
+    run(
+        &backend,
+        "create table teams (id integer primary key, name varchar)",
+    )
+    .await;
+    run(&backend, "insert into teams values (1, 'red')").await;
+
+    let result = run(
+        &backend,
+        "select p.*, t.name as team_name, t.id
+         from people p left join teams t on t.id = p.team
+         order by p.id",
+    )
+    .await;
+    match result.source() {
+        Some(Source::Tables(tables)) => {
+            assert_eq!(tables.len(), 2);
+            assert_eq!(tables[0].key, vec![0]);
+            assert_eq!(tables[1].key, vec![4]);
+            assert_eq!(tables[1].column(3), Some("name"));
+        }
+        other => panic!("expected tables, got {other:?}"),
+    }
+    assert_eq!(result.columns()[4].key, KeyKind::Primary);
+
+    let changes = Changes {
+        updates: vec![(
+            0,
+            vec![(1, Some("ann".into())), (3, Some("crimson".into()))],
+        )],
+        ..Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&result, &changes).unwrap())
+        .await
+        .unwrap();
+
+    let after = run(
+        &backend,
+        "select p.name, t.name from people p join teams t on t.id = p.team",
+    )
+    .await;
+    assert_eq!(after.cell(0, 0), Some(&Cell::Text("ann".into())));
+    assert_eq!(after.cell(0, 1), Some(&Cell::Text("crimson".into())));
 }

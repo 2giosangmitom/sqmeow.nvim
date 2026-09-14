@@ -1,7 +1,7 @@
 // Cases every CQL server must pass.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Changes, Error, KeyKind, RelationKind, ResultSet, Source};
+use sqmeow_db::{Cell, Changes, Error, KeyKind, RelationKind, ResultSet, Source, Table};
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -176,11 +176,17 @@ async fn edits_a_row_by_its_whole_primary_key() {
     let result = run(&backend, "SELECT pk, ck, n, label FROM sqmeow.edited").await;
     assert_eq!(
         result.source(),
-        Some(&Source::Table {
+        Some(&Source::Tables(vec![Table {
             schema: Some("sqmeow".into()),
             name: "edited".into(),
             key: vec![0, 1],
-        })
+            columns: vec![
+                (0, "pk".into()),
+                (1, "ck".into()),
+                (2, "n".into()),
+                (3, "label".into()),
+            ],
+        }]))
     );
     assert_eq!(result.columns()[1].key, KeyKind::Primary);
 

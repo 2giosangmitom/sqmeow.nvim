@@ -4,9 +4,42 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use rmpv::Value;
 use sqmeow_adapters::Backend;
 use sqmeow_db::ResultSet;
 use tokio_util::sync::CancellationToken;
+
+/// The id the plugin gave a connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ConnId(pub i64);
+
+/// The id of one run of statements, and of the result it keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CallId(pub u64);
+
+impl std::fmt::Display for ConnId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Display for CallId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<ConnId> for Value {
+    fn from(id: ConnId) -> Self {
+        Value::from(id.0)
+    }
+}
+
+impl From<CallId> for Value {
+    fn from(id: CallId) -> Self {
+        Value::from(id.0)
+    }
+}
 
 /// Engine-side settings, mirrored from the plugin's configuration.
 #[derive(Debug, Clone)]
@@ -46,34 +79,43 @@ pub struct OptionsPatch {
 /// One open connection.
 #[derive(Debug)]
 pub struct Connection {
-    pub id: i64,
+    pub id: ConnId,
     pub name: String,
     pub backend: Backend,
-}
-
-impl Connection {
-    /// Record an open connection, with nothing introspected yet.
-    pub fn new(id: i64, name: String, backend: Backend) -> Self {
-        Self { id, name, backend }
-    }
 }
 
 /// A finished result, kept so its rows can be read and reopened.
 #[derive(Debug)]
 pub struct Call {
-    pub id: u64,
-    pub conn_id: i64,
+    pub id: CallId,
+    pub conn_id: ConnId,
     pub result: ResultSet,
     /// The rows the editor is paging through, when it filtered or sorted them.
     pub view: Mutex<Option<Arc<Vec<usize>>>>,
 }
 
+impl Call {
+    pub fn new(id: CallId, conn_id: ConnId, result: ResultSet) -> Self {
+        Self {
+            id,
+            conn_id,
+            result,
+            view: Mutex::default(),
+        }
+    }
+
+    /// The rows the editor pages through: the view when there is one.
+    pub fn view(&self) -> Option<Arc<Vec<usize>>> {
+        self.view.lock().expect("view poisoned").clone()
+    }
+}
+
 /// The state one editor session owns.
 #[derive(Default)]
 pub struct Session {
-    connections: Mutex<HashMap<i64, Arc<Connection>>>,
+    connections: Mutex<HashMap<ConnId, Arc<Connection>>>,
     calls: Mutex<History>,
-    running: Mutex<HashMap<u64, CancellationToken>>,
+    running: Mutex<HashMap<CallId, CancellationToken>>,
     options: Mutex<Options>,
     next_call_id: AtomicU64,
 }
@@ -81,9 +123,31 @@ pub struct Session {
 #[derive(Default)]
 struct History {
     /// Shared, so a result can be saved to disk without holding the lock for as long as that takes.
-    calls: HashMap<u64, Arc<Call>>,
+    calls: HashMap<CallId, Arc<Call>>,
     /// Call ids oldest first, which is the order they are evicted in.
-    order: VecDeque<u64>,
+    order: VecDeque<CallId>,
+}
+
+/// A call registered as running, which stops being cancellable when dropped.
+pub struct RunningCall<'a> {
+    session: &'a Session,
+    id: CallId,
+    token: CancellationToken,
+}
+
+impl RunningCall<'_> {
+    /// The token a cancel trips.
+    pub fn token(&self) -> CancellationToken {
+        self.token.clone()
+    }
+}
+
+impl Drop for RunningCall<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut running) = self.session.running.lock() {
+            running.remove(&self.id);
+        }
+    }
 }
 
 impl Session {
@@ -108,7 +172,7 @@ impl Session {
     }
 
     /// Look up a connection.
-    pub fn connection(&self, id: i64) -> Option<Arc<Connection>> {
+    pub fn connection(&self, id: ConnId) -> Option<Arc<Connection>> {
         self.connections
             .lock()
             .expect("connections poisoned")
@@ -117,7 +181,7 @@ impl Session {
     }
 
     /// Forget a connection, returning it so the caller can close its pool.
-    pub fn remove_connection(&self, id: i64) -> Option<Arc<Connection>> {
+    pub fn remove_connection(&self, id: ConnId) -> Option<Arc<Connection>> {
         self.connections
             .lock()
             .expect("connections poisoned")
@@ -125,7 +189,7 @@ impl Session {
     }
 
     /// Every open connection, by ascending id, as the editor sees them.
-    pub fn describe_connections(&self) -> Vec<rmpv::Value> {
+    pub fn describe_connections(&self) -> Vec<Value> {
         let mut connections: Vec<Arc<Connection>> = self
             .connections
             .lock()
@@ -136,51 +200,39 @@ impl Session {
         connections.sort_unstable_by_key(|connection| connection.id);
 
         connections
-            .into_iter()
+            .iter()
             .map(|connection| {
                 crate::value::map(vec![
-                    ("id", rmpv::Value::from(connection.id)),
-                    ("name", rmpv::Value::from(connection.name.clone())),
-                    (
-                        "dialect",
-                        rmpv::Value::from(connection.backend.dialect().name()),
-                    ),
+                    ("id", Value::from(connection.id)),
+                    ("name", Value::from(connection.name.as_str())),
+                    ("dialect", Value::from(connection.backend.dialect().name())),
                 ])
             })
             .collect()
     }
 
     /// Reserve the next call id.
-    pub fn next_call_id(&self) -> u64 {
-        self.next_call_id.fetch_add(1, Ordering::Relaxed) + 1
+    pub fn next_call_id(&self) -> CallId {
+        CallId(self.next_call_id.fetch_add(1, Ordering::Relaxed) + 1)
     }
 
-    /// Register a cancellation token for a call that is about to run.
-    pub fn begin_call(&self, call_id: u64) -> CancellationToken {
+    /// Register a call that is about to run, until the returned guard drops.
+    pub fn begin_call(&self, id: CallId) -> RunningCall<'_> {
         let token = CancellationToken::new();
         self.running
             .lock()
             .expect("running poisoned")
-            .insert(call_id, token.clone());
-        token
-    }
-
-    /// Drop a call's cancellation token, once it is no longer running.
-    pub fn end_call(&self, call_id: u64) {
-        self.running
-            .lock()
-            .expect("running poisoned")
-            .remove(&call_id);
+            .insert(id, token.clone());
+        RunningCall {
+            session: self,
+            id,
+            token,
+        }
     }
 
     /// Cancel a running call. Returns whether there was one to cancel.
-    pub fn cancel(&self, call_id: u64) -> bool {
-        match self
-            .running
-            .lock()
-            .expect("running poisoned")
-            .remove(&call_id)
-        {
+    pub fn cancel(&self, id: CallId) -> bool {
+        match self.running.lock().expect("running poisoned").remove(&id) {
             Some(token) => {
                 token.cancel();
                 true
@@ -207,9 +259,9 @@ impl Session {
     }
 
     /// Read a stored result.
-    pub fn with_call<T>(&self, call_id: u64, read: impl FnOnce(&Call) -> T) -> Option<T> {
+    pub fn with_call<T>(&self, id: CallId, read: impl FnOnce(&Call) -> T) -> Option<T> {
         let history = self.calls.lock().expect("calls poisoned");
-        history.calls.get(&call_id).map(|call| read(call))
+        history.calls.get(&id).map(|call| read(call))
     }
 }
 
@@ -224,19 +276,14 @@ mod tests {
         for n in 0..rows {
             result.push_row(vec![Cell::Int(n as i64)]);
         }
-        Call {
-            id,
-            conn_id: 1,
-            result,
-            view: Default::default(),
-        }
+        Call::new(CallId(id), ConnId(1), result)
     }
 
     #[test]
     fn call_ids_start_at_one_and_do_not_repeat() {
         let session = Session::default();
-        assert_eq!(session.next_call_id(), 1);
-        assert_eq!(session.next_call_id(), 2);
+        assert_eq!(session.next_call_id(), CallId(1));
+        assert_eq!(session.next_call_id(), CallId(2));
     }
 
     #[test]
@@ -255,7 +302,6 @@ mod tests {
         });
 
         assert_eq!(options.history_size, 8);
-        // Untouched by a patch that did not name it.
         assert_eq!(options.max_rows, 100_000);
     }
 
@@ -274,17 +320,24 @@ mod tests {
     #[test]
     fn cancelling_an_unknown_call_says_so() {
         let session = Session::default();
-        assert!(!session.cancel(42));
+        assert!(!session.cancel(CallId(42)));
     }
 
     #[test]
     fn cancelling_a_running_call_trips_its_token() {
         let session = Session::default();
-        let token = session.begin_call(1);
-        assert!(session.cancel(1));
-        assert!(token.is_cancelled());
+        let running = session.begin_call(CallId(1));
+        assert!(session.cancel(CallId(1)));
+        assert!(running.token().is_cancelled());
         // A call can only be cancelled once.
-        assert!(!session.cancel(1));
+        assert!(!session.cancel(CallId(1)));
+    }
+
+    #[test]
+    fn a_finished_call_can_no_longer_be_cancelled() {
+        let session = Session::default();
+        drop(session.begin_call(CallId(1)));
+        assert!(!session.cancel(CallId(1)));
     }
 
     #[test]
@@ -299,19 +352,18 @@ mod tests {
         session.store_call(call(2, 1));
         session.store_call(call(3, 1));
 
-        assert!(session.with_call(1, |_| ()).is_none());
-        assert!(session.with_call(2, |_| ()).is_some());
-        assert!(session.with_call(3, |_| ()).is_some());
+        assert!(session.with_call(CallId(1), |_| ()).is_none());
+        assert!(session.with_call(CallId(2), |_| ()).is_some());
+        assert!(session.with_call(CallId(3), |_| ()).is_some());
     }
 
     #[test]
     fn a_stored_result_keeps_every_row_for_the_editor_to_ask_for() {
-        // Where the editor has got to is not recorded here any more.
         let session = Session::default();
         session.store_call(call(1, 250));
 
         assert_eq!(
-            session.with_call(1, |call| call.result.row_count()),
+            session.with_call(CallId(1), |call| call.result.row_count()),
             Some(250)
         );
     }
@@ -319,8 +371,8 @@ mod tests {
     #[test]
     fn an_empty_session_has_no_connections() {
         let session = Session::default();
-        assert!(session.connection(1).is_none());
+        assert!(session.connection(ConnId(1)).is_none());
         assert!(session.describe_connections().is_empty());
-        assert!(session.remove_connection(1).is_none());
+        assert!(session.remove_connection(ConnId(1)).is_none());
     }
 }

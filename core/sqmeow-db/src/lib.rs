@@ -13,7 +13,7 @@ pub mod view;
 pub mod width;
 
 pub use adapter::{Adapter, Dialect};
-pub use edit::{Changes, RedisKind, Source};
+pub use edit::{Changes, RedisKind, Source, Table, TableBinder, TableName};
 pub use error::{Error, Result};
 pub use export::{Format, Rows};
 pub use node::{

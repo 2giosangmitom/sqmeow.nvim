@@ -39,6 +39,14 @@ impl Dialect {
         }
     }
 
+    /// Quote an SQL identifier.
+    pub fn quote_ident(self, name: &str) -> String {
+        match self {
+            Self::MySql => format!("`{}`", name.replace('`', "``")),
+            _ => format!("\"{}\"", name.replace('"', "\"\"")),
+        }
+    }
+
     /// Work out the dialect from a connection URL's scheme.
     pub fn from_url(url: &str) -> Option<Self> {
         let scheme = url.split_once("://").map_or_else(
@@ -67,7 +75,9 @@ pub trait Adapter: Send + Sync {
     fn dialect(&self) -> Dialect;
 
     /// Quote an identifier for this dialect.
-    fn quote_ident(&self, name: &str) -> String;
+    fn quote_ident(&self, name: &str) -> String {
+        self.dialect().quote_ident(name)
+    }
 
     /// Run one statement, streaming rows until the cap is reached or the token is cancelled.
     fn execute(
@@ -79,12 +89,7 @@ pub trait Adapter: Send + Sync {
 
     /// Plan staged changes to a result into the statements that make them.
     fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
-        crate::edit::sql_plan(
-            self.dialect(),
-            |name| self.quote_ident(name),
-            result,
-            changes,
-        )
+        crate::edit::sql_plan(self.dialect(), result, changes)
     }
 
     /// Run planned statements together: all of them or, as far as the database allows, none.

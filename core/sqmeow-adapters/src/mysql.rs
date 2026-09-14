@@ -7,16 +7,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use sqlx::mysql::{MySqlConnectOptions, MySqlConnection, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::{
-    AssertSqlSafe, Connection, Decode, MySql, Row, Statement as _, Type, TypeInfo, ValueRef, types,
+    AssertSqlSafe, Connection, Decode, MySql, Pool, Row, Statement as _, Type, TypeInfo, ValueRef,
+    types,
 };
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode, Source,
+    ResultSet, RoutineNode, SchemaNode, Source, TableName,
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::stream::{
-    self, TableKeys, foreign_key, origins, prepare, result_columns, text_or_bytes,
+    self, SqlxAdapter, TableKeys, foreign_key, origins, prepare, result_columns, text_or_bytes,
 };
 
 /// A pool against one MySQL or MariaDB database.
@@ -71,7 +72,7 @@ impl MySqlAdapter {
     }
 
     /// Stop the query the session is running, from a connection of its own.
-    async fn stop_running(&self) {
+    async fn stop_query(&self) {
         let id = self.connection_id.load(Ordering::Relaxed);
         let stop = async {
             let mut connection = MySqlConnection::connect_with(&self.options).await?;
@@ -105,12 +106,8 @@ impl MySqlAdapter {
     }
 
     /// Ask `information_schema` which columns of one table are keys.
-    async fn read_keys(&self, origin: String) -> HashMap<String, KeyKind> {
-        // MySQL qualifies the table with its schema when it knows one.
-        let (schema, table) = match origin.rsplit_once('.') {
-            Some((schema, table)) => (Some(schema), table),
-            None => (None, origin.as_str()),
-        };
+    async fn read_keys(&self, origin: TableName) -> HashMap<String, KeyKind> {
+        let (schema, table) = (origin.schema.as_deref(), origin.name.as_str());
 
         let rows = sqlx::query(
             "select c.column_name as column_name,
@@ -135,7 +132,7 @@ impl MySqlAdapter {
         let rows = match rows {
             Ok(rows) => rows,
             Err(error) => {
-                tracing::debug!(%error, %origin, "could not read which result columns are keys");
+                tracing::debug!(%error, ?origin, "could not read which result columns are keys");
                 return HashMap::new();
             }
         };
@@ -146,6 +143,34 @@ impl MySqlAdapter {
                 Some((column, key_kind(row)))
             })
             .collect()
+    }
+}
+
+impl SqlxAdapter for MySqlAdapter {
+    type Db = MySql;
+
+    fn pool(&self) -> &Pool<MySql> {
+        &self.pool
+    }
+
+    async fn describe(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
+        self.columns(statement).await
+    }
+
+    fn decode(row: &MySqlRow, index: usize) -> Cell {
+        decode_cell(row, index)
+    }
+
+    fn affected(outcome: &<MySql as sqlx::Database>::QueryResult) -> u64 {
+        outcome.rows_affected()
+    }
+
+    async fn stop_running(&self) {
+        self.stop_query().await;
+    }
+
+    fn forget(&self) {
+        self.keys.forget();
     }
 }
 
@@ -168,10 +193,6 @@ impl Adapter for MySqlAdapter {
         Dialect::MySql
     }
 
-    fn quote_ident(&self, name: &str) -> String {
-        format!("`{}`", name.replace('`', "``"))
-    }
-
     async fn apply(&self, statements: &[String]) -> Result<()> {
         stream::transact(&self.pool, statements, |outcome| outcome.rows_affected()).await
     }
@@ -182,26 +203,7 @@ impl Adapter for MySqlAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let (columns, source) = self.columns(statement).await;
-        let outcome = stream::execute(
-            &self.pool,
-            statement,
-            columns,
-            max_rows,
-            &cancel,
-            |outcome| outcome.rows_affected(),
-            decode_cell,
-        )
-        .await;
-        if matches!(outcome, Err(Error::Cancelled)) {
-            self.stop_running().await;
-        }
-        if stream::may_change_schema(statement) {
-            self.keys.forget();
-        }
-        let mut result = outcome?;
-        result.set_source(source);
-        Ok(result)
+        stream::run(self, statement, max_rows, &cancel).await
     }
 
     /// MySQL has no schemas within a database, so its databases fill that level of the tree.

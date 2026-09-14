@@ -26,7 +26,7 @@ local M = {}
 ---@field error string|nil
 ---@field statement string|nil The SQL as submitted.
 ---@field sql string|nil The statement the rows came from, as the engine reports it.
----@field source sqmeow.ResultSource|nil Where the rows are stored, when they trace back to one relation.
+---@field source sqmeow.ResultSource|nil Where the rows are stored, when they trace back to tables or a key.
 ---@field history boolean|nil False for a call that stays out of the query log.
 ---@field archive string|nil Where the engine was asked to save the rows for the log.
 ---@field connection string|nil For a result shown from the log, the database it ran on.
@@ -37,6 +37,7 @@ local M = {}
 ---@class sqmeow.ResultSource Where a result's rows are stored.
 ---@field kind string What the relation is, as the engine names it.
 ---@field name string
+---@field insertable boolean|nil Present when rows can be added, which a join does not allow.
 
 ---@class sqmeow.ResultColumn
 ---@field name string

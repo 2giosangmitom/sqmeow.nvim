@@ -21,8 +21,6 @@ pub struct Column {
     pub class: TypeClass,
     /// Whether it is a key in the table it came from.
     pub key: KeyKind,
-    /// The column's name in the table it came from.
-    pub origin: Option<String>,
 }
 
 impl Column {
@@ -34,14 +32,7 @@ impl Column {
             class: TypeClass::from_type_name(&type_name),
             type_name,
             key: KeyKind::None,
-            origin: None,
         }
-    }
-
-    /// The same column, naming the table column it came from.
-    pub fn with_origin(mut self, origin: impl Into<String>) -> Self {
-        self.origin = Some(origin.into());
-        self
     }
 
     /// The same column, marked as a key.

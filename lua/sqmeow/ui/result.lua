@@ -1148,6 +1148,12 @@ function M.actions.add_row()
   if not editing() then
     return
   end
+  if not require('sqmeow.state').call.source.insertable then
+    return utils.notify(
+      'a row cannot be added to a result that shows more than one table',
+      vim.log.levels.WARN
+    )
+  end
   require('sqmeow.ui.edit').add_row()
   if win then
     local last = vim.api.nvim_buf_line_count(M.buffer())

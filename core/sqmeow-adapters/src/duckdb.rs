@@ -1,6 +1,5 @@
 //! The DuckDB adapter.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -9,11 +8,11 @@ use duckdb::{Connection, InterruptHandle, Row, Statement};
 use sqlx::types::chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
-    RelationNode, Result, ResultSet, RoutineNode, SchemaNode,
+    RelationNode, Result, ResultSet, RoutineNode, SchemaNode, Source, TableBinder, TableName,
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::stream::{Origin, TableKeys, check_affected};
+use crate::stream::check_affected;
 
 /// One DuckDB database, driven from blocking threads since the driver is synchronous.
 pub struct DuckDbAdapter {
@@ -64,10 +63,6 @@ impl DuckDbAdapter {
 impl Adapter for DuckDbAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::DuckDb
-    }
-
-    fn quote_ident(&self, name: &str) -> String {
-        format!("\"{}\"", name.replace('"', "\"\""))
     }
 
     async fn apply(&self, statements: &[String]) -> Result<()> {
@@ -241,18 +236,8 @@ fn read(connection: &Connection, sql: &str, max_rows: usize) -> Result<ResultSet
     let mut rows = statement.query([]).map_err(Error::driver)?;
     let mut columns = rows.as_ref().map(result_columns).unwrap_or_default();
     let source = described
-        .filter(|(_, origins, _)| origins.len() == columns.len())
-        .and_then(|(table, origins, keys)| {
-            for (column, origin) in columns.iter_mut().zip(&origins) {
-                if let Some((_, name)) = origin {
-                    column.key = keys.get(name).copied().unwrap_or_default();
-                    column.origin = Some(name.clone());
-                }
-            }
-            let known = TableKeys::default();
-            known.remember(table, keys);
-            known.source(&origins)
-        });
+        .filter(|described| described.origins.len() == columns.len())
+        .and_then(|described| described.bind(&mut columns));
     let uuids: Vec<bool> = columns.iter().map(|c| c.type_name == "UUID").collect();
     let mut result = ResultSet::new(sql, columns);
     result.set_source(source);
@@ -277,12 +262,59 @@ fn read(connection: &Connection, sql: &str, max_rows: usize) -> Result<ResultSet
     Ok(result)
 }
 
-/// For a `SELECT` whose rows are one table's rows: the table as `schema.table`, where each result
-/// column came from, and the table's keys. Read with DuckDB's own parser.
-fn describe(
-    connection: &Connection,
-    sql: &str,
-) -> Option<(String, Vec<Origin>, HashMap<String, KeyKind>)> {
+/// A table a `SELECT` reads, as the catalog describes it.
+struct Catalog {
+    table: TableName,
+    /// Each column, with the key it is part of.
+    columns: Vec<(String, Option<KeyKind>)>,
+    /// Read more than once, as in a self-join, so a column cannot be pinned to one side.
+    repeated: bool,
+}
+
+/// Where the result columns of a `SELECT` came from, read with DuckDB's own parser, which is what
+/// the database driver reports for the other dialects.
+struct Described {
+    tables: Vec<Catalog>,
+    /// For each result column, the table it came from and its name there.
+    origins: Vec<Option<(usize, String)>>,
+}
+
+impl Described {
+    /// Mark the key columns and bind the result to its tables.
+    fn bind(self, columns: &mut [Column]) -> Option<Source> {
+        let mut binder = TableBinder::default();
+        for (index, (column, origin)) in columns.iter_mut().zip(&self.origins).enumerate() {
+            let Some((table, name)) = origin else {
+                continue;
+            };
+            let catalog = &self.tables[*table];
+            column.key = catalog
+                .columns
+                .iter()
+                .find(|(known, _)| known == name)
+                .and_then(|(_, kind)| *kind)
+                .unwrap_or_default();
+            binder.bind(index, catalog.table.clone(), name.clone());
+        }
+        binder.build(|table| {
+            self.tables
+                .iter()
+                .find(|catalog| catalog.table == *table)
+                .map_or_else(Vec::new, |catalog| {
+                    catalog
+                        .columns
+                        .iter()
+                        .filter(|(_, kind)| *kind == Some(KeyKind::Primary))
+                        .map(|(name, _)| name.clone())
+                        .collect()
+                })
+        })
+    }
+}
+
+/// Trace the result columns of a `SELECT` whose rows are table rows: from base tables and their
+/// joins, without grouping, `DISTINCT`, set operations or common table expressions.
+fn describe(connection: &Connection, sql: &str) -> Option<Described> {
     use serde_json::Value as Json;
 
     let tree: String = connection
@@ -295,12 +327,8 @@ fn describe(
         return None;
     };
     let node = &statement["node"];
-    let from = &node["from_table"];
     let empty = |value: &Json| value.as_array().is_some_and(Vec::is_empty);
     let plain = node["type"] == "SELECT_NODE"
-        && from["type"] == "BASE_TABLE"
-        && from["catalog_name"] == ""
-        && from["at_clause"].is_null()
         && empty(&node["cte_map"]["map"])
         && empty(&node["group_expressions"])
         && node["having"].is_null()
@@ -312,8 +340,127 @@ fn describe(
         return None;
     }
 
-    let alias = from["alias"].as_str()?;
-    let table_name = from["table_name"].as_str()?;
+    // Each table in `FROM` as written, with the index of its catalog entry.
+    let mut written = Vec::new();
+    from_tables(&node["from_table"], &mut written)?;
+    let mut tables: Vec<Catalog> = Vec::new();
+    let mut scopes: Vec<(&str, &str, usize)> = Vec::new();
+    for (alias, schema, name) in written {
+        let catalog = table_catalog(connection, schema, name)?;
+        let index = match tables.iter().position(|known| known.table == catalog.table) {
+            Some(index) => {
+                tables[index].repeated = true;
+                index
+            }
+            None => {
+                tables.push(catalog);
+                tables.len() - 1
+            }
+        };
+        scopes.push((alias, name, index));
+    }
+
+    let named = |relation: &str| -> Option<usize> {
+        let mut matching = scopes.iter().filter(|(alias, name, _)| {
+            relation.eq_ignore_ascii_case(alias) || relation.eq_ignore_ascii_case(name)
+        });
+        let (.., table) = matching.next()?;
+        matching.next().is_none().then_some(*table)
+    };
+    let origin = |table: usize, column: &str| -> Option<(usize, String)> {
+        let catalog = &tables[table];
+        if catalog.repeated {
+            return None;
+        }
+        catalog
+            .columns
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(column))
+            .map(|(name, _)| (table, name.clone()))
+    };
+
+    let mut origins = Vec::new();
+    for item in node["select_list"].as_array()? {
+        match item["class"].as_str()? {
+            "STAR" => {
+                let relation = item["relation_name"].as_str()?;
+                let bare = item["columns"] == false
+                    && item["expr"].is_null()
+                    && empty(&item["replace_list"])
+                    && empty(&item["rename_list"])
+                    && empty(&item["qualified_exclude_list"]);
+                if !bare {
+                    return None;
+                }
+                let excluded: Vec<&str> = item["exclude_list"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(Json::as_str)
+                    .collect();
+                let expanded: Vec<usize> = if relation.is_empty() {
+                    scopes.iter().map(|(.., table)| *table).collect()
+                } else {
+                    vec![named(relation)?]
+                };
+                for table in expanded {
+                    for (name, _) in &tables[table].columns {
+                        if !excluded.iter().any(|e| e.eq_ignore_ascii_case(name)) {
+                            origins.push(origin(table, name));
+                        }
+                    }
+                }
+            }
+            "COLUMN_REF" => {
+                let parts: Vec<&str> = item["column_names"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(Json::as_str)
+                    .collect();
+                origins.push(match parts.as_slice() {
+                    [name] => {
+                        // An unqualified column is only pinned down when one table has it.
+                        let mut having = scopes
+                            .iter()
+                            .filter(|(.., table)| origin(*table, name).is_some());
+                        match (having.next(), having.next()) {
+                            (Some((.., table)), None) => origin(*table, name),
+                            _ => None,
+                        }
+                    }
+                    [relation, name] => named(relation).and_then(|table| origin(table, name)),
+                    _ => None,
+                });
+            }
+            _ => origins.push(None),
+        }
+    }
+    Some(Described { tables, origins })
+}
+
+/// The base tables a `FROM` joins, as `(alias, schema, table)`, or `None` for any other source.
+fn from_tables<'a>(
+    from: &'a serde_json::Value,
+    found: &mut Vec<(&'a str, &'a str, &'a str)>,
+) -> Option<()> {
+    match from["type"].as_str()? {
+        "JOIN" => {
+            from_tables(&from["left"], found)?;
+            from_tables(&from["right"], found)
+        }
+        "BASE_TABLE" if from["catalog_name"] == "" && from["at_clause"].is_null() => {
+            found.push((
+                from["alias"].as_str()?,
+                from["schema_name"].as_str()?,
+                from["table_name"].as_str()?,
+            ));
+            Some(())
+        }
+        _ => None,
+    }
+}
+
+/// A table's columns and keys, or `None` when the catalog has no such table.
+fn table_catalog(connection: &Connection, schema: &str, table: &str) -> Option<Catalog> {
     let columns: Vec<(String, String, String, Option<KeyKind>)> = rows(
         connection,
         "select c.schema_name, c.table_name, c.column_name,
@@ -332,7 +479,7 @@ fn describe(
            and lower(c.schema_name) = lower(coalesce(nullif(?, ''), current_schema()))
            and lower(c.table_name) = lower(?)
          order by c.column_index",
-        [from["schema_name"].as_str()?, table_name],
+        [schema, table],
         |row| {
             let kind: String = row.get(3)?;
             Ok((
@@ -346,65 +493,14 @@ fn describe(
     .ok()?;
 
     let (schema, table, ..) = columns.first()?;
-    let qualified = format!("{schema}.{table}");
-    let keys = columns
-        .iter()
-        .filter_map(|(_, _, name, kind)| Some((name.clone(), (*kind)?)))
-        .collect();
-    let ours = |relation: &str| {
-        relation.eq_ignore_ascii_case(alias) || relation.eq_ignore_ascii_case(table_name)
-    };
-    let origin = |name: &str| {
-        columns
+    Some(Catalog {
+        table: TableName::new(Some(schema), table),
+        columns: columns
             .iter()
-            .find(|(_, _, column, _)| column.eq_ignore_ascii_case(name))
-            .map(|(_, _, column, _)| (qualified.clone(), column.clone()))
-    };
-
-    let mut origins = Vec::new();
-    for item in node["select_list"].as_array()? {
-        match item["class"].as_str()? {
-            "STAR" => {
-                let relation = item["relation_name"].as_str()?;
-                let bare = (relation.is_empty() || ours(relation))
-                    && item["columns"] == false
-                    && item["expr"].is_null()
-                    && empty(&item["replace_list"])
-                    && empty(&item["rename_list"])
-                    && empty(&item["qualified_exclude_list"]);
-                if !bare {
-                    return None;
-                }
-                let excluded: Vec<&str> = item["exclude_list"]
-                    .as_array()?
-                    .iter()
-                    .filter_map(Json::as_str)
-                    .collect();
-                origins.extend(
-                    columns
-                        .iter()
-                        .filter(|(_, _, name, _)| {
-                            !excluded.iter().any(|e| e.eq_ignore_ascii_case(name))
-                        })
-                        .map(|(_, _, name, _)| Some((qualified.clone(), name.clone()))),
-                );
-            }
-            "COLUMN_REF" => {
-                let parts: Vec<&str> = item["column_names"]
-                    .as_array()?
-                    .iter()
-                    .filter_map(Json::as_str)
-                    .collect();
-                origins.push(match parts.as_slice() {
-                    [name] => origin(name),
-                    [relation, name] if ours(relation) => origin(name),
-                    _ => None,
-                });
-            }
-            _ => origins.push(None),
-        }
-    }
-    Some((qualified, origins, keys))
+            .map(|(.., name, kind)| (name.clone(), *kind))
+            .collect(),
+        repeated: false,
+    })
 }
 
 fn result_columns(statement: &Statement<'_>) -> Vec<Column> {

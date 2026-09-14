@@ -4,14 +4,16 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
-use sqlx::{AssertSqlSafe, Row, SqlitePool, Statement as _, TypeInfo, ValueRef};
+use sqlx::{AssertSqlSafe, Pool, Row, Sqlite, SqlitePool, Statement as _, TypeInfo, ValueRef};
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
-    RelationNode, Result, ResultSet, RoutineNode, SchemaNode, Source,
+    RelationNode, Result, ResultSet, RoutineNode, SchemaNode, Source, TableName,
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::stream::{self, TableKeys, origins, prepare, result_columns, text_or_bytes};
+use crate::stream::{
+    self, SqlxAdapter, TableKeys, origins, prepare, result_columns, text_or_bytes,
+};
 
 /// A pool against one SQLite database.
 #[derive(Debug)]
@@ -55,13 +57,33 @@ impl SqliteAdapter {
         self.keys
             .mark(&origins, &mut columns, |table| self.read_keys(table))
             .await;
-        let source = self.keys.source(&origins);
+        // SQLite traces a compound `SELECT`'s columns to its first part, though rows come from every part.
+        let source = match self.keys.source(&origins) {
+            Some(source) if !self.compound(statement).await => Some(source),
+            _ => None,
+        };
         (columns, source)
     }
 
+    /// Whether a statement's plan combines `SELECT`s with `UNION`, `INTERSECT` or `EXCEPT`.
+    async fn compound(&self, statement: &str) -> bool {
+        let sql = format!("explain query plan {statement}");
+        match sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await {
+            Ok(rows) => rows.iter().any(|row| {
+                row.try_get::<String, _>("detail")
+                    .is_ok_and(|detail| detail == "COMPOUND QUERY" || detail.starts_with("MERGE ("))
+            }),
+            Err(error) => {
+                tracing::debug!(%error, "could not read a statement's plan");
+                true
+            }
+        }
+    }
+
     /// Ask the pragmas which columns of one table are keys.
-    async fn read_keys(&self, table: String) -> HashMap<String, KeyKind> {
+    async fn read_keys(&self, table: TableName) -> HashMap<String, KeyKind> {
         let mut keys = HashMap::new();
+        let table = table.name;
 
         // Foreign keys first.
         let sql = format!("pragma foreign_key_list({})", self.quote_ident(&table));
@@ -105,10 +127,6 @@ impl Adapter for SqliteAdapter {
         Dialect::Sqlite
     }
 
-    fn quote_ident(&self, name: &str) -> String {
-        format!("\"{}\"", name.replace('"', "\"\""))
-    }
-
     async fn apply(&self, statements: &[String]) -> Result<()> {
         stream::transact(&self.pool, statements, |outcome| outcome.rows_affected()).await
     }
@@ -119,23 +137,7 @@ impl Adapter for SqliteAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let (columns, source) = self.columns(statement).await;
-        let outcome = stream::execute(
-            &self.pool,
-            statement,
-            columns,
-            max_rows,
-            &cancel,
-            |outcome| outcome.rows_affected(),
-            decode_cell,
-        )
-        .await;
-        if stream::may_change_schema(statement) {
-            self.keys.forget();
-        }
-        let mut result = outcome?;
-        result.set_source(source);
-        Ok(result)
+        stream::run(self, statement, max_rows, &cancel).await
     }
 
     /// SQLite calls them databases: `main`, `temp`, and anything attached.
@@ -244,6 +246,30 @@ impl Adapter for SqliteAdapter {
 
     async fn close(&self) {
         self.pool.close().await;
+    }
+}
+
+impl SqlxAdapter for SqliteAdapter {
+    type Db = Sqlite;
+
+    fn pool(&self) -> &Pool<Sqlite> {
+        &self.pool
+    }
+
+    async fn describe(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
+        self.columns(statement).await
+    }
+
+    fn decode(row: &SqliteRow, index: usize) -> Cell {
+        decode_cell(row, index)
+    }
+
+    fn affected(outcome: &<Sqlite as sqlx::Database>::QueryResult) -> u64 {
+        outcome.rows_affected()
+    }
+
+    fn forget(&self) {
+        self.keys.forget();
     }
 }
 

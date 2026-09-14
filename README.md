@@ -148,6 +148,11 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Editing Results
 
+A column is editable when it is a plain table column and its table's whole primary key is in the
+result, so joined, filtered and sorted queries can be edited. Changes to a joined row update each
+table by its own key, a deleted row is removed from the table of the first editable column, and rows
+can only be added to a result from one table. Computed columns such as aggregates stay read-only.
+
 | Key           | Action                                                    |
 | ------------- | --------------------------------------------------------- |
 | `i`, `<CR>`   | Edit the cell                                             |

@@ -15,7 +15,7 @@ use sqlx::types::BigDecimal;
 use sqlx::types::chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode, Source,
+    ResultSet, RoutineNode, SchemaNode, Source, TableBinder, TableName,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -93,11 +93,13 @@ impl ScyllaAdapter {
         let state = self.session.get_cluster_state();
         let meta = state.get_keyspace(keyspace)?.tables.get(table)?;
 
-        for column in columns.iter_mut() {
+        let name = TableName::new(Some(keyspace), table);
+        let mut binder = TableBinder::default();
+        for (index, column) in columns.iter_mut().enumerate() {
             let Some(found) = meta.columns.get(&column.name) else {
                 continue;
             };
-            column.origin = Some(column.name.clone());
+            binder.bind(index, name.clone(), column.name.clone());
             if matches!(
                 found.kind,
                 ColumnKind::PartitionKey | ColumnKind::Clustering
@@ -105,21 +107,12 @@ impl ScyllaAdapter {
                 column.key = KeyKind::Primary;
             }
         }
-
-        let key = meta
-            .partition_key
-            .iter()
-            .chain(&meta.clustering_key)
-            .map(|name| {
-                columns
-                    .iter()
-                    .position(|column| column.origin.as_ref() == Some(name))
-            })
-            .collect::<Option<Vec<_>>>()?;
-        Some(Source::Table {
-            schema: Some(keyspace.to_owned()),
-            name: table.to_owned(),
-            key,
+        binder.build(|_| {
+            meta.partition_key
+                .iter()
+                .chain(&meta.clustering_key)
+                .cloned()
+                .collect()
         })
     }
 
@@ -170,10 +163,6 @@ impl ScyllaAdapter {
 impl Adapter for ScyllaAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::Scylla
-    }
-
-    fn quote_ident(&self, name: &str) -> String {
-        format!("\"{}\"", name.replace('"', "\"\""))
     }
 
     /// One statement after another, since CQL has no transactions.

@@ -10,11 +10,13 @@ use sqlx::{
     AssertSqlSafe, ColumnIndex, Database, Decode, Either, Executor, Pool, Row, SqlSafeStr, Type,
     TypeInfo,
 };
-use sqmeow_db::{Cell, Column, Error, ForeignKey, KeyKind, Result, ResultSet, Source};
+use sqmeow_db::{
+    Cell, Column, Error, ForeignKey, KeyKind, Result, ResultSet, Source, TableBinder, TableName,
+};
 use tokio_util::sync::CancellationToken;
 
 /// Where a result column came from: its table, and its name in that table.
-pub(crate) type Origin = Option<(String, String)>;
+pub(crate) type Origin = Option<(TableName, String)>;
 
 /// Prepare a statement to learn what its result looks like, before running it.
 pub(crate) async fn prepare<DB>(pool: &Pool<DB>, statement: &str) -> Option<DB::Statement>
@@ -47,13 +49,71 @@ pub(crate) fn origins<C: sqlx::Column>(prepared: &[C]) -> Vec<Origin> {
         .map(|column| {
             let origin = column.origin();
             let origin = origin.table_column()?;
-            Some((origin.table.to_string(), origin.name.to_string()))
+            // MySQL names the table with its schema when it knows one.
+            Some((TableName::parse(&origin.table), origin.name.to_string()))
         })
         .collect()
 }
 
+/// What each sqlx adapter supplies to the shared query flow in [`run`].
+pub(crate) trait SqlxAdapter: Sync {
+    type Db: Database;
+
+    fn pool(&self) -> &Pool<Self::Db>;
+
+    /// A statement's columns and where its rows are stored, read before it runs.
+    fn describe(
+        &self,
+        statement: &str,
+    ) -> impl Future<Output = (Vec<Column>, Option<Source>)> + Send;
+
+    fn decode(row: &<Self::Db as Database>::Row, index: usize) -> Cell;
+
+    fn affected(outcome: &<Self::Db as Database>::QueryResult) -> u64;
+
+    /// Stop a cancelled query on the server.
+    fn stop_running(&self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+
+    /// Forget the tables read so far.
+    fn forget(&self);
+}
+
+/// Describe, run and read one statement through an adapter.
+pub(crate) async fn run<A: SqlxAdapter>(
+    adapter: &A,
+    statement: &str,
+    max_rows: usize,
+    cancel: &CancellationToken,
+) -> Result<ResultSet>
+where
+    for<'c> &'c mut <A::Db as Database>::Connection: Executor<'c, Database = A::Db>,
+{
+    let (columns, source) = adapter.describe(statement).await;
+    let outcome = execute(
+        adapter.pool(),
+        statement,
+        columns,
+        max_rows,
+        cancel,
+        A::affected,
+        A::decode,
+    )
+    .await;
+    if matches!(outcome, Err(Error::Cancelled)) {
+        adapter.stop_running().await;
+    }
+    if may_change_schema(statement) {
+        adapter.forget();
+    }
+    let mut result = outcome?;
+    result.set_source(source);
+    Ok(result)
+}
+
 /// Run one statement and read what it produced into a result set.
-pub(crate) async fn execute<DB>(
+async fn execute<DB>(
     pool: &Pool<DB>,
     statement: &str,
     columns: Vec<Column>,
@@ -132,47 +192,6 @@ where
                 }
             },
         }
-    }
-}
-
-impl TableKeys {
-    /// Where a result's rows are stored.
-    pub(crate) fn source(&self, origins: &[Origin]) -> Option<Source> {
-        let mut tables = origins.iter().flatten().map(|(table, _)| table.as_str());
-        let table = tables.next()?;
-        if tables.any(|other| other != table) {
-            return None;
-        }
-        // The same table column twice is a self-join, whose rows are not one table row each.
-        let mut seen = std::collections::HashSet::new();
-        if !origins.iter().flatten().all(|origin| seen.insert(origin)) {
-            return None;
-        }
-
-        let known = self.0.lock().ok()?;
-        let mut key = known
-            .get(table)?
-            .iter()
-            .filter(|(_, kind)| **kind == KeyKind::Primary)
-            .map(|(name, _)| {
-                origins.iter().position(|origin| {
-                    origin
-                        .as_ref()
-                        .is_some_and(|(from, column)| from == table && column == name)
-                })
-            })
-            .collect::<Option<Vec<usize>>>()?;
-        if key.is_empty() {
-            return None;
-        }
-        key.sort_unstable();
-
-        // MySQL names the table with its schema when it knows one.
-        let (schema, name) = match table.rsplit_once('.') {
-            Some((schema, name)) => (Some(schema.to_owned()), name.to_owned()),
-            None => (None, table.to_owned()),
-        };
-        Some(Source::Table { schema, name, key })
     }
 }
 
@@ -289,16 +308,9 @@ where
 
 /// Which columns of each table are keys, by table name and then column name.
 #[derive(Debug, Default)]
-pub(crate) struct TableKeys(Mutex<HashMap<String, HashMap<String, KeyKind>>>);
+pub(crate) struct TableKeys(Mutex<HashMap<TableName, HashMap<String, KeyKind>>>);
 
 impl TableKeys {
-    /// Record which columns of one table are keys.
-    pub(crate) fn remember(&self, table: String, keys: HashMap<String, KeyKind>) {
-        if let Ok(mut known) = self.0.lock() {
-            known.insert(table, keys);
-        }
-    }
-
     /// Forget every table, so each is read again the next time a result comes from it.
     pub(crate) fn forget(&self) {
         if let Ok(mut known) = self.0.lock() {
@@ -310,14 +322,14 @@ impl TableKeys {
     /// seen before with `read`.
     pub(crate) async fn mark<F, Fut>(&self, origins: &[Origin], columns: &mut [Column], read: F)
     where
-        F: Fn(String) -> Fut,
+        F: Fn(TableName) -> Fut,
         Fut: Future<Output = HashMap<String, KeyKind>>,
     {
-        let missing: Vec<String> = {
+        let missing: Vec<TableName> = {
             let Ok(known) = self.0.lock() else {
                 return;
             };
-            let mut missing: Vec<String> = origins
+            let mut missing: Vec<TableName> = origins
                 .iter()
                 .flatten()
                 .map(|(table, _)| table.clone())
@@ -339,9 +351,6 @@ impl TableKeys {
             return;
         };
         for (column, origin) in columns.iter_mut().zip(origins) {
-            if let Some((_, name)) = origin {
-                column.origin = Some(name.clone());
-            }
             if let Some(kind) = origin
                 .as_ref()
                 .and_then(|(table, name)| known.get(table)?.get(name))
@@ -349,6 +358,25 @@ impl TableKeys {
                 column.key = *kind;
             }
         }
+    }
+
+    /// Where a result's rows are stored, from the tables read so far.
+    pub(crate) fn source(&self, origins: &[Origin]) -> Option<Source> {
+        let known = self.0.lock().ok()?;
+        let mut binder = TableBinder::default();
+        for (column, origin) in origins.iter().enumerate() {
+            if let Some((table, name)) = origin {
+                binder.bind(column, table.clone(), name.clone());
+            }
+        }
+        binder.build(|table| {
+            known.get(table).map_or_else(Vec::new, |keys| {
+                keys.iter()
+                    .filter(|(_, kind)| **kind == KeyKind::Primary)
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+        })
     }
 }
 

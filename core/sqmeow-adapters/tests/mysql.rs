@@ -537,9 +537,9 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
     )
     .await;
     match result.source() {
-        Some(Source::Table { name, key, .. }) => {
-            assert_eq!(name, "my_edited");
-            assert_eq!(key, &vec![0]);
+        Some(Source::Tables(tables)) => {
+            assert_eq!(tables[0].name, "my_edited");
+            assert_eq!(tables[0].key, vec![0]);
         }
         other => panic!("expected a table source, got {other:?}"),
     }
@@ -934,4 +934,67 @@ async fn a_query_run_again_after_its_table_changed_shows_the_change() {
         .apply(&plan)
         .await
         .expect("the renamed column should be written");
+}
+
+#[tokio::test]
+async fn a_join_is_edited_through_each_table_key() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists my_members, my_teams").await;
+    run(
+        &backend,
+        "create table my_teams (id int primary key, name text)",
+    )
+    .await;
+    run(
+        &backend,
+        "create table my_members (id int primary key, name text, team int)",
+    )
+    .await;
+    run(&backend, "insert into my_teams values (1, 'red')").await;
+    run(
+        &backend,
+        "insert into my_members values (1, 'ann', 1), (2, 'bob', null)",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select m.id, m.name, t.id, t.name
+         from my_members m left join my_teams t on t.id = m.team
+         order by m.id",
+    )
+    .await;
+    let Some(source @ Source::Tables(tables)) = result.source() else {
+        panic!("expected tables, got {:?}", result.source());
+    };
+    let names: Vec<&str> = tables.iter().map(|table| table.name.as_str()).collect();
+    assert_eq!(names, ["my_members", "my_teams"]);
+    assert!(!source.insertable());
+
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some("amy".into())), (3, Some("blue".into()))])],
+        deletes: vec![1],
+        ..Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&result, &changes).unwrap())
+        .await
+        .expect("the plan should apply");
+
+    let after = run(
+        &backend,
+        "select m.name, t.name from my_members m join my_teams t on t.id = m.team",
+    )
+    .await;
+    assert_eq!(after.row_count(), 1);
+    assert_eq!(after.cell(0, 0), Some(&text("amy")));
+    assert_eq!(after.cell(0, 1), Some(&text("blue")));
+
+    for sql in [
+        "select a.id, a.name, b.id, b.name from my_members a join my_members b on b.id = a.id",
+        "select id, name from my_members union all select id, name from my_teams",
+        "select team, count(*) from my_members group by team",
+    ] {
+        assert!(run(&backend, sql).await.source().is_none(), "{sql}");
+    }
 }

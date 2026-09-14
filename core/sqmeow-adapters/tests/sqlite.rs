@@ -468,15 +468,15 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
     .await;
 
     match result.source() {
-        Some(Source::Table { name, key, .. }) => {
-            assert_eq!(name, "people");
-            assert_eq!(key, &vec![0]);
+        Some(Source::Tables(tables)) => {
+            assert_eq!(tables[0].name, "people");
+            assert_eq!(tables[0].key, vec![0]);
+            // The alias is written back to the column it names, and the expression cannot be written.
+            assert_eq!(tables[0].column(1), Some("name"));
+            assert_eq!(tables[0].column(2), None);
         }
         other => panic!("expected a table source, got {other:?}"),
     }
-    // The alias is written back to the column it names, and the expression cannot be written.
-    assert_eq!(result.columns()[1].origin.as_deref(), Some("name"));
-    assert_eq!(result.columns()[2].origin, None);
 
     let changes = Changes {
         updates: vec![(0, vec![(1, Some("o'ally".into()))])],
@@ -787,7 +787,75 @@ async fn a_table_recreated_with_another_key_is_edited_through_the_new_one() {
 
     let result = run(&backend, "select id, code from rekeyed order by code").await;
     match result.source() {
-        Some(Source::Table { key, .. }) => assert_eq!(key, &vec![1]),
+        Some(Source::Tables(tables)) => assert_eq!(tables[0].key, vec![1]),
         other => panic!("expected a table source, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_join_writes_each_table_by_its_own_key() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table teams (id integer primary key, name text)",
+    )
+    .await;
+    run(
+        &backend,
+        "create table members (id integer primary key, name text, team integer)",
+    )
+    .await;
+    run(&backend, "insert into teams values (1, 'red'), (2, 'blue')").await;
+    run(
+        &backend,
+        "insert into members values (1, 'ann', 1), (2, 'bob', null), (3, 'cy', 2)",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select m.id, m.name, t.id as team_id, t.name as team
+         from members m left join teams t on t.id = m.team
+         order by m.name desc",
+    )
+    .await;
+    let Some(source @ Source::Tables(tables)) = result.source() else {
+        panic!("expected tables, got {:?}", result.source());
+    };
+    assert_eq!(tables.len(), 2);
+    assert!(!source.insertable());
+
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some("cyd".into())), (3, Some("navy".into()))])],
+        deletes: vec![2],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.expect("the plan should apply");
+
+    let members = run(&backend, "select name from members order by id").await;
+    assert_eq!(members.column_cells(0), &[text("bob"), text("cyd")]);
+    // Deleting a joined row leaves the team it showed.
+    let teams = run(&backend, "select name from teams order by id").await;
+    assert_eq!(teams.column_cells(0), &[text("red"), text("navy")]);
+
+    // Bob has no team to change.
+    let missing = Changes {
+        updates: vec![(1, vec![(3, Some("x".into()))])],
+        ..Changes::default()
+    };
+    assert!(backend.plan(&result, &missing).is_err());
+}
+
+#[tokio::test]
+async fn grouped_or_combined_rows_are_read_only() {
+    let backend = seeded().await;
+    for sql in [
+        "select id, name from people union all select id, name from people",
+        "select id, name from people where id = 1 union select id, name from people",
+        "select name, count(*) from people group by name",
+        "select a.id, a.name, b.id, b.name from people a join people b on b.id = a.id",
+    ] {
+        assert!(run(&backend, sql).await.source().is_none(), "{sql}");
     }
 }

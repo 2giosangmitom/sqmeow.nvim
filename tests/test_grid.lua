@@ -60,6 +60,17 @@ T['a selection from one table says it can be edited, and which columns'] = funct
   eq(state.call.source, nil)
 end
 
+T['a join is editable through each table, but takes no new rows'] = function()
+  eq(state.call.source.insertable, true)
+
+  run('create table pets (id integer primary key, owner integer, name text)')
+  run('select p.id, p.name, t.id, t.name from people p join pets t on t.owner = p.id')
+  eq(state.call.source.kind, 'tables')
+  eq(state.call.source.insertable, nil)
+  eq(state.call.columns[4].editable, true)
+  run('drop table pets')
+end
+
 T['a view filters and sorts in the engine, and pages count what it holds'] = function()
   api.view({ filters = { { column = 1, op = 'contains', value = 'O' } } })
   wait('the view should arrive', function()
@@ -93,7 +104,9 @@ T['editing applies through a review'] = function()
     changes = edit.changes(),
   })
   eq(#statements, 3)
-  eq(statements[1]:match('^UPDATE') ~= nil, true)
+  -- Deletes, then inserts, then updates, the order DBeaver saves in.
+  eq(statements[1]:match('^DELETE') ~= nil, true)
+  eq(statements[3]:match('^UPDATE') ~= nil, true)
 
   local before = state.call.call_id
   edit.apply(state.call.conn_id, statements)

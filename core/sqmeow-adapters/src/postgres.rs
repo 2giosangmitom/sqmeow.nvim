@@ -9,14 +9,16 @@ use sqlx::postgres::types::Oid;
 use sqlx::postgres::{
     PgColumn, PgConnectOptions, PgConnection, PgHasArrayType, PgPool, PgPoolOptions, PgRow,
 };
-use sqlx::{Connection, Decode, Postgres, Row, Statement as _, Type, TypeInfo, ValueRef, types};
+use sqlx::{
+    Connection, Decode, Pool, Postgres, Row, Statement as _, Type, TypeInfo, ValueRef, types,
+};
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode, Source,
+    ResultSet, RoutineNode, SchemaNode, Source, TableBinder, TableName,
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::stream::{self, foreign_key, prepare, result_columns};
+use crate::stream::{self, SqlxAdapter, foreign_key, prepare, result_columns};
 
 /// A pool against one PostgreSQL database.
 #[derive(Debug)]
@@ -99,7 +101,7 @@ impl PostgresAdapter {
     }
 
     /// Stop the query the session is running, from a connection of its own.
-    async fn stop_running(&self) {
+    async fn stop_query(&self) {
         let pid = self.backend_pid.load(Ordering::Relaxed);
         let stop = async {
             let mut connection = PgConnection::connect_with(&self.options).await?;
@@ -117,7 +119,7 @@ impl PostgresAdapter {
     }
 
     /// Forget every table read so far, so each is read again the next time a result comes from it.
-    fn forget(&self) {
+    fn forget_tables(&self) {
         if let Ok(mut keys) = self.keys.lock() {
             keys.clear();
         }
@@ -133,7 +135,7 @@ impl PostgresAdapter {
         };
         let mut columns = result_columns(prepared.columns());
         self.mark_keys(prepared.columns(), &mut columns).await;
-        let source = self.source(prepared.columns(), &mut columns).await;
+        let source = self.source(prepared.columns()).await;
         (columns, source)
     }
 
@@ -224,8 +226,7 @@ impl PostgresAdapter {
 /// A table a result column came from, as the catalog describes it.
 #[derive(Debug)]
 struct Relation {
-    schema: String,
-    name: String,
+    table: TableName,
     /// Column names by attribute number.
     columns: HashMap<i16, String>,
     /// The attribute numbers of the primary key.
@@ -233,8 +234,8 @@ struct Relation {
 }
 
 impl PostgresAdapter {
-    /// Resolve each column's table column, and the source table when its whole key is selected.
-    async fn source(&self, prepared: &[PgColumn], columns: &mut [Column]) -> Option<Source> {
+    /// Bind each result column to its table column, keeping the tables whose whole key is selected.
+    async fn source(&self, prepared: &[PgColumn]) -> Option<Source> {
         let sources: Vec<Option<(Oid, i16)>> = prepared
             .iter()
             .map(|column| column.relation_id().zip(column.relation_attribute_no()))
@@ -260,40 +261,26 @@ impl PostgresAdapter {
         }
 
         let known = self.relations.lock().ok()?;
-        for (column, source) in columns.iter_mut().zip(&sources) {
-            if let Some((oid, attribute)) = source {
-                column.origin = known
-                    .get(oid)
-                    .and_then(|relation| relation.columns.get(attribute))
-                    .cloned();
+        let mut binder = TableBinder::default();
+        for (index, source) in sources.iter().enumerate() {
+            if let Some((oid, attribute)) = source
+                && let Some(relation) = known.get(oid)
+                && let Some(column) = relation.columns.get(attribute)
+            {
+                binder.bind(index, relation.table.clone(), column.clone());
             }
         }
-
-        let [oid] = wanted.as_slice() else {
-            return None;
-        };
-        // The same table column twice is a self-join, whose rows are not one table row each.
-        let mut seen = std::collections::HashSet::new();
-        if !sources.iter().flatten().all(|source| seen.insert(*source)) {
-            return None;
-        }
-        let relation = known.get(oid)?;
-        if relation.primary.is_empty() {
-            return None;
-        }
-        let key = relation
-            .primary
-            .iter()
-            .map(|attribute| {
-                sources
-                    .iter()
-                    .position(|source| *source == Some((*oid, *attribute)))
-            })
-            .collect::<Option<Vec<usize>>>()?;
-        Some(Source::Table {
-            schema: Some(relation.schema.clone()),
-            name: relation.name.clone(),
-            key,
+        binder.build(|table| {
+            known
+                .values()
+                .find(|relation| relation.table == *table)
+                .map_or_else(Vec::new, |relation| {
+                    relation
+                        .primary
+                        .iter()
+                        .filter_map(|attribute| relation.columns.get(attribute).cloned())
+                        .collect()
+                })
         })
     }
 
@@ -337,8 +324,10 @@ impl PostgresAdapter {
                 continue;
             };
             let relation = relations.entry(oid).or_insert_with(|| Relation {
-                schema,
-                name,
+                table: TableName {
+                    schema: Some(schema),
+                    name,
+                },
                 columns: HashMap::new(),
                 primary: Vec::new(),
             });
@@ -348,6 +337,34 @@ impl PostgresAdapter {
             }
         }
         relations
+    }
+}
+
+impl SqlxAdapter for PostgresAdapter {
+    type Db = Postgres;
+
+    fn pool(&self) -> &Pool<Postgres> {
+        &self.pool
+    }
+
+    async fn describe(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
+        self.columns(statement).await
+    }
+
+    fn decode(row: &PgRow, index: usize) -> Cell {
+        decode_cell(row, index)
+    }
+
+    fn affected(outcome: &<Postgres as sqlx::Database>::QueryResult) -> u64 {
+        outcome.rows_affected()
+    }
+
+    async fn stop_running(&self) {
+        self.stop_query().await;
+    }
+
+    fn forget(&self) {
+        self.forget_tables();
     }
 }
 
@@ -369,10 +386,6 @@ impl Adapter for PostgresAdapter {
         Dialect::Postgres
     }
 
-    fn quote_ident(&self, name: &str) -> String {
-        format!("\"{}\"", name.replace('"', "\"\""))
-    }
-
     async fn apply(&self, statements: &[String]) -> Result<()> {
         stream::transact(&self.pool, statements, |outcome| outcome.rows_affected()).await
     }
@@ -383,26 +396,7 @@ impl Adapter for PostgresAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let (columns, source) = self.columns(statement).await;
-        let outcome = stream::execute(
-            &self.pool,
-            statement,
-            columns,
-            max_rows,
-            &cancel,
-            |outcome| outcome.rows_affected(),
-            decode_cell,
-        )
-        .await;
-        if matches!(outcome, Err(Error::Cancelled)) {
-            self.stop_running().await;
-        }
-        if stream::may_change_schema(statement) {
-            self.forget();
-        }
-        let mut result = outcome?;
-        result.set_source(source);
-        Ok(result)
+        stream::run(self, statement, max_rows, &cancel).await
     }
 
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {

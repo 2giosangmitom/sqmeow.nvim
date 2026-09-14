@@ -774,10 +774,10 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
     )
     .await;
     match result.source() {
-        Some(Source::Table { schema, name, key }) => {
-            assert_eq!(schema.as_deref(), Some(SCHEMA));
-            assert_eq!(name, "pg_edited");
-            assert_eq!(key, &vec![0]);
+        Some(Source::Tables(tables)) => {
+            assert_eq!(tables[0].schema.as_deref(), Some(SCHEMA));
+            assert_eq!(tables[0].name, "pg_edited");
+            assert_eq!(tables[0].key, vec![0]);
         }
         other => panic!("expected a table source, got {other:?}"),
     }
@@ -856,11 +856,10 @@ async fn a_column_added_after_its_table_was_read_can_be_edited() {
     run(&backend, "alter table pg_altered add column added text").await;
 
     let result = run(&backend, "select * from pg_altered").await;
-    let origins: Vec<Option<&str>> = result
-        .columns()
-        .iter()
-        .map(|column| column.origin.as_deref())
-        .collect();
+    let Some(Source::Tables(tables)) = result.source() else {
+        panic!("expected a table source, got {:?}", result.source());
+    };
+    let origins: Vec<Option<&str>> = (0..4).map(|index| tables[0].column(index)).collect();
     assert_eq!(
         origins,
         vec![Some("id"), Some("label"), Some("note"), Some("added")]
@@ -977,4 +976,71 @@ async fn a_copy_to_stdout_answers_rather_than_hanging() {
     .await;
     assert!(outcome.is_ok(), "copy should answer, with rows or an error");
     assert_eq!(run(&backend, "select 1").await.row_count(), 1);
+}
+
+#[tokio::test]
+async fn a_join_is_edited_through_each_table_key() {
+    let backend = connect(&server!()).await;
+    run(
+        &backend,
+        "drop table if exists pg_members, pg_teams cascade",
+    )
+    .await;
+    run(
+        &backend,
+        "create table pg_teams (id int primary key, name text)",
+    )
+    .await;
+    run(
+        &backend,
+        "create table pg_members (id int primary key, name text, team int references pg_teams)",
+    )
+    .await;
+    run(&backend, "insert into pg_teams values (1, 'red')").await;
+    run(
+        &backend,
+        "insert into pg_members values (1, 'ann', 1), (2, 'bob', null)",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select m.id, m.name, t.id, t.name
+         from pg_members m left join pg_teams t on t.id = m.team
+         order by m.id",
+    )
+    .await;
+    let Some(source @ Source::Tables(tables)) = result.source() else {
+        panic!("expected tables, got {:?}", result.source());
+    };
+    let names: Vec<&str> = tables.iter().map(|table| table.name.as_str()).collect();
+    assert_eq!(names, ["pg_members", "pg_teams"]);
+    assert!(!source.insertable());
+
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some("amy".into())), (3, Some("blue".into()))])],
+        deletes: vec![1],
+        ..Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&result, &changes).unwrap())
+        .await
+        .expect("the plan should apply");
+
+    let after = run(
+        &backend,
+        "select m.name, t.name from pg_members m join pg_teams t on t.id = m.team",
+    )
+    .await;
+    assert_eq!(after.row_count(), 1);
+    assert_eq!(after.cell(0, 0), Some(&text("amy")));
+    assert_eq!(after.cell(0, 1), Some(&text("blue")));
+
+    for sql in [
+        "select a.id, a.name, b.id, b.name from pg_members a join pg_members b on b.id = a.id",
+        "select id, name from pg_members union all select id, name from pg_teams",
+        "select team, count(*) from pg_members group by team",
+    ] {
+        assert!(run(&backend, sql).await.source().is_none(), "{sql}");
+    }
 }
