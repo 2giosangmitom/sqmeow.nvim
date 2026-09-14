@@ -61,6 +61,7 @@ M.links = {
   SqmeowIconPostgres = 'Constant',
   SqmeowIconMysql = 'Constant',
   SqmeowIconSqlite = 'Constant',
+  SqmeowIconDuckdb = 'Constant',
   SqmeowIconRedis = 'Constant',
   SqmeowIconMongodb = 'String',
   SqmeowIconKey = 'Identifier',

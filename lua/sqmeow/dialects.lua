@@ -88,6 +88,12 @@ M.list = {
     -- A file, so none of the network questions apply and asking them would be noise.
     fields = { { key = 'path', label = 'File', hint = 'app.db' } },
   },
+  {
+    id = 'duckdb',
+    label = 'DuckDB',
+    scheme = 'duckdb',
+    fields = { { key = 'path', label = 'File', hint = 'app.duckdb' } },
+  },
 }
 
 --- Schemes that mean the same dialect, beyond the one it is written with.

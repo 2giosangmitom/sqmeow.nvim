@@ -30,6 +30,7 @@ Query your database from your favorite editor.
 - PostgreSQL, and servers speaking its protocol such as CockroachDB
 - MySQL, MariaDB
 - SQLite
+- DuckDB
 - Redis, Valkey, Dragonfly
 - MongoDB
 

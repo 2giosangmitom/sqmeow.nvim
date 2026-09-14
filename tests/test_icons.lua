@@ -136,14 +136,14 @@ end
 T['connections'] = MiniTest.new_set()
 
 T['connections']['use the glyph of the dialect they speak'] = function()
-  for _, dialect in ipairs({ 'postgres', 'mysql', 'sqlite', 'redis', 'mongodb' }) do
+  for _, dialect in ipairs({ 'postgres', 'mysql', 'sqlite', 'duckdb', 'redis', 'mongodb' }) do
     eq(icons.connection_kind(dialect), dialect)
   end
   eq(select(2, icons.get('postgres')), 'SqmeowIconPostgres')
 end
 
 T['connections']['fall back to a plain database for one nobody has heard of'] = function()
-  eq(icons.connection_kind('duckdb'), 'connection')
+  eq(icons.connection_kind('cassandra'), 'connection')
   eq(icons.connection_kind(nil), 'connection')
 end
 

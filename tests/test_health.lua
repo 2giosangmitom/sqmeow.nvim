@@ -51,7 +51,7 @@ T['reports the engine, its adapters, the configuration and nui.nvim'] = function
   eq(sections.configuration[#sections.configuration], 'ok: configuration is valid')
   local engine = table.concat(sections.engine, '\n')
   helpers.contains(engine, 'ok: sqmeow-core')
-  for _, dialect in ipairs({ 'sqlite', 'postgres', 'mysql', 'redis', 'mongodb' }) do
+  for _, dialect in ipairs({ 'sqlite', 'duckdb', 'postgres', 'mysql', 'redis', 'mongodb' }) do
     eq({ dialect, engine:find(dialect, 1, true) ~= nil }, { dialect, true })
   end
   eq(sections.dependencies[1], 'ok: nui.nvim is installed')
@@ -88,6 +88,7 @@ T['knows the dialect of every scheme the engine accepts'] = function()
     sqlite = 'sqlite',
     sqlite3 = 'sqlite',
     file = 'sqlite',
+    duckdb = 'duckdb',
     postgres = 'postgres',
     postgresql = 'postgres',
     PostgreSQL = 'postgres',

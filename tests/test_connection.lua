@@ -49,13 +49,14 @@ T['create']['asks which database first'] = function()
   connection.create()
 
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  eq(#lines, 6)
+  eq(#lines, 7)
   helpers.contains(lines[1], 'PostgreSQL')
   helpers.contains(lines[2], 'MySQL')
   helpers.contains(lines[3], 'Redis')
   helpers.contains(lines[4], 'MongoDB')
   helpers.contains(lines[5], 'SQLite')
-  helpers.contains(lines[6], 'Connection string')
+  helpers.contains(lines[6], 'DuckDB')
+  helpers.contains(lines[7], 'Connection string')
 end
 
 T['create']['asks for a name and offers none'] = function()

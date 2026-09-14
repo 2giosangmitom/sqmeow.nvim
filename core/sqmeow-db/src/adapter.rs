@@ -13,6 +13,7 @@ use crate::result::ResultSet;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
     Sqlite,
+    DuckDb,
     Postgres,
     MySql,
     /// Not SQL at all: one command per line, and keys where the others have tables.
@@ -27,6 +28,7 @@ impl Dialect {
     pub fn name(self) -> &'static str {
         match self {
             Self::Sqlite => "sqlite",
+            Self::DuckDb => "duckdb",
             Self::Postgres => "postgres",
             Self::MySql => "mysql",
             Self::Redis => "redis",
@@ -43,6 +45,7 @@ impl Dialect {
 
         match scheme.to_ascii_lowercase().as_str() {
             "sqlite" | "sqlite3" | "file" => Some(Self::Sqlite),
+            "duckdb" => Some(Self::DuckDb),
             "postgres" | "postgresql" => Some(Self::Postgres),
             "mysql" | "mariadb" => Some(Self::MySql),
             // The trailing `s` is TLS, which is the driver's business and not a different dialect.
@@ -111,6 +114,10 @@ mod tests {
     fn recognises_the_schemes_people_type() {
         assert_eq!(Dialect::from_url("sqlite://app.db"), Some(Dialect::Sqlite));
         assert_eq!(Dialect::from_url("sqlite::memory:"), Some(Dialect::Sqlite));
+        assert_eq!(
+            Dialect::from_url("duckdb:app.duckdb"),
+            Some(Dialect::DuckDb)
+        );
         assert_eq!(
             Dialect::from_url("postgres://localhost/x"),
             Some(Dialect::Postgres)
