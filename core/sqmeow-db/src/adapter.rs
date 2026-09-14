@@ -8,6 +8,7 @@ use std::future::Future;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::edit::Changes;
 use crate::error::Result;
 use crate::node::{ColumnNode, RelationNode, RoutineNode, SchemaNode};
 use crate::result::ResultSet;
@@ -82,6 +83,22 @@ pub trait Adapter: Send + Sync {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> impl Future<Output = Result<ResultSet>> + Send;
+
+    /// Plan staged changes to a result into the statements that make them.
+    ///
+    /// Answers without touching the database, so the editor can show the plan for review. The SQL
+    /// adapters share one planner; the others lay out commands of their own.
+    fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
+        crate::edit::sql_plan(
+            self.dialect(),
+            |name| self.quote_ident(name),
+            result,
+            changes,
+        )
+    }
+
+    /// Run planned statements together: all of them or, as far as the database allows, none.
+    fn apply(&self, statements: &[String]) -> impl Future<Output = Result<()>> + Send;
 
     /// The schemas, or for MySQL the databases, this connection can see.
     fn schemas(&self) -> impl Future<Output = Result<Vec<SchemaNode>>> + Send;

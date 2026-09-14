@@ -15,7 +15,7 @@ use sqlx::{
     AssertSqlSafe, ColumnIndex, Database, Decode, Either, Executor, Pool, Row, SqlSafeStr, Type,
     TypeInfo,
 };
-use sqmeow_db::{Cell, Column, Error, ForeignKey, KeyKind, Result, ResultSet};
+use sqmeow_db::{Cell, Column, Error, ForeignKey, KeyKind, Result, ResultSet, Source};
 use tokio_util::sync::CancellationToken;
 
 /// Where a result column came from: its table, and its name in that table.
@@ -91,13 +91,21 @@ where
     // plugin.
     let stream = sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(pool);
 
-    drain(stream, &mut result, max_rows, cancel, affected, |row| {
-        // A row can be wider than preparing predicted, so take whichever is larger and let the
-        // result set trim or pad. Losing a column silently would be worse than showing an extra one.
-        (0..width.max(row.len()))
-            .map(|index| decode(row, index))
-            .collect()
-    })
+    drain(
+        stream,
+        &mut result,
+        max_rows,
+        cancel,
+        affected,
+        |row| result_columns(row.columns()),
+        |row| {
+            // A row can be wider than preparing predicted, so take whichever is larger and let the
+            // result set trim or pad. Losing a column silently would be worse than showing an extra one.
+            (0..width.max(row.len()))
+                .map(|index| decode(row, index))
+                .collect()
+        },
+    )
     .await?;
 
     result.set_elapsed(started.elapsed());
@@ -111,6 +119,7 @@ async fn drain<S, Q, R>(
     max_rows: usize,
     cancel: &CancellationToken,
     affected: impl Fn(&Q) -> u64,
+    describe: impl Fn(&R) -> Vec<Column>,
     decode: impl Fn(&R) -> Vec<Cell>,
 ) -> Result<()>
 where
@@ -129,6 +138,11 @@ where
                 Some(Err(error)) => return Err(Error::driver(error)),
                 Some(Ok(Either::Left(outcome))) => result.set_affected(affected(&outcome)),
                 Some(Ok(Either::Right(row))) => {
+                    // A statement that would not prepare arrives with no columns, and the first
+                    // row is the first thing to say what they are.
+                    if result.columns().is_empty() {
+                        result.adopt_columns(describe(&row));
+                    }
                     if result.row_count() >= max_rows {
                         // Stopping here drops the stream, which tells the server to stop sending.
                         result.mark_truncated();
@@ -139,6 +153,74 @@ where
             },
         }
     }
+}
+
+impl TableKeys {
+    /// Where a result's rows are stored: the one table every column that is not an expression
+    /// comes from, when that table's whole primary key is among them.
+    ///
+    /// Read after [`TableKeys::mark`], which is what fills in each table's keys. A join, a table
+    /// without a primary key, or a result missing part of one cannot find its rows again, so none
+    /// of those has a source.
+    pub(crate) fn source(&self, origins: &[Origin]) -> Option<Source> {
+        let mut tables = origins.iter().flatten().map(|(table, _)| table.as_str());
+        let table = tables.next()?;
+        if tables.any(|other| other != table) {
+            return None;
+        }
+        // The same table column twice is a self-join, whose rows are not one table row each.
+        let mut seen = std::collections::HashSet::new();
+        if !origins.iter().flatten().all(|origin| seen.insert(origin)) {
+            return None;
+        }
+
+        let known = self.0.lock().ok()?;
+        let mut key = known
+            .get(table)?
+            .iter()
+            .filter(|(_, kind)| **kind == KeyKind::Primary)
+            .map(|(name, _)| {
+                origins.iter().position(|origin| {
+                    origin
+                        .as_ref()
+                        .is_some_and(|(from, column)| from == table && column == name)
+                })
+            })
+            .collect::<Option<Vec<usize>>>()?;
+        if key.is_empty() {
+            return None;
+        }
+        key.sort_unstable();
+
+        // MySQL names the table with its schema when it knows one.
+        let (schema, name) = match table.rsplit_once('.') {
+            Some((schema, name)) => (Some(schema.to_owned()), name.to_owned()),
+            None => (None, table.to_owned()),
+        };
+        Some(Source::Table { schema, name, key })
+    }
+}
+
+/// Run statements in one transaction, rolling all of them back when any fails.
+///
+/// The error names the statement that failed, since the user approved several and needs to know
+/// which one the database refused.
+// ponytail: sqlx tracks its own transactions, not a `BEGIN` the user typed into a scratchpad on
+// this same connection; applying then would commit theirs. Check `pg_current_xact_id_if_assigned`
+// or `@@in_transaction` first if that bites.
+pub(crate) async fn transact<DB>(pool: &Pool<DB>, statements: &[String]) -> Result<()>
+where
+    DB: Database,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+{
+    let mut transaction = pool.begin().await.map_err(Error::driver)?;
+    for statement in statements {
+        sqlx::raw_sql(AssertSqlSafe(statement.clone()))
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| Error::driver(format!("{error}\nin: {statement}")))?;
+    }
+    transaction.commit().await.map_err(Error::driver)
 }
 
 /// Last resort for a value no decoder claimed: its text, else its bytes, else its type's name.
@@ -228,6 +310,9 @@ impl TableKeys {
             return;
         };
         for (column, origin) in columns.iter_mut().zip(origins) {
+            if let Some((_, name)) = origin {
+                column.origin = Some(name.clone());
+            }
             if let Some(kind) = origin
                 .as_ref()
                 .and_then(|(table, name)| known.get(table)?.get(name))

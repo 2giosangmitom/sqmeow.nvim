@@ -68,6 +68,40 @@ M.defaults = {
     -- that cannot be edited.
     { action = 'export', lhs = 'x', desc = 'Export the result to a file' },
     { action = 'export_selection', lhs = 'x', mode = 'x', desc = 'Export the selected rows' },
+    -- How rows are shown. None of these is a motion along a line: `f`, `F`, `E` and the like stay
+    -- free for crossing a wide grid, which is why filtering is `=` and editing is "change".
+    {
+      action = 'filter_cell',
+      lhs = '=',
+      desc = 'Show only rows holding this value in this column',
+    },
+    { action = 'filter', lhs = 'gf', desc = 'Add a filter on a column, or on any column' },
+    { action = 'sort', lhs = 's', desc = 'Sort by this column: ascending, descending, off' },
+    { action = 'sort_add', lhs = 'S', desc = 'Add this column to the sort' },
+    { action = 'hide_column', lhs = '-', desc = 'Hide this column' },
+    { action = 'show_columns', lhs = 'g-', desc = 'Show every hidden column' },
+    {
+      action = 'reset_view',
+      lhs = 'R',
+      desc = 'Clear filters, sort and hidden columns',
+    },
+    {
+      action = 'toggle_float',
+      lhs = 'Z',
+      desc = 'Show the result in a float, or back in its split',
+    },
+    { action = 'edit_cell', lhs = { 'i', '<CR>' }, desc = 'Change this cell' },
+    { action = 'set_null', lhs = 'X', desc = 'Set this cell to NULL' },
+    { action = 'add_row', lhs = 'o', desc = 'Add a row' },
+    { action = 'delete_row', lhs = 'dd', desc = 'Delete this row, or keep it after all' },
+    { action = 'delete_selection', lhs = 'd', mode = 'x', desc = 'Delete the selected rows' },
+    { action = 'undo', lhs = 'u', desc = 'Undo the last change' },
+    { action = 'discard', lhs = 'U', desc = 'Discard every change' },
+    {
+      action = 'review',
+      lhs = { 'gs', '<C-s>' },
+      desc = 'Review the changes; <C-s> there applies them',
+    },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the result window' },
   },
@@ -105,6 +139,12 @@ M.plug = {
     desc = 'Run the selection',
     run = function()
       require('sqmeow.api').execute_selection()
+    end,
+  },
+  ['sqmeow-result-float'] = {
+    desc = 'Show the result in a float, or back in its split',
+    run = function()
+      require('sqmeow.api').toggle_float()
     end,
   },
   ['sqmeow-cancel'] = {

@@ -233,6 +233,20 @@ M.subcommands = {
     end,
   },
 
+  float = {
+    desc = 'Show the result in a bigger float, or back in its split',
+    run = function()
+      require('sqmeow.api').toggle_float()
+    end,
+  },
+
+  review = {
+    desc = 'Review the changes staged in the result, and apply them',
+    run = function()
+      require('sqmeow.api').review()
+    end,
+  },
+
   statement = {
     desc = 'Run the statement the cursor is in',
     run = function()
@@ -248,8 +262,11 @@ M.subcommands = {
   },
 
   export = {
-    desc = 'Write the result to a file',
+    desc = 'Write the result to a file, or with `clipboard` as the path copy it',
     run = function(args)
+      if args[2] == 'clipboard' then
+        return require('sqmeow.api').export({ format = args[1], clipboard = true })
+      end
       require('sqmeow.api').export({ format = args[1], path = args[2] })
     end,
     complete = function(lead)

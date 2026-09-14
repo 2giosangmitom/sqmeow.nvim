@@ -484,3 +484,41 @@ async fn a_relation_that_is_not_there_has_no_columns() {
     let backend = connect(&server!()).await;
     assert!(backend.columns(SCHEMA, "absent").await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn an_explain_tree_is_one_value_spanning_lines() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "explained").await;
+
+    let tree = run(
+        &backend,
+        "explain format=tree select * from explained where label = 'a'",
+    )
+    .await;
+    let names: Vec<&str> = tree.columns().iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["EXPLAIN"]);
+    assert_eq!(tree.row_count(), 1);
+    // The line breaks survive in the value, which the result window splits back into lines.
+    match tree.cell(0, 0) {
+        Some(Cell::Text(text)) => {
+            assert!(text.starts_with("-> "), "{text}");
+            assert!(
+                text.contains('\n'),
+                "a filter over a scan spans two lines: {text}"
+            );
+        }
+        other => panic!("expected the plan as text, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_plain_explain_is_a_table() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "explained_table").await;
+
+    // Laid out as columns already, so the result window keeps it a grid.
+    let plan = run(&backend, "explain select * from explained_table").await;
+    let names: Vec<&str> = plan.columns().iter().map(|c| c.name.as_str()).collect();
+    assert!(names.contains(&"select_type"), "{names:?}");
+    assert!(names.len() > 1);
+}

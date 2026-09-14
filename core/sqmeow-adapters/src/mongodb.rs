@@ -11,14 +11,16 @@ use std::sync::{PoisonError, RwLock};
 use std::time::Instant;
 
 use futures_util::StreamExt;
+use mongodb::bson::oid::ObjectId;
 use mongodb::bson::spec::BinarySubtype;
 use mongodb::bson::{self, Bson, Document, doc};
 use mongodb::options::ClientOptions;
 use mongodb::results::CollectionType;
 use mongodb::{Client, Database};
+use sqmeow_db::edit::{self, check_column, check_row};
 use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode,
+    Adapter, Cell, Changes, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
+    ResultSet, RoutineNode, SchemaNode, Source,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -124,6 +126,44 @@ impl Adapter for MongoAdapter {
     /// A name as a JSON string, which is how a command document names a collection.
     fn quote_ident(&self, name: &str) -> String {
         serde_json::Value::from(name).to_string()
+    }
+
+    fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
+        plan(result, changes)
+    }
+
+    /// One command after another, stopping at the first that fails.
+    // ponytail: not atomic; a multi-document transaction needs a replica set, so wrap these in a
+    // session with `start_transaction` if one is guaranteed.
+    async fn apply(&self, statements: &[String]) -> Result<()> {
+        for (done, statement) in statements.iter().enumerate() {
+            let Statement::Command { db, command } = parse(statement)? else {
+                return Err(Error::driver("only commands can be applied"));
+            };
+            let database = self.client.database(&db.unwrap_or_else(|| self.database()));
+            let failed = |error: String| {
+                Error::driver(format!(
+                    "{done} of {} commands were applied before one failed: {error}",
+                    statements.len()
+                ))
+            };
+
+            let reply = database
+                .run_command(command)
+                .await
+                .map_err(|error| failed(error.to_string()))?;
+            // A write the server refused still answers `ok`, with the reason in `writeErrors`.
+            if let Ok(errors) = reply.get_array("writeErrors")
+                && let Some(first) = errors.first()
+            {
+                return Err(failed(first.clone().into_relaxed_extjson().to_string()));
+            }
+            // Nothing matched the `_id`, so the document went away since the result was read.
+            if reply.get("n").and_then(count) == Some(0) {
+                return Err(failed("no document had that _id any more".to_owned()));
+            }
+        }
+        Ok(())
     }
 
     async fn execute(
@@ -267,6 +307,7 @@ async fn run(
     max_rows: usize,
 ) -> Result<ResultSet> {
     let name = command_name(&command).to_owned();
+    let collection = command.get_str(&name).ok().map(str::to_owned);
 
     if !CURSOR_COMMANDS.contains(&name.as_str()) {
         let reply = database.run_command(command).await.map_err(Error::driver)?;
@@ -305,7 +346,110 @@ async fn run(
     if truncated {
         result.mark_truncated();
     }
+    // Documents a `find` returned are found again by `_id`, unless a projection left it out. An
+    // empty collection has no columns at all, and can still be added to.
+    if name == "find"
+        && let Some(collection) = collection
+        && (result.row_count() == 0
+            || result
+                .columns()
+                .first()
+                .is_some_and(|column| column.name == "_id"))
+    {
+        result.set_source(Some(Source::Collection {
+            db: database.name().to_owned(),
+            name: collection,
+        }));
+    }
     Ok(result)
+}
+
+/// Plan changes to a collection into `update`, `delete` and `insert` commands, one per line of
+/// Extended JSON, each naming its database.
+fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
+    let Some(source @ Source::Collection { db, name }) = result.source() else {
+        return Err(edit::not_editable());
+    };
+    let line = |mut command: Document| {
+        command.insert("$db", db.clone());
+        Bson::Document(command).into_relaxed_extjson().to_string()
+    };
+    let field = |column: usize| result.columns()[column].name.clone();
+    let id = |row: usize| -> Result<Bson> {
+        check_row(result, row)?;
+        let kind = result
+            .columns()
+            .first()
+            .map_or("", |column| column.type_name.as_str());
+        id_bson(result.cell(row, 0).unwrap_or(&Cell::Null), kind)
+    };
+
+    let mut commands = Vec::new();
+    for (row, cells) in changes.live_updates() {
+        let mut set = Document::new();
+        for (column, value) in cells {
+            check_column(source, result, *column)?;
+            set.insert(field(*column), value_bson(value.as_deref()));
+        }
+        commands.push(line(doc! {
+            "update": name,
+            "updates": [{ "q": { "_id": id(*row)? }, "u": { "$set": set } }],
+        }));
+    }
+    for &row in &changes.deletes {
+        commands.push(line(doc! {
+            "delete": name,
+            "deletes": [{ "q": { "_id": id(row)? }, "limit": 1 }],
+        }));
+    }
+    for cells in &changes.inserts {
+        let mut document = Document::new();
+        for (column, value) in cells {
+            if *column >= result.columns().len() {
+                return Err(Error::driver(format!("there is no column {column}")));
+            }
+            document.insert(field(*column), value_bson(value.as_deref()));
+        }
+        commands.push(line(doc! { "insert": name, "documents": [document] }));
+    }
+    Ok(commands)
+}
+
+/// A value typed into a cell: JSON when it reads as JSON, so `42`, `true` and `{"$oid": "…"}` keep
+/// their type, and a string otherwise. Quote a number to keep it text.
+fn value_bson(value: Option<&str>) -> Bson {
+    let Some(text) = value else {
+        return Bson::Null;
+    };
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|json| Bson::try_from(json).ok())
+        .unwrap_or_else(|| Bson::String(text.to_owned()))
+}
+
+/// The `_id` a row was read with, as the BSON that matches it again.
+///
+/// The grid holds an `ObjectId` as its hex, so the column's type is what says to read it back as
+/// one rather than as a string that matches nothing.
+fn id_bson(cell: &Cell, kind: &str) -> Result<Bson> {
+    Ok(match cell {
+        Cell::Text(hex) if kind == "objectId" => {
+            Bson::ObjectId(ObjectId::parse_str(hex).map_err(Error::driver)?)
+        }
+        Cell::Text(text) => Bson::String(text.clone()),
+        Cell::Int(number) => Bson::Int64(*number),
+        Cell::Float(number) => Bson::Double(*number),
+        Cell::Bool(flag) => Bson::Boolean(*flag),
+        Cell::Uuid(text) => Bson::Binary(bson::Binary::from_uuid(
+            bson::Uuid::parse_str(text).map_err(Error::driver)?,
+        )),
+        other => {
+            return Err(Error::driver(format!(
+                "an _id of type {} cannot be matched again",
+                other.type_name()
+            )));
+        }
+    })
 }
 
 fn count(value: &Bson) -> Option<u64> {
@@ -469,6 +613,56 @@ mod tests {
     use sqmeow_db::TypeClass;
 
     use super::*;
+
+    fn people() -> ResultSet {
+        let id = ObjectId::parse_str("65a1b2c3d4e5f60718293a4b").unwrap();
+        let mut result = to_result("find", vec![doc! { "_id": id, "name": "al" }]);
+        result.set_source(Some(Source::Collection {
+            db: "app".into(),
+            name: "people".into(),
+        }));
+        result
+    }
+
+    #[test]
+    fn changes_become_commands_finding_documents_by_id() {
+        let changes = Changes {
+            updates: vec![(0, vec![(1, Some("bob".into()))])],
+            deletes: vec![0],
+            inserts: vec![vec![(1, Some("42".into()))]],
+        };
+        // The update to a document being deleted is dropped.
+        assert_eq!(
+            plan(&people(), &changes).unwrap(),
+            vec![
+                r#"{"delete":"people","deletes":[{"q":{"_id":{"$oid":"65a1b2c3d4e5f60718293a4b"}},"limit":1}],"$db":"app"}"#,
+                r#"{"insert":"people","documents":[{"name":42}],"$db":"app"}"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_planned_command_parses_back_with_its_name_first() {
+        let changes = Changes {
+            updates: vec![(0, vec![(1, None)])],
+            ..Changes::default()
+        };
+        let line = &plan(&people(), &changes).unwrap()[0];
+        let Statement::Command { db, command } = parse(line).unwrap() else {
+            panic!("a command");
+        };
+        assert_eq!(db.as_deref(), Some("app"));
+        assert_eq!(command_name(&command), "update");
+    }
+
+    #[test]
+    fn the_id_itself_cannot_be_edited() {
+        let changes = Changes {
+            updates: vec![(0, vec![(0, Some("x".into()))])],
+            ..Changes::default()
+        };
+        assert!(plan(&people(), &changes).is_err());
+    }
 
     #[test]
     fn use_names_a_database() {

@@ -505,3 +505,30 @@ async fn a_relation_that_is_not_there_has_no_columns() {
     let backend = connect(&server!()).await;
     assert!(backend.columns(SCHEMA, "absent").await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn an_explain_is_a_column_of_plan_lines() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "explained").await;
+
+    // One row a line, which is what lets the result window show the plan as text.
+    let plan = run(
+        &backend,
+        "explain select * from explained where label = 'a'",
+    )
+    .await;
+    let names: Vec<&str> = plan.columns().iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["QUERY PLAN"]);
+    assert!(plan.row_count() >= 2, "a scan and its filter");
+    match plan.cell(0, 0) {
+        Some(Cell::Text(line)) => assert!(line.contains("Scan"), "{line}"),
+        other => panic!("expected the first plan line, got {other:?}"),
+    }
+    // A plan is nobody's table, so it cannot be edited.
+    assert!(plan.source().is_none());
+
+    // Asked for as JSON, the whole plan is one value.
+    let json = run(&backend, "explain (format json) select * from explained").await;
+    assert_eq!(json.columns().len(), 1);
+    assert_eq!(json.row_count(), 1);
+}

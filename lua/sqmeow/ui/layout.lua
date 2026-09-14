@@ -23,8 +23,20 @@ function M.remember()
     return
   end
 
+  -- By window rather than with `winrestcmd()`, which names windows by number and counts floats. A
+  -- notification open now and gone later shifts every number after it, and the command then sizes
+  -- the wrong window: `2resize 1` meant for that notification lands on the editor, squeezing it to
+  -- one line.
+  local sizes = {}
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_config(win).relative == '' then
+      sizes[win] =
+        { height = vim.api.nvim_win_get_height(win), width = vim.api.nvim_win_get_width(win) }
+    end
+  end
+
   saved = {
-    sizes = vim.fn.winrestcmd(),
+    sizes = sizes,
     win = vim.api.nvim_get_current_win(),
   }
 end
@@ -38,8 +50,27 @@ function M.restore()
   local restore = saved
   saved = nil
 
-  -- Sizes first, then the cursor, so the window it lands in is already the right size.
-  pcall(vim.api.nvim_command, restore.sizes)
+  -- Only the arrangement that was recorded is put back. A window opened or closed since then means
+  -- the sizes describe some other layout, and a lone window already fills the screen: forcing a
+  -- size on it only hands the rest to the command line.
+  local now = vim.tbl_filter(function(win)
+    return vim.api.nvim_win_get_config(win).relative == ''
+  end, vim.api.nvim_tabpage_list_wins(0))
+  local same = #now == vim.tbl_count(restore.sizes)
+    and vim.iter(now):all(function(win)
+      return restore.sizes[win] ~= nil
+    end)
+
+  -- Sizes first, then the cursor, so the window it lands in is already the right size. Twice, as
+  -- `winrestcmd()` does, because setting one window's size moves its neighbours'.
+  if same and #now > 1 then
+    for _ = 1, 2 do
+      for win, size in pairs(restore.sizes) do
+        pcall(vim.api.nvim_win_set_height, win, size.height)
+        pcall(vim.api.nvim_win_set_width, win, size.width)
+      end
+    end
+  end
   if vim.api.nvim_win_is_valid(restore.win) then
     pcall(vim.api.nvim_set_current_win, restore.win)
   end
@@ -121,7 +152,12 @@ function M.close_window(win)
     return
   end
 
-  if #vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win)) > 1 then
+  -- Floats do not count: a tab whose only other windows float over this one still has this as its
+  -- last window, and Neovim refuses to close it.
+  local others = vim.tbl_filter(function(other)
+    return other ~= win and vim.api.nvim_win_get_config(other).relative == ''
+  end, vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win)))
+  if #others > 0 then
     return vim.api.nvim_win_close(win, true)
   end
   vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))
