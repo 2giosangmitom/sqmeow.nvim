@@ -3,5 +3,4 @@
 *.so
 *.dylib
 *.dll
-.luarc.json
 /.tests
