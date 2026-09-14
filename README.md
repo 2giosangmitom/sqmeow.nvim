@@ -1,37 +1,35 @@
 # 🐱 sqmeow.nvim
 
-Query your database from your favorite editor. _sqmeow.nvim_ is a database client for Neovim: a Lua frontend over a Rust engine.
+Query your database from your favorite editor.
 
+[![Release](https://img.shields.io/github/v/release/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=github&color=a6da95&logoColor=D9E0EE&labelColor=302D41)](https://github.com/2giosangmitom/sqmeow.nvim/releases/latest)
 ![Stars](https://img.shields.io/github/stars/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=apachespark&color=C9CBFF&logoColor=D9E0EE&labelColor=302D41)
 ![Last commit](https://img.shields.io/github/last-commit/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=github&color=7dc4e4&logoColor=D9E0EE&labelColor=302D41)
 ![Forks](https://img.shields.io/github/forks/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=starship&color=8bd5ca&logoColor=D9E0EE&labelColor=302D41)
 ![Issues](https://img.shields.io/github/issues/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=lightning&color=8bd5ca&logoColor=D9E0EE&labelColor=302D41)
 ![Repo size](https://img.shields.io/github/repo-size/2giosangmitom/sqmeow.nvim?color=%23DDB6F2&label=SIZE&logo=codesandbox&style=for-the-badge&logoColor=D9E0EE&labelColor=302D41)
-![LICENSE](https://img.shields.io/github/license/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=alpinedotjs&color=ee999f&logoColor=D9E0EE&labelColor=302D41)
+![License](https://img.shields.io/github/license/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=alpinedotjs&color=ee999f&logoColor=D9E0EE&labelColor=302D41)
 
 ## ✨ Features
 
-- 🐘 Several connections open at once, each to a different database if you like.
-- 🖥️ One command opens the client: schema drawer and result grid.
-- 📝 A connection form with real fields, so nobody types a URL by hand. The password stays hidden behind asterisks.
-- 🌲 A schema drawer with tables, views, functions, procedures and columns with their types and keys, loaded as you expand.
-- ▶️ Run the statement under the cursor, a selection or the whole buffer. Errors show up in the result window.
-- 📄 Scratchpads you create and name from the drawer, as many per connection as you like. They survive a restart and stay tied to their connection, so two of them can query two databases side by side.
-- 🕘 A query log that keeps every result, so you can look at yesterday's answer without running the query again.
-- ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Export the result, or just the rows you select, to CSV or JSON, in a file or on the clipboard.
-- 🔎 Filter, search every column, sort and hide columns in the grid. The engine does it over the rows it holds, so nothing is queried again.
-- ✏️ Edit rows right in the grid: change cells, add and delete rows, review the statements, then apply them together. Works on PostgreSQL, MySQL, SQLite, MongoDB and Redis.
-- 🧭 Run an `EXPLAIN` and its plan shows in the result window as the database writes it, rather than cut short in a grid column.
-- 🔐 Passwords can come from `{{ env "VAR" }}` or `{{ exec "cmd" }}`, and are masked wherever a URL is shown.
-- ⌨️ No global keymaps. Every key is buffer-local and configurable, with `<Plug>` mappings for your own bindings.
+- **⚡ Rust engine**: Queries run off the editor thread and results are paged, so large results never freeze Neovim.
+- **🐘 Multiple connections**: Keep several databases open at once.
+- **🌲 Schema drawer**: Browse schemas, tables, views, routines and columns with their types and keys.
+- **📄 Scratchpads**: Query buffers tied to a connection, kept across restarts.
+- **✏️ In-grid editing**: Edit cells, add or delete rows, and review staged changes before applying them.
+- **🔎 Filter and sort**: Done in the engine on the rows it already holds, without querying again.
+- **▶️ Flexible execution**: Run the statement under the cursor, a selection, or the whole buffer.
+- **🧭 EXPLAIN**: Query plans and errors show in the result window.
+- **🕘 Query log**: Reopen the result of any past query, even after a restart.
+- **📤 Export**: Results or selected rows to CSV or JSON, as a file or on the clipboard.
+- **🔐 Secrets**: Passwords are masked, and URLs can read them with `{{ env "VAR" }}` or `{{ exec "cmd" }}`.
+- **⌨️ Buffer-local keymaps**: No global mappings; `<Plug>` mappings for everything worth a global key.
 
-<a id="supported-databases"></a>
+## 🗄️ Supported Databases
 
-## 🗄️ Supported databases
-
-- SQLite
-- PostgreSQL
+- PostgreSQL, and servers speaking its protocol such as CockroachDB
 - MySQL, MariaDB
+- SQLite
 - Redis, Valkey, Dragonfly
 - MongoDB
 
@@ -41,7 +39,7 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 
 ## 🚀 Installation
 
-Requires Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim). The engine is a separate binary and is never installed automatically, so call `install()` from your plugin manager's build hook.
+**Requirements**: Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim).
 
 With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
@@ -51,98 +49,113 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
   dependencies = { 'MunifTanjim/nui.nvim' },
   version = '*',
   build = function()
-    -- Downloads the matching release. Pass 'curl', 'wget', 'powershell' or 'cargo' to choose.
+    -- Downloads the matching release binary; pass 'curl', 'wget', 'powershell' or 'cargo' to choose.
     require('sqmeow').install()
   end,
   opts = {},
 }
 ```
 
-To track the latest commit instead of a release, drop `version` and use `install('cargo')`, which needs a Rust toolchain. `:Sqmeow install [method]` installs from inside a session, and `:checkhealth sqmeow` shows which engine is running.
+> [!NOTE]
+> To track `master`, remove `version` and build with `install('cargo')`, which needs a Rust toolchain.
+> Run `:checkhealth sqmeow` to verify the installation.
 
-## ⚡ Usage
+## ⚡ Quick Start
 
-1. `:Sqmeow` opens the drawer and the result window. Run it again to restore your layout.
-2. `:Sqmeow add` (or `A` in the drawer) opens a form to add a connection. Leave the database empty to list every database on the server, or choose **Connection string** to paste a whole URL.
-3. `<CR>` on a connection in the drawer opens it. `u` makes it the one queries run against, and `a` creates a scratchpad for it.
-4. Write SQL in the scratchpad and press `<CR>` to run the statement under the cursor, or a visual selection. Errors show in the result window. On a Redis connection, write one command per line; the drawer lists keys by type. On a MongoDB connection, write [database commands](https://www.mongodb.com/docs/manual/reference/command/) as Extended JSON, such as `{"find": "users", "filter": {"age": {"$gt": 30}}}`, one document per statement; `use shop` switches database.
+1. `:Sqmeow` opens the drawer and the result window.
+2. `A` in the drawer, or `:Sqmeow add`, adds a connection.
+3. `<CR>` on a connection connects; `a` creates a scratchpad for it.
+4. Write a query and press `<CR>` to run the statement under the cursor, or a visual selection.
 
-Press `?` in the drawer or result window to list its keys.
+> [!TIP]
+> Press `?` in the drawer or the result window to list its keymaps.
 
-Connections are stored in `connections.json` under `core.path`. They can also come from the `SQMEOW_CONNECTIONS` environment variable, as a JSON array:
+### Dialect Notes
+
+- **SQL**: `<CR>` runs the statement under the cursor; `<leader>E` runs the whole buffer.
+- **Redis**: One command per line, such as `GET key`. The drawer lists keys by type.
+- **MongoDB**: Database commands as Extended JSON, such as `{"find": "users"}`. `use db_name` switches database.
+
+### Environment Connections
+
+Define connections in `SQMEOW_CONNECTIONS`:
 
 ```sh
 export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPASSWORD\" }}@localhost/dev"}]'
 ```
 
-### Commands
+## ⌨️ Commands
 
-| Command                      | Description                                         |
-| ---------------------------- | --------------------------------------------------- |
-| `:Sqmeow`                    | Open every window, or restore the layout            |
-| `:Sqmeow toggle`             | Open every window, or close them                    |
-| `:Sqmeow add`                | Add a connection                                    |
-| `:Sqmeow edit [name]`        | Edit a saved connection                             |
-| `:Sqmeow use [name]`         | Choose the connection queries run against           |
-| `:Sqmeow bind <name\|none>`  | Tie the current buffer to a connection, or untie it |
-| `:Sqmeow disconnect`         | Close the current connection                        |
-| `:Sqmeow scratch [name]`     | Create a scratchpad for a connection                |
-| `:Sqmeow execute [sql]`      | Run the buffer, the selection, or the given SQL     |
-| `:Sqmeow cancel`             | Stop the running query                              |
-| `:Sqmeow export <csv\|json>` | Write the result to a file                          |
-| `:Sqmeow export csv clipboard` | Copy the result to the clipboard                  |
-| `:Sqmeow float`              | Show the result in a float, or back in its split    |
-| `:Sqmeow review`             | Review the staged changes, and apply them           |
-| `:Sqmeow log [clear]`        | Show a past query's result, or clear the log        |
-| `:Sqmeow install [method]`   | Install the engine                                  |
-| `:Sqmeow health`             | Run the health check                                |
+| Command                                        | Description                                         |
+| ---------------------------------------------- | --------------------------------------------------- |
+| `:Sqmeow`                                      | Open the drawer and the result window               |
+| `:Sqmeow toggle`                               | Show or hide the schema drawer                      |
+| `:Sqmeow drawer`                               | Show the schema drawer                              |
+| `:Sqmeow open` / `close`                       | Show / hide the result window                       |
+| `:Sqmeow add`                                  | Add a connection                                    |
+| `:Sqmeow save`                                 | Save a connection for next time                     |
+| `:Sqmeow edit [name]`                          | Edit a saved connection                             |
+| `:Sqmeow use [name]`                           | Choose the connection queries run against           |
+| `:Sqmeow bind <name\|none>`                    | Tie the current buffer to a connection, or untie it |
+| `:Sqmeow disconnect`                           | Close the current connection                        |
+| `:Sqmeow scratch [name]`                       | Create a scratchpad for a connection                |
+| `:Sqmeow execute [sql]`                        | Run the buffer, the selection, or the given SQL     |
+| `:Sqmeow statement`                            | Run the statement under the cursor                  |
+| `:Sqmeow cancel`                               | Stop the running query                              |
+| `:Sqmeow next` / `prev`                        | Show the next / previous page                       |
+| `:Sqmeow float`                                | Move the result between its split and a float       |
+| `:Sqmeow review`                               | Review and apply staged edits                       |
+| `:Sqmeow export <csv\|json> [path\|clipboard]` | Export the result to a file or the clipboard        |
+| `:Sqmeow log [clear]`                          | Reopen a past query's result, or clear the log      |
+| `:Sqmeow install [method]`                     | Install the engine binary                           |
+| `:Sqmeow start` / `stop` / `restart`           | Start, stop or restart the engine                   |
+| `:Sqmeow messages`                             | Show the engine's log                               |
+| `:Sqmeow health`                               | Run the health check                                |
 
-Subcommands complete with `<Tab>`. See `:h sqmeow` for the rest.
+## 🗺️ Keymaps
 
-### Keymaps
+### Drawer
 
-**Drawer**
+| Key         | Action                                  |
+| ----------- | --------------------------------------- |
+| `<CR>`, `o` | Expand or collapse the node             |
+| `u`         | Run queries against this connection     |
+| `p`         | Preview the relation's first page       |
+| `r`         | Reload the subtree                      |
+| `y` / `s`   | Yank the qualified name / a `SELECT`    |
+| `a`         | Create a scratchpad                     |
+| `A` / `e`   | Add / edit a connection                 |
+| `R`         | Rename the connection or scratchpad     |
+| `d`         | Delete the scratchpad, or clear the log |
+| `?` / `q`   | Show keymaps / close the drawer         |
 
-| Key         | Action                                 |
-| ----------- | -------------------------------------- |
-| `<CR>`, `o` | Expand or collapse                     |
-| `u`         | Run queries against this connection    |
-| `p`         | Preview the relation                   |
-| `r`         | Reload the subtree                     |
-| `y` / `s`   | Yank the qualified name / a `SELECT`   |
-| `a`         | Create a scratchpad for the connection |
-| `A` / `e`   | Add / edit a connection                |
-| `R`         | Rename a connection or scratchpad      |
-| `d`         | Delete a scratchpad, or empty the log  |
-| `q`         | Close                                  |
+### Result Window
 
-**Result**
+| Key        | Action                                    |
+| ---------- | ----------------------------------------- |
+| `L` / `H`  | Next / previous page                      |
+| `gg` / `G` | First / last page                         |
+| `K`        | Show the row's details                    |
+| `x`        | Export the result, or the selected rows   |
+| `=` / `gf` | Filter by the cell's value / add a filter |
+| `s` / `S`  | Sort by the column / add it to the sort   |
+| `-` / `g-` | Hide the column / show hidden columns     |
+| `R`        | Clear filters, sort and hidden columns    |
+| `Z`        | Move between split and float              |
+| `?` / `q`  | Show keymaps / close the result window    |
 
-| Key                  | Action                                                   |
-| -------------------- | -------------------------------------------------------- |
-| `L` / `H`            | Next / previous page                                     |
-| `gg` / `G`           | First / last page                                        |
-| `K`                  | Show the row in detail                                   |
-| `x`                  | Export the result, or the selection in visual mode       |
-| `=` / `gf`           | Filter by the value under the cursor / add a filter      |
-| `s` / `S`            | Sort by this column / add it to the sort                 |
-| `-` / `g-`           | Hide this column / show every column                     |
-| `R`                  | Clear filters, sort and hidden columns                   |
-| `Z`                  | Show the result in a bigger float, or back in its split  |
-| `q`                  | Close                                                    |
+### Editing Results
 
-Editing:
+| Key           | Action                                                    |
+| ------------- | --------------------------------------------------------- |
+| `i`, `<CR>`   | Edit the cell                                             |
+| `X`           | Set the cell to `NULL`                                    |
+| `o`           | Add a row                                                 |
+| `dd` / `d`    | Delete the row / the selected rows                        |
+| `u` / `U`     | Undo the last change / discard all changes                |
+| `gs`, `<C-s>` | Review staged changes; `<C-s>` in the review applies them |
 
-| Key            | Action                                  |
-| -------------- | --------------------------------------- |
-| `i`, `<CR>`    | Change the cell                         |
-| `X`            | Set the cell to `NULL`                  |
-| `o`            | Add a row                               |
-| `dd` / `d`     | Delete the row / the selected rows      |
-| `u` / `U`      | Undo the last change / discard them all |
-| `gs`, `<C-s>`  | Review the statements; `<C-s>` applies  |
-
-**Scratchpad**
+### Scratchpad
 
 | Key             | Action                             |
 | --------------- | ---------------------------------- |
@@ -151,9 +164,9 @@ Editing:
 | `<leader>E`     | Run the whole buffer               |
 | `<C-c>`         | Stop the running query             |
 
-Override or disable (`false`) any key by action name, e.g. `keymaps = { result = { next_page = '<C-n>' } }`. The action names are listed in `:h sqmeow-keymaps`.
+### Global Keymaps
 
-For global keys, bind the `<Plug>` mappings:
+Bind the `<Plug>` mappings to keys of your own:
 
 ```lua
 vim.keymap.set('n', '<leader>dd', '<Plug>(sqmeow-toggle)')
@@ -166,7 +179,7 @@ vim.keymap.set('n', '<leader>df', '<Plug>(sqmeow-result-float)')
 
 ## ⚙️ Configuration
 
-`setup()` is optional. These are the defaults (icons omitted):
+`setup()` is optional. The defaults:
 
 ```lua
 require('sqmeow').setup({
@@ -178,7 +191,7 @@ require('sqmeow').setup({
   ui = {
     drawer = { width = 36 },
     result = { height = 16, page_size = 100, max_column_width = 48, column_icons = true, null_text = 'NULL' },
-    border = 'default', -- follows 'winborder'; or any nui border style
+    border = 'default', -- 'default' follows 'winborder'; or a nui style such as 'rounded'
     winbar = true,
     persist_session = false,
   },
@@ -186,33 +199,33 @@ require('sqmeow').setup({
     max_rows = 100000,
     timeout_ms = 0, -- 0 disables the timeout
     history_size = 32, -- results kept in memory
-    persist_history = true, -- save the query log and its results to disk
+    persist_history = true, -- save the log and its results to disk
     history_limit = 500,
   },
-  icons = {}, -- Nerd Font glyphs by default; recolour through the SqmeowIcon* highlight groups
+  icons = {}, -- Nerd Font glyphs; recolour them through the SqmeowIcon* highlight groups
   keymaps = {},
-  redact_urls = true, -- mask passwords in displayed URLs
+  redact_urls = true, -- mask passwords wherever a URL is shown
 })
 ```
 
-Unknown options are reported by name. See `:h sqmeow-config` for every option and icon.
+See `:h sqmeow-config` for every option.
 
 ## 🤝 Contributing
 
-Contributions are welcome. The toolchain is pinned with [mise](https://mise.jdx.dev) and tasks are [just](https://just.systems) recipes:
+The toolchain is pinned with [mise](https://mise.jdx.dev) and tasks are [just](https://just.systems) recipes:
 
 ```sh
 mise install   # rust, just, stylua, selene, lua-language-server
-just db-up     # PostgreSQL, MySQL, Redis, Dragonfly and MongoDB for integration tests
-just           # lint and test, as CI does
+just db-up     # start the test databases in Docker
+just           # lint, test and check the help file, as CI does
 just docs      # regenerate doc/sqmeow.txt
 ```
 
-Write commit messages as [conventional commits](https://www.conventionalcommits.org); they become the release notes.
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org).
 
 ## 📜 License
 
-[MIT](LICENSE). Thanks to all the [contributors](https://github.com/2giosangmitom/sqmeow.nvim/graphs/contributors) 💛
+[MIT](LICENSE). Thanks to all [contributors](https://github.com/2giosangmitom/sqmeow.nvim/graphs/contributors) 💛
 
 [![Contributors](https://contrib.rocks/image?repo=2giosangmitom/sqmeow.nvim)](https://github.com/2giosangmitom/sqmeow.nvim/graphs/contributors)
 
