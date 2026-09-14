@@ -34,11 +34,12 @@ end
 
 --- A view that shows everything as the query returned it.
 local function fresh()
-  return { filters = {}, sort = {}, hidden = {} }
+  return { filters = {}, sort = {}, hidden = {}, where = '', order_by = '' }
 end
 
---- How the current result is shown.
----@return { filters: table[], sort: table[], hidden: table<integer, boolean> }
+--- How the current result is shown. `where` and `order_by` are run in its query, which `base`
+--- holds as written once it has been filtered.
+---@return { filters: table[], sort: table[], hidden: table<integer, boolean>, where: string, order_by: string, base: string|nil }
 function M.spec()
   local call = require('sqmeow.state').call
   local id = call and call.call_id
@@ -111,12 +112,25 @@ function M.describe(summary, highlight)
 
   local spec = summary.call_id and specs[summary.call_id]
   if spec then
+    local function clause(label, text)
+      if vim.fn.strchars(text) > 40 then
+        text = vim.fn.strcharpart(text, 0, 39) .. '…'
+      end
+      -- A winbar reads `%` as the start of an item.
+      table.insert(parts, label .. (highlight and text:gsub('%%', '%%%%') or text))
+    end
+    if (spec.where or '') ~= '' then
+      clause('where ', spec.where)
+    end
+
     local keys = {}
     for _, key in ipairs(spec.sort) do
       local column = summary.columns and summary.columns[key.column + 1]
       table.insert(keys, (column and column.name or '?') .. (key.descending and '↓' or '↑'))
     end
-    if #keys > 0 then
+    if (spec.order_by or '') ~= '' then
+      clause('order by ', spec.order_by)
+    elseif #keys > 0 then
       table.insert(parts, 'sorted by ' .. table.concat(keys, ', '))
     end
     local hidden = vim.tbl_count(spec.hidden)
@@ -606,9 +620,80 @@ function M.on_view(payload)
   end
 end
 
---- Keep the current filters, sort and hidden columns for the result that comes next.
-function M.carry_view()
-  carried = vim.deepcopy(M.spec())
+--- Whether a result is filtered and ordered by running its query again, which needs an open SQL
+--- connection, rather than in the engine's memory.
+---@param call sqmeow.CallSummary|nil
+---@return boolean
+function M.queried(call)
+  local connection = call and call.conn_id and require('sqmeow.state').connections[call.conn_id]
+  return connection ~= nil
+    and connection.dialect ~= nil
+    and not vim.tbl_contains({ 'redis', 'mongodb', 'scylla' }, connection.dialect)
+end
+
+--- An identifier quoted for the current result's database.
+---@param name string
+---@return string
+function M.quote(name)
+  local state = require('sqmeow.state')
+  local connection = state.call and state.call.conn_id and state.connections[state.call.conn_id]
+  if connection and connection.dialect == 'mysql' then
+    return '`' .. (name:gsub('`', '``')) .. '`'
+  end
+  return '"' .. (name:gsub('"', '""')) .. '"'
+end
+
+--- Run the current result's query again, changing the parts of its view `view` names.
+---@param view table|nil Fields of the view to replace, such as `where` and `order_by`.
+---@return boolean started
+function M.rerun(view)
+  local call = require('sqmeow.state').call
+  if not (call and call.call_id and call.conn_id) then
+    return false
+  end
+  -- A new result would drop them.
+  local staged = require('sqmeow.ui.edit').count()
+  if staged > 0 then
+    utils.notify(
+      ('apply or discard the %d staged change%s first'):format(staged, staged == 1 and '' or 's'),
+      vim.log.levels.WARN
+    )
+    return false
+  end
+
+  local spec = vim.tbl_extend('force', vim.deepcopy(M.spec()), view or {})
+  -- A filtered result's own SQL is the wrapper, not the query as written.
+  spec.base = spec.base or call.sql
+  if not spec.base then
+    return false
+  end
+
+  carried = spec
+  local started = require('sqmeow.api').execute(spec.base, {
+    conn_id = call.conn_id,
+    history = false,
+    where = spec.where,
+    order_by = spec.order_by,
+  })
+  if not started then
+    carried = nil
+  end
+  return started ~= nil
+end
+
+--- Filter and order the current result by running its query again.
+---@param where string A WHERE condition, or empty for none.
+---@param order_by string An ORDER BY list, or empty for none.
+---@return boolean started
+function M.filter(where, order_by)
+  if not M.queried(require('sqmeow.state').call) then
+    utils.notify(
+      'filtering with WHERE and ORDER BY needs an open SQL connection',
+      vim.log.levels.WARN
+    )
+    return false
+  end
+  return M.rerun({ where = where, order_by = order_by, sort = {} })
 end
 
 --- Draw a result from its beginning.
@@ -645,7 +730,8 @@ function M.render(summary)
   if pending == id then
     pending = nil
     local spec = M.spec()
-    if (#spec.filters > 0 or #spec.sort > 0) and M.send_view() then
+    -- A result filtered by its query arrives already narrowed.
+    if not M.queried(summary) and (#spec.filters > 0 or #spec.sort > 0) and M.send_view() then
       return
     end
   end
@@ -866,6 +952,8 @@ end
 
 --- Move the grid between its split and its float.
 function M.toggle_float()
+  -- The bar is docked to the window the grid is leaving.
+  require('sqmeow.ui.filter').close()
   if not M.is_float() then
     return M.open_float()
   end
@@ -895,114 +983,49 @@ local function editing()
   return true
 end
 
---- Order the rows by a column.
+--- Order the rows by a column: in the query when it can run again, otherwise in the engine.
 local function sort_by(column, add)
+  local call = require('sqmeow.state').call
   local spec = M.spec()
+  local sort = vim.deepcopy(spec.sort)
   local at
-  for index, key in ipairs(spec.sort) do
+  for index, key in ipairs(sort) do
     if key.column == column then
       at = index
     end
   end
-  local key = at and spec.sort[at]
+  local key = at and sort[at]
 
   if add then
     if not key then
-      table.insert(spec.sort, { column = column, descending = false })
+      table.insert(sort, { column = column, descending = false })
     elseif not key.descending then
       key.descending = true
     else
-      table.remove(spec.sort, at)
+      table.remove(sort, at)
     end
   elseif not key then
-    spec.sort = { { column = column, descending = false } }
+    sort = { { column = column, descending = false } }
   elseif not key.descending then
-    spec.sort = { { column = column, descending = true } }
+    sort = { { column = column, descending = true } }
   else
-    spec.sort = {}
-  end
-  M.send_view()
-end
-
---- The conditions the filter dialog offers, in order, and the engine's name for each.
-local CONDITIONS = {
-  { 'contains', 'contains' },
-  { '=', 'eq' },
-  { '!=', 'ne' },
-  { '<', 'lt' },
-  { '<=', 'le' },
-  { '>', 'gt' },
-  { '>=', 'ge' },
-  { 'starts with', 'starts_with' },
-  { 'is null', 'is_null' },
-  { 'is not null', 'not_null' },
-}
-
---- Ask for a filter on the current result and add it to the ones already there.
-local function filter_dialog()
-  local call = require('sqmeow.state').call
-  if not (call and call.columns and #call.columns > 0) then
-    return utils.notify('there is no result to filter', vim.log.levels.WARN)
+    sort = {}
   end
 
-  local spec = M.spec()
-  local ANY = 'any column'
-  local labels, by_label = { ANY }, {}
-  for index, column in ipairs(call.columns) do
-    if not spec.hidden[index - 1] then
-      -- Two columns can share a name, and a dialog that could not tell them apart would filter
-      -- whichever came first.
-      local label = column.name
-      if by_label[label] then
-        label = ('%s (%d)'):format(label, index)
-      end
-      by_label[label] = index - 1
-      table.insert(labels, label)
-    end
+  if not (call and M.queried(call)) then
+    spec.sort = sort
+    M.send_view()
+    return
   end
-
-  local conditions, ops = {}, {}
-  for _, condition in ipairs(CONDITIONS) do
-    table.insert(conditions, condition[1])
-    ops[condition[1]] = condition[2]
+  local keys = {}
+  for _, entry in ipairs(sort) do
+    local column = (call.columns or {})[entry.column + 1]
+    table.insert(
+      keys,
+      M.quote(column and column.name or '') .. (entry.descending and ' DESC' or '')
+    )
   end
-  local function needs_value(values)
-    return not values.condition:match('null$')
-  end
-
-  local here = cursor_column()
-  local column = ANY
-  for label, index in pairs(by_label) do
-    if here and index == here.column and (column == ANY or #label < #column) then
-      column = label
-    end
-  end
-
-  local ok, err = require('sqmeow.ui.form').open({
-    title = 'Filter',
-    fields = {
-      { key = 'column', label = 'Column', options = labels },
-      { key = 'condition', label = 'Condition', options = conditions },
-      { key = 'value', label = 'Value', enabled = needs_value },
-    },
-    values = { column = column, condition = 'contains', value = '' },
-    validate = function(values)
-      if needs_value(values) and values.value == '' then
-        return 'a value is needed'
-      end
-    end,
-    on_submit = function(values)
-      table.insert(spec.filters, {
-        column = by_label[values.column],
-        op = ops[values.condition],
-        value = needs_value(values) and values.value or nil,
-      })
-      M.send_view()
-    end,
-  })
-  if not ok then
-    utils.notify(err or 'the filter dialog could not open', vim.log.levels.ERROR)
-  end
+  M.rerun({ sort = sort, order_by = table.concat(keys, ', ') })
 end
 
 -- -- actions --------------------------------------------------------------------------------
@@ -1070,6 +1093,22 @@ function M.actions.filter_cell()
   if not (cell and cell.row) then
     return
   end
+
+  local call = require('sqmeow.state').call
+  if call and M.queried(call) then
+    local condition, err = require('sqmeow.rpc').request('condition', {
+      call_id = call.call_id,
+      row = cell.row,
+      column = cell.column,
+    })
+    if not condition then
+      return utils.notify(err or 'the value could not be matched', vim.log.levels.WARN)
+    end
+    local where = M.spec().where
+    M.rerun({ where = where == '' and condition or ('(%s) AND %s'):format(where, condition) })
+    return
+  end
+
   local filter = { column = cell.column, op = 'is_null' }
   if cell.value ~= nil and cell.value ~= vim.NIL then
     filter = { column = cell.column, op = 'eq', value = tostring(cell.value) }
@@ -1079,7 +1118,11 @@ function M.actions.filter_cell()
 end
 
 function M.actions.filter()
-  filter_dialog()
+  require('sqmeow.ui.filter').open(1)
+end
+
+function M.actions.order()
+  require('sqmeow.ui.filter').open(2)
 end
 
 function M.actions.sort()
@@ -1119,6 +1162,11 @@ end
 function M.actions.reset_view()
   local call = require('sqmeow.state').call
   if not (call and call.call_id) then
+    return
+  end
+  local spec = M.spec()
+  if spec.where ~= '' or spec.order_by ~= '' then
+    M.rerun({ where = '', order_by = '', sort = {}, filters = {}, hidden = {} })
     return
   end
   specs[call.call_id] = fresh()
@@ -1242,8 +1290,15 @@ function M.open()
   return win
 end
 
+--- The window showing the grid, or nil.
+---@return integer|nil
+function M.window()
+  return utils.shows(win, buf) and win or nil
+end
+
 --- Hide the result window, keeping what it holds.
 function M.close()
+  require('sqmeow.ui.filter').close()
   if popup then
     local closing = popup
     popup = nil

@@ -859,3 +859,27 @@ async fn grouped_or_combined_rows_are_read_only() {
         assert!(run(&backend, sql).await.source().is_none(), "{sql}");
     }
 }
+
+#[tokio::test]
+async fn a_filtered_result_stays_editable() {
+    let backend = seeded().await;
+    let origin = "select id, name from people order by id";
+    let wrapped = sqmeow_db::sql::filtered(origin, "name like 'b%'", "id desc").unwrap();
+    let result = backend
+        .execute_wrapped(&wrapped, origin, NO_CAP, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(result.row_count(), 1);
+    assert_eq!(result.cell(0, 1), Some(&text("bob")));
+
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some("rob".into()))])],
+        ..Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&result, &changes).unwrap())
+        .await
+        .expect("the plan should apply");
+    let after = run(&backend, "select name from people where id = 2").await;
+    assert_eq!(after.cell(0, 0), Some(&text("rob")));
+}

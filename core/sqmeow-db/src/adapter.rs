@@ -87,6 +87,17 @@ pub trait Adapter: Send + Sync {
         cancel: CancellationToken,
     ) -> impl Future<Output = Result<ResultSet>> + Send;
 
+    /// Run `statement`, a query wrapping `origin`, tracing its columns to tables through `origin`.
+    fn execute_wrapped(
+        &self,
+        statement: &str,
+        _origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> impl Future<Output = Result<ResultSet>> + Send {
+        self.execute(statement, max_rows, cancel)
+    }
+
     /// Plan staged changes to a result into the statements that make them.
     fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         crate::edit::sql_plan(self.dialect(), result, changes)

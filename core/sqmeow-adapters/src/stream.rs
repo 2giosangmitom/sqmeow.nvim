@@ -80,17 +80,19 @@ pub(crate) trait SqlxAdapter: Sync {
     fn forget(&self);
 }
 
-/// Describe, run and read one statement through an adapter.
+/// Run and read one statement through an adapter, describing it through `origin`, the query it
+/// wraps or itself.
 pub(crate) async fn run<A: SqlxAdapter>(
     adapter: &A,
     statement: &str,
+    origin: &str,
     max_rows: usize,
     cancel: &CancellationToken,
 ) -> Result<ResultSet>
 where
     for<'c> &'c mut <A::Db as Database>::Connection: Executor<'c, Database = A::Db>,
 {
-    let (columns, source) = adapter.describe(statement).await;
+    let (columns, source) = adapter.describe(origin).await;
     let outcome = execute(
         adapter.pool(),
         statement,
@@ -229,28 +231,8 @@ pub(crate) fn check_affected(statement: &str, affected: u64) -> Result<()> {
 
 /// Whether a statement may have changed a table an adapter holds a picture of.
 pub(crate) fn may_change_schema(statement: &str) -> bool {
-    let mut rest = statement.trim_start();
-    loop {
-        if let Some(after) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
-            rest = after
-                .split_once('\n')
-                .map_or("", |(_, tail)| tail)
-                .trim_start();
-        } else if let Some(after) = rest.strip_prefix("/*") {
-            rest = after
-                .split_once("*/")
-                .map_or("", |(_, tail)| tail)
-                .trim_start();
-        } else {
-            break;
-        }
-    }
-    let word: String = rest
-        .chars()
-        .take_while(|character| character.is_alphabetic())
-        .collect();
     !matches!(
-        word.to_lowercase().as_str(),
+        sqmeow_db::sql::first_word(statement).as_str(),
         "select"
             | "with"
             | "values"

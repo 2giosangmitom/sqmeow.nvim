@@ -203,7 +203,17 @@ impl Adapter for MySqlAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run(self, statement, max_rows, &cancel).await
+        stream::run(self, statement, statement, max_rows, &cancel).await
+    }
+
+    async fn execute_wrapped(
+        &self,
+        statement: &str,
+        origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        stream::run(self, statement, origin, max_rows, &cancel).await
     }
 
     /// MySQL has no schemas within a database, so its databases fill that level of the tree.

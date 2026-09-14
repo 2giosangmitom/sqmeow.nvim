@@ -17,7 +17,7 @@ Query your database from your favorite editor.
 - **🌲 Schema drawer**: Browse schemas, tables, views, routines and columns with their types and keys.
 - **📄 Scratchpads**: Query buffers tied to a connection, kept across restarts.
 - **✏️ In-grid editing**: Edit cells, add or delete rows, and review staged changes before applying them.
-- **🔎 Filter and sort**: Done in the engine on the rows it already holds, without querying again.
+- **🔎 Filter and sort**: Type a `WHERE` condition and an `ORDER BY` list in a bar above the grid, and the database runs them on your query.
 - **▶️ Flexible execution**: Run the statement under the cursor, a selection, or the whole buffer.
 - **🧭 EXPLAIN**: Query plans and errors show in the result window.
 - **🕘 Query log**: Reopen the result of any past query, even after a restart.
@@ -133,18 +133,33 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Result Window
 
-| Key        | Action                                    |
-| ---------- | ----------------------------------------- |
-| `L` / `H`  | Next / previous page                      |
-| `gg` / `G` | First / last page                         |
-| `K`        | Show the row's details                    |
-| `x`        | Export the result, or the selected rows   |
-| `=` / `gf` | Filter by the cell's value / add a filter |
-| `s` / `S`  | Sort by the column / add it to the sort   |
-| `-` / `g-` | Hide the column / show hidden columns     |
-| `R`        | Clear filters, sort and hidden columns    |
-| `Z`        | Move between split and float              |
-| `?` / `q`  | Show keymaps / close the result window    |
+| Key         | Action                                       |
+| ----------- | -------------------------------------------- |
+| `L` / `H`   | Next / previous page                         |
+| `gg` / `G`  | First / last page                            |
+| `K`         | Show the row's details                       |
+| `x`         | Export the result, or the selected rows      |
+| `gf` / `go` | Open the filter bar on `WHERE` / `ORDER BY`  |
+| `=`         | Filter by the cell's value                   |
+| `s` / `S`   | Sort by the column / add it to the sort      |
+| `-` / `g-`  | Hide the column / show hidden columns        |
+| `R`         | Clear filters, sort and hidden columns       |
+| `Z`         | Move between split and float                 |
+| `?` / `q`   | Show keymaps / close the result window       |
+
+### Filter Bar
+
+`gf` and `go` open a bar above the grid with a `WHERE` line and an `ORDER BY` line. The query runs
+again as a subquery narrowed and ordered by them, so they take any SQL the database accepts, and the
+rows stay editable. `=` adds the cell's value to the `WHERE` line, and `s` fills the `ORDER BY` line.
+Redis, MongoDB and ScyllaDB results are filtered and sorted in memory instead.
+
+| Key               | Action                                |
+| ----------------- | ------------------------------------- |
+| `<CR>`            | Run the query with what the bar holds |
+| `q`, `<Esc>`      | Close the bar without filtering       |
+| `<C-p>` / `<C-n>` | Show an older / newer filter          |
+| `<C-x><C-o>`      | Complete a column name                |
 
 ### Editing Results
 

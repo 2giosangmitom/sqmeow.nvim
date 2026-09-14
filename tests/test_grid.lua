@@ -91,6 +91,93 @@ T['a view filters and sorts in the engine, and pages count what it holds'] = fun
   end)
 end
 
+--- Wait for the result that replaces the current one.
+local function next_result(what, condition)
+  local before = state.call.call_id
+  return function()
+    wait(what, function()
+      return state.call.call_id ~= before and state.call.state ~= 'executing' and condition()
+    end)
+  end
+end
+
+T['the filter bar docks above the grid and filters in the database'] = function()
+  focus_result()
+  result.actions.filter()
+  local bar = vim.api.nvim_get_current_win()
+  eq(vim.bo[vim.api.nvim_win_get_buf(bar)].filetype, 'sqmeow-filter')
+  eq(vim.api.nvim_win_get_height(bar), 2)
+  eq(#floats(), 0)
+
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'age > 20 or age is null', 'id desc' })
+  local arrived = next_result('the filtered result should arrive', function()
+    return #rows() == 2
+  end)
+  vim.api.nvim_feedkeys(vim.keycode('<CR>'), 'mx', false)
+  arrived()
+
+  eq(vim.api.nvim_win_is_valid(bar), false)
+  eq(rows()[1]:match('^%s*(%d)'), '2')
+  eq(result.spec().where, 'age > 20 or age is null')
+  helpers.contains(vim.wo[result.window()].winbar, 'where age > 20')
+end
+
+T['= and s narrow and order in the database, and R runs the query as written'] = function()
+  local win = focus_result()
+  vim.api.nvim_win_set_cursor(win, { 3, 0 })
+  result.goto_column(2)
+  local arrived = next_result('the narrowed result should arrive', function()
+    return #rows() == 1
+  end)
+  result.actions.filter_cell()
+  arrived()
+  eq(result.spec().where, [["name" = 'alice']])
+
+  arrived = next_result('every row should come back', function()
+    return #rows() == 3
+  end)
+  result.actions.reset_view()
+  arrived()
+  eq(result.spec().where, '')
+
+  vim.api.nvim_win_set_cursor(result.window(), { 3, 0 })
+  result.goto_column(3)
+  arrived = next_result('the ordered result should arrive', function()
+    return #rows() == 3
+  end)
+  result.actions.sort()
+  arrived()
+  eq(result.spec().order_by, '"age"')
+  -- SQLite puts NULL first when ascending.
+  eq(rows()[1]:match('^%s*(%d)'), '2')
+end
+
+T['a condition the database refuses shows its error, and the bar opens with it'] = function()
+  focus_result()
+  local arrived = next_result('the error should arrive', function()
+    return state.call.state == 'error'
+  end)
+  eq(result.filter('nope > 1', ''), true)
+  arrived()
+  helpers.contains(table.concat(helpers.result_lines(), '\n'), 'nope')
+
+  result.actions.filter()
+  eq(vim.api.nvim_get_current_line(), 'nope > 1')
+  require('sqmeow.ui.filter').close()
+end
+
+T['staged changes keep the result from being filtered'] = function()
+  result.open()
+  edit.set({ row = 0 }, 1, 'x')
+  local messages = {}
+  helpers.stub(vim, 'notify', function(message)
+    table.insert(messages, message)
+  end)
+
+  eq(result.filter('age > 1', ''), false)
+  helpers.contains(messages[1], 'staged change')
+end
+
 T['editing applies through a review'] = function()
   result.open()
 

@@ -307,7 +307,8 @@ result
  x           Export the result to a file
  x (x)       Export the selected rows
  =           Show only rows holding this value in this column
- gf          Add a filter on a column, or on any column
+ gf          Filter the rows with a WHERE condition
+ go          Order the rows with an ORDER BY list
  s           Sort by this column: ascending, descending, off
  S           Add this column to the sort
  -           Hide this column
@@ -324,6 +325,13 @@ result
  gs, <C-s>   Review the changes; <C-s> there applies them
  ?           Show these mappings
  q           Close the result window
+
+filter
+ <CR>       Filter the result with what the bar holds
+ <CR> (i)   Filter the result with what the bar holds
+ q, <Esc>   Close the bar without filtering
+ <C-p>      Show the filter used before this one
+ <C-n>      Show the filter used after this one
 
 editor
  <CR>        Run the statement under the cursor
@@ -484,7 +492,8 @@ Return ~
 Run SQL on the current connection.
 Parameters ~
 {sql} `(string)` One or more statements.
-{opts} `(table|nil)` `line` runs only the statement at that zero-based line.
+{opts} `(table|nil)` `line` runs only the statement at that zero-based line; `where` and
+`order_by` run a single query as a subquery filtered and ordered by them.
 Return ~
 `(integer|nil)` call_id
 Return ~
@@ -549,10 +558,23 @@ Show the result in a float, or put it back in its split.
 Show the statements the changes staged in the result plan into, to apply with `<C-s>`.
 
 ------------------------------------------------------------------------------
+                                                           *sqmeow.api.filter()*
+                          `sqmeow.api.filter`({view})
+Filter and order the current result by running its query again with a WHERE condition and an
+ORDER BY list. Needs an open SQL connection; empty strings clear them.
+Parameters ~
+{view} `({ where: string|nil, order_by: string|nil })`
+Return ~
+`(boolean)` started
+Usage ~
+>lua
+  require('sqmeow.api').filter({ where = "name like 'a%'", order_by = 'age desc' })
+<
+------------------------------------------------------------------------------
                                                              *sqmeow.api.view()*
                            `sqmeow.api.view`({view})
-Filter and sort the current result's rows in the engine. Columns are zero-based; a filter
-without one searches every column.
+Filter and sort the current result's rows in the engine's memory, without querying again.
+Columns are zero-based; a filter without one searches every column.
 Parameters ~
 {view} `({ filters: { column: integer|nil, op: string, value: string|nil }[]|nil, sort: { column: integer, descending: boolean|nil }[]|nil })`
 `op`: `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `starts_with`, `is_null`, `not_null`.

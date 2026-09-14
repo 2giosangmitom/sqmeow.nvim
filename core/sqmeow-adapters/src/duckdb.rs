@@ -86,8 +86,19 @@ impl Adapter for DuckDbAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let statement = statement.to_owned();
-        let work = self.run(move |connection| read(connection, &statement, max_rows));
+        self.execute_wrapped(statement, statement, max_rows, cancel)
+            .await
+    }
+
+    async fn execute_wrapped(
+        &self,
+        statement: &str,
+        origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        let (statement, origin) = (statement.to_owned(), origin.to_owned());
+        let work = self.run(move |connection| read(connection, &statement, &origin, max_rows));
         tokio::pin!(work);
         tokio::select! {
             biased;
@@ -227,11 +238,11 @@ fn rows<T, P: duckdb::Params>(
         .map_err(Error::driver)
 }
 
-/// Run one statement and read up to `max_rows` of its rows.
-fn read(connection: &Connection, sql: &str, max_rows: usize) -> Result<ResultSet> {
+/// Run one statement and read up to `max_rows` of its rows, describing it through `origin`.
+fn read(connection: &Connection, sql: &str, origin: &str, max_rows: usize) -> Result<ResultSet> {
     let started = Instant::now();
     // Before the query, since another query on the connection would end its stream of rows.
-    let described = describe(connection, sql);
+    let described = describe(connection, origin);
     let mut statement = connection.prepare(sql).map_err(Error::driver)?;
     let mut rows = statement.query([]).map_err(Error::driver)?;
     let mut columns = rows.as_ref().map(result_columns).unwrap_or_default();

@@ -29,6 +29,53 @@ pub fn statement_at(statements: &[Statement], line: usize) -> Option<&Statement>
         .or_else(|| statements.first())
 }
 
+/// The first word of a statement past its leading comments, in lower case.
+pub fn first_word(statement: &str) -> String {
+    let mut rest = statement.trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
+            rest = after
+                .split_once('\n')
+                .map_or("", |(_, tail)| tail)
+                .trim_start();
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            rest = after
+                .split_once("*/")
+                .map_or("", |(_, tail)| tail)
+                .trim_start();
+        } else {
+            break;
+        }
+    }
+    rest.chars()
+        .take_while(|character| character.is_alphabetic())
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// A query run as a subquery narrowed by `condition` and ordered by `order`, or `None` for a
+/// statement that returns no rows.
+pub fn filtered(statement: &str, condition: &str, order: &str) -> Option<String> {
+    let statement = statement.trim().trim_end_matches(';').trim_end();
+    if !matches!(
+        first_word(statement).as_str(),
+        "select" | "with" | "values" | "table"
+    ) {
+        return None;
+    }
+    // Each clause on its own line, so a trailing `--` comment cannot swallow the next one.
+    let mut sql = format!("SELECT * FROM (\n{statement}\n) AS sqmeow_view");
+    if !condition.trim().is_empty() {
+        sql.push_str("\nWHERE ");
+        sql.push_str(condition.trim());
+    }
+    if !order.trim().is_empty() {
+        sql.push_str("\nORDER BY ");
+        sql.push_str(order.trim());
+    }
+    Some(sql)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Code,
@@ -488,6 +535,28 @@ mod tests {
 
     fn sqls_as(input: &str, dialect: Dialect) -> Vec<String> {
         split(input, dialect).into_iter().map(|s| s.sql).collect()
+    }
+
+    #[test]
+    fn a_filter_wraps_the_query_so_its_own_clauses_hold() {
+        assert_eq!(
+            filtered("select * from t order by a limit 5;", "b > 1", "a desc").as_deref(),
+            Some(
+                "SELECT * FROM (\nselect * from t order by a limit 5\n) AS sqmeow_view\nWHERE b > 1\nORDER BY a desc"
+            )
+        );
+        assert_eq!(
+            filtered("  with x as (select 1) select * from x -- note", "", " ").as_deref(),
+            Some("SELECT * FROM (\nwith x as (select 1) select * from x -- note\n) AS sqmeow_view")
+        );
+    }
+
+    #[test]
+    fn only_a_query_that_returns_rows_is_filtered() {
+        assert!(filtered("/* rows */ VALUES (1)", "x = 1", "").is_some());
+        for statement in ["delete from t", "explain select 1", "pragma table_info(t)"] {
+            assert_eq!(filtered(statement, "x = 1", ""), None, "{statement}");
+        }
     }
 
     #[test]

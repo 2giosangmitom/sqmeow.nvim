@@ -57,7 +57,8 @@ M.defaults = {
       lhs = '=',
       desc = 'Show only rows holding this value in this column',
     },
-    { action = 'filter', lhs = 'gf', desc = 'Add a filter on a column, or on any column' },
+    { action = 'filter', lhs = 'gf', desc = 'Filter the rows with a WHERE condition' },
+    { action = 'order', lhs = 'go', desc = 'Order the rows with an ORDER BY list' },
     { action = 'sort', lhs = 's', desc = 'Sort by this column: ascending, descending, off' },
     { action = 'sort_add', lhs = 'S', desc = 'Add this column to the sort' },
     { action = 'hide_column', lhs = '-', desc = 'Hide this column' },
@@ -86,6 +87,20 @@ M.defaults = {
     },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the result window' },
+  },
+
+  -- The WHERE and ORDER BY bar above the result.
+  filter = {
+    { action = 'apply', lhs = '<CR>', desc = 'Filter the result with what the bar holds' },
+    {
+      action = 'apply',
+      lhs = '<CR>',
+      mode = 'i',
+      desc = 'Filter the result with what the bar holds',
+    },
+    { action = 'close', lhs = { 'q', '<Esc>' }, desc = 'Close the bar without filtering' },
+    { action = 'older', lhs = '<C-p>', desc = 'Show the filter used before this one' },
+    { action = 'newer', lhs = '<C-n>', desc = 'Show the filter used after this one' },
   },
 
   -- A scratchpad is an ordinary editing buffer.
@@ -239,7 +254,7 @@ end
 function M.summary()
   local lines = {}
 
-  for _, surface in ipairs({ 'drawer', 'result', 'editor' }) do
+  for _, surface in ipairs({ 'drawer', 'result', 'filter', 'editor' }) do
     table.insert(lines, surface)
     vim.list_extend(lines, require('sqmeow.ui.help').lines(surface))
     table.insert(lines, '')

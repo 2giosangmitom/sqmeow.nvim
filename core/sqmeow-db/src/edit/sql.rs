@@ -219,6 +219,15 @@ pub fn quote_text(dialect: Dialect, text: &str) -> String {
     format!("'{escaped}'")
 }
 
+/// The condition a row meets when `column` holds `cell`.
+pub fn condition(dialect: Dialect, column: &str, cell: &Cell) -> Result<String> {
+    let column = dialect.quote_ident(column);
+    Ok(match cell {
+        Cell::Null => format!("{column} IS NULL"),
+        cell => format!("{column} = {}", cell_literal(dialect, cell)?),
+    })
+}
+
 /// A value the result holds, as the SQL literal that matches it again.
 fn cell_literal(dialect: Dialect, cell: &Cell) -> Result<String> {
     Ok(match cell {
@@ -258,6 +267,22 @@ mod tests {
     use crate::result::Column;
 
     use super::*;
+
+    #[test]
+    fn a_condition_matches_the_cell_again() {
+        assert_eq!(
+            condition(Dialect::Postgres, "na\"me", &Cell::Text("o'k".into())).unwrap(),
+            "\"na\"\"me\" = 'o''k'"
+        );
+        assert_eq!(
+            condition(Dialect::MySql, "age", &Cell::Int(3)).unwrap(),
+            "`age` = 3"
+        );
+        assert_eq!(
+            condition(Dialect::Sqlite, "gone", &Cell::Null).unwrap(),
+            "\"gone\" IS NULL"
+        );
+    }
 
     fn table(schema: Option<&str>, name: &str, key: &[usize], columns: &[(usize, &str)]) -> Table {
         Table {

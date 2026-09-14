@@ -370,9 +370,8 @@ function M.on_applied(payload)
   )
 
   local call = require('sqmeow.state').call
-  if call and call.conn_id == payload.conn_id and call.sql then
-    require('sqmeow.ui.result').carry_view()
-    require('sqmeow.api').execute(call.sql, { conn_id = call.conn_id, history = false })
+  if call and call.conn_id == payload.conn_id then
+    require('sqmeow.ui.result').rerun()
   end
 end
 

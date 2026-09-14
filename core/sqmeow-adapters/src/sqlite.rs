@@ -137,7 +137,17 @@ impl Adapter for SqliteAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run(self, statement, max_rows, &cancel).await
+        stream::run(self, statement, statement, max_rows, &cancel).await
+    }
+
+    async fn execute_wrapped(
+        &self,
+        statement: &str,
+        origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        stream::run(self, statement, origin, max_rows, &cancel).await
     }
 
     /// SQLite calls them databases: `main`, `temp`, and anything attached.

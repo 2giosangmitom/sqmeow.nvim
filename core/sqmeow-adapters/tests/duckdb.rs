@@ -355,3 +355,37 @@ async fn a_join_is_edited_through_each_table_key() {
     assert_eq!(after.cell(0, 0), Some(&Cell::Text("ann".into())));
     assert_eq!(after.cell(0, 1), Some(&Cell::Text("crimson".into())));
 }
+
+#[tokio::test]
+async fn a_filtered_result_stays_editable() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table filtered (id integer primary key, name varchar)",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into filtered values (1, 'ann'), (2, 'bob')",
+    )
+    .await;
+
+    let origin = "select id, name from filtered order by id";
+    let wrapped = sqmeow_db::sql::filtered(origin, "name = 'bob'", "").unwrap();
+    let result = backend
+        .execute_wrapped(&wrapped, origin, NO_CAP, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(result.row_count(), 1);
+
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some("rob".into()))])],
+        ..Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&result, &changes).unwrap())
+        .await
+        .expect("the plan should apply");
+    let after = run(&backend, "select name from filtered where id = 2").await;
+    assert_eq!(after.cell(0, 0), Some(&Cell::Text("rob".into())));
+}

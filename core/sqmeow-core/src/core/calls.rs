@@ -32,10 +32,11 @@ impl Core {
         let conn_id = args.conn_id("conn_id")?;
         let source = args.string("sql")?;
         let connection = self.connection(conn_id)?;
+        let dialect = connection.backend.dialect();
 
         // A Redis command ends with its line, a MongoDB command with its document, and a SQL
         // statement with a semicolon.
-        let mut statements = match connection.backend.dialect() {
+        let mut statements = match dialect {
             Dialect::Redis => sql::split_lines(&source),
             Dialect::MongoDb => sql::split_documents(&source),
             dialect => sql::split(&source, dialect),
@@ -53,16 +54,35 @@ impl Core {
         }
         let archive = args.opt_string("archive").map(PathBuf::from);
 
+        let condition = args.opt_string("where").unwrap_or_default();
+        let order = args.opt_string("order_by").unwrap_or_default();
+        let wrapped = if condition.trim().is_empty() && order.trim().is_empty() {
+            None
+        } else {
+            if matches!(dialect, Dialect::Redis | Dialect::MongoDb | Dialect::Scylla) {
+                return Err("filtering with WHERE and ORDER BY needs a SQL database".to_owned());
+            }
+            let [statement] = statements.as_slice() else {
+                return Err("only one statement can be filtered".to_owned());
+            };
+            Some(
+                sql::filtered(&statement.sql, &condition, &order)
+                    .ok_or("only a query that returns rows can be filtered")?,
+            )
+        };
+
         let call_id = self.session.next_call_id();
-        let work = self.run(call_id, connection, statements, archive);
+        let work = self.run(call_id, connection, statements, wrapped, archive);
         Ok((Value::from(call_id), Box::pin(work)))
     }
 
+    /// Run statements, or the one query `wrapped` filters.
     async fn run(
         self: Arc<Self>,
         call_id: CallId,
         connection: Arc<Connection>,
         statements: Vec<sql::Statement>,
+        wrapped: Option<String>,
         archive: Option<PathBuf>,
     ) {
         let conn_id = connection.id;
@@ -91,9 +111,10 @@ impl Core {
 
         let mut last: Option<ResultSet> = None;
         for statement in &statements {
+            let run = wrapped.as_deref().unwrap_or(&statement.sql);
             let outcome = connection
                 .backend
-                .execute(&statement.sql, options.max_rows, running.token())
+                .execute_wrapped(run, &statement.sql, options.max_rows, running.token())
                 .await;
             match outcome {
                 Ok(result) => last = Some(result),
@@ -101,8 +122,15 @@ impl Core {
                     return self.emit_call(call_id, conn_id, "cancelled", elapsed(started));
                 }
                 Err(error) => {
+                    let mut error = error.to_string();
+                    // MySQL refuses a subquery whose columns share a name.
+                    if wrapped.is_some() && error.contains("Duplicate column name") {
+                        error.push_str(
+                            "\nname each column differently with AS to filter this result",
+                        );
+                    }
                     let mut payload = elapsed(started);
-                    payload.push(("error", Value::from(error.to_string())));
+                    payload.push(("error", Value::from(error)));
                     return self.emit_call(call_id, conn_id, "error", payload);
                 }
             }
@@ -194,6 +222,29 @@ impl Core {
             .ok_or_else(|| format!("result {call_id} is no longer held"))?;
 
         row.ok_or_else(|| format!("row {index} is past the end of the result"))
+    }
+
+    /// The condition matching one cell's value, for the filter bar.
+    pub(super) fn condition(&self, args: &Args) -> Result<Value, String> {
+        let call_id = args.call_id()?;
+        let row = args.opt_usize("row").unwrap_or(0);
+        let column = args.opt_usize("column").unwrap_or(0);
+        let gone = || format!("result {call_id} is no longer held");
+
+        let conn_id = self
+            .session
+            .with_call(call_id, |call| call.conn_id)
+            .ok_or_else(gone)?;
+        let dialect = self.connection(conn_id)?.backend.dialect();
+        self.session
+            .with_call(call_id, |call| {
+                let result = &call.result;
+                let name = &result.columns().get(column).ok_or("no such column")?.name;
+                let cell = result.cell(row, column).ok_or("no such row")?;
+                sqmeow_db::edit::condition(dialect, name, cell).map_err(|error| error.to_string())
+            })
+            .ok_or_else(gone)?
+            .map(Value::from)
     }
 
     /// Hand the editor a slice of a result's rows.

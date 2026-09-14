@@ -197,7 +197,8 @@ end
 
 --- Run SQL on the current connection.
 ---@param sql string One or more statements.
----@param opts table|nil `line` runs only the statement at that zero-based line.
+---@param opts table|nil `line` runs only the statement at that zero-based line; `where` and
+--- `order_by` run a single query as a subquery filtered and ordered by them.
 ---@return integer|nil call_id
 ---@return string|nil error
 function M.execute(sql, opts)
@@ -235,6 +236,8 @@ function M.execute(sql, opts)
     sql = sql,
     line = opts.line,
     archive = archive,
+    where = opts.where,
+    order_by = opts.order_by,
   })
   if not call_id then
     notify(err or 'the query was refused', vim.log.levels.ERROR)
@@ -354,8 +357,19 @@ function M.review()
   require('sqmeow.ui.edit').review()
 end
 
---- Filter and sort the current result's rows in the engine. Columns are zero-based; a filter
---- without one searches every column.
+--- Filter and order the current result by running its query again with a WHERE condition and an
+--- ORDER BY list. Needs an open SQL connection; empty strings clear them.
+---@param view { where: string|nil, order_by: string|nil }
+---@return boolean started
+---@usage >lua
+---   require('sqmeow.api').filter({ where = "name like 'a%'", order_by = 'age desc' })
+--- <
+function M.filter(view)
+  return require('sqmeow.ui.result').filter(view.where or '', view.order_by or '')
+end
+
+--- Filter and sort the current result's rows in the engine's memory, without querying again.
+--- Columns are zero-based; a filter without one searches every column.
 ---@param view { filters: { column: integer|nil, op: string, value: string|nil }[]|nil, sort: { column: integer, descending: boolean|nil }[]|nil }
 --- `op`: `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `starts_with`, `is_null`, `not_null`.
 ---@usage >lua

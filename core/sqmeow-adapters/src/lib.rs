@@ -140,6 +140,17 @@ impl Backend {
         dispatch!(self, adapter => adapter.execute(statement, max_rows, cancel).await)
     }
 
+    /// Run a query wrapping `origin`, tracing its columns to tables through `origin`.
+    pub async fn execute_wrapped(
+        &self,
+        statement: &str,
+        origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        dispatch!(self, adapter => adapter.execute_wrapped(statement, origin, max_rows, cancel).await)
+    }
+
     /// Plan staged changes to a result into the statements that make them.
     pub fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         dispatch!(self, adapter => adapter.plan(result, changes))
