@@ -49,8 +49,9 @@ redis = { version = "1.7", default-features = false, features = [
 # The official driver. Its rustls trusts a bundled set of roots and has no native-roots feature, so a
 # server behind a private CA is reached with `tlsCAFile=` in the URL. DNS is on for `mongodb+srv`.
 mongodb = "3.9"
-# Bundled, so the released engine needs no libduckdb on the machine.
-duckdb = { version = "1.10505", features = ["bundled", "chrono"] }
+# Bundled, so the released engine needs no libduckdb on the machine. `json` has
+# `json_serialize_sql`, which finds the table an editable result came from.
+duckdb = { version = "1.10505", features = ["bundled", "chrono", "json"] }
 csv = "1.4"
 serde_json = "1"
 tracing = "0.1"

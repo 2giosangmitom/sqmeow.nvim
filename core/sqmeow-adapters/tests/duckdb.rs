@@ -1,7 +1,7 @@
 //! The DuckDB adapter against a real in-memory database.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Error, ForeignKey, RelationKind, TypeClass};
+use sqmeow_db::{Cell, Changes, Error, ForeignKey, KeyKind, RelationKind, Source, TypeClass};
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -169,4 +169,139 @@ async fn describes_the_schema_for_the_drawer() {
     assert_eq!(columns[2].type_name, "VARCHAR");
 
     assert_eq!(backend.columns("main", "names").await.unwrap().len(), 1);
+}
+
+async fn people() -> Backend {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table people (id integer primary key, name varchar, team integer)",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into people values (1, 'alice', 1), (2, 'bob', 2)",
+    )
+    .await;
+    backend
+}
+
+#[tokio::test]
+async fn a_plain_select_from_a_table_is_edited_by_its_key() {
+    let backend = people().await;
+    let result = run(
+        &backend,
+        "select id, name as who, id + 1 from people p order by id",
+    )
+    .await;
+
+    assert_eq!(
+        result.source(),
+        Some(&Source::Table {
+            schema: Some("main".into()),
+            name: "people".into(),
+            key: vec![0],
+        })
+    );
+    assert_eq!(result.columns()[0].key, KeyKind::Primary);
+    assert_eq!(result.columns()[1].origin.as_deref(), Some("name"));
+    assert_eq!(result.columns()[2].origin, None);
+
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some("ann".into()))])],
+        deletes: vec![1],
+        inserts: vec![vec![(0, Some("3".into())), (1, None)]],
+    };
+    let statements = backend.plan(&result, &changes).unwrap();
+    backend.apply(&statements).await.unwrap();
+
+    let after = run(&backend, "select id, name from people order by id").await;
+    assert_eq!(after.row_count(), 2);
+    assert_eq!(after.cell(0, 1), Some(&Cell::Text("ann".into())));
+    assert_eq!(after.cell(1, 0), Some(&Cell::Int(3)));
+    assert_eq!(after.cell(1, 1), Some(&Cell::Null));
+}
+
+#[tokio::test]
+async fn every_spelling_of_one_table_is_editable() {
+    let backend = people().await;
+    for sql in [
+        "from people",
+        "select * from main.people",
+        "select p.* exclude (team) from people p",
+        "select P.ID, Name from PEOPLE p",
+    ] {
+        let result = run(&backend, sql).await;
+        assert!(
+            matches!(result.source(), Some(Source::Table { name, key, .. }) if name == "people" && key == &[0]),
+            "{sql}: {:?}",
+            result.source()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_result_that_is_not_one_row_per_table_row_is_read_only() {
+    let backend = people().await;
+    run(&backend, "create table loose (id integer, name varchar)").await;
+    run(&backend, "create view named as select * from people").await;
+    for sql in [
+        "select name from people",
+        "select distinct id, name from people",
+        "select id, count(*) from people group by id",
+        "with people as (select 1 as id) select id from people",
+        "select id from people union all select id from people",
+        "select a.id from people a join people b on a.id = b.id",
+        "select id, id from people",
+        "select * from loose",
+        "select * from named",
+        "select 1 as id",
+    ] {
+        assert_eq!(run(&backend, sql).await.source(), None, "{sql}");
+    }
+}
+
+#[tokio::test]
+async fn a_binary_key_finds_its_row() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table blobs (id blob primary key, note varchar)",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into blobs values ('\\xabcd'::blob, 'old')",
+    )
+    .await;
+
+    let result = run(&backend, "select * from blobs").await;
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some("new".into()))])],
+        ..Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&result, &changes).unwrap())
+        .await
+        .unwrap();
+
+    let after = run(&backend, "select note from blobs").await;
+    assert_eq!(after.cell(0, 0), Some(&Cell::Text("new".into())));
+}
+
+#[tokio::test]
+async fn a_row_gone_since_it_was_read_is_not_written() {
+    let backend = people().await;
+    let result = run(&backend, "select * from people order by id").await;
+    run(&backend, "delete from people where id = 1").await;
+
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some("ann".into()))])],
+        ..Changes::default()
+    };
+    let error = backend
+        .apply(&backend.plan(&result, &changes).unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("no row had that key"), "{error}");
 }

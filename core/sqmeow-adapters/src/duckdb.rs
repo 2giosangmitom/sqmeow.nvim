@@ -1,5 +1,6 @@
 //! The DuckDB adapter.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -7,10 +8,12 @@ use duckdb::types::{Value, ValueRef};
 use duckdb::{Connection, InterruptHandle, Row, Statement};
 use sqlx::types::chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, RelationKind, RelationNode,
-    Result, ResultSet, RoutineNode, SchemaNode,
+    Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
+    RelationNode, Result, ResultSet, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
+
+use crate::stream::{Origin, TableKeys, check_affected};
 
 /// One DuckDB database, driven from blocking threads since the driver is synchronous.
 pub struct DuckDbAdapter {
@@ -72,9 +75,10 @@ impl Adapter for DuckDbAdapter {
         self.run(move |connection| {
             let transaction = connection.unchecked_transaction().map_err(Error::driver)?;
             for statement in &statements {
-                transaction
+                let affected = transaction
                     .execute(statement, [])
                     .map_err(|error| Error::driver(format!("{error}\nin: {statement}")))?;
+                check_affected(statement, affected as u64)?;
             }
             transaction.commit().map_err(Error::driver)
         })
@@ -225,11 +229,27 @@ fn rows<T, P: duckdb::Params>(
 /// Run one statement and read up to `max_rows` of its rows.
 fn read(connection: &Connection, sql: &str, max_rows: usize) -> Result<ResultSet> {
     let started = Instant::now();
+    // Before the query, since another query on the connection would end its stream of rows.
+    let described = describe(connection, sql);
     let mut statement = connection.prepare(sql).map_err(Error::driver)?;
     let mut rows = statement.query([]).map_err(Error::driver)?;
-    let columns = rows.as_ref().map(result_columns).unwrap_or_default();
+    let mut columns = rows.as_ref().map(result_columns).unwrap_or_default();
+    let source = described
+        .filter(|(_, origins, _)| origins.len() == columns.len())
+        .and_then(|(table, origins, keys)| {
+            for (column, origin) in columns.iter_mut().zip(&origins) {
+                if let Some((_, name)) = origin {
+                    column.key = keys.get(name).copied().unwrap_or_default();
+                    column.origin = Some(name.clone());
+                }
+            }
+            let known = TableKeys::default();
+            known.remember(table, keys);
+            known.source(&origins)
+        });
     let uuids: Vec<bool> = columns.iter().map(|c| c.type_name == "UUID").collect();
     let mut result = ResultSet::new(sql, columns);
+    result.set_source(source);
 
     while let Some(row) = rows.next().map_err(Error::driver)? {
         if result.row_count() >= max_rows {
@@ -249,6 +269,136 @@ fn read(connection: &Connection, sql: &str, max_rows: usize) -> Result<ResultSet
 
     result.set_elapsed(started.elapsed());
     Ok(result)
+}
+
+/// For a `SELECT` whose rows are one table's rows: the table as `schema.table`, where each result
+/// column came from, and the table's keys. Read with DuckDB's own parser.
+fn describe(
+    connection: &Connection,
+    sql: &str,
+) -> Option<(String, Vec<Origin>, HashMap<String, KeyKind>)> {
+    use serde_json::Value as Json;
+
+    let tree: String = connection
+        .query_row("select json_serialize_sql(?::varchar)", [sql], |row| {
+            row.get(0)
+        })
+        .ok()?;
+    let tree: Json = serde_json::from_str(&tree).ok()?;
+    let [statement] = tree["statements"].as_array()?.as_slice() else {
+        return None;
+    };
+    let node = &statement["node"];
+    let from = &node["from_table"];
+    let empty = |value: &Json| value.as_array().is_some_and(Vec::is_empty);
+    let plain = node["type"] == "SELECT_NODE"
+        && from["type"] == "BASE_TABLE"
+        && from["catalog_name"] == ""
+        && from["at_clause"].is_null()
+        && empty(&node["cte_map"]["map"])
+        && empty(&node["group_expressions"])
+        && node["having"].is_null()
+        && node["modifiers"]
+            .as_array()?
+            .iter()
+            .all(|modifier| modifier["type"] != "DISTINCT_MODIFIER");
+    if !plain {
+        return None;
+    }
+
+    let alias = from["alias"].as_str()?;
+    let table_name = from["table_name"].as_str()?;
+    let columns: Vec<(String, String, String, Option<KeyKind>)> = rows(
+        connection,
+        "select c.schema_name, c.table_name, c.column_name,
+                case
+                  when list_contains(p.constraint_column_names, c.column_name) then 'primary_key'
+                  when exists (select 1 from duckdb_constraints() f
+                               where f.table_oid = c.table_oid and f.constraint_type = 'FOREIGN KEY'
+                                 and list_contains(f.constraint_column_names, c.column_name))
+                    then 'foreign_key'
+                  else ''
+                end
+         from duckdb_columns() c
+         left join duckdb_constraints() p
+           on p.table_oid = c.table_oid and p.constraint_type = 'PRIMARY KEY'
+         where c.database_name = current_database()
+           and lower(c.schema_name) = lower(coalesce(nullif(?, ''), current_schema()))
+           and lower(c.table_name) = lower(?)
+         order by c.column_index",
+        [from["schema_name"].as_str()?, table_name],
+        |row| {
+            let kind: String = row.get(3)?;
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                KeyKind::from_name(&kind),
+            ))
+        },
+    )
+    .ok()?;
+
+    let (schema, table, ..) = columns.first()?;
+    let qualified = format!("{schema}.{table}");
+    let keys = columns
+        .iter()
+        .filter_map(|(_, _, name, kind)| Some((name.clone(), (*kind)?)))
+        .collect();
+    let ours = |relation: &str| {
+        relation.eq_ignore_ascii_case(alias) || relation.eq_ignore_ascii_case(table_name)
+    };
+    let origin = |name: &str| {
+        columns
+            .iter()
+            .find(|(_, _, column, _)| column.eq_ignore_ascii_case(name))
+            .map(|(_, _, column, _)| (qualified.clone(), column.clone()))
+    };
+
+    let mut origins = Vec::new();
+    for item in node["select_list"].as_array()? {
+        match item["class"].as_str()? {
+            "STAR" => {
+                let relation = item["relation_name"].as_str()?;
+                let bare = (relation.is_empty() || ours(relation))
+                    && item["columns"] == false
+                    && item["expr"].is_null()
+                    && empty(&item["replace_list"])
+                    && empty(&item["rename_list"])
+                    && empty(&item["qualified_exclude_list"]);
+                if !bare {
+                    return None;
+                }
+                let excluded: Vec<&str> = item["exclude_list"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(Json::as_str)
+                    .collect();
+                origins.extend(
+                    columns
+                        .iter()
+                        .filter(|(_, _, name, _)| {
+                            !excluded.iter().any(|e| e.eq_ignore_ascii_case(name))
+                        })
+                        .map(|(_, _, name, _)| Some((qualified.clone(), name.clone()))),
+                );
+            }
+            "COLUMN_REF" => {
+                let parts: Vec<&str> = item["column_names"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(Json::as_str)
+                    .collect();
+                origins.push(match parts.as_slice() {
+                    [name] => origin(name),
+                    [relation, name] if ours(relation) => origin(name),
+                    _ => None,
+                });
+            }
+            _ => origins.push(None),
+        }
+    }
+    Some((qualified, origins, keys))
 }
 
 fn result_columns(statement: &Statement<'_>) -> Vec<Column> {

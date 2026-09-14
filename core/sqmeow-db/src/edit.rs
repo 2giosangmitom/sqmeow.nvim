@@ -256,6 +256,12 @@ fn cell_literal(dialect: Dialect, cell: &Cell) -> Result<String> {
             let hex: String = head.iter().map(|byte| format!("{byte:02x}")).collect();
             match dialect {
                 Dialect::Postgres => format!("'\\x{hex}'"),
+                // DuckDB reads `X'ab'` as text, and `\x` escapes one byte at a time.
+                Dialect::DuckDb => {
+                    let escaped: String =
+                        head.iter().map(|byte| format!("\\x{byte:02x}")).collect();
+                    format!("'{escaped}'")
+                }
                 _ => format!("X'{hex}'"),
             }
         }
@@ -379,6 +385,10 @@ mod tests {
         assert_eq!(
             cell_literal(Dialect::Sqlite, &Cell::bytes(&[0xab])).unwrap(),
             "X'ab'"
+        );
+        assert_eq!(
+            cell_literal(Dialect::DuckDb, &Cell::bytes(&[0xab, 0x63])).unwrap(),
+            r"'\xab\x63'"
         );
         assert!(cell_literal(Dialect::Sqlite, &Cell::bytes(&[0; 200])).is_err());
     }
