@@ -82,6 +82,8 @@ pub struct Connection {
     pub id: ConnId,
     pub name: String,
     pub backend: Backend,
+    /// Runs only statements that read, and takes no edits.
+    pub read_only: bool,
 }
 
 /// A finished result, kept so its rows can be read and reopened.
@@ -206,6 +208,7 @@ impl Session {
                     ("id", Value::from(connection.id)),
                     ("name", Value::from(connection.name.as_str())),
                     ("dialect", Value::from(connection.backend.dialect().name())),
+                    ("read_only", Value::from(connection.read_only)),
                 ])
             })
             .collect()

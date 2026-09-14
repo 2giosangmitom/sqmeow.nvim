@@ -48,6 +48,8 @@ M.defaults = {
     persist_history = true,
     -- Queries kept in the log, each with its result. The oldest go once there are twice as many.
     history_limit = 500,
+    -- Ask before a DELETE or UPDATE without WHERE, a DROP, a TRUNCATE, or emptying a database.
+    confirm_destructive = true,
   },
 
   -- Every character the plugin draws that is not text.

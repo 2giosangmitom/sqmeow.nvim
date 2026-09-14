@@ -22,6 +22,9 @@ impl Core {
         let connection = self.session.connection(conn_id).ok_or_else(|| {
             "the connection this result came from is not open, so it cannot be edited".to_owned()
         })?;
+        if connection.read_only {
+            return Err(read_only(&connection.name));
+        }
         let statements = self
             .session
             .with_call(call_id, |call| {
@@ -40,6 +43,9 @@ impl Core {
             return Err("there is nothing to apply".to_owned());
         }
         let connection = self.connection(conn_id)?;
+        if connection.read_only {
+            return Err(read_only(&connection.name));
+        }
 
         let work = async move {
             let mut payload = vec![
@@ -53,4 +59,8 @@ impl Core {
         };
         Ok((Value::from(conn_id), Box::pin(work)))
     }
+}
+
+fn read_only(name: &str) -> String {
+    format!("`{name}` is read-only, so its results cannot be edited")
 }

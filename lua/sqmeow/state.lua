@@ -12,6 +12,7 @@ local M = {}
 ---@field parent integer|nil For one database of a cluster, the connection that listed it.
 ---@field database string|nil For one database of a cluster, which one.
 ---@field current_database string|nil For MongoDB, the database commands run on.
+---@field read_only boolean|nil Runs only statements that read.
 
 ---@class sqmeow.CallSummary
 ---@field call_id integer|nil Absent for an entry from the log that has no rows to read.
@@ -166,14 +167,18 @@ function M.reset()
 end
 
 --- How a winbar names a connection.
----@param connection { name: string, dialect?: string, database?: string, current_database?: string }
+---@param connection { name: string, dialect?: string, database?: string, current_database?: string, read_only?: boolean }
 ---@return string
 function M.label(connection)
   local name = connection.name
   if connection.current_database and connection.current_database ~= connection.database then
     name = ('%s › %s'):format(name, connection.current_database)
   end
-  return ('%s (%s)'):format(name, connection.dialect or '?')
+  local kind = connection.dialect or '?'
+  if connection.read_only then
+    kind = kind .. ', read-only'
+  end
+  return ('%s (%s)'):format(name, kind)
 end
 
 return M

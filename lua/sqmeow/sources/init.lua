@@ -5,6 +5,7 @@ local M = {}
 ---@class sqmeow.ConnectionSpec
 ---@field name string
 ---@field url string
+---@field read_only boolean|nil Runs only statements that read.
 ---@field source string|nil Which source it came from.
 
 --- The sources that ship with the plugin.
@@ -56,7 +57,12 @@ function M.load()
           )
         else
           seen[entry.name] = spec.type
-          table.insert(connections, { name = entry.name, url = entry.url, source = spec.type })
+          table.insert(connections, {
+            name = entry.name,
+            url = entry.url,
+            read_only = entry.read_only == true or nil,
+            source = spec.type,
+          })
         end
       end
     end

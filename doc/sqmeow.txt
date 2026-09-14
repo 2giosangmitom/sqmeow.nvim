@@ -138,6 +138,8 @@ Default configuration.
       persist_history = true,
       -- Queries kept in the log, each with its result. The oldest go once there are twice as many.
       history_limit = 500,
+      -- Ask before a DELETE or UPDATE without WHERE, a DROP, a TRUNCATE, or emptying a database.
+      confirm_destructive = true,
     },
 
     -- Every character the plugin draws that is not text.
@@ -397,7 +399,7 @@ The public interface.
 Open a connection. Returns once the engine accepts the request; success arrives as an event.
 Parameters ~
 {url} `(string)` A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
-{opts} `(table|nil)` `name` labels it; `database` and `parent` open one database of cluster `parent`.
+{opts} `(table|nil)` `name` labels it; `database` and `parent` open one database of cluster `parent`; `read_only` runs only statements that read.
 Return ~
 `(integer|nil)` id The connection id, or nil if the engine refused the request.
 Return ~
@@ -493,7 +495,8 @@ Run SQL on the current connection.
 Parameters ~
 {sql} `(string)` One or more statements.
 {opts} `(table|nil)` `line` runs only the statement at that zero-based line; `where` and
-`order_by` run a single query as a subquery filtered and ordered by them.
+`order_by` run a single query as a subquery filtered and ordered by them; `confirmed` skips
+asking before a destructive statement.
 Return ~
 `(integer|nil)` call_id
 Return ~

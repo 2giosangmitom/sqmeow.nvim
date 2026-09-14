@@ -972,7 +972,16 @@ end
 --- Whether the keys that change rows may do so on this result, saying why not when they may not.
 ---@return boolean
 local function editing()
-  local call = require('sqmeow.state').call
+  local state = require('sqmeow.state')
+  local call = state.call
+  local connection = call and call.conn_id and state.connections[call.conn_id]
+  if connection and connection.read_only then
+    utils.notify(
+      ('`%s` is read-only, so its results cannot be edited'):format(connection.name),
+      vim.log.levels.WARN
+    )
+    return false
+  end
   if not (call and call.source) then
     utils.notify(
       'this result cannot be edited: its rows cannot be traced back to where they are stored',
@@ -1019,10 +1028,10 @@ local function sort_by(column, add)
   end
   local keys = {}
   for _, entry in ipairs(sort) do
-    local column = (call.columns or {})[entry.column + 1]
+    local described = (call.columns or {})[entry.column + 1]
     table.insert(
       keys,
-      M.quote(column and column.name or '') .. (entry.descending and ' DESC' or '')
+      M.quote(described and described.name or '') .. (entry.descending and ' DESC' or '')
     )
   end
   M.rerun({ sort = sort, order_by = table.concat(keys, ', ') })

@@ -478,6 +478,7 @@ local function toggle_database(node)
     name = ('%s/%s'):format(parent.name, node.name),
     parent = parent.id,
     database = node.name,
+    read_only = parent.read_only,
   })
   -- Marked open, the way a connection someone expanded is, so a refresh reloads what it holds.
   if id then

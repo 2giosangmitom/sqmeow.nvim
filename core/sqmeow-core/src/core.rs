@@ -83,6 +83,7 @@ impl Core {
             "row" => self.row(args),
             "rows" => self.rows(args),
             "condition" => self.condition(args),
+            "inspect" => self.inspect(args),
             "plan" => self.plan(args),
             "export_preview" => self.export_preview(args),
             "connections" => Ok(Value::Array(self.session.describe_connections())),

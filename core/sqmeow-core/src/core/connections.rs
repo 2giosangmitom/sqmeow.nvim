@@ -26,8 +26,9 @@ impl Core {
             .unwrap_or_else(|| format!("connection {id}"));
         // One database of a cluster the URL reaches as a whole, opened from the drawer.
         let database = args.opt_string("database");
+        let read_only = args.opt_bool("read_only").unwrap_or(false);
 
-        let work = self.open(id, name, url, database);
+        let work = self.open(id, name, url, database, read_only);
         Ok((Value::from(id), Box::pin(work)))
     }
 
@@ -37,6 +38,7 @@ impl Core {
         name: String,
         url: String,
         database: Option<String>,
+        read_only: bool,
     ) {
         self.emit_connection(id, "connecting", vec![("name", Value::from(name.as_str()))]);
 
@@ -62,8 +64,12 @@ impl Core {
                 if let Some(database) = backend.database() {
                     payload.push(("current_database", Value::from(database)));
                 }
-                self.session
-                    .insert_connection(Connection { id, name, backend });
+                self.session.insert_connection(Connection {
+                    id,
+                    name,
+                    backend,
+                    read_only,
+                });
                 self.emit_connection(id, "connected", payload);
             }
             Err(error) => self.emit_connection(

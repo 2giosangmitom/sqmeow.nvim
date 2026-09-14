@@ -347,4 +347,44 @@ T['an EXPLAIN that is run shows its plan as lines rather than a grid'] = functio
   helpers.absent(text, '│')
 end
 
+T['a DELETE without WHERE asks first, and runs only when told to'] = function()
+  run('create table doomed (id integer)')
+  run('insert into doomed values (1)')
+  local asked, answer = nil, 'Cancel'
+  helpers.stub(vim.ui, 'select', function(_, opts, on_choice)
+    asked = opts.prompt
+    on_choice(answer)
+  end)
+
+  eq(api.execute('delete from doomed'), nil)
+  helpers.contains(asked, 'DELETE without WHERE')
+
+  answer = 'Run it'
+  local before = state.call.call_id
+  api.execute('delete from doomed')
+  wait('the delete should run', function()
+    return state.call.call_id ~= before and state.call.state == 'done'
+  end)
+  eq(state.call.affected, 1)
+  run('drop table doomed')
+end
+
+T['a read-only connection reads, and refuses writes and edits'] = function()
+  local id = helpers.connect('sqlite::memory:', { name = 'locked', read_only = true })
+  MiniTest.finally(function()
+    api.disconnect(id)
+  end)
+  helpers.contains(state.label(state.connections[id]), 'read-only')
+  eq(run('select 1 as one', { conn_id = id }).state, 'done')
+
+  local messages = {}
+  helpers.stub(vim, 'notify', function(message)
+    table.insert(messages, message)
+  end)
+  eq(api.execute('create table nope (id integer)', { conn_id = id, confirmed = true }), nil)
+  helpers.contains(messages[1], 'read-only')
+  result.actions.add_row()
+  helpers.contains(messages[2], 'read-only')
+end
+
 return T

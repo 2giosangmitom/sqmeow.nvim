@@ -4,6 +4,7 @@ pub mod adapter;
 pub mod edit;
 pub mod error;
 pub mod export;
+pub mod guard;
 pub mod node;
 pub mod result;
 pub mod sql;

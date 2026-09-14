@@ -5,14 +5,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rmpv::Value;
-use sqmeow_db::{Cell, Dialect, Error as DbError, ResultSet, sql, view};
+use sqmeow_db::{Cell, Dialect, Error as DbError, ResultSet, guard, sql, view};
 
 use super::summary::{cell_value, summarize};
 use super::{Core, Started, params};
 use crate::archive;
 use crate::args::Args;
 use crate::session::{Call, CallId, ConnId, Connection};
-use crate::value::{map, optional};
+use crate::value::{map, optional, strings};
 
 impl Core {
     /// The error for a result the history no longer holds.
@@ -33,24 +33,16 @@ impl Core {
         let source = args.string("sql")?;
         let connection = self.connection(conn_id)?;
         let dialect = connection.backend.dialect();
-
-        // A Redis command ends with its line, a MongoDB command with its document, and a SQL
-        // statement with a semicolon.
-        let mut statements = match dialect {
-            Dialect::Redis => sql::split_lines(&source),
-            Dialect::MongoDb => sql::split_documents(&source),
-            dialect => sql::split(&source, dialect),
-        };
-        let none = || "there is no statement to run".to_owned();
-        if statements.is_empty() {
-            return Err(none());
-        }
-        // A line means "run only what the cursor is in".
-        if let Some(line) = args.opt_usize("line") {
-            let chosen = sql::statement_at(&statements, line)
-                .cloned()
-                .ok_or_else(none)?;
-            statements = vec![chosen];
+        let statements = chosen(dialect, &source, args.opt_usize("line"))?;
+        if connection.read_only
+            && statements
+                .iter()
+                .any(|statement| guard::writes(dialect, &statement.sql))
+        {
+            return Err(format!(
+                "`{}` is read-only, so it runs only statements that read",
+                connection.name
+            ));
         }
         let archive = args.opt_string("archive").map(PathBuf::from);
 
@@ -74,6 +66,19 @@ impl Core {
         let call_id = self.session.next_call_id();
         let work = self.run(call_id, connection, statements, wrapped, archive);
         Ok((Value::from(call_id), Box::pin(work)))
+    }
+
+    /// What the statements a call would run destroy, for the editor to confirm first.
+    pub(super) fn inspect(&self, args: &Args) -> Result<Value, String> {
+        let connection = self.connection(args.conn_id("conn_id")?)?;
+        let dialect = connection.backend.dialect();
+        let statements = chosen(dialect, &args.string("sql")?, args.opt_usize("line"))?;
+        Ok(strings(
+            statements
+                .iter()
+                .filter_map(|statement| guard::danger(dialect, &statement.sql))
+                .collect::<Vec<_>>(),
+        ))
     }
 
     /// Run statements, or the one query `wrapped` filters.
@@ -343,6 +348,33 @@ impl Core {
         ];
         pairs.extend(extra);
         self.emit("call:state", map(pairs));
+    }
+}
+
+/// The statements a buffer holds, or only the one at `line`.
+fn chosen(
+    dialect: Dialect,
+    source: &str,
+    line: Option<usize>,
+) -> Result<Vec<sql::Statement>, String> {
+    // A Redis command ends with its line, a MongoDB command with its document, and a SQL
+    // statement with a semicolon.
+    let statements = match dialect {
+        Dialect::Redis => sql::split_lines(source),
+        Dialect::MongoDb => sql::split_documents(source),
+        dialect => sql::split(source, dialect),
+    };
+    let none = || "there is no statement to run".to_owned();
+    if statements.is_empty() {
+        return Err(none());
+    }
+    // A line means "run only what the cursor is in".
+    match line {
+        Some(line) => sql::statement_at(&statements, line)
+            .cloned()
+            .map(|statement| vec![statement])
+            .ok_or_else(none),
+        None => Ok(statements),
     }
 }
 

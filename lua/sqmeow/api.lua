@@ -13,7 +13,7 @@ end
 
 --- Open a connection. Returns once the engine accepts the request; success arrives as an event.
 ---@param url string A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
----@param opts table|nil `name` labels it; `database` and `parent` open one database of cluster `parent`.
+---@param opts table|nil `name` labels it; `database` and `parent` open one database of cluster `parent`; `read_only` runs only statements that read.
 ---@return integer|nil id The connection id, or nil if the engine refused the request.
 ---@return string|nil error
 ---@usage >lua
@@ -35,11 +35,17 @@ function M.connect(url, opts)
     state = 'connecting',
     parent = opts.parent,
     database = opts.database,
+    read_only = opts.read_only,
   })
   require('sqmeow.ui.drawer').render()
 
-  local accepted, err =
-    engine().request('connect', { id = id, url = url, name = name, database = opts.database })
+  local accepted, err = engine().request('connect', {
+    id = id,
+    url = url,
+    name = name,
+    database = opts.database,
+    read_only = opts.read_only,
+  })
   if not accepted then
     state.remove_connection(id)
     require('sqmeow.ui.drawer').render()
@@ -61,7 +67,7 @@ function M.connect_named(name)
     return nil, message
   end
 
-  return M.connect(spec.url, { name = spec.name })
+  return M.connect(spec.url, { name = spec.name, read_only = spec.read_only })
 end
 
 --- Every connection the configured sources declare.
@@ -198,7 +204,8 @@ end
 --- Run SQL on the current connection.
 ---@param sql string One or more statements.
 ---@param opts table|nil `line` runs only the statement at that zero-based line; `where` and
---- `order_by` run a single query as a subquery filtered and ordered by them.
+--- `order_by` run a single query as a subquery filtered and ordered by them; `confirmed` skips
+--- asking before a destructive statement.
 ---@return integer|nil call_id
 ---@return string|nil error
 function M.execute(sql, opts)
@@ -219,6 +226,25 @@ function M.execute(sql, opts)
   end
   if sql:match('^%s*$') then
     return nil, 'there is nothing to run'
+  end
+
+  if not opts.confirmed and require('sqmeow.config').get().query.confirm_destructive then
+    local dangers = engine().request('inspect', {
+      conn_id = connection.id,
+      sql = sql,
+      line = opts.line,
+    })
+    if type(dangers) == 'table' and #dangers > 0 then
+      vim.ui.select({ 'Run it', 'Cancel' }, {
+        prompt = ('%s, on %s. Run it?'):format(table.concat(dangers, '; '), connection.name),
+      }, function(choice)
+        if choice == 'Run it' then
+          local confirmed = { conn_id = connection.id, confirmed = true }
+          M.execute(sql, vim.tbl_extend('force', opts, confirmed))
+        end
+      end)
+      return nil, 'waiting for confirmation'
+    end
   end
 
   local result = require('sqmeow.ui.result')

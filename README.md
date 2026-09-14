@@ -86,6 +86,14 @@ Define connections in `SQMEOW_CONNECTIONS`:
 export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPASSWORD\" }}@localhost/dev"}]'
 ```
 
+### Safety
+
+- Add `"read_only": true` to a connection, here or in `connections.json`, to run only statements that
+  read and refuse edits. It guards against mistakes; a database user without write access is the real
+  protection.
+- Before a `DELETE` or `UPDATE` without `WHERE`, a `DROP`, a `TRUNCATE`, or emptying a Redis or
+  MongoDB database, sqmeow asks first. Set `query.confirm_destructive = false` to turn it off.
+
 ## ⌨️ Commands
 
 | Command                                        | Description                                         |
@@ -223,6 +231,7 @@ require('sqmeow').setup({
     history_size = 32, -- results kept in memory
     persist_history = true, -- save the log and its results to disk
     history_limit = 500,
+    confirm_destructive = true, -- ask before DELETE/UPDATE without WHERE, DROP, TRUNCATE
   },
   icons = {}, -- Nerd Font glyphs; recolour them through the SqmeowIcon* highlight groups
   keymaps = {},

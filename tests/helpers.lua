@@ -58,6 +58,8 @@ end
 function M.run(sql, opts, timeout)
   local api = require('sqmeow.api')
   local state = require('sqmeow.state')
+  -- Tests drop and delete freely, so nothing asks first.
+  opts = vim.tbl_extend('keep', opts or {}, { confirmed = true })
   local call_id = assert(api.execute(sql, opts), 'the query should be accepted: ' .. sql)
   M.wait_for('the query should settle: ' .. sql, function()
     return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
