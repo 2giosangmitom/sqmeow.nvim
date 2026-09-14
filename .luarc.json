@@ -6,7 +6,7 @@
   },
   "diagnostics": {
     "enable": true,
-    "globals": ["vim", "MiniTest", "MiniDoc"]
+    "globals": ["vim"]
   },
   "workspace": {
     "library": [".tests/data/nvim/lazy/mini.nvim/lua", ".tests/data/nvim/lazy/nui.nvim/lua"],

@@ -15,7 +15,7 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 - 🖥️ One command opens the client: schema drawer and result grid.
 - 📝 A connection form with real fields, so nobody types a URL by hand. The password stays hidden behind asterisks.
 - 🌲 A schema drawer with tables, views, functions, procedures and columns with their types and keys, loaded as you expand.
-- ▶️ Run the statement under the cursor, a selection or the whole buffer. Errors show up as diagnostics on their own lines.
+- ▶️ Run the statement under the cursor, a selection or the whole buffer. Errors show up in the result window.
 - 📄 Scratchpads you create and name from the drawer, as many per connection as you like. They survive a restart and stay tied to their connection, so two of them can query two databases side by side.
 - 🕘 A query log that keeps every result, so you can look at yesterday's answer without running the query again.
 - ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Export the result, or just the rows you select, to CSV or JSON, in a file or on the clipboard.
@@ -65,7 +65,7 @@ To track the latest commit instead of a release, drop `version` and use `install
 1. `:Sqmeow` opens the drawer and the result window. Run it again to restore your layout.
 2. `:Sqmeow add` (or `A` in the drawer) opens a form to add a connection. Leave the database empty to list every database on the server, or choose **Connection string** to paste a whole URL.
 3. `<CR>` on a connection in the drawer opens it. `u` makes it the one queries run against, and `a` creates a scratchpad for it.
-4. Write SQL in the scratchpad and press `<CR>` to run the statement under the cursor, or a visual selection. Errors show as diagnostics. On a Redis connection, write one command per line; the drawer lists keys by type. On a MongoDB connection, write [database commands](https://www.mongodb.com/docs/manual/reference/command/) as Extended JSON, such as `{"find": "users", "filter": {"age": {"$gt": 30}}}`, one document per statement; `use shop` switches database.
+4. Write SQL in the scratchpad and press `<CR>` to run the statement under the cursor, or a visual selection. Errors show in the result window. On a Redis connection, write one command per line; the drawer lists keys by type. On a MongoDB connection, write [database commands](https://www.mongodb.com/docs/manual/reference/command/) as Extended JSON, such as `{"find": "users", "filter": {"age": {"$gt": 30}}}`, one document per statement; `use shop` switches database.
 
 Press `?` in the drawer or result window to list its keys.
 
@@ -202,7 +202,7 @@ Unknown options are reported by name. See `:h sqmeow-config` for every option an
 Contributions are welcome. The toolchain is pinned with [mise](https://mise.jdx.dev) and tasks are [just](https://just.systems) recipes:
 
 ```sh
-mise install   # rust, just, stylua, selene
+mise install   # rust, just, stylua, selene, lua-language-server
 just db-up     # PostgreSQL, MySQL, Redis, Dragonfly and MongoDB for integration tests
 just           # lint and test, as CI does
 just docs      # regenerate doc/sqmeow.txt

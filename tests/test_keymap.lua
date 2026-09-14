@@ -1,5 +1,6 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
+local helpers = dofile('tests/helpers.lua')
 local keymap = require('sqmeow.keymap')
 local help = require('sqmeow.ui.help')
 local config = require('sqmeow.config')
@@ -55,6 +56,19 @@ T['defaults']['run a selection from visual mode'] = function()
   eq(find('editor', 'execute_statement').mode, 'n')
 end
 
+T['defaults']['leave the result free to be crossed sideways'] = function()
+  -- A wide grid is read by moving along a line, and a mapping on one of these takes that away.
+  local motions = { 'w', 'b', 'e', 'W', 'B', 'E', 'ge', 'gE', 'h', 'l', '0', '^', '$' }
+  vim.list_extend(motions, { 'f', 'F', 't', 'T', ';', ',', 'zh', 'zl', 'zH', 'zL' })
+
+  for _, entry in ipairs(keymap.resolve('result')) do
+    local keys = type(entry.lhs) == 'table' and entry.lhs or { entry.lhs }
+    for _, lhs in ipairs(keys) do
+      eq(vim.tbl_contains(motions, lhs), false)
+    end
+  end
+end
+
 T['overrides'] = MiniTest.new_set()
 
 T['overrides']['change one action without restating the rest'] = function()
@@ -85,7 +99,7 @@ T['problems']['name an action that does not exist'] = function()
 
   local problems = keymap.problems()
   eq(#problems, 1)
-  eq(problems[1]:find('togle', 1, true) ~= nil, true)
+  helpers.contains(problems[1], 'togle')
 end
 
 T['problems']['name a surface that does not exist'] = function()
@@ -93,44 +107,41 @@ T['problems']['name a surface that does not exist'] = function()
 
   local problems = keymap.problems()
   eq(#problems, 1)
-  eq(problems[1]:find('sidebar', 1, true) ~= nil, true)
+  helpers.contains(problems[1], 'sidebar')
 end
 
 T['applying'] = MiniTest.new_set()
 
 T['applying']['binds only inside the buffer it was given'] = function()
-  local buf = vim.api.nvim_create_buf(false, true)
+  local buf = helpers.temp_buf()
   local before = #vim.api.nvim_get_keymap('n')
 
   keymap.apply('result', buf, { next_page = function() end })
 
   eq(#vim.api.nvim_get_keymap('n'), before)
   eq(#vim.api.nvim_buf_get_keymap(buf, 'n'), 1)
-  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 T['applying']['skips an action the surface has not implemented'] = function()
-  local buf = vim.api.nvim_create_buf(false, true)
+  local buf = helpers.temp_buf()
   keymap.apply('result', buf, {})
 
   eq(#vim.api.nvim_buf_get_keymap(buf, 'n'), 0)
-  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 T['applying']['puts a description on what it binds'] = function()
-  local buf = vim.api.nvim_create_buf(false, true)
+  local buf = helpers.temp_buf()
   keymap.apply('result', buf, { close = function() end })
 
   local maps = vim.api.nvim_buf_get_keymap(buf, 'n')
   eq(maps[1].lhs, 'q')
   eq(maps[1].desc:find('sqmeow', 1, true), 1)
-  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 T['plug'] = MiniTest.new_set()
 
 T['plug']['is defined and bound to no ordinary key'] = function()
-  require('sqmeow.keymap').register_plug()
+  keymap.register_plug()
 
   local global = vim.api.nvim_get_keymap('n')
   local plugs = vim.tbl_filter(function(map)
@@ -158,7 +169,7 @@ T['cheatsheet'] = MiniTest.new_set({
 T['cheatsheet']['lists a line per mapping'] = function()
   local lines = help.lines('drawer')
   eq(#lines, #keymap.defaults.drawer)
-  eq(lines[1]:find('<CR>, o', 1, true) ~= nil, true)
+  helpers.contains(lines[1], '<CR>, o')
 end
 
 T['cheatsheet']['omits an action the user disabled'] = function()
@@ -170,20 +181,7 @@ T['cheatsheet']['shows an override rather than the default'] = function()
   config.apply({ keymaps = { result = { next_page = '<C-n>' } } })
 
   local text = table.concat(help.lines('result'), '\n')
-  eq(text:find('<C-n>', 1, true) ~= nil, true)
-end
-
-T['defaults']['leave the result free to be crossed sideways'] = function()
-  -- A wide grid is read by moving along a line, and a mapping on one of these takes that away.
-  local motions = { 'w', 'b', 'e', 'W', 'B', 'E', 'ge', 'gE', 'h', 'l', '0', '^', '$' }
-  vim.list_extend(motions, { 'f', 'F', 't', 'T', ';', ',', 'zh', 'zl', 'zH', 'zL' })
-
-  for _, entry in ipairs(keymap.resolve('result')) do
-    local keys = type(entry.lhs) == 'table' and entry.lhs or { entry.lhs }
-    for _, lhs in ipairs(keys) do
-      eq(vim.tbl_contains(motions, lhs), false)
-    end
-  end
+  helpers.contains(text, '<C-n>')
 end
 
 return T

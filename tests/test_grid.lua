@@ -1,42 +1,39 @@
 local MiniTest = require('mini.test')
 -- The result grid against a real engine and SQLite: filtering and sorting in the engine, editing
 -- through a review, copying to the clipboard, and showing a query plan.
+local helpers = dofile('tests/helpers.lua')
 
 local eq = MiniTest.expect.equality
 local api = require('sqmeow.api')
 local state = require('sqmeow.state')
 local result = require('sqmeow.ui.result')
 local edit = require('sqmeow.ui.edit')
+local rpc = require('sqmeow.rpc')
 
-local TIMEOUT = 5000
+local wait = helpers.wait_for
+local run = helpers.run
+local rows = helpers.result_rows
 
-local function wait(what, condition)
-  assert(vim.wait(TIMEOUT, condition, 10), what)
+--- Every floating window.
+---@return integer[]
+local function floats()
+  return vim.tbl_filter(function(win)
+    return vim.api.nvim_win_get_config(win).relative ~= ''
+  end, vim.api.nvim_list_wins())
 end
 
---- Run SQL and wait for the engine to finish with it.
-local function run(sql, opts)
-  local call_id = assert(api.execute(sql, opts), 'the query should be accepted: ' .. sql)
-  wait('the query should settle: ' .. sql, function()
-    return state.call and state.call.call_id == call_id and state.call.state ~= 'executing'
-  end)
-  return state.call
-end
-
---- The data rows of the grid, with the header dropped.
-local function rows()
-  return vim.list_slice(vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false), 3)
+--- Open the result and put the cursor in it, the way a case about keys needs.
+local function focus_result()
+  local win = result.open()
+  vim.api.nvim_set_current_win(win)
+  return win
 end
 
 local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
       require('sqmeow').setup({ ui = { result = { page_size = 10, column_icons = false } } })
-      local id = assert(api.connect('sqlite::memory:', { name = 'grid' }))
-      wait('the connection should open', function()
-        return state.connections[id] and state.connections[id].state == 'connected'
-      end)
-      api.use(id)
+      api.use(helpers.connect('sqlite::memory:', { name = 'grid' }))
       run('create table people (id integer primary key, name text, age integer)')
       run([[insert into people (id, name, age) values
               (1, 'alice', 30), (2, 'bob', null), (3, 'carol', 9)]])
@@ -92,7 +89,7 @@ T['editing applies through a review'] = function()
   edit.add_row()
   edit.set({ insert = 1 }, 1, 'dave')
 
-  local statements = require('sqmeow.rpc').request('plan', {
+  local statements = rpc.request('plan', {
     call_id = state.call.call_id,
     changes = edit.changes(),
   })
@@ -107,22 +104,15 @@ T['editing applies through a review'] = function()
 
   run('select name from people order by id')
   local names = table.concat(rows(), '\n')
-  eq(names:find("o'alice", 1, true) ~= nil, true)
-  eq(names:find('bob', 1, true), nil)
-  eq(names:find('dave', 1, true) ~= nil, true)
+  helpers.contains(names, "o'alice")
+  helpers.absent(names, 'bob')
+  helpers.contains(names, 'dave')
 end
 
 T['a cell is changed straight from the split, and q leaves the editor'] = function()
-  local win = result.open()
-  vim.api.nvim_set_current_win(win)
+  local win = focus_result()
   -- Line three is the first row, and column zero of it is `id`.
   vim.api.nvim_win_set_cursor(win, { 3, 0 })
-
-  local function floats()
-    return #vim.tbl_filter(function(window)
-      return vim.api.nvim_win_get_config(window).relative ~= ''
-    end, vim.api.nvim_tabpage_list_wins(0))
-  end
 
   -- Pressed as a user presses it, in one go: `feedkeys` ends an insert left open when its keys run
   -- out. The editor opens typing, after what the cell holds, so the `9` goes on the end of the
@@ -130,17 +120,16 @@ T['a cell is changed straight from the split, and q leaves the editor'] = functi
   local value = tostring(result.current_cell().value)
   vim.api.nvim_feedkeys(vim.keycode('i9<Esc><CR>'), 'mx', false)
   eq(edit.staged(0, 0), value .. '9')
-  eq(floats(), 0)
+  eq(#floats(), 0)
 
   vim.api.nvim_set_current_win(win)
   vim.api.nvim_feedkeys(vim.keycode('i<Esc>q'), 'mx', false)
-  eq(floats(), 0)
+  eq(#floats(), 0)
   eq(edit.staged(0, 0), value .. '9')
 end
 
 T['the cell editor is as tall as the value it holds'] = function()
-  local win = result.open()
-  vim.api.nvim_set_current_win(win)
+  local win = focus_result()
   edit.set({ row = 0 }, 1, 'first\nsecond')
   vim.api.nvim_win_set_cursor(win, { 3, 0 })
   result.goto_column(2)
@@ -166,25 +155,21 @@ end
 T['a failed apply keeps what was staged'] = function()
   result.open()
   edit.set({ row = 0 }, 0, '3')
-  local statements = require('sqmeow.rpc').request('plan', {
+  local statements = rpc.request('plan', {
     call_id = state.call.call_id,
     changes = edit.changes(),
   })
 
   local messages = {}
-  local notify = vim.notify
-  vim.notify = function(message)
+  helpers.stub(vim, 'notify', function(message)
     table.insert(messages, message)
-  end
-  MiniTest.finally(function()
-    vim.notify = notify
   end)
 
   edit.apply(state.call.conn_id, statements)
   wait('the failure should be reported', function()
     return #messages > 0
   end)
-  eq(messages[1]:find('nothing was applied', 1, true) ~= nil, true)
+  helpers.contains(messages[1], 'nothing was applied')
   eq(edit.count(), 1)
 end
 
@@ -195,12 +180,9 @@ T['the grid moves between its split and its float, keeping its buffer'] = functi
   eq(result.is_float(), true)
   eq(vim.api.nvim_get_current_buf(), buffer)
   -- Just a bigger view: nothing on it speaks of editing.
-  eq(vim.wo.winbar:find('edit', 1, true), nil)
+  helpers.absent(vim.wo.winbar, 'edit')
   -- It has a border, drawn in a window of its own around the grid, as every dialog's is.
-  local floats = vim.tbl_filter(function(window)
-    return vim.api.nvim_win_get_config(window).relative ~= ''
-  end, vim.api.nvim_tabpage_list_wins(0))
-  eq(#floats, 2)
+  eq(#floats(), 2)
   result.toggle_float()
   eq(result.is_float(), false)
   eq(result.is_open(), true)
@@ -218,8 +200,7 @@ T['an export without a file goes to the clipboard, as the grid shows it'] = func
 end
 
 T['the export dialog previews what it writes, scrolls it, and gives focus back'] = function()
-  local win = result.open()
-  vim.api.nvim_set_current_win(win)
+  local win = focus_result()
   api.export()
 
   local function preview()
@@ -232,15 +213,15 @@ T['the export dialog previews what it writes, scrolls it, and gives focus back']
   end
 
   -- The header and a line per row, whatever the cases before this one left in the table.
-  local _, lines = preview()
-  eq(lines[1], 'id,name,age')
-  eq(#lines, state.call.rows + 1)
+  local _, preview_lines = preview()
+  eq(preview_lines[1], 'id,name,age')
+  eq(#preview_lines, state.call.rows + 1)
 
   -- The format is the first field, and choosing JSON renders the rows as JSON instead.
   vim.api.nvim_feedkeys(vim.keycode('gg<CR>'), 'mx', false)
   local window
-  window, lines = preview()
-  eq(lines[1], '[')
+  window, preview_lines = preview()
+  eq(preview_lines[1], '[')
   eq(vim.bo[vim.api.nvim_win_get_buf(window)].filetype, 'json')
 
   vim.api.nvim_feedkeys(vim.keycode('<C-d>'), 'mx', false)
@@ -256,9 +237,9 @@ T['an EXPLAIN that is run shows its plan as lines rather than a grid'] = functio
   run([[explain query plan
         select * from people where id in (select id from people where name = 'x')]])
 
-  local lines = vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false)
+  local lines = helpers.result_lines()
   local text = table.concat(lines, '\n')
-  eq(text:find('SCAN', 1, true) ~= nil, true)
+  helpers.contains(text, 'SCAN')
   -- Nested under the step it belongs to, and not drawn as a grid of columns.
   eq(
     vim.iter(lines):any(function(line)
@@ -266,7 +247,7 @@ T['an EXPLAIN that is run shows its plan as lines rather than a grid'] = functio
     end),
     true
   )
-  eq(text:find('│', 1, true), nil)
+  helpers.absent(text, '│')
 end
 
 return T

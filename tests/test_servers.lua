@@ -10,66 +10,39 @@ local api = require('sqmeow.api')
 local rpc = require('sqmeow.rpc')
 local state = require('sqmeow.state')
 local result = require('sqmeow.ui.result')
+local drawer = require('sqmeow.ui.drawer')
+local sql = require('sqmeow.sql')
 
 local TIMEOUT = 15000
+
+--- Skip the case unless `url` is set, saying which variable would set it.
+---@param url string|nil
+---@param name string The environment variable, such as `'SQMEOW_TEST_POSTGRES_URL'`.
+local function skip_unless(url, name)
+  if not url then
+    MiniTest.skip(('set %s, or run `just db-up`'):format(name))
+  end
+end
 
 local servers = {
   postgres = vim.env.SQMEOW_TEST_POSTGRES_URL,
   mysql = vim.env.SQMEOW_TEST_MYSQL_URL,
 }
 
-local function connect(url, opts)
-  local id = assert(api.connect(url, opts), 'the engine should accept the connection')
-  local settled = vim.wait(TIMEOUT, function()
-    local connection = state.connections[id]
-    return connection == nil or connection.state ~= 'connecting'
-  end, 20)
-  assert(settled, 'the connection should settle')
-  return state.connections[id]
+local function run(query)
+  return helpers.run(query, nil, TIMEOUT)
 end
 
-local function run(sql)
-  local call_id = assert(api.execute(sql), 'the engine should accept the query')
-  local settled = vim.wait(TIMEOUT, function()
-    return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
-  end, 20)
-  assert(settled, 'the query should settle: ' .. sql)
-  return assert(state.call, 'the query should leave a result')
-end
-
-local function grid()
-  return vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false)
-end
-
-local function header()
-  return vim.list_slice(grid(), 1, 2)
-end
-
-local function lines()
-  return vim.list_slice(grid(), 3)
-end
+local grid = helpers.result_lines
+local header = helpers.result_header
+local lines = helpers.result_rows
 
 local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
       -- ASCII icons, so an expectation on a grid line can be read. The defaults are Nerd Font
       -- glyphs, which a test file cannot assert on without becoming unreadable itself.
-      require('sqmeow').setup({
-        icons = {
-          types = {
-            text = 't',
-            number = 'n',
-            boolean = 'b',
-            temporal = 'd',
-            json = 'j',
-            uuid = 'u',
-            binary = 'y',
-            unknown = '?',
-            primary_key = 'K',
-            foreign_key = 'k',
-          },
-        },
-      })
+      require('sqmeow').setup({ icons = { types = helpers.ascii_icons() } })
     end,
     post_once = function()
       rpc.stop()
@@ -78,14 +51,13 @@ local T = MiniTest.new_set({
   },
 })
 
-for dialect, url in pairs(servers) do
+for _, dialect in ipairs({ 'postgres', 'mysql' }) do
+  local url = servers[dialect]
   T[dialect] = MiniTest.new_set({
     hooks = {
       pre_case = function()
-        if not url then
-          MiniTest.skip(('set SQMEOW_TEST_%s_URL, or run `just db-up`'):format(dialect:upper()))
-        end
-        connect(url)
+        skip_unless(url, ('SQMEOW_TEST_%s_URL'):format(dialect:upper()))
+        helpers.connect(url, nil, TIMEOUT)
       end,
       post_case = function()
         api.disconnect()
@@ -136,7 +108,7 @@ for dialect, url in pairs(servers) do
 
   T[dialect]['survives a password being redacted in the label'] = function()
     -- The connection name comes from the URL, and must never carry the password.
-    eq(state.current_connection().name:find('sqmeow:sqmeow', 1, true), nil)
+    helpers.absent(state.current_connection().name, 'sqmeow:sqmeow')
   end
 
   T[dialect]['shows an EXPLAIN as its plan rather than a grid'] = function()
@@ -147,19 +119,19 @@ for dialect, url in pairs(servers) do
     end)
 
     -- PostgreSQL writes a row a line; MySQL's tree is one value holding every line.
-    local sql = dialect == 'mysql'
+    local statement = dialect == 'mysql'
         and "explain format=tree select * from explained where label = 'a'"
       or "explain select * from explained where label = 'a'"
-    eq(run(sql).state, 'done')
+    eq(run(statement).state, 'done')
 
     local drawn = grid()
     local text = table.concat(drawn, '\n')
     eq(#drawn >= 2, true)
-    eq(drawn[1]:find(dialect == 'mysql' and '-> ' or 'Scan', 1, true) ~= nil, true)
+    helpers.contains(drawn[1], dialect == 'mysql' and '-> ' or 'Scan')
     -- The filter is there in full: nothing is cut to a column's width or drawn between columns.
-    eq(text:find('label', 1, true) ~= nil, true)
-    eq(text:find('…', 1, true), nil)
-    eq(text:find('│', 1, true), nil)
+    helpers.contains(text, 'label')
+    helpers.absent(text, '…')
+    helpers.absent(text, '│')
   end
 end
 
@@ -172,7 +144,6 @@ local redis_servers = {
 
 --- One level of the drawer, as the engine reports it.
 local function introspect(path)
-  local drawer = require('sqmeow.ui.drawer')
   local reply
   -- Put back as soon as the level arrives rather than when the case ends, so the drawer the case
   -- goes on to use is the real one.
@@ -180,12 +151,11 @@ local function introspect(path)
     reply = payload
   end)
   rpc.request('introspect', { conn_id = state.current_connection().id, path = path })
-  local settled = vim.wait(TIMEOUT, function()
+  helpers.wait_for('the drawer level should arrive', function()
     return reply ~= nil
-  end, 20)
+  end, TIMEOUT)
   helpers.swap(drawer, 'on_nodes', original)
 
-  assert(settled, 'the drawer level should arrive')
   eq(reply.error, nil)
   return reply.nodes
 end
@@ -198,14 +168,13 @@ local function named(nodes, name)
   end
 end
 
-for server, url in pairs(redis_servers) do
+for _, server in ipairs({ 'redis', 'dragonfly' }) do
+  local url = redis_servers[server]
   T[server] = MiniTest.new_set({
     hooks = {
       pre_case = function()
-        if not url then
-          MiniTest.skip(('set SQMEOW_TEST_%s_URL, or run `just db-up`'):format(server:upper()))
-        end
-        connect(url)
+        skip_unless(url, ('SQMEOW_TEST_%s_URL'):format(server:upper()))
+        helpers.connect(url, nil, TIMEOUT)
       end,
       post_case = function()
         api.disconnect()
@@ -242,7 +211,7 @@ for server, url in pairs(redis_servers) do
     run('DEL test:lua:preview')
     run('HSET test:lua:preview colour teal')
 
-    local summary = run(require('sqmeow.sql').read_key('hashes', 'test:lua:preview', 10))
+    local summary = run(sql.read_key('hashes', 'test:lua:preview', 10))
     eq(summary.state, 'done')
     eq(summary.rows, 1)
     eq(lines()[1]:find('colour', 1, true) ~= nil and lines()[1]:find('teal', 1, true) ~= nil, true)
@@ -257,17 +226,17 @@ for server, url in pairs(redis_servers) do
     eq(named(introspect({ db }), 'json').count >= 1, true)
     eq(named(introspect({ db, 'json' }), 'test:lua:doc').kind, 'key')
 
-    local summary = run(require('sqmeow.sql').read_key('json', 'test:lua:doc', 10))
+    local summary = run(sql.read_key('json', 'test:lua:doc', 10))
     eq(summary.state, 'done')
-    eq(lines()[1]:find('teal', 1, true) ~= nil, true)
+    helpers.contains(lines()[1], 'teal')
   end
 end
 
 -- A PostgreSQL URL naming no database reaches every database on the server.
 T['mysql']['keeps a plain EXPLAIN, which is a table, as a grid'] = function()
   run('explain select 1')
-  eq(header()[1]:find('select_type', 1, true) ~= nil, true)
-  eq(header()[1]:find('│', 1, true) ~= nil, true)
+  helpers.contains(header()[1], 'select_type')
+  helpers.contains(header()[1], '│')
 end
 
 T['mysql']['shows catalog names as text rather than bytes'] = function()
@@ -287,43 +256,23 @@ end
 T['postgres cluster'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
-      if not servers.postgres then
-        MiniTest.skip('set SQMEOW_TEST_POSTGRES_URL, or run `just db-up`')
-      end
+      skip_unless(servers.postgres, 'SQMEOW_TEST_POSTGRES_URL')
     end,
     post_case = function()
       api.disconnect()
-      require('sqmeow.ui.drawer').close()
+      drawer.close()
     end,
   },
 })
 
 T['postgres cluster']['opens a database from the drawer as its own connection'] = function()
-  local drawer = require('sqmeow.ui.drawer')
   local cluster_url, database = servers.postgres:match('^(.*/)([^/?]+)$')
-  local cluster = connect(cluster_url, { name = 'cluster' })
+  local cluster = state.connections[helpers.connect(cluster_url, { name = 'cluster' }, TIMEOUT)]
   eq(cluster.state, 'connected')
   drawer.open()
 
-  local function drawn()
-    return vim.api.nvim_buf_get_lines(drawer.buffer(), 0, -1, false)
-  end
   local function toggle(pattern)
-    local found
-    local arrived = vim.wait(TIMEOUT, function()
-      for number, line in ipairs(drawn()) do
-        if line:find(pattern) then
-          found = number
-          return true
-        end
-      end
-      return false
-    end, 20)
-    assert(
-      arrived,
-      ('no line matching %q; drawer holds:\n%s'):format(pattern, table.concat(drawn(), '\n'))
-    )
-    vim.api.nvim_win_set_cursor(drawer.open(), { found, 0 })
+    vim.api.nvim_win_set_cursor(drawer.open(), { helpers.drawer_line(pattern, TIMEOUT), 0 })
     drawer.actions.toggle()
   end
 
@@ -335,8 +284,8 @@ T['postgres cluster']['opens a database from the drawer as its own connection'] 
   local child = assert(state.child_connection(cluster.id, database))
   eq(child.name, 'cluster/' .. database)
   eq(child.state, 'connected')
-  for _, line in ipairs(drawn()) do
-    eq(line:find('cluster/', 1, true), nil)
+  for _, line in ipairs(helpers.drawer_lines()) do
+    helpers.absent(line, 'cluster/')
   end
 
   api.disconnect(cluster.id)
@@ -347,10 +296,8 @@ end
 T['mongodb'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
-      if not vim.env.SQMEOW_TEST_MONGODB_URL then
-        MiniTest.skip('set SQMEOW_TEST_MONGODB_URL, or run `just db-up`')
-      end
-      connect(vim.env.SQMEOW_TEST_MONGODB_URL)
+      skip_unless(vim.env.SQMEOW_TEST_MONGODB_URL, 'SQMEOW_TEST_MONGODB_URL')
+      helpers.connect(vim.env.SQMEOW_TEST_MONGODB_URL, nil, TIMEOUT)
     end,
     post_case = function()
       api.disconnect()
@@ -370,7 +317,7 @@ T['mongodb']['runs a script of documents spanning lines'] = function()
     '{"find": "lua_script"}',
   }, '\n'))
   eq(summary.state, 'done')
-  eq(lines()[1]:find('teal', 1, true) ~= nil, true)
+  helpers.contains(lines()[1], 'teal')
 end
 
 T['mongodb']['lists collections and previews one'] = function()
@@ -382,49 +329,30 @@ T['mongodb']['lists collections and previews one'] = function()
   eq(collections.name, 'Collections')
   eq(collections.count >= 1, true)
 
-  local summary = run(require('sqmeow.sql').select_from('mongodb', { 'sqmeow', 'lua_preview' }, 10))
+  local summary = run(sql.select_from('mongodb', { 'sqmeow', 'lua_preview' }, 10))
   eq(summary.state, 'done')
   eq(summary.rows, 1)
-  eq(lines()[1]:find('plum', 1, true) ~= nil, true)
+  helpers.contains(lines()[1], 'plum')
 end
 
 T['mongodb']['lists every database when the url names none'] = function()
   api.disconnect()
-  connect((vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')))
+  helpers.connect((vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')), nil, TIMEOUT)
   -- Rows the drawer opens as connections of their own, which is what `u` chooses between.
   eq(named(introspect({}), 'sqmeow').kind, 'database')
 end
 
 T['mongodb']['refreshing the server reloads the databases opened under it'] = function()
-  local drawer = require('sqmeow.ui.drawer')
   api.disconnect()
-  connect((vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')))
+  helpers.connect((vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')), nil, TIMEOUT)
   run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
   run('{"insert": "first", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}')
   MiniTest.finally(function()
     run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
   end)
 
-  local function drawn()
-    return vim.api.nvim_buf_get_lines(drawer.buffer(), 0, -1, false)
-  end
-  --- The number of the last line matching `pattern`, once one is drawn.
-  local function line(pattern, timeout)
-    local found
-    vim.wait(timeout or TIMEOUT, function()
-      for number, text in ipairs(drawn()) do
-        if text:find(pattern) then
-          found = number
-        end
-      end
-      return found ~= nil
-    end, 20)
-    return found
-  end
   local function press(pattern, action)
-    local number = line(pattern)
-    assert(number, ('no line matching %q:\n%s'):format(pattern, table.concat(drawn(), '\n')))
-    vim.api.nvim_win_set_cursor(drawer.open(), { number, 0 })
+    vim.api.nvim_win_set_cursor(drawer.open(), { helpers.drawer_line(pattern, TIMEOUT), 0 })
     drawer.actions[action]()
   end
 
@@ -433,19 +361,17 @@ T['mongodb']['refreshing the server reloads the databases opened under it'] = fu
   -- A database opened from the server is a connection of its own, with its tree cached under it.
   press('sqmeow_refresh', 'toggle')
   press('Collections', 'toggle')
-  assert(line('first'), 'the collection should be listed')
+  helpers.drawer_line('first', TIMEOUT)
   -- Named once: its groups sit straight under the database, with no schema row repeating it.
   local repeated = vim.tbl_filter(function(text)
     return text:find('sqmeow_refresh', 1, true) ~= nil
-  end, drawn())
+  end, helpers.drawer_lines())
   eq(#repeated, 1)
 
   run('{"insert": "second", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}')
   press('mongodb://', 'refresh')
-  assert(
-    line('second'),
-    'refreshing the server should list the new collection:\n' .. table.concat(drawn(), '\n')
-  )
+  -- Refreshing the server lists the collection added since.
+  helpers.drawer_line('second', TIMEOUT)
 end
 
 T['mongodb']['a find that matches nothing says so'] = function()
@@ -455,7 +381,7 @@ T['mongodb']['a find that matches nothing says so'] = function()
   -- Neither rows nor a count. The count is left out rather than sent as a nil the winbar would
   -- try to print as a number.
   eq(summary.affected, nil)
-  eq(result.describe(summary):find('no rows', 1, true) ~= nil, true)
+  helpers.contains(result.describe(summary), 'no rows')
 end
 
 T['mongodb']['names the database it runs on, following use'] = function()
@@ -465,7 +391,7 @@ T['mongodb']['names the database it runs on, following use'] = function()
   run('use sqmeow_other')
   eq(connection.current_database, 'sqmeow_other')
   -- The winbar is what tells someone which database their next query reaches.
-  eq(state.label(connection):find('› sqmeow_other (mongodb)', 1, true) ~= nil, true)
+  helpers.contains(state.label(connection), '› sqmeow_other (mongodb)')
 end
 
 return T

@@ -7,52 +7,25 @@ local api = require('sqmeow.api')
 local rpc = require('sqmeow.rpc')
 local state = require('sqmeow.state')
 local drawer = require('sqmeow.ui.drawer')
+local editor = require('sqmeow.ui.editor')
+local file = require('sqmeow.sources.file')
+local history = require('sqmeow.history')
+
+local run = helpers.run
 
 local TIMEOUT = 5000
 
 --- Every extmark on a line, as a list of `{ group, from, to }`, in column order.
 local function marks_on(number)
-  local namespace = vim.api.nvim_get_namespaces()['sqmeow.drawer']
-  local found = vim.api.nvim_buf_get_extmarks(
-    drawer.buffer(),
-    namespace,
-    { number - 1, 0 },
-    { number - 1, -1 },
-    { details = true }
-  )
-
-  local spans = vim.tbl_map(function(mark)
-    return { group = mark[4].hl_group, from = mark[3], to = mark[4].end_col }
-  end, found)
-
-  table.sort(spans, function(left, right)
-    return left.from < right.from
-  end)
-  return spans
+  return helpers.marks_on(drawer.buffer(), 'sqmeow.drawer', number)
 end
 
-local function lines()
-  return vim.api.nvim_buf_get_lines(drawer.buffer(), 0, -1, false)
-end
+local lines = helpers.drawer_lines
+local line_matching = helpers.drawer_line
 
---- Wait until a line matching `pattern` is drawn, then answer with its number.
-local function line_matching(pattern)
-  local found
-  local arrived = vim.wait(TIMEOUT, function()
-    for number, line in ipairs(lines()) do
-      if line:find(pattern) then
-        found = number
-        return true
-      end
-    end
-    return false
-  end, 20)
-
-  assert(
-    arrived,
-    ('no line matching %q; drawer holds:\n%s'):format(pattern, table.concat(lines(), '\n'))
-  )
-  return found
+--- Put the cursor on the line matching `pattern`.
+local function goto_line(pattern)
+  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching(pattern), 0 })
 end
 
 --- Put the cursor on a line and make sure what is there is open.
@@ -71,19 +44,8 @@ end
 
 --- Put the cursor on a line and close what is there.
 local function collapse(pattern)
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching(pattern), 0 })
+  goto_line(pattern)
   drawer.actions.toggle()
-end
-
-local function run(sql)
-  local call_id = assert(api.execute(sql))
-  assert(
-    vim.wait(TIMEOUT, function()
-      return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
-    end, 10),
-    'the query should settle: ' .. sql
-  )
-  return assert(state.call, 'the query should leave a result')
 end
 
 local T = MiniTest.new_set({
@@ -121,25 +83,11 @@ local T = MiniTest.new_set({
           markers = { open = 'v', closed = '>', leaf = ' ' },
           grid = { vertical = '|', horizontal = '-', cross = '+', ellipsis = '~' },
           -- ASCII, like every other glyph here, so a pattern can match on them.
-          types = {
-            text = 't',
-            number = 'n',
-            boolean = 'b',
-            temporal = 'd',
-            json = 'j',
-            uuid = 'u',
-            binary = 'y',
-            unknown = '?',
-            primary_key = 'K',
-            foreign_key = 'k',
-          },
+          types = helpers.ascii_icons(),
         },
       })
 
-      local id = assert(api.connect('sqlite::memory:', { name = 'scratch' }))
-      assert(vim.wait(TIMEOUT, function()
-        return state.connections[id] ~= nil and state.connections[id].state == 'connected'
-      end, 10))
+      helpers.connect('sqlite::memory:', { name = 'scratch' })
 
       run('create table people (id integer primary key, name text not null, score real)')
       run('create view adults as select * from people')
@@ -251,12 +199,12 @@ T['tree']['renews the count on a heading it refreshes'] = function()
   run('create table late (id integer primary key)')
   MiniTest.finally(function()
     run('drop table late')
-    vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('Tables'), 0 })
+    goto_line('Tables')
     drawer.actions.refresh()
     line_matching('T Tables%s+%(2%)')
   end)
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('Tables'), 0 })
+  goto_line('Tables')
   drawer.actions.refresh()
 
   -- The new table appearing is only half of it. The number beside the heading counts the same
@@ -279,15 +227,15 @@ T['tree']['refreshing a connection reloads every level that is open'] = function
   -- dropped, so everything under it has to be asked for again: reloading only the connection
   -- would leave the schema, the group and the columns with no cache entry and nothing on the way,
   -- which draws as levels that have quietly lost their children.
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch'), 0 })
+  goto_line('scratch')
   drawer.actions.refresh()
 
   line_matching('added')
   local text = table.concat(lines(), '\n')
   -- The levels in between are still there rather than having emptied out.
-  eq(text:find('T Tables', 1, true) ~= nil, true)
-  eq(text:find('= people', 1, true) ~= nil, true)
-  eq(text:find('n score', 1, true) ~= nil, true)
+  helpers.contains(text, 'T Tables')
+  helpers.contains(text, '= people')
+  helpers.contains(text, 'n score')
 end
 
 T['tree']['expands a relation into its columns'] = function()
@@ -344,54 +292,53 @@ T['actions'] = MiniTest.new_set()
 
 T['actions']['yank a qualified name'] = function()
   open_relation('Tables', 'people')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('people'), 0 })
+  goto_line('people')
   drawer.actions.yank_name()
   eq(vim.fn.getreg('"'), '"main"."people"')
 end
 
 T['actions']['yank a select for a relation'] = function()
   open_relation('Tables', 'people')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('people'), 0 })
+  goto_line('people')
   drawer.actions.yank_select()
   eq(vim.fn.getreg('"'), 'select * from "main"."people" limit 100')
 end
 
 T['actions']['do nothing on a node that is not a relation'] = function()
   vim.fn.setreg('"', 'untouched')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch'), 0 })
+  goto_line('scratch')
   drawer.actions.yank_select()
   eq(vim.fn.getreg('"'), 'untouched')
 end
 
 T['actions']['preview a relation into the result window'] = function()
   open_relation('Tables', 'people')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('people'), 0 })
+  goto_line('people')
   drawer.actions.preview()
 
-  assert(vim.wait(TIMEOUT, function()
+  helpers.wait_for('the preview should finish', function()
     return state.call ~= nil and state.call.state == 'done'
-  end, 10))
+  end, TIMEOUT)
 
   -- ASCII rules and ASCII icons, because this file asked for the ASCII set and that setting
   -- reaches the grid the engine draws as well as the markers the drawer draws. `id` is marked as
   -- the primary key rather than as a number, which is the more useful thing to say about it.
-  local grid = vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
-  eq(grid[1], ' K id | t name | n score')
+  eq(helpers.result_lines()[1], ' K id | t name | n score')
 end
 
 T['the active connection'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
-      require('sqmeow.api').connect('sqlite::memory:', { name = 'other' })
-      vim.wait(TIMEOUT, function()
-        return require('sqmeow.state').connection_by_name('other') ~= nil
-      end, 10)
+      api.connect('sqlite::memory:', { name = 'other' })
+      helpers.wait_for('the connection should be listed', function()
+        return state.connection_by_name('other') ~= nil
+      end, TIMEOUT)
       drawer.render()
     end,
     post_case = function()
-      local other = require('sqmeow.state').connection_by_name('other')
+      local other = state.connection_by_name('other')
       if other then
-        require('sqmeow.api').disconnect(other.id)
+        api.disconnect(other.id)
       end
       drawer.render()
     end,
@@ -399,17 +346,17 @@ T['the active connection'] = MiniTest.new_set({
 })
 
 T['the active connection']['moves when another is chosen'] = function()
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('other'), 0 })
+  goto_line('other')
   drawer.actions.use()
 
   eq(state.current, state.connection_by_name('other').id)
 end
 
 T['the active connection']['does not move when a row is only opened'] = function()
-  require('sqmeow.api').use(state.connection_by_name('scratch').id)
+  api.use(state.connection_by_name('scratch').id)
   drawer.render()
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('other'), 0 })
+  goto_line('other')
   drawer.actions.toggle()
 
   -- Expanding a connection to read its schemas is a different intention from sending the next
@@ -419,7 +366,7 @@ end
 
 T['the active connection']['is left alone from a row that is not a connection'] = function()
   local before = state.current
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratchpads'), 0 })
+  goto_line('scratchpads')
   drawer.actions.use()
 
   eq(state.current, before)
@@ -428,11 +375,11 @@ end
 T['saved connections'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
-      require('sqmeow.sources.file').add({ name = 'ledger', url = 'postgres://localhost/ledger' })
+      file.add({ name = 'ledger', url = 'postgres://localhost/ledger' })
       drawer.render()
     end,
     post_case = function()
-      vim.fn.delete(require('sqmeow.sources.file').default_path())
+      vim.fn.delete(file.default_path())
       drawer.render()
     end,
   },
@@ -452,11 +399,11 @@ end
 
 T['saved connections']['open when chosen'] = function()
   local opened
-  helpers.stub(require('sqmeow.api'), 'connect_named', function(name)
+  helpers.stub(api, 'connect_named', function(name)
     opened = name
   end)
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('ledger'), 0 })
+  goto_line('ledger')
   drawer.actions.toggle()
   eq(opened, 'ledger')
 end
@@ -480,28 +427,25 @@ T['saved connections']['say they are connecting while they do'] = function()
 end
 
 T['saved connections']['can be tried again after failing to open'] = function()
-  require('sqmeow.sources.file').add({ name = 'broken', url = 'cassandra://localhost/broken' })
+  file.add({ name = 'broken', url = 'cassandra://localhost/broken' })
   drawer.render()
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('broken'), 0 })
+  goto_line('broken')
   drawer.actions.toggle()
-  assert(
-    vim.wait(TIMEOUT, function()
-      return state.connection_by_name('broken') == nil
-    end, 10),
-    'the failed connection should be forgotten'
-  )
+  helpers.wait_for('the failed connection should be forgotten', function()
+    return state.connection_by_name('broken') == nil
+  end, TIMEOUT)
   -- Back to a saved row that says it failed, rather than left drawn as the connection that did.
   local number = line_matching('broken')
   eq(lines()[number]:find('error$') ~= nil, true)
   eq(marks_on(number)[2].group, 'SqmeowConnectionError')
 
   local opened
-  helpers.stub(require('sqmeow.api'), 'connect_named', function(name)
+  helpers.stub(api, 'connect_named', function(name)
     opened = name
   end)
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('broken'), 0 })
+  goto_line('broken')
   drawer.actions.toggle()
   eq(opened, 'broken')
 end
@@ -509,11 +453,11 @@ end
 T['history'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
-      require('sqmeow.history').clear()
+      history.clear()
       drawer.render()
     end,
     post_case = function()
-      require('sqmeow.history').clear()
+      history.clear()
       drawer.render()
     end,
   },
@@ -536,22 +480,18 @@ T['history']['puts a query back on screen when chosen'] = function()
   drawer.render()
   expand('history')
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('select 3'), 0 })
+  goto_line('select 3')
   drawer.actions.toggle()
 
-  eq(assert(require('sqmeow.state').call).call_id, summary.call_id)
+  eq(assert(state.call).call_id, summary.call_id)
 end
 
 T['history']['shows a saved result once the engine no longer holds it'] = function()
-  local history = require('sqmeow.history')
   local summary = run('select 5 as five')
   local entry = history.entries()[1]
-  assert(
-    vim.wait(TIMEOUT, function()
-      return history.saved(entry)
-    end, 10),
-    'the engine should save the result'
-  )
+  helpers.wait_for('the engine should save the result', function()
+    return history.saved(entry)
+  end, TIMEOUT)
 
   -- As if Neovim had restarted: the call ids the last session handed out mean nothing now.
   local session = history.session
@@ -562,28 +502,23 @@ T['history']['shows a saved result once the engine no longer holds it'] = functi
 
   drawer.render()
   expand('history')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('select 5'), 0 })
+  goto_line('select 5')
   drawer.actions.toggle()
 
-  assert(
-    vim.wait(TIMEOUT, function()
-      return state.call ~= nil
-        and state.call.call_id ~= summary.call_id
-        and state.call.state == 'done'
-    end, 10),
-    'the saved result should be read back'
-  )
+  helpers.wait_for('the saved result should be read back', function()
+    return state.call ~= nil
+      and state.call.call_id ~= summary.call_id
+      and state.call.state == 'done'
+  end, TIMEOUT)
 
   eq(state.call.rows, 1)
   eq(state.call.ran_at, entry.at)
-  local grid = vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
-  eq(vim.trim(grid[3]), '5')
+  eq(vim.trim(helpers.result_lines()[3]), '5')
   -- Showing it again is not running it again.
   eq(#history.entries(), 1)
 end
 
 T['history']['shows the error a failed query had'] = function()
-  local history = require('sqmeow.history')
   run('select nope_at_all from nowhere_at_all')
   local entry = history.entries()[1]
   eq(entry.state, 'error')
@@ -596,7 +531,7 @@ T['history']['shows the error a failed query had'] = function()
 
   drawer.render()
   expand('history')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('nope_at_all'), 0 })
+  goto_line('nope_at_all')
   drawer.actions.toggle()
 
   eq(state.call.state, 'error')
@@ -606,20 +541,20 @@ end
 
 T['history']['leaves out a preview the drawer ran'] = function()
   open_relation('Tables', 'people')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('people'), 0 })
+  goto_line('people')
   drawer.actions.preview()
 
-  assert(vim.wait(TIMEOUT, function()
+  helpers.wait_for('the preview should finish', function()
     return state.call ~= nil and state.call.state == 'done'
-  end, 10))
-  eq(require('sqmeow.history').entries(), {})
+  end, TIMEOUT)
+  eq(history.entries(), {})
 end
 
 T['history']['empties on request'] = function()
   run('select 4 as four')
   drawer.render()
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('history'), 0 })
+  goto_line('history')
   local answered = false
   helpers.stub(vim.ui, 'select', function(_, _, on_choice)
     answered = true
@@ -628,19 +563,17 @@ T['history']['empties on request'] = function()
 
   drawer.actions.delete()
   eq(answered, true)
-  eq(require('sqmeow.history').entries(), {})
+  eq(history.entries(), {})
 end
 
 T['scratchpads'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
-      local editor = require('sqmeow.ui.editor')
-      vim.fn.mkdir(editor.directory(), 'p')
-      vim.fn.writefile({ 'select 1' }, vim.fs.joinpath(editor.directory(), 'notes.sql'))
+      helpers.writefile(vim.fs.joinpath(editor.directory(), 'notes.sql'), { 'select 1' })
       drawer.render()
     end,
     post_case = function()
-      vim.fn.delete(vim.fs.joinpath(require('sqmeow.ui.editor').directory(), 'notes.sql'))
+      vim.fn.delete(vim.fs.joinpath(editor.directory(), 'notes.sql'))
       drawer.render()
     end,
   },
@@ -659,7 +592,7 @@ end
 
 T['scratchpads']['open the file when chosen'] = function()
   expand('scratchpads')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  goto_line('notes')
   drawer.actions.toggle()
 
   local opened = vim.api.nvim_buf_get_name(0)
@@ -690,7 +623,6 @@ T['scratchpads']['open somewhere other than the drawer'] = function()
 end
 
 T['scratchpads']['are renamed once a new name is given'] = function()
-  local editor = require('sqmeow.ui.editor')
   helpers.stub(vim.ui, 'input', function(_, on_confirm)
     on_confirm('renamed')
   end)
@@ -699,7 +631,7 @@ T['scratchpads']['are renamed once a new name is given'] = function()
   end)
 
   expand('scratchpads')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  goto_line('notes')
   drawer.actions.rename()
 
   eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'notes.sql')), nil)
@@ -713,20 +645,19 @@ T['scratchpads']['offer the current name to edit'] = function()
   end)
 
   expand('scratchpads')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  goto_line('notes')
   drawer.actions.rename()
 
   eq(offered, 'notes')
 end
 
 T['scratchpads']['are left alone when the rename is abandoned'] = function()
-  local editor = require('sqmeow.ui.editor')
   helpers.stub(vim.ui, 'input', function(_, on_confirm)
     on_confirm(nil)
   end)
 
   expand('scratchpads')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  goto_line('notes')
   drawer.actions.rename()
 
   eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'notes.sql')) ~= nil, true)
@@ -740,7 +671,7 @@ T['scratchpads']['are not renamed from a row that is not one'] = function()
 
   -- A schema is neither a scratchpad nor a connection, so there is no name of its own to change.
   expand('scratch')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('@ main'), 0 })
+  goto_line('@ main')
   drawer.actions.rename()
   eq(called, false)
 end
@@ -758,11 +689,11 @@ T['connections']['are renamed from the row that shows them'] = function()
     drawer.render()
   end)
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
+  goto_line('scratch  sqlite')
   drawer.actions.rename()
 
   eq(state.connections[state.current].name, 'local sqlite')
-  eq(lines()[1]:find('local sqlite', 1, true) ~= nil, true)
+  helpers.contains(lines()[1], 'local sqlite')
 end
 
 T['connections']['keep their name when the prompt is dismissed'] = function()
@@ -770,20 +701,19 @@ T['connections']['keep their name when the prompt is dismissed'] = function()
     on_confirm(nil)
   end)
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
+  goto_line('scratch  sqlite')
   drawer.actions.rename()
   eq(state.connections[state.current].name, 'scratch')
 end
 
 T['scratchpads']['are deleted once the question is answered'] = function()
-  local editor = require('sqmeow.ui.editor')
   local answer = 'yes'
   helpers.stub(vim.ui, 'select', function(_, _, on_choice)
     on_choice(answer)
   end)
 
   expand('scratchpads')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  goto_line('notes')
   drawer.actions.delete()
 
   eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'notes.sql')), nil)
@@ -791,13 +721,12 @@ T['scratchpads']['are deleted once the question is answered'] = function()
 end
 
 T['scratchpads']['are left alone when the question is declined'] = function()
-  local editor = require('sqmeow.ui.editor')
   helpers.stub(vim.ui, 'select', function(_, _, on_choice)
     on_choice('no')
   end)
 
   expand('scratchpads')
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('notes'), 0 })
+  goto_line('notes')
   drawer.actions.delete()
 
   eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'notes.sql')) ~= nil, true)
@@ -809,15 +738,14 @@ T['scratchpads']['are not deleted from a row that is not one'] = function()
     called = true
   end)
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
+  goto_line('scratch  sqlite')
   drawer.actions.delete()
   eq(called, false)
 end
 
 T['scratchpads']['are created for the connection under the cursor'] = function()
-  local editor = require('sqmeow.ui.editor')
   helpers.stub(vim.ui, 'input', function(opts, on_confirm)
-    eq(opts.prompt:find('scratch', 1, true) ~= nil, true)
+    helpers.contains(opts.prompt, 'scratch')
     on_confirm('report')
   end)
   MiniTest.finally(function()
@@ -827,7 +755,7 @@ T['scratchpads']['are created for the connection under the cursor'] = function()
     drawer.render()
   end)
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratch  sqlite'), 0 })
+  goto_line('scratch  sqlite')
   vim.api.nvim_set_current_win(drawer.open())
   drawer.actions.new_scratchpad()
 
@@ -845,13 +773,13 @@ T['scratchpads']['are not created from a row outside every connection'] = functi
     called = true
   end)
 
-  vim.api.nvim_win_set_cursor(drawer.open(), { line_matching('scratchpads'), 0 })
+  goto_line('scratchpads')
   drawer.actions.new_scratchpad()
   eq(called, false)
 end
 
 T['scratchpads']['say so when there are none'] = function()
-  vim.fn.delete(vim.fs.joinpath(require('sqmeow.ui.editor').directory(), 'notes.sql'))
+  vim.fn.delete(vim.fs.joinpath(editor.directory(), 'notes.sql'))
   drawer.render()
 
   eq(lines()[line_matching('scratchpads')]:find('none saved') ~= nil, true)
@@ -866,11 +794,7 @@ T['window']['is open, and its buffer cannot be typed into'] = function()
 end
 
 T['window']['maps its keys buffer-locally with descriptions'] = function()
-  local maps = vim.api.nvim_buf_get_keymap(drawer.buffer(), 'n')
-  local seen = {}
-  for _, map in ipairs(maps) do
-    seen[map.lhs] = map.desc
-  end
+  local seen = helpers.buf_maps(drawer.buffer())
 
   for _, key in ipairs({ '<CR>', 'o', 'r', 'y', 's', 'a', '?', 'q' }) do
     eq(type(seen[key]), 'string')

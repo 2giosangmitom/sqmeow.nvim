@@ -1,24 +1,30 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
+local helpers = dofile('tests/helpers.lua')
 local history = require('sqmeow.history')
 local config = require('sqmeow.config')
+local paths = require('sqmeow.paths')
 local state = require('sqmeow.state')
 
 -- Everything the log writes goes under here, so the suite never touches a real one.
 local root = vim.fn.tempname()
 
+--- Apply the configuration this suite runs on, under the scratch directory.
+local function apply_root(extra)
+  config.apply(vim.tbl_extend('force', { core = { path = root } }, extra or {}))
+end
+
 --- The log file for the configured directory.
 ---@return string
 local function log_file()
-  return require('sqmeow.paths').history()
+  return paths.history()
 end
 
 --- Put something at a result path, standing in for the file the engine writes.
 ---@param path string
 ---@return string path
 local function saved_file(path)
-  vim.fn.mkdir(vim.fs.dirname(path), 'p')
-  vim.fn.writefile({ 'rows' }, path)
+  helpers.writefile(path, { 'rows' })
   return path
 end
 
@@ -50,7 +56,7 @@ end
 local T = MiniTest.new_set({
   hooks = {
     pre_case = function()
-      config.apply({ core = { path = root } })
+      apply_root()
       history.clear()
     end,
     post_case = function()
@@ -123,10 +129,9 @@ T['on disk']['writes a line per call'] = function()
 end
 
 T['on disk']['reads back what an earlier session left'] = function()
-  vim.fn.mkdir(vim.fs.dirname(log_file()), 'p')
-  vim.fn.writefile({
+  helpers.writefile(log_file(), {
     vim.json.encode({ at = 1, session = 'earlier', call_id = 7, statement = 'select 7' }),
-  }, log_file())
+  })
 
   local entries = history.entries()
   eq(#entries, 1)
@@ -134,11 +139,10 @@ T['on disk']['reads back what an earlier session left'] = function()
 end
 
 T['on disk']['skips a line that does not decode'] = function()
-  vim.fn.mkdir(vim.fs.dirname(log_file()), 'p')
-  vim.fn.writefile({
+  helpers.writefile(log_file(), {
     'this is not json',
     vim.json.encode({ at = 1, statement = 'select 1' }),
-  }, log_file())
+  })
 
   eq(#history.entries(), 1)
 end
@@ -156,7 +160,7 @@ T['on disk']['notices the file changing underneath it'] = function()
 end
 
 T['on disk']['keeps nothing when persistence is off'] = function()
-  config.apply({ core = { path = root }, query = { persist_history = false } })
+  apply_root({ query = { persist_history = false } })
 
   history.append(call())
   eq(written(), {})
@@ -165,7 +169,7 @@ T['on disk']['keeps nothing when persistence is off'] = function()
 end
 
 T['on disk']['drops the oldest once the file is twice the limit'] = function()
-  config.apply({ core = { path = root }, query = { history_limit = 3 } })
+  apply_root({ query = { history_limit = 3 } })
 
   for index = 1, 7 do
     history.append(call({ call_id = index, statement = ('select %d'):format(index) }))
@@ -264,7 +268,7 @@ T['results'] = MiniTest.new_set()
 T['results']['are named inside the directory the log keeps them in'] = function()
   local first, second = history.result_path(), history.result_path()
   eq(first ~= second, true)
-  eq(vim.startswith(first, require('sqmeow.paths').results() .. '/'), true)
+  eq(vim.startswith(first, paths.results() .. '/'), true)
 end
 
 T['results']['are pointed at only by a run that returned columns'] = function()
@@ -289,34 +293,28 @@ T['results']['count as saved only while the file is there'] = function()
 end
 
 T['results']['go when the entry pointing at them is trimmed'] = function()
-  config.apply({ core = { path = root }, query = { history_limit = 1 } })
+  apply_root({ query = { history_limit = 1 } })
 
-  local paths = {}
+  local saved = {}
   for index = 1, 3 do
-    paths[index] = saved_file(history.result_path())
-    history.append(call({ call_id = index, archive = paths[index], columns = { { name = 'n' } } }))
+    saved[index] = saved_file(history.result_path())
+    history.append(call({ call_id = index, archive = saved[index], columns = { { name = 'n' } } }))
   end
 
-  eq(vim.uv.fs_stat(paths[1]), nil)
-  eq(vim.uv.fs_stat(paths[2]), nil)
-  eq(vim.uv.fs_stat(paths[3]) ~= nil, true)
+  eq(vim.uv.fs_stat(saved[1]), nil)
+  eq(vim.uv.fs_stat(saved[2]), nil)
+  eq(vim.uv.fs_stat(saved[3]) ~= nil, true)
 end
 
 T['results']['are never deleted from outside their own directory'] = function()
-  config.apply({ core = { path = root }, query = { history_limit = 1 } })
+  apply_root({ query = { history_limit = 1 } })
 
-  local outside = vim.fn.tempname()
-  vim.fn.writefile({ 'keep me' }, outside)
-  MiniTest.finally(function()
-    vim.fn.delete(outside)
-  end)
+  local outside = helpers.temp_file({ 'keep me' })
 
   -- A log line edited by hand to name some other file.
-  vim.fn.mkdir(vim.fs.dirname(log_file()), 'p')
-  vim.fn.writefile(
-    { vim.json.encode({ at = 1, statement = 'select 0', result = outside }) },
-    log_file()
-  )
+  helpers.writefile(log_file(), {
+    vim.json.encode({ at = 1, statement = 'select 0', result = outside }),
+  })
   for index = 1, 2 do
     history.append(call({ call_id = index, statement = ('select %d'):format(index) }))
   end
@@ -331,7 +329,7 @@ T['results']['go with the log when it is cleared'] = function()
   history.append(call({ archive = path, columns = { { name = 'n' } } }))
   history.clear()
 
-  eq(vim.uv.fs_stat(require('sqmeow.paths').results()), nil)
+  eq(vim.uv.fs_stat(paths.results()), nil)
 end
 
 T['ago'] = MiniTest.new_set()

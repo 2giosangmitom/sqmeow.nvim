@@ -2,6 +2,7 @@ local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local icons = require('sqmeow.icons')
 local config = require('sqmeow.config')
+local highlights = require('sqmeow.ui.highlights').links
 
 --- Every case sets what it needs, since there is nothing left to detect: the icons a kind draws
 --- with are exactly the ones the configuration holds.
@@ -156,10 +157,8 @@ end
 T['highlights'] = MiniTest.new_set()
 
 T['highlights']['are all defined by the plugin'] = function()
-  local links = require('sqmeow.ui.highlights').links
-
   for _, group in pairs(icons.highlights) do
-    eq(links[group] ~= nil, true)
+    eq(highlights[group] ~= nil, true)
   end
 end
 

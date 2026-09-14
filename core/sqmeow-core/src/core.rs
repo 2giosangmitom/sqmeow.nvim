@@ -270,14 +270,8 @@ impl Core {
                 }
                 Err(error) => {
                     self.session.end_call(call_id);
-                    // The failing statement's line range travels with the error so the plugin can
-                    // put a diagnostic where the SQL is, rather than in a message that scrolls by.
                     let mut payload = elapsed(started);
-                    payload.extend(vec![
-                        ("error", Value::from(error.to_string())),
-                        ("start_line", Value::from(statement.start_line as u64)),
-                        ("end_line", Value::from(statement.end_line as u64)),
-                    ]);
+                    payload.push(("error", Value::from(error.to_string())));
                     self.emit_call(call_id, conn_id, "error", payload);
                     return;
                 }

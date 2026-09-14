@@ -62,10 +62,8 @@ end
 function M.on_call(payload)
   local state = require('sqmeow.state')
   local result = require('sqmeow.ui.result')
-  local diagnostics = require('sqmeow.diagnostics')
 
-  -- Merge rather than replace: the SQL text and the buffer it came from are the plugin's own
-  -- record of this call, and the engine has no reason to send them back.
+  -- Merge rather than replace: the SQL text is the plugin's own record of this call, and the engine has no reason to send them back.
   local previous = state.call or {}
   if previous.call_id == payload.call_id then
     state.call = vim.tbl_extend('force', previous, payload)
@@ -73,12 +71,8 @@ function M.on_call(payload)
     state.call = payload
   end
 
-  if payload.state == 'error' then
-    diagnostics.set(state.call.source_buf, payload)
-    notify(payload.error or 'the query failed', vim.log.levels.ERROR)
-  elseif payload.state == 'done' then
-    diagnostics.clear(state.call.source_buf)
-  elseif payload.state == 'cancelled' then
+  -- An error gets no message of its own: the result buffer shows it.
+  if payload.state == 'cancelled' then
     notify('query cancelled', vim.log.levels.WARN)
   end
 
