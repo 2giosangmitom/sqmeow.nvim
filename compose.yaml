@@ -58,3 +58,30 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # ScyllaDB and Cassandra both speak CQL, and the CQL cases run against each. Both take a minute to start.
+  scylla:
+    image: scylladb/scylla:2025.3
+    # Advertise the host's address, or the driver dials the container's IP on the published port.
+    command: --smp 1 --memory 512M --overprovisioned 1 --developer-mode 1 --broadcast-rpc-address 127.0.0.1
+    ports:
+      - "59042:9042"
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  cassandra:
+    image: cassandra:5.0
+    environment:
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+      CASSANDRA_BROADCAST_RPC_ADDRESS: 127.0.0.1
+    ports:
+      - "59043:9042"
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 5s
+      timeout: 5s
+      retries: 60

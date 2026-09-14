@@ -27,7 +27,7 @@ fmt:
 
 test: test-rust test-lua
 
-# Rust tests. The PostgreSQL, MySQL, Redis, Dragonfly and MongoDB tests report themselves skipped unless `just db-up` has
+# Rust tests. The PostgreSQL, MySQL, Redis, Dragonfly, MongoDB, ScyllaDB and Cassandra tests report themselves skipped unless `just db-up` has
 # started the servers they need.
 test-rust:
     #!/usr/bin/env bash
@@ -49,9 +49,15 @@ test-rust:
     if [ -n "$(docker compose ps --status running --quiet mongodb 2>/dev/null)" ]; then
         export SQMEOW_TEST_MONGODB_URL="mongodb://127.0.0.1:57017/sqmeow"
     fi
+    if [ -n "$(docker compose ps --status running --quiet scylla 2>/dev/null)" ]; then
+        export SQMEOW_TEST_SCYLLA_URL="scylla://127.0.0.1:59042/"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet cassandra 2>/dev/null)" ]; then
+        export SQMEOW_TEST_CASSANDRA_URL="cassandra://127.0.0.1:59043/"
+    fi
     cargo test --all-features
 
-# Start the PostgreSQL, MySQL, Redis, Dragonfly and MongoDB servers the integration tests use.
+# Start the PostgreSQL, MySQL, Redis, Dragonfly, MongoDB, ScyllaDB and Cassandra servers the integration tests use.
 db-up:
     docker compose up -d --wait
 
@@ -86,6 +92,12 @@ test-lua: build-debug
     fi
     if [ -n "$(docker compose ps --status running --quiet mongodb 2>/dev/null)" ]; then
         export SQMEOW_TEST_MONGODB_URL="mongodb://127.0.0.1:57017/sqmeow"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet scylla 2>/dev/null)" ]; then
+        export SQMEOW_TEST_SCYLLA_URL="scylla://127.0.0.1:59042/"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet cassandra 2>/dev/null)" ]; then
+        export SQMEOW_TEST_CASSANDRA_URL="cassandra://127.0.0.1:59043/"
     fi
     nvim -l tests/minit.lua
 

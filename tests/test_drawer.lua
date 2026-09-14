@@ -406,7 +406,7 @@ T['saved connections']['say they are connecting while they do'] = function()
 end
 
 T['saved connections']['can be tried again after failing to open'] = function()
-  file.add({ name = 'broken', url = 'cassandra://localhost/broken' })
+  file.add({ name = 'broken', url = 'oracle://localhost/broken' })
   drawer.render()
 
   goto_line('broken')

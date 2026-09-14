@@ -44,6 +44,8 @@ jobs:
       SQMEOW_TEST_REDIS_URL: redis://127.0.0.1:6379/0
       SQMEOW_TEST_DRAGONFLY_URL: redis://127.0.0.1:6380/0
       SQMEOW_TEST_MONGODB_URL: mongodb://127.0.0.1:27017/sqmeow
+      SQMEOW_TEST_SCYLLA_URL: scylla://127.0.0.1:59042/
+      SQMEOW_TEST_CASSANDRA_URL: cassandra://127.0.0.1:59043/
 
     services:
       postgres:
@@ -108,6 +110,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      # A service container cannot take ScyllaDB's start-up flags.
+      - run: docker compose up -d --wait scylla cassandra
       - run: cargo test --all-features
       - run: cargo build
       - run: nvim -l tests/minit.lua

@@ -61,6 +61,11 @@ impl TypeClass {
 
         let has = |needle: &str| name.contains(needle);
 
+        // CQL collections, tuples and vectors, such as `frozen<list<int>>`.
+        if has("<") {
+            return Self::Json;
+        }
+
         // Ordered, and the order is load-bearing.
         if has("JSON") || matches!(name.as_str(), "OBJECT" | "ARRAY") {
             Self::Json
@@ -75,7 +80,7 @@ impl TypeClass {
             || has("DATE")
             || has("TIME")
             || has("INTERVAL")
-            || name == "YEAR"
+            || matches!(name.as_str(), "YEAR" | "DURATION")
         {
             Self::Temporal
         } else if has("INT")
@@ -86,7 +91,7 @@ impl TypeClass {
             || has("REAL")
             || has("SERIAL")
             || has("MONEY")
-            || matches!(name.as_str(), "NUMBER" | "BIT" | "OID" | "LONG")
+            || matches!(name.as_str(), "NUMBER" | "BIT" | "OID" | "LONG" | "COUNTER")
         {
             Self::Number
         } else if has("CHAR")
@@ -96,7 +101,15 @@ impl TypeClass {
             || has("XML")
             || matches!(
                 name.as_str(),
-                "NAME" | "ENUM" | "SET" | "INET" | "CIDR" | "MACADDR" | "MACADDR8" | "CITEXT"
+                "NAME"
+                    | "ENUM"
+                    | "SET"
+                    | "INET"
+                    | "CIDR"
+                    | "MACADDR"
+                    | "MACADDR8"
+                    | "CITEXT"
+                    | "ASCII"
             )
         {
             Self::Text
@@ -273,6 +286,19 @@ mod tests {
         assert_class(TypeClass::Boolean, &["BOOLEAN"]);
         // A SQLite column may be declared with no type at all, which the adapter reports as "any".
         assert_class(TypeClass::Unknown, &["any", "", "NULL"]);
+    }
+
+    #[test]
+    fn cql_names_classify() {
+        assert_eq!(
+            TypeClass::from_type_name("frozen<map<text, uuid>>"),
+            TypeClass::Json
+        );
+        assert_eq!(TypeClass::from_type_name("set<int>"), TypeClass::Json);
+        assert_eq!(TypeClass::from_type_name("timeuuid"), TypeClass::Uuid);
+        assert_eq!(TypeClass::from_type_name("ascii"), TypeClass::Text);
+        assert_eq!(TypeClass::from_type_name("counter"), TypeClass::Number);
+        assert_eq!(TypeClass::from_type_name("duration"), TypeClass::Temporal);
     }
 
     #[test]

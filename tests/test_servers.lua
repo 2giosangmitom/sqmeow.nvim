@@ -383,4 +383,44 @@ T['mongodb']['names the database it runs on, following use'] = function()
   helpers.contains(state.label(connection), '› sqmeow_other (mongodb)')
 end
 
+-- ScyllaDB and Cassandra speak CQL, and each case runs against both.
+for _, server in ipairs({ 'scylla', 'cassandra' }) do
+  local variable = ('SQMEOW_TEST_%s_URL'):format(server:upper())
+  T[server] = MiniTest.new_set({
+    hooks = {
+      pre_case = function()
+        skip_unless(vim.env[variable], variable)
+        helpers.connect(vim.env[variable], nil, TIMEOUT)
+        run(
+          "create keyspace if not exists sqmeow with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"
+        )
+      end,
+      post_case = function()
+        api.disconnect()
+      end,
+    },
+  })
+
+  T[server]['connects and reports its dialect'] = function()
+    eq(state.current_connection().dialect, 'scylla')
+  end
+
+  T[server]['lists keyspaces and previews a table with its key'] = function()
+    run('drop table if exists sqmeow.lua_preview')
+    run('create table sqmeow.lua_preview (id int primary key, colour text)')
+    run("insert into sqmeow.lua_preview (id, colour) values (1, 'plum')")
+
+    eq(named(introspect({}), 'sqmeow') ~= nil, true)
+    local groups = introspect({ 'sqmeow' })
+    eq(named(groups, 'tables').count >= 1, true)
+    eq(named(groups, 'procedures'), nil)
+
+    local summary = run(sql.select_from('scylla', { 'sqmeow', 'lua_preview' }, 10))
+    eq(summary.state, 'done')
+    eq(summary.rows, 1)
+    eq(header()[1], ' K id │ t colour')
+    helpers.contains(lines()[1], 'plum')
+  end
+end
+
 return T

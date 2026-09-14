@@ -52,7 +52,10 @@ mongodb = "3.9"
 # Bundled, so the released engine needs no libduckdb on the machine. `json` has
 # `json_serialize_sql`, which finds the table an editable result came from.
 duckdb = { version = "1.10505", features = ["bundled", "chrono", "json"] }
+# CQL, for ScyllaDB and Apache Cassandra alike.
+scylla = { version = "1.8", features = ["chrono-04", "bigdecimal-04", "num-bigint-04"] }
 csv = "1.4"
+percent-encoding = "2"
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -5,6 +5,7 @@ pub mod mongodb;
 pub mod mysql;
 pub mod postgres;
 pub mod redis;
+pub mod scylla;
 pub mod sqlite;
 mod stream;
 
@@ -55,6 +56,7 @@ pub use mysql::MySqlAdapter;
 pub use postgres::PostgresAdapter;
 // `self::`, because a bare `redis` here would also name the driver crate.
 pub use self::redis::RedisAdapter;
+pub use self::scylla::ScyllaAdapter;
 pub use sqlite::SqliteAdapter;
 
 /// Turn a routine's name and the database's own word for what it is into a node.
@@ -76,6 +78,7 @@ pub enum Backend {
     MySql(MySqlAdapter),
     Redis(RedisAdapter),
     MongoDb(MongoAdapter),
+    Scylla(ScyllaAdapter),
 }
 
 impl Backend {
@@ -98,6 +101,7 @@ impl Backend {
             Dialect::MySql => Ok(Self::MySql(MySqlAdapter::connect(url).await?)),
             Dialect::Redis => Ok(Self::Redis(RedisAdapter::connect(url).await?)),
             Dialect::MongoDb => Ok(Self::MongoDb(MongoAdapter::connect(url, database).await?)),
+            Dialect::Scylla => Ok(Self::Scylla(ScyllaAdapter::connect(url).await?)),
         }
     }
 
@@ -110,6 +114,7 @@ impl Backend {
             Self::MySql(adapter) => adapter.dialect(),
             Self::Redis(adapter) => adapter.dialect(),
             Self::MongoDb(adapter) => adapter.dialect(),
+            Self::Scylla(adapter) => adapter.dialect(),
         }
     }
 
@@ -122,6 +127,7 @@ impl Backend {
             Self::MySql(adapter) => adapter.quote_ident(name),
             Self::Redis(adapter) => adapter.quote_ident(name),
             Self::MongoDb(adapter) => adapter.quote_ident(name),
+            Self::Scylla(adapter) => adapter.quote_ident(name),
         }
     }
 
@@ -139,6 +145,7 @@ impl Backend {
             Self::MySql(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::Redis(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::MongoDb(adapter) => adapter.execute(statement, max_rows, cancel).await,
+            Self::Scylla(adapter) => adapter.execute(statement, max_rows, cancel).await,
         }
     }
 
@@ -151,6 +158,7 @@ impl Backend {
             Self::MySql(adapter) => adapter.plan(result, changes),
             Self::Redis(adapter) => adapter.plan(result, changes),
             Self::MongoDb(adapter) => adapter.plan(result, changes),
+            Self::Scylla(adapter) => adapter.plan(result, changes),
         }
     }
 
@@ -163,6 +171,7 @@ impl Backend {
             Self::MySql(adapter) => adapter.apply(statements).await,
             Self::Redis(adapter) => adapter.apply(statements).await,
             Self::MongoDb(adapter) => adapter.apply(statements).await,
+            Self::Scylla(adapter) => adapter.apply(statements).await,
         }
     }
 
@@ -193,6 +202,7 @@ impl Backend {
             Self::MySql(adapter) => adapter.schemas().await,
             Self::Redis(adapter) => adapter.schemas().await,
             Self::MongoDb(adapter) => adapter.schemas().await,
+            Self::Scylla(adapter) => adapter.schemas().await,
         }
     }
 
@@ -206,6 +216,7 @@ impl Backend {
             Self::MySql(adapter) => adapter.relations(schema).await,
             Self::Redis(adapter) => adapter.relations(schema).await,
             Self::MongoDb(adapter) => adapter.relations(schema).await,
+            Self::Scylla(adapter) => adapter.relations(schema).await,
         }
     }
 
@@ -218,6 +229,7 @@ impl Backend {
             Self::MySql(adapter) => adapter.routines(schema).await,
             Self::Redis(adapter) => adapter.routines(schema).await,
             Self::MongoDb(adapter) => adapter.routines(schema).await,
+            Self::Scylla(adapter) => adapter.routines(schema).await,
         }
     }
 
@@ -230,6 +242,7 @@ impl Backend {
             Self::MySql(adapter) => adapter.columns(schema, relation).await,
             Self::Redis(adapter) => adapter.columns(schema, relation).await,
             Self::MongoDb(adapter) => adapter.columns(schema, relation).await,
+            Self::Scylla(adapter) => adapter.columns(schema, relation).await,
         }
     }
 
@@ -242,6 +255,7 @@ impl Backend {
             Self::MySql(adapter) => adapter.close().await,
             Self::Redis(adapter) => adapter.close().await,
             Self::MongoDb(adapter) => adapter.close().await,
+            Self::Scylla(adapter) => adapter.close().await,
         }
     }
 }
@@ -255,6 +269,7 @@ pub fn supported() -> Vec<&'static str> {
         Dialect::MySql.name(),
         Dialect::Redis.name(),
         Dialect::MongoDb.name(),
+        Dialect::Scylla.name(),
     ]
 }
 

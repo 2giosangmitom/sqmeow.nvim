@@ -33,6 +33,7 @@ Query your database from your favorite editor.
 - DuckDB
 - Redis, Valkey, Dragonfly
 - MongoDB
+- ScyllaDB, Apache Cassandra
 
 ## 🎬 Preview
 
