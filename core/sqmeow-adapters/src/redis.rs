@@ -14,7 +14,6 @@ use sqmeow_db::{
 use tokio_util::sync::CancellationToken;
 
 /// The most keys the drawer lists from one database.
-// ponytail: one capped SCAN walk; page through the keyspace if databases this large need browsing
 const MAX_KEYS: usize = 10_000;
 
 /// One connection to a Redis or Valkey server.
@@ -118,8 +117,7 @@ impl Adapter for RedisAdapter {
             command.arg(word.as_slice());
         }
 
-        // Dropping the request leaves the connection usable. ponytail: a blocking command such as
-        // `BLPOP` still holds the server session until it returns; `CLIENT UNBLOCK` would free it.
+        // Dropping the request leaves the connection usable.
         let reply = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(Error::Cancelled),
@@ -328,8 +326,6 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             }
             RedisKind::Hash => format!("HDEL {key} {}", original(row, 0)?),
             RedisKind::Set => format!("SREM {key} {}", original(row, 0)?),
-            // ponytail: removes the first element equal to this one, which is this one unless the
-            // list repeats it; an `LSET` to a marker then `LREM` of the marker if order matters.
             RedisKind::List { .. } => format!("LREM {key} 1 {}", original(row, 0)?),
             RedisKind::SortedSet => format!("ZREM {key} {}", original(row, 0)?),
         });

@@ -177,9 +177,6 @@ impl TableKeys {
 }
 
 /// Run statements in one transaction, rolling all of them back when any fails.
-// ponytail: sqlx tracks its own transactions, not a `BEGIN` the user typed into a scratchpad on
-// this same connection; applying then would commit theirs. Check `pg_current_xact_id_if_assigned`
-// or `@@in_transaction` first if that bites.
 pub(crate) async fn transact<DB>(
     pool: &Pool<DB>,
     statements: &[String],

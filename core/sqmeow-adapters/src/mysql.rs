@@ -398,8 +398,6 @@ fn decode_cell(row: &MySqlRow, index: usize) -> Cell {
 }
 
 /// Bytes that read as text, shown as text.
-// ponytail: a real BLOB holding printable UTF-8 shows as text too; check for collation 63 (binary)
-// instead if sqlx ever exposes it.
 fn binary(bytes: Vec<u8>) -> Cell {
     match String::from_utf8(bytes) {
         Ok(text)
