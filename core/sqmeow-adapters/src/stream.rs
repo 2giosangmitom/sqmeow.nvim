@@ -192,16 +192,20 @@ where
             .execute(&mut *transaction)
             .await
             .map_err(|error| Error::driver(format!("{error}\nin: {statement}")))?;
-        // The planner spells these in capitals; a statement it did not write is not checked.
-        if (statement.starts_with("UPDATE ") || statement.starts_with("DELETE "))
-            && affected(&outcome) == 0
-        {
-            return Err(Error::driver(format!(
-                "no row had that key any more, so nothing was changed\nin: {statement}"
-            )));
-        }
+        check_affected(statement, affected(&outcome))?;
     }
     transaction.commit().await.map_err(Error::driver)
+}
+
+/// Refuse a planned `UPDATE` or `DELETE` that found no row.
+pub(crate) fn check_affected(statement: &str, affected: u64) -> Result<()> {
+    // The planner spells these in capitals; a statement it did not write is not checked.
+    if (statement.starts_with("UPDATE ") || statement.starts_with("DELETE ")) && affected == 0 {
+        return Err(Error::driver(format!(
+            "no row had that key any more, so nothing was changed\nin: {statement}"
+        )));
+    }
+    Ok(())
 }
 
 /// Whether a statement may have changed a table an adapter holds a picture of.
@@ -288,6 +292,13 @@ where
 pub(crate) struct TableKeys(Mutex<HashMap<String, HashMap<String, KeyKind>>>);
 
 impl TableKeys {
+    /// Record which columns of one table are keys.
+    pub(crate) fn remember(&self, table: String, keys: HashMap<String, KeyKind>) {
+        if let Ok(mut known) = self.0.lock() {
+            known.insert(table, keys);
+        }
+    }
+
     /// Forget every table, so each is read again the next time a result comes from it.
     pub(crate) fn forget(&self) {
         if let Ok(mut known) = self.0.lock() {
