@@ -1,4 +1,4 @@
-name: ci
+name: CI
 
 on:
   push:
@@ -11,18 +11,40 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  SQMEOW_TEST_POSTGRES_URL: postgres://sqmeow:sqmeow@127.0.0.1:5432/sqmeow
-  SQMEOW_TEST_MYSQL_URL: mysql://root:sqmeow@127.0.0.1:3306/sqmeow
-  SQMEOW_TEST_REDIS_URL: redis://127.0.0.1:6379/0
-  SQMEOW_TEST_DRAGONFLY_URL: redis://127.0.0.1:6380/0
-  SQMEOW_TEST_MONGODB_URL: mongodb://127.0.0.1:27017/sqmeow
 
 jobs:
-  rust:
-    name: rust
+  lint:
+    name: lint
     runs-on: ubuntu-latest
 
-    # The adapter tests talk to real servers. A stub would prove the adapters agree with the stub.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+
+      # The pinned toolchain from mise.toml: rust, just, stylua, selene, lua-language-server.
+      - uses: jdx/mise-action@v2
+      - run: rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # Also installs the plugins lua-language-server checks against.
+      - run: just docs-check
+      - run: just lint
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+
+    env:
+      SQMEOW_TEST_POSTGRES_URL: postgres://sqmeow:sqmeow@127.0.0.1:5432/sqmeow
+      SQMEOW_TEST_MYSQL_URL: mysql://root:sqmeow@127.0.0.1:3306/sqmeow
+      SQMEOW_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      SQMEOW_TEST_DRAGONFLY_URL: redis://127.0.0.1:6380/0
+      SQMEOW_TEST_MONGODB_URL: mongodb://127.0.0.1:27017/sqmeow
+
     services:
       postgres:
         image: postgres:17-alpine
@@ -36,7 +58,7 @@ jobs:
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30
-      # Root, because creating a stored function needs SUPER while binary logging is on.
+      # Root: creating a stored function needs SUPER while binary logging is on.
       mysql:
         image: mysql:8
         env:
@@ -56,7 +78,7 @@ jobs:
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30
-      # Locks its memory on start, which the runner's default limit refuses.
+      # Dragonfly locks its memory on start.
       dragonfly:
         image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2
         ports: ["6380:6379"]
@@ -77,111 +99,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: rhysd/action-setup-vim@v1
         with:
-          components: rustfmt, clippy
+          neovim: true
+          version: stable
+
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+
       - run: cargo test --all-features
-
-  lua:
-    name: lua
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: sqmeow
-          POSTGRES_PASSWORD: sqmeow
-          POSTGRES_DB: sqmeow
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U sqmeow"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-      # Root, because creating a stored function needs SUPER while binary logging is on.
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: sqmeow
-          MYSQL_DATABASE: sqmeow
-        ports: ["3306:3306"]
-        options: >-
-          --health-cmd "mysqladmin ping -psqmeow"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-      redis:
-        image: redis:8-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-      # Locks its memory on start, which the runner's default limit refuses.
-      dragonfly:
-        image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2
-        ports: ["6380:6379"]
-        options: >-
-          --ulimit memlock=-1
-          --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-      mongodb:
-        image: mongo:8
-        ports: ["27017:27017"]
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping: 1})'"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: rhysd/action-setup-vim@v1
-        with:
-          neovim: true
-          version: stable
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: JohnnyMorganz/stylua-action@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          version: latest
-          args: --check .
-
-      - uses: NTBBloodbath/selene-action@v1.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: lua plugin tests
-
-      # The suite drives a real engine over a real channel, so it needs one built first.
       - run: cargo build
-      # Installs mini.nvim and nui.nvim with lazy.nvim's minit, then runs the suite.
       - run: nvim -l tests/minit.lua
-
-  docs:
-    name: docs
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: rhysd/action-setup-vim@v1
-        with:
-          neovim: true
-          version: stable
-
-      # The help file is committed, because plugin managers do not run build steps and
-      # `:help sqmeow` has to work on a fresh install. This is what keeps it current: a pull
-      # request that changes an annotation without regenerating fails here.
-      - run: nvim -l tests/minit.lua --docs
-      - run: git diff --exit-code doc/

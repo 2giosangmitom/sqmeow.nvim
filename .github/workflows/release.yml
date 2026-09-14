@@ -1,14 +1,12 @@
-name: release
+name: Release
 
 on:
-  # Called by the release-please workflow once merging its pull request has tagged the commit.
   workflow_call:
     inputs:
       tag:
         description: Tag to build and attach the archives to
         required: true
         type: string
-  # Either half of a release can be redone by hand: push a tag, or name one already pushed.
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -23,6 +21,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -33,25 +32,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # musl rather than glibc, so the binary is not tied to a distribution newer than the
-          # one the user is running.
-          - target: x86_64-unknown-linux-musl
-            runner: ubuntu-latest
-            cross: true
-          - target: aarch64-unknown-linux-musl
-            runner: ubuntu-latest
-            cross: true
-          - target: x86_64-apple-darwin
-            runner: macos-latest
-          - target: aarch64-apple-darwin
-            runner: macos-latest
-          - target: x86_64-pc-windows-msvc
-            runner: windows-latest
+          # musl, so the binary does not depend on the distribution's glibc.
+          - { target: x86_64-unknown-linux-musl, runner: ubuntu-latest, cross: true }
+          - { target: aarch64-unknown-linux-musl, runner: ubuntu-latest, cross: true }
+          - { target: x86_64-apple-darwin, runner: macos-latest }
+          - { target: aarch64-apple-darwin, runner: macos-latest }
+          - { target: x86_64-pc-windows-msvc, runner: windows-latest }
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ env.TAG }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -66,29 +57,22 @@ jobs:
         run: cargo install cross --locked
 
       - name: Build
-        shell: bash
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --locked --target ${{ matrix.target }} -p sqmeow-core
-          else
-            cargo build --release --locked --target ${{ matrix.target }} -p sqmeow-core
-          fi
+        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }} -p sqmeow-core
 
-      # One archive per target, named after it, holding the binary and nothing else. The manifest
-      # job reads the checksum files rather than recomputing anything.
       - name: Package
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
           name="sqmeow-core-${{ matrix.target }}"
+          dir="target/${{ matrix.target }}/release"
 
-          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
-            7z a "dist/$name.zip" "./target/${{ matrix.target }}/release/sqmeow-core.exe"
+          if [ "${{ runner.os }}" = "Windows" ]; then
             archive="dist/$name.zip"
+            7z a "$archive" "./$dir/sqmeow-core.exe"
           else
-            tar -czf "dist/$name.tar.gz" -C "target/${{ matrix.target }}/release" sqmeow-core
             archive="dist/$name.tar.gz"
+            tar -czf "$archive" -C "$dir" sqmeow-core
           fi
 
           if command -v sha256sum >/dev/null; then
@@ -108,59 +92,38 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.ref_name }}
-
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      # What `install.lua` reads to decide which archive to fetch and what it should hash to.
+      # Read by install.lua to pick an archive and verify its hash.
       - name: Write manifest.json
-        shell: bash
         run: |
-          set -euo pipefail
-          tag="${{ inputs.tag || github.ref_name }}"
-          base="https://github.com/${{ github.repository }}/releases/download/$tag"
-
-          python3 - "$tag" "$base" <<'PY'
+          python3 - "$TAG" "https://github.com/${{ github.repository }}/releases/download/$TAG" <<'PY'
           import hashlib, json, os, sys
 
           tag, base = sys.argv[1], sys.argv[2]
           targets = {}
-
           for name in sorted(os.listdir('dist')):
               if name.endswith('.sha256'):
                   continue
               path = os.path.join('dist', name)
-              triple = name.removeprefix('sqmeow-core-')
-              triple = triple.removesuffix('.tar.gz').removesuffix('.zip')
-
-              with open(path + '.sha256') as digest:
-                  sha256 = digest.read().strip()
-              # Recomputed, so a mismatched checksum file cannot become a manifest nobody can use.
+              triple = name.removeprefix('sqmeow-core-').removesuffix('.tar.gz').removesuffix('.zip')
+              sha256 = open(path + '.sha256').read().strip()
               actual = hashlib.sha256(open(path, 'rb').read()).hexdigest()
               assert actual == sha256, f'{name}: {actual} != {sha256}'
-
-              targets[triple] = {
-                  'url': f'{base}/{name}',
-                  'sha256': sha256,
-                  'size': os.path.getsize(path),
-              }
+              targets[triple] = {'url': f'{base}/{name}', 'sha256': sha256, 'size': os.path.getsize(path)}
 
           with open('dist/manifest.json', 'w') as out:
               json.dump({'version': tag.lstrip('v'), 'targets': targets}, out, indent=2)
               out.write('\n')
           PY
-
           cat dist/manifest.json
 
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ env.TAG }}
           files: dist/*
-          # release-please has already written the release and its notes from the changelog.
-          # Generating notes here would replace them with GitHub's own list of commits.
+          # A release-please release already has notes from the changelog.
           generate_release_notes: ${{ !inputs.tag }}
