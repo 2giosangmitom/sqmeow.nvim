@@ -1,8 +1,4 @@
 //! The MongoDB adapter against a real server.
-//!
-//! Needs a server. `just db-up` starts one and `just test-rust` passes its URL in. Without
-//! `SQMEOW_TEST_MONGODB_URL` these tests report that they were skipped rather than failing, so
-//! `cargo test` still works on a machine with no Docker.
 
 use sqmeow_adapters::Backend;
 use sqmeow_db::{Cell, Changes, Error, RelationKind, ResultSet, Source};
@@ -23,8 +19,7 @@ macro_rules! server {
     };
 }
 
-// The tests share one database and run in parallel, so each one owns a collection of its own and
-// empties it first.
+// The tests share one database and run in parallel.
 
 async fn connect(url: &str) -> Backend {
     Backend::connect(url)

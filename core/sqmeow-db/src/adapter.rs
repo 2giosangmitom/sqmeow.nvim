@@ -1,8 +1,4 @@
 //! The contract every database adapter meets.
-//!
-//! The trait uses `impl Future` returns rather than boxed futures, so it is not object safe. That
-//! is deliberate: dispatch happens through an enum in the adapters crate, which costs no
-//! allocation per call and makes the compiler point at every place a new database must be handled.
 
 use std::future::Future;
 
@@ -14,9 +10,6 @@ use crate::node::{ColumnNode, RelationNode, RoutineNode, SchemaNode};
 use crate::result::ResultSet;
 
 /// Which SQL dialect a connection speaks.
-///
-/// Adapters differ in more than their wire protocol: quoting, introspection queries, and
-/// pagination syntax all vary, and code that must branch on those branches on this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
     Sqlite,
@@ -42,9 +35,6 @@ impl Dialect {
     }
 
     /// Work out the dialect from a connection URL's scheme.
-    ///
-    /// Every alias a user might reasonably type is accepted, because being told "unsupported url"
-    /// for `postgresql://` when `postgres://` works is a bad first experience.
     pub fn from_url(url: &str) -> Option<Self> {
         let scheme = url.split_once("://").map_or_else(
             || url.split_once(':').map(|(scheme, _)| scheme),
@@ -73,10 +63,6 @@ pub trait Adapter: Send + Sync {
     fn quote_ident(&self, name: &str) -> String;
 
     /// Run one statement, streaming rows until the cap is reached or the token is cancelled.
-    ///
-    /// `max_rows` caps what is kept, not what the database computes. Reaching it marks the result
-    /// truncated rather than failing it, so a stray `select * from events` shows something useful
-    /// instead of an error.
     fn execute(
         &self,
         statement: &str,
@@ -85,9 +71,6 @@ pub trait Adapter: Send + Sync {
     ) -> impl Future<Output = Result<ResultSet>> + Send;
 
     /// Plan staged changes to a result into the statements that make them.
-    ///
-    /// Answers without touching the database, so the editor can show the plan for review. The SQL
-    /// adapters share one planner; the others lay out commands of their own.
     fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         crate::edit::sql_plan(
             self.dialect(),
@@ -107,16 +90,9 @@ pub trait Adapter: Send + Sync {
     fn relations(&self, schema: &str) -> impl Future<Output = Result<Vec<RelationNode>>> + Send;
 
     /// The stored functions and procedures in one schema.
-    ///
-    /// A database with no stored routines at all answers with an empty list rather than an error,
-    /// so the drawer can show the group as empty instead of broken.
     fn routines(&self, schema: &str) -> impl Future<Output = Result<Vec<RoutineNode>>> + Send;
 
     /// The columns of one relation.
-    ///
-    /// Loaded when the user expands that relation and not before. A database with ten thousand
-    /// tables would otherwise stall the drawer on open, for information almost none of which is
-    /// about to be read.
     fn columns(
         &self,
         schema: &str,

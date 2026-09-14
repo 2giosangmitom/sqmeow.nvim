@@ -1,8 +1,4 @@
 //! Splitting a buffer of SQL into statements.
-//!
-//! Naively splitting on `;` breaks the moment a semicolon appears inside a string literal, a
-//! comment, or a Postgres function body. This walks the text once, tracking what it is inside, so
-//! only a semicolon at the top level ends a statement.
 
 use crate::adapter::Dialect;
 
@@ -18,12 +14,6 @@ pub struct Statement {
 }
 
 /// The statement the cursor is in, or the nearest one before it.
-///
-/// A cursor on a blank line between two statements picks the one above rather than the one below.
-/// That is what running a buffer line by line feels like: you finish a statement, press the key,
-/// and the statement you just finished runs.
-///
-/// Returns `None` only when there is no statement at all.
 pub fn statement_at(statements: &[Statement], line: usize) -> Option<&Statement> {
     if let Some(inside) = statements
         .iter()
@@ -50,9 +40,6 @@ enum Mode {
 }
 
 /// Split a buffer of Redis commands into statements, one per line.
-///
-/// A Redis command ends with its line, so that is all the splitting a script needs. Blank lines are
-/// dropped, and so are lines starting with `#` or `--`, which is how people comment one.
 pub fn split_lines(input: &str) -> Vec<Statement> {
     input
         .lines()
@@ -70,11 +57,6 @@ pub fn split_lines(input: &str) -> Vec<Statement> {
 }
 
 /// Split a buffer of MongoDB commands into statements.
-///
-/// A statement is one JSON document, which may span as many lines as it likes, or one line that is
-/// not a document, such as `use shop`. A document ends on the line where its brackets close,
-/// counted outside strings, so a `}` inside a value does not end it early. Blank lines are dropped,
-/// and so are lines starting with `//` or `#` between statements.
 pub fn split_documents(input: &str) -> Vec<Statement> {
     let mut statements = Vec::new();
     let mut current: Option<(usize, String)> = None;
@@ -128,8 +110,7 @@ pub fn split_documents(input: &str) -> Vec<Statement> {
         }
     }
 
-    // A document left open runs to the end of the buffer, so the parse error lands on it rather
-    // than on nothing.
+    // A document left open runs to the end of the buffer.
     if let Some((start_line, sql)) = current {
         statements.push(Statement {
             sql: sql.trim().to_owned(),
@@ -141,13 +122,6 @@ pub fn split_documents(input: &str) -> Vec<Statement> {
 }
 
 /// Split a buffer of SQL into its statements.
-///
-/// Whitespace-only and comment-only fragments are dropped, so a trailing semicolon or a trailing
-/// comment does not produce an empty statement that the database would reject.
-///
-/// The dialect decides what a string and a comment are: MySQL reads a backslash in a string as an
-/// escape and `#` as a comment, PostgreSQL reads a backslash as one only in an `E'…'` string and is
-/// the only one with dollar-quoted bodies, and SQLite does neither.
 pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
     let mut statements = Vec::new();
     let chars: Vec<char> = input.chars().collect();
@@ -158,9 +132,7 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
     let mut dollar_tag: Option<String> = None;
     // Whether a backslash in the quoted run currently open escapes the character after it.
     let mut escapes = false;
-    // Whether the statement being read starts with `CREATE`, once its first word is read; whether
-    // it creates a routine or a trigger; and how many `BEGIN … END` and `CASE … END` blocks of that
-    // body are open. A semicolon inside one ends a statement of the body, not the `CREATE`.
+    // Whether the statement being read starts with `CREATE`, once its first word is read.
     let mut creating: Option<bool> = None;
     let mut routine = false;
     let mut body_depth = 0usize;
@@ -267,9 +239,7 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                         "begin" | "case" if routine => body_depth += 1,
                         "end" if routine => {
                             let (next, after) = next_word(&chars, end);
-                            // `END IF`, `END LOOP`, `END WHILE` and `END REPEAT` close blocks that
-                            // were never counted open. The word after `END` belongs to it, so it
-                            // is not read again as a block of its own.
+                            // `END IF`/`LOOP`/`WHILE`/`REPEAT` close blocks that were never counted open.
                             let closes =
                                 matches!(next.as_str(), "if" | "loop" | "while" | "repeat");
                             if !closes {
@@ -297,8 +267,7 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                 continue;
             }
 
-            // A doubled quote inside a quoted run is an escaped quote, not the end of it. Skipping
-            // both characters leaves the mode unchanged, which is exactly right.
+            // A doubled quote inside a quoted run is an escaped quote, not the end of it.
             Mode::SingleQuote if character == '\'' => {
                 if peek!(1) == Some('\'') {
                     index += 2;

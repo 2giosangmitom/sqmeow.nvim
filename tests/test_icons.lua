@@ -4,8 +4,7 @@ local icons = require('sqmeow.icons')
 local config = require('sqmeow.config')
 local highlights = require('sqmeow.ui.highlights').links
 
---- Every case sets what it needs, since there is nothing left to detect: the icons a kind draws
---- with are exactly the ones the configuration holds.
+--- Every case sets what it needs.
 local function set(overrides)
   config.apply({ icons = overrides })
 end
@@ -45,8 +44,7 @@ T['get']['covers every kind the plugin colours'] = function()
     return kinds
   end
 
-  -- Two tables of glyphs: the kinds of thing the drawer names, and the classes a column holds.
-  -- `icons` already had a `column` of its own, so the classes could not join it.
+  -- Two tables of glyphs.
   local configured = names(config.defaults.icons)
   vim.list_extend(configured, names(config.defaults.icons.types))
   table.sort(configured)

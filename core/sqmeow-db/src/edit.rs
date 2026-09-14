@@ -1,12 +1,4 @@
 //! Changing the rows a result showed.
-//!
-//! An adapter records where a result's rows are stored, as a [`Source`], when it can tell. Edits
-//! staged in the editor arrive as [`Changes`] against row and column indices of that result, and
-//! the adapter plans them into the statements that make them. The text the review window shows is
-//! exactly the text that runs, so what was approved is what happens.
-//!
-//! The original values that find a row again, a primary key or an `_id`, are read from the result
-//! the engine holds rather than sent back by the editor, which only ever saw them as display text.
 
 use crate::adapter::Dialect;
 use crate::error::{Error, Result};
@@ -73,9 +65,6 @@ impl Source {
     }
 
     /// Whether a column's values can be changed.
-    ///
-    /// A SQL column that is an expression has nowhere to be written, and a MongoDB `_id` is what
-    /// finds the document, which the server refuses to change.
     pub fn editable(&self, result: &ResultSet, column: usize) -> bool {
         let Some(meta) = result.columns().get(column) else {
             return false;
@@ -106,8 +95,7 @@ pub struct Changes {
 }
 
 impl Changes {
-    /// The updates, less those to a row that is also being deleted: changing a row on its way
-    /// out would only make the delete miss it.
+    /// The updates, less those to a row that is also being deleted.
     pub fn live_updates(&self) -> impl Iterator<Item = &(usize, Vec<(usize, Value)>)> {
         self.updates
             .iter()
@@ -145,11 +133,7 @@ pub fn check_column(source: &Source, result: &ResultSet, column: usize) -> Resul
     Err(Error::driver(format!("`{name}` cannot be edited")))
 }
 
-/// Plan changes to a SQL table: `UPDATE`s, then `DELETE`s, then `INSERT`s.
-///
-/// Rows are found by their primary key's original values, compared as literals. Values are written
-/// as quoted literals and left for the database to convert to the column's type, which PostgreSQL,
-/// MySQL and SQLite all do for a quoted string, so `'42'` goes into an integer column as 42.
+/// Plan changes to a SQL table.
 pub fn sql_plan(
     dialect: Dialect,
     quote: impl Fn(&str) -> String,
@@ -245,10 +229,6 @@ pub fn value_literal(dialect: Dialect, value: Option<&str>) -> String {
 }
 
 /// Text as a quoted SQL string.
-///
-/// MySQL reads a backslash in a string as an escape unless `NO_BACKSLASH_ESCAPES` is set, so there
-/// it is doubled too. PostgreSQL has read backslashes literally since `standard_conforming_strings`
-/// became the default, and SQLite always has.
 pub fn quote_text(dialect: Dialect, text: &str) -> String {
     let escaped = match dialect {
         Dialect::MySql => text.replace('\\', "\\\\").replace('\'', "''"),

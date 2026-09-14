@@ -1,9 +1,4 @@
 //! The database contract for sqmeow.nvim.
-//!
-//! This crate knows nothing about the editor and nothing about any particular driver. It defines
-//! the shape every adapter meets, the one value type every driver decodes into, and the result set
-//! the renderer reads. Adding a database means implementing [`Adapter`], not touching anything
-//! downstream of it.
 
 pub mod adapter;
 pub mod edit;
@@ -22,8 +17,7 @@ pub use edit::{Changes, RedisKind, Source};
 pub use error::{Error, Result};
 pub use export::{Format, Rows};
 pub use node::{
-    CatalogEntry, ColumnNode, KeyType, RelationKind, RelationNode, RoutineKind, RoutineNode,
-    SchemaNode,
+    ColumnNode, KeyType, RelationKind, RelationNode, RoutineKind, RoutineNode, SchemaNode,
 };
 pub use result::{Column, ResultSet};
 pub use sql::Statement;

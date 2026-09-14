@@ -1,6 +1,5 @@
 local MiniTest = require('mini.test')
--- `:Sqmeow`: which subcommand a line reaches, what completion offers, and what each says when there
--- is nothing to act on. The work itself is the api's, and is stubbed where a case only routes to it.
+-- `:Sqmeow` dispatch, completion and empty-state messages.
 
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')

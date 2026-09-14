@@ -1,7 +1,4 @@
 --- `:checkhealth sqmeow`.
----
---- Answers the questions that come up when something is wrong: which engine is being used, is it
---- the version this plugin expects, and did the configuration parse.
 
 local M = {}
 
@@ -62,9 +59,7 @@ local function check_engine()
   end
   vim.health.ok(('sqmeow-core %s (%s)\n%s'):format(version, source, path))
 
-  -- A checkout build that is not the one running is worth saying out loud. `resolve` prefers the
-  -- installed engine, so someone who ran `cargo build` by hand and expected to be testing it is
-  -- otherwise looking at their change having no effect with nothing anywhere to explain why.
+  -- A checkout build that is not the one running is worth saying out loud.
   local dev = install.dev_path()
   if dev and dev ~= path then
     local other = install.version(dev)
@@ -159,11 +154,8 @@ local function check_dependencies()
     )
   end
 
-  -- There is no way to ask a terminal whether it can draw a glyph, so this says where to look
-  -- rather than claiming an answer. A wrong icon is visible the moment the drawer opens.
+  -- There is no way to ask a terminal whether it can draw a glyph.
   vim.health.info('icons need a Nerd Font; set `icons` if boxes appear in the drawer')
-  -- Worth naming separately: the grid's glyphs are measured to lay out the columns, so a terminal
-  -- that draws one wider than it was measured misaligns the whole grid rather than looking odd.
   if require('sqmeow.config').get().ui.result.column_icons then
     vim.health.info(
       'the result grid is marking its columns; '
@@ -173,9 +165,6 @@ local function check_dependencies()
 end
 
 --- Which dialect a URL scheme belongs to, or nil if none does.
----
---- Answered from the dialect list rather than by asking the engine, so the health check works
---- before the engine has been started.
 ---@param scheme string
 ---@return string|nil
 function M.dialect_of(scheme)

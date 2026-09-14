@@ -59,9 +59,7 @@ T['create']['asks which database first'] = function()
 end
 
 T['create']['asks for a name and offers none'] = function()
-  -- The name is what everything else will call this database, so it is the user's to choose. A
-  -- default assembled out of the host and the database would also be a piece of the URL the form
-  -- exists to keep off the screen.
+  -- The name is what everything else will call this database.
   require('sqmeow.ui.form').open({
     title = 'New PostgreSQL connection',
     fields = require('sqmeow.dialects').fields('postgres'),
@@ -137,8 +135,7 @@ T['edit']['asks a SQLite connection for a file and nothing else'] = function()
 end
 
 T['edit']['refuses a url holding a template'] = function()
-  -- Taking one apart and writing it back would percent encode the braces, so the caller is told
-  -- to ask the older way instead.
+  -- Taking one apart and writing it back would percent encode the braces.
   eq(connection.edit({ name = 'prod', url = 'postgres://app:{{ env "PGPASS" }}@host/db' }), false)
   eq(rows(), {})
 end

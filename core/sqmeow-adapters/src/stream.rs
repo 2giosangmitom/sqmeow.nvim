@@ -1,9 +1,4 @@
 //! What the sqlx adapters share.
-//!
-//! Running a statement, reading a row and remembering which columns are keys are the same for
-//! SQLite, MySQL and PostgreSQL once the driver's types are named. The cancel check, the row cap
-//! and the split between "rows came back" and "rows were changed" are the parts that must be right,
-//! and keeping one copy means a fix reaches every adapter.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -22,11 +17,6 @@ use tokio_util::sync::CancellationToken;
 pub(crate) type Origin = Option<(String, String)>;
 
 /// Prepare a statement to learn what its result looks like, before running it.
-///
-/// This is what lets a query returning no rows still show its header, which is the difference
-/// between "no rows" and "something went wrong" at a glance. Preparing is a convenience: a statement
-/// that will not prepare may still run, and if it cannot, running it reports the real error. So a
-/// failure here answers with nothing.
 pub(crate) async fn prepare<DB>(pool: &Pool<DB>, statement: &str) -> Option<DB::Statement>
 where
     DB: Database,
@@ -51,9 +41,6 @@ pub(crate) fn result_columns<C: sqlx::Column>(prepared: &[C]) -> Vec<Column> {
 }
 
 /// The table column each result column came from, for a driver that says.
-///
-/// SQLite and MySQL both name it with the prepared statement, so reading it costs no query. A
-/// column that is an expression has none.
 pub(crate) fn origins<C: sqlx::Column>(prepared: &[C]) -> Vec<Origin> {
     prepared
         .iter()
@@ -66,9 +53,6 @@ pub(crate) fn origins<C: sqlx::Column>(prepared: &[C]) -> Vec<Origin> {
 }
 
 /// Run one statement and read what it produced into a result set.
-///
-/// `columns` is what preparing the statement said the result looks like, `affected` reads the
-/// driver's own row count, and `decode` turns one value into a cell.
 pub(crate) async fn execute<DB>(
     pool: &Pool<DB>,
     statement: &str,
@@ -86,9 +70,7 @@ where
     let width = columns.len();
     let mut result = ResultSet::new(statement, columns);
 
-    // The SQL is whatever the user typed into their own editor, against their own database. There
-    // is no untrusted input to escape here, and refusing to run it would defeat the point of the
-    // plugin.
+    // The SQL is whatever the user typed into their own editor, against their own database.
     let stream = sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(pool);
 
     drain(
@@ -99,8 +81,7 @@ where
         affected,
         |row| result_columns(row.columns()),
         |row| {
-            // A row can be wider than preparing predicted, so take whichever is larger and let the
-            // result set trim or pad. Losing a column silently would be worse than showing an extra one.
+            // A row can be wider than preparing predicted.
             (0..width.max(row.len()))
                 .map(|index| decode(row, index))
                 .collect()
@@ -127,8 +108,7 @@ where
 {
     loop {
         tokio::select! {
-            // Cancellation wins a tie, so a held cancel is honoured even while rows arrive faster
-            // than the loop can drain them.
+            // Cancellation wins a tie.
             biased;
 
             () = cancel.cancelled() => return Err(Error::Cancelled),
@@ -138,8 +118,8 @@ where
                 Some(Err(error)) => return Err(Error::driver(error)),
                 Some(Ok(Either::Left(outcome))) => result.set_affected(affected(&outcome)),
                 Some(Ok(Either::Right(row))) => {
-                    // A statement that would not prepare arrives with no columns, and the first
-                    // row is the first thing to say what they are.
+                    // A statement that would not prepare arrives with no columns, and the first row
+                    // is the first thing to say what they are.
                     if result.columns().is_empty() {
                         result.adopt_columns(describe(&row));
                     }
@@ -156,12 +136,7 @@ where
 }
 
 impl TableKeys {
-    /// Where a result's rows are stored: the one table every column that is not an expression
-    /// comes from, when that table's whole primary key is among them.
-    ///
-    /// Read after [`TableKeys::mark`], which is what fills in each table's keys. A join, a table
-    /// without a primary key, or a result missing part of one cannot find its rows again, so none
-    /// of those has a source.
+    /// Where a result's rows are stored.
     pub(crate) fn source(&self, origins: &[Origin]) -> Option<Source> {
         let mut tables = origins.iter().flatten().map(|(table, _)| table.as_str());
         let table = tables.next()?;
@@ -202,11 +177,6 @@ impl TableKeys {
 }
 
 /// Run statements in one transaction, rolling all of them back when any fails.
-///
-/// The error names the statement that failed, since the user approved several and needs to know
-/// which one the database refused. A planned `UPDATE` or `DELETE` finds its row by key, so one that
-/// finds none means the row changed or went away since it was read: that fails too, rather than
-/// passing as a change that was made. `affected` reads the driver's row count.
 // ponytail: sqlx tracks its own transactions, not a `BEGIN` the user typed into a scratchpad on
 // this same connection; applying then would commit theirs. Check `pg_current_xact_id_if_assigned`
 // or `@@in_transaction` first if that bites.
@@ -237,12 +207,7 @@ where
     transaction.commit().await.map_err(Error::driver)
 }
 
-/// Whether a statement may have changed a table an adapter holds a picture of, which must then be
-/// read again.
-///
-/// Anything but the statements that only read or write rows: `CREATE`, `ALTER` and `DROP` plainly,
-/// but also a `ROLLBACK` that undoes one, or a `DO` block or a `CALL` that runs one. Reading a
-/// table again costs one catalog query; a stale picture edits the wrong column.
+/// Whether a statement may have changed a table an adapter holds a picture of.
 pub(crate) fn may_change_schema(statement: &str) -> bool {
     let mut rest = statement.trim_start();
     loop {
@@ -283,10 +248,7 @@ pub(crate) fn may_change_schema(statement: &str) -> bool {
     )
 }
 
-/// Last resort for a value no decoder claimed: its text, else its bytes, else its type's name.
-///
-/// SQLite will happily store text in an integer column, and MySQL has types nothing decodes, so a
-/// failed decode is a normal event rather than a bug, and the value itself is still worth showing.
+/// Last resort for a value no decoder claimed.
 pub(crate) fn text_or_bytes<'r, R>(row: &'r R, index: usize, type_name: &str) -> Cell
 where
     R: Row,
@@ -325,11 +287,6 @@ where
 }
 
 /// Which columns of each table are keys, by table name and then column name.
-///
-/// Whole tables at a time, because asking about one column costs the same as asking about all of
-/// them, and the next query on that table is then free. A table present here has been read, even
-/// if it turned out to have no keys, which is what stops one without any from being asked about
-/// again on every execution.
 #[derive(Debug, Default)]
 pub(crate) struct TableKeys(Mutex<HashMap<String, HashMap<String, KeyKind>>>);
 
@@ -343,9 +300,6 @@ impl TableKeys {
 
     /// Mark the result columns that are keys in the table they came from, reading each table not
     /// seen before with `read`.
-    ///
-    /// A column that is an expression has no origin and is left unmarked: `count(*)` is nobody's
-    /// primary key.
     pub(crate) async fn mark<F, Fut>(&self, origins: &[Origin], columns: &mut [Column], read: F)
     where
         F: Fn(String) -> Fut,

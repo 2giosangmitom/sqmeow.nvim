@@ -1,8 +1,4 @@
 //! The sqmeow.nvim database engine.
-//!
-//! Started by the plugin as `jobstart({ 'sqmeow-core' }, { rpc = true })`, which puts a
-//! msgpack-rpc channel on stdin and stdout. Nothing may print to stdout: that stream is the
-//! protocol. Diagnostics go to stderr, where the editor can surface them or drop them.
 
 mod archive;
 mod args;
@@ -64,8 +60,7 @@ fn init_tracing() {
     tracing_subscriber::fmt()
         // stdout belongs to the protocol.
         .with_writer(std::io::stderr)
-        // The editor collects stderr as text and shows it in a log buffer, where escape codes
-        // would be noise rather than color.
+        // The editor shows stderr as plain text.
         .with_ansi(false)
         .with_env_filter(filter)
         .with_target(false)

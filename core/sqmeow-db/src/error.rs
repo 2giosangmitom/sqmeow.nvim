@@ -1,8 +1,7 @@
 /// What can go wrong talking to a database.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The driver rejected something. Its own message is the useful part, so it is passed through
-    /// rather than wrapped in wording of ours.
+    /// The driver rejected something.
     #[error("{0}")]
     Driver(String),
 

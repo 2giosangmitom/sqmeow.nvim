@@ -1,9 +1,4 @@
 //! Narrowing and ordering the rows a result holds.
-//!
-//! A view is a list of row indices into a result the engine already holds. Nothing is asked of the
-//! database again: a filter reads the cells that came back, so it works the same for every dialect
-//! and for a result shown again from the log. What it cannot see is a row the query never returned,
-//! which is what the `truncated` marker on a result is there to say.
 
 use std::cmp::Ordering;
 
@@ -61,10 +56,6 @@ pub struct Sort {
 }
 
 /// The rows that pass every filter, in sort order.
-///
-/// `scope` limits the view to those rows before anything else, which is how editing a selection
-/// shows only the selection. Filters are AND-ed. The sort is stable, so rows equal on every key keep
-/// the order the query gave them, and `NULL` sorts last whichever way a column is ordered.
 pub fn select(
     result: &ResultSet,
     filters: &[Filter],
@@ -123,8 +114,7 @@ fn test(cell: &Cell, op: Op, value: &str) -> bool {
         _ => {}
     }
 
-    // A number compares as a number when the value reads as one, so `9 < 10` holds. Anything else
-    // compares as the text the grid shows.
+    // A number compares as a number when the value reads as one.
     let ordering = match (number(cell), value.trim().parse::<f64>()) {
         (Some(left), Ok(right)) => left.partial_cmp(&right).unwrap_or(Ordering::Equal),
         _ => text.as_ref().cmp(value),

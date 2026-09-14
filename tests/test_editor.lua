@@ -419,9 +419,7 @@ end
 T['editing window']['is made when every window in the tab belongs to the plugin'] = function()
   tabpage()
 
-  -- The one window in this tab holds a plugin surface, so there is nowhere for a file to go.
-  -- Wiped afterwards: a stray buffer claiming to be one of ours is a plausible fallback for
-  -- Neovim to pick when some other buffer is deleted, which would confuse later cases.
+  -- The one window in this tab holds a plugin surface.
   local pretend = vim.api.nvim_get_current_buf()
   vim.bo[pretend].filetype = 'sqmeow-result'
   MiniTest.finally(function()
@@ -482,9 +480,8 @@ T['surfaces']['count as closed once something else takes their window'] = functi
   local win = result.open()
   eq(result.is_open(), true)
 
-  -- A `:bdelete` elsewhere, a session restore, or a picker opening a file can all leave the
-  -- window valid while showing someone else's buffer. Painting a result into that would write
-  -- rows over whatever moved in.
+  -- A `:bdelete` elsewhere, a session restore, or a picker opening a file can all leave the window
+  -- valid while showing someone else's buffer.
   vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(false, true))
   eq(result.is_open(), false)
 end
@@ -595,8 +592,7 @@ T['rename']['carries an open buffer over to the new name'] = function()
   local buf = editor.open_path(path)
   local renamed = editor.rename(path, 'moved')
 
-  -- The buffer must follow the file. Left on the old name it would write the scratchpad back
-  -- under it on the next `:w`, which is a confusing way to learn a rename did not stick.
+  -- The buffer must follow the file.
   eq(vim.fs.normalize(vim.api.nvim_buf_get_name(buf)), renamed)
   eq(vim.bo[buf].modified, false)
   eq(#editor.buffers_for(vim.fs.normalize(path)), 0)

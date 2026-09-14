@@ -29,9 +29,6 @@ local function goto_line(pattern)
 end
 
 --- Put the cursor on a line and make sure what is there is open.
----
---- Open-only rather than a toggle, so a case that runs after one which already expanded the same
---- node does not quietly collapse it again.
 local function expand(pattern)
   local number = line_matching(pattern)
   if lines()[number]:find('^%s*v') then
@@ -51,11 +48,9 @@ end
 local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
-      -- Pinned to plain characters, so every assertion below can say what a line reads as
-      -- without the suite needing a Nerd Font. All of it is ordinary configuration.
+      -- Pinned to plain characters.
       require('sqmeow').setup({
-        -- A directory of its own, so the drawer's history holds what this file put there and not
-        -- whatever the machine running the suite has run before.
+        -- A directory of its own.
         core = { path = vim.fn.tempname() },
         icons = {
           connection = '#',
@@ -109,9 +104,6 @@ local T = MiniTest.new_set({
 })
 
 --- Open a schema and the group a relation sits under, then the relation itself.
----
---- Three levels rather than two, because the tree groups a schema into Tables, Views, Functions
---- and Procedures the way every database's own tooling does.
 local function open_relation(group, name)
   expand('scratch')
   expand('main')
@@ -124,8 +116,7 @@ T['tree'] = MiniTest.new_set()
 T['tree']['starts with connections collapsed'] = function()
   local drawn = lines()
   eq(vim.list_slice(drawn, 1, 2), { '> o s scratch  sqlite', '> + scratchpads  none saved' })
-  -- The log's own contents are this file's queries, and how many there are by now depends on
-  -- which cases have run. What matters here is that the section is drawn and shut.
+  -- The log's contents depend on which cases have run.
   eq(drawn[3]:find('> H history', 1, true), 1)
   eq(#drawn, 3)
 end
@@ -134,9 +125,7 @@ T['tree']['colours the marker apart from the icon'] = function()
   expand('scratch')
   line_matching('main')
 
-  -- `v o s scratch  sqlite`: the marker, the dot saying the connection is open, the dialect
-  -- icon, the plain name, and the trailing note. The note starts after the two spaces separating
-  -- it, which are part of neither it nor the name.
+  -- `v o s scratch sqlite`.
   eq(marks_on(1), {
     { group = 'SqmeowMarker', from = 0, to = 1 },
     { group = 'SqmeowConnected', from = 2, to = 3 },
@@ -207,9 +196,7 @@ T['tree']['renews the count on a heading it refreshes'] = function()
   goto_line('Tables')
   drawer.actions.refresh()
 
-  -- The new table appearing is only half of it. The number beside the heading counts the same
-  -- tables, and it is drawn from the level above them, so a refresh that reloads one and not the
-  -- other leaves the drawer contradicting itself.
+  -- The new table appearing is only half of it.
   line_matching('= late')
   line_matching('T Tables%s+%(3%)')
 end
@@ -223,10 +210,7 @@ T['tree']['refreshing a connection reloads every level that is open'] = function
     run('alter table people drop column added')
   end)
 
-  -- Refreshed from the connection, three levels above the columns. Everything under it was
-  -- dropped, so everything under it has to be asked for again: reloading only the connection
-  -- would leave the schema, the group and the columns with no cache entry and nothing on the way,
-  -- which draws as levels that have quietly lost their children.
+  -- Refreshed from the connection, three levels above the columns.
   goto_line('scratch')
   drawer.actions.refresh()
 
@@ -253,8 +237,7 @@ T['tree']['marks a column with what it holds'] = function()
   open_relation('Tables', 'people')
   local number = line_matching('score')
 
-  -- The glyph is coloured by what the column holds rather than by it being a column, which is the
-  -- whole reason to draw one: a schema reads as types without being read as words.
+  -- The glyph is coloured by what the column holds rather than by it being a column.
   local groups = vim.tbl_map(function(span)
     return span.group
   end, marks_on(number))
@@ -273,8 +256,7 @@ T['tree']['leaves a blank marker unmarked'] = function()
   open_relation('Tables', 'people')
   local number = line_matching('score')
 
-  -- A leaf's marker is a space, and an extmark over nothing is one more thing to track on every
-  -- row of a long tree.
+  -- A leaf's marker is a space and gets no extmark.
   for _, span in ipairs(marks_on(number)) do
     eq(span.group ~= 'SqmeowMarker', true)
   end
@@ -320,9 +302,7 @@ T['actions']['preview a relation into the result window'] = function()
     return state.call ~= nil and state.call.state == 'done'
   end, TIMEOUT)
 
-  -- ASCII rules and ASCII icons, because this file asked for the ASCII set and that setting
-  -- reaches the grid the engine draws as well as the markers the drawer draws. `id` is marked as
-  -- the primary key rather than as a number, which is the more useful thing to say about it.
+  -- ASCII rules and ASCII icons.
   eq(helpers.result_lines()[1], ' K id | t name | n score')
 end
 
@@ -359,8 +339,7 @@ T['the active connection']['does not move when a row is only opened'] = function
   goto_line('other')
   drawer.actions.toggle()
 
-  -- Expanding a connection to read its schemas is a different intention from sending the next
-  -- query to it, so the key that does the first must not do the second.
+  -- Expanding a connection does not make it the active one.
   eq(state.current, state.connection_by_name('scratch').id)
 end
 
@@ -612,8 +591,7 @@ T['scratchpads']['open somewhere other than the drawer'] = function()
 
   drawer.actions.toggle()
 
-  -- A plain `:edit` would have opened the file in the window the key was pressed in, which is the
-  -- sidebar, replacing the tree with a SQL buffer.
+  -- A plain `:edit` would have opened the file in the window the key was pressed in.
   eq(vim.api.nvim_get_current_win() ~= sidebar, true)
   eq(vim.bo[vim.api.nvim_win_get_buf(sidebar)].filetype, 'sqmeow-drawer')
   eq(drawer.is_open(), true)

@@ -1,8 +1,4 @@
 --- Connections from a JSON file.
----
---- The default source, and the one `:Sqmeow save` writes to. It lives under `core.path`
---- rather than in the user's configuration, because a connection list is per-machine and is not
---- something to commit.
 
 local M = {}
 
@@ -13,7 +9,6 @@ function M.default_path()
 end
 
 --- The path this source reads.
----
 ---@param opts table|nil Source options: `path` overrides the default.
 ---@return string
 function M.path(opts)
@@ -21,9 +16,6 @@ function M.path(opts)
 end
 
 --- Read connections from the file.
----
---- A file that is not there is not an error: it just means nothing has been saved yet.
----
 ---@param opts table|nil
 ---@return sqmeow.ConnectionSpec[]
 ---@return string|nil error
@@ -51,7 +43,6 @@ function M.load(opts)
 end
 
 --- Replace the file's contents.
----
 ---@param connections sqmeow.ConnectionSpec[]
 ---@param opts table|nil
 ---@return boolean written
@@ -60,8 +51,7 @@ function M.save(connections, opts)
   local path = M.path(opts)
   vim.fn.mkdir(vim.fs.dirname(path), 'p')
 
-  -- Only the fields that describe a connection are written back. A spec read from here carries a
-  -- `source` field the loader added, and writing that out would make it look user-authored.
+  -- Only the fields that describe a connection are written back.
   local plain = vim.tbl_map(function(connection)
     return { name = connection.name, url = connection.url }
   end, connections)
@@ -73,12 +63,7 @@ function M.save(connections, opts)
   return true
 end
 
---- Replace one connection, which may give it a different name.
----
---- Separate from `add` because a rename is two operations to a file keyed by name, and doing them
---- as an add and a remove would lose the connection's place in the list, or leave two of it behind
---- if the second half failed.
----
+--- Replace one connection.
 ---@param name string The name it is saved under now.
 ---@param connection sqmeow.ConnectionSpec What to save instead.
 ---@param opts table|nil
@@ -112,7 +97,6 @@ function M.update(name, connection, opts)
 end
 
 --- Add one connection, keeping the rest.
----
 ---@param connection sqmeow.ConnectionSpec
 ---@param opts table|nil
 ---@return boolean written

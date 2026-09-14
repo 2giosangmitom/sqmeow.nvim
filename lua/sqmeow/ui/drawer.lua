@@ -1,11 +1,4 @@
 --- The connection and schema tree, and the scratchpads below it.
----
---- Each level is fetched when the user expands it and not before. A database with ten thousand
---- tables would otherwise stall the drawer on open, to fetch names almost none of which are about
---- to be read.
----
---- The tree itself is drawn here rather than in the engine. It is tens of lines, not tens of
---- thousands of rows, so there is nothing to gain by sending it across the channel twice.
 
 local M = {}
 
@@ -14,8 +7,7 @@ local utils = require('sqmeow.utils')
 local buf = nil
 local win = nil
 
--- Which nodes the user has opened, and what each one's children turned out to be. Keyed by
--- connection and path, so state survives a redraw and a collapse.
+-- Which nodes the user has opened, and what each one's children turned out to be.
 local expanded = {}
 local cache = {}
 
@@ -27,7 +19,6 @@ local function node_key(conn_id, path)
 end
 
 --- Read a key back into the connection and path it was built from.
----
 ---@param key string
 ---@return integer|nil conn_id Nil for a key that is not a schema node's, such as the scratchpads.
 ---@return string[] path
@@ -42,10 +33,6 @@ local function key_parts(key)
 end
 
 --- Whether a key names something at or under a path.
----
---- The separator has to be there exactly once. A key for a path of no elements — a whole
---- connection — already ends in one, so appending another matches nothing, and refreshing a
---- connection would quietly reload none of the levels under it.
 local function under(key, prefix)
   if key == prefix then
     return true
@@ -63,7 +50,6 @@ function M.is_expanded(conn_id, path)
 end
 
 --- Ask the engine for one level of the tree.
----
 ---@param conn_id integer
 ---@param path string[]
 function M.load(conn_id, path)
@@ -73,8 +59,7 @@ function M.load(conn_id, path)
     return
   end
 
-  -- What is already drawn is kept while the reply is on its way, so reloading a level someone is
-  -- looking at renews it in place rather than emptying it and filling it back in.
+  -- What is already drawn is kept while the reply is on its way.
   cache[key] = { loading = true, nodes = entry and entry.nodes }
   local _, err = require('sqmeow.rpc').request('introspect', { conn_id = conn_id, path = path })
   if err then
@@ -84,7 +69,6 @@ function M.load(conn_id, path)
 end
 
 --- Take one level of the tree from the engine.
----
 ---@param payload table
 function M.on_nodes(payload)
   cache[node_key(payload.conn_id, payload.path or {})] = {
@@ -94,8 +78,7 @@ function M.on_nodes(payload)
   M.render()
 end
 
---- Forget what is cached below a node, so the next expansion reads it again.
----
+--- Forget what is cached below a node.
 ---@param conn_id integer
 ---@param path string[]
 function M.invalidate(conn_id, path)
@@ -108,10 +91,6 @@ function M.invalidate(conn_id, path)
 end
 
 --- Kinds whose name says nothing the row above it has not already said.
----
---- A table sits under `Tables` and a function under `Functions`, so repeating the kind on every
---- row is noise. What survives is the kind a group does not imply: a materialised view among the
---- views, or a foreign table among the tables.
 local implied = {
   database = true,
   schema = true,
@@ -123,8 +102,7 @@ local implied = {
 }
 
 local function annotate(node)
-  -- A group heading carries how many things it holds, which is the whole reason to draw one
-  -- before it is opened.
+  -- A group heading carries how many things it holds.
   if node.count then
     return ('(%d)'):format(node.count)
   end
@@ -148,14 +126,6 @@ local function nui()
 end
 
 --- Turn one node into the line the drawer draws for it.
----
---- Each piece gets its own highlight on purpose. A marker says whether a row is open, a badge says
---- something about the thing itself, an icon says what the row holds, and colouring them apart is
---- most of what makes a tree readable without reading it.
----
---- Built as a `NuiLine` rather than as a string with byte offsets worked out beside it, which is
---- what this used to be: the offsets had to be recomputed whenever a piece changed width, and a
---- multi-byte glyph made every one of them a measurement rather than a length.
 local function prepare_node(node)
   local parts = assert(nui())
   local icons = require('sqmeow.icons')
@@ -171,8 +141,7 @@ local function prepare_node(node)
 
   local marks = icons.markers()
   local marker = marks.leaf
-  -- A connection carries a marker whether or not it can be opened yet: pressing the same key on a
-  -- closed one connects it, so a leaf's blank marker would say it is a dead end when it is not.
+  -- A connection carries a marker whether or not it can be opened yet.
   if node.expandable or node.show_marker then
     marker = node:is_expanded() and marks.open or marks.closed
   end
@@ -185,8 +154,7 @@ local function prepare_node(node)
   end
   line:append(' ')
 
-  -- A badge sits between the marker and the icon: the marker says whether the row is open, the
-  -- badge says something about the thing itself, and the icon says what kind of thing it is.
+  -- A badge sits between the marker and the icon.
   if node.badge then
     local text, group = icons.get(node.badge)
     line:append(parts.Text(text, group))
@@ -207,7 +175,6 @@ local function prepare_node(node)
 end
 
 --- The nodes one level of the schema tree contributes.
----
 ---@param conn_id integer
 ---@param path string[]
 ---@return table[]
@@ -236,20 +203,18 @@ local function schema_nodes(conn_id, path)
 
   local nodes = {}
   for _, node in ipairs(entry.nodes or {}) do
-    -- The engine's own word for the node, which for a group heading is not what is drawn:
-    -- `Tables` is a label, `tables` is what the engine matches on.
+    -- The engine's own word for the node.
     local child = vim.list_extend(vim.list_slice(path, 1, #path), { node.key or node.name })
     local expandable = node.expandable == true
     local open = expandable and M.is_expanded(conn_id, child)
 
     local children = nil
     if open and node.kind == 'database' then
-      -- One database of a cluster is a connection of its own, opened when it was expanded, and
-      -- what it holds is that connection's tree.
+      -- One database of a cluster is a connection of its own, opened when it was expanded, and what
+      -- it holds is that connection's tree.
       local opened = require('sqmeow.state').child_connection(conn_id, node.name)
       if opened and opened.state == 'connected' then
-        -- A MongoDB database is its own only schema, so a schema row would repeat the database's
-        -- name one level down. Its groups are drawn in that row's place.
+        -- A MongoDB database is its own only schema.
         children = schema_nodes(opened.id, opened.dialect == 'mongodb' and { node.name } or {})
       elseif opened then
         children = {
@@ -271,8 +236,7 @@ local function schema_nodes(conn_id, path)
       kind = node.kind,
       icon_kind = node.kind == 'column' and icons.column_kind(node) or nil,
       note = annotate(node),
-      -- Only a group heading has one, so it doubles as how an action tells a heading apart from
-      -- something the database actually holds.
+      -- Only a group heading has one.
       count = node.count,
       expandable = expandable,
     }, children)
@@ -286,14 +250,10 @@ local function schema_nodes(conn_id, path)
   return nodes
 end
 
--- The scratchpad section is keyed on this rather than a connection id, because a scratchpad
--- belongs to the plugin's data directory and outlives whatever connection it was written for.
+-- The scratchpad section is keyed on this rather than a connection id.
 local SCRATCHPADS = 'scratchpads'
 
 --- The saved scratchpads, under a heading of their own.
----
---- Below the connections, because the tree is about databases first. Reopening yesterday's query
---- is something a user can see rather than something they have to remember exists.
 local function scratchpad_node()
   local parts = assert(nui())
   local pads = require('sqmeow.ui.editor').list()
@@ -327,8 +287,7 @@ local function scratchpad_node()
   return node
 end
 
--- Keyed on this for the same reason as the scratchpads: the log belongs to the plugin rather than
--- to any one connection, and it outlives every connection in the tree.
+-- Keyed on this for the same reason as the scratchpads.
 local HISTORY = 'history'
 
 --- How many queries the drawer offers before the section becomes a wall of text.
@@ -343,8 +302,7 @@ local function history_node()
 
   local children = {}
   for index, entry in ipairs(entries) do
-    -- One line, however it was written. A statement spread over six lines would otherwise take
-    -- six rows of the tree and say no more than its first clause does.
+    -- One line, however it was written.
     local statement = (entry.statement:gsub('%s+', ' '):gsub('^%s', ''))
     children[index] = parts.Tree.Node({
       id = ('query:%d'):format(index),
@@ -371,13 +329,6 @@ local function history_node()
 end
 
 --- Every connection the drawer draws.
----
---- The open ones, and then the saved ones that are not open. A database client lists what you can
---- connect to, not only what you have connected to, and the dot beside each says which is which.
----
---- Read on every draw rather than remembered, so a connection saved in another Neovim, or written
---- straight into the file, is there without anyone asking for a refresh.
----
 ---@return table[]
 function M.connection_rows()
   local state = require('sqmeow.state')
@@ -446,8 +397,7 @@ function M.render()
         or connection.dialect
         or connection.note,
       url = connection.url,
-      -- A connection nobody has opened has nothing to show yet. Pressing the same key opens it,
-      -- and then it does, which is why the marker is drawn either way.
+      -- A connection nobody has opened has nothing to show yet.
       expandable = connection.connected,
       show_marker = true,
     }, open and schema_nodes(connection.id, {}) or nil)
@@ -468,19 +418,14 @@ function M.render()
   table.insert(nodes, scratchpad_node())
   table.insert(nodes, history_node())
 
-  -- One tree for the life of the buffer, fed new nodes rather than rebuilt. A fresh tree does not
-  -- know which lines the last one occupied, so rendering it writes a second copy underneath the
-  -- first instead of replacing it.
+  -- One tree for the life of the buffer, fed new nodes rather than rebuilt.
   if not (tree and tree.bufnr == buf) then
     tree = parts.Tree({
       bufnr = buf,
-      -- The same namespace the drawer has always marked in, so anything looking for its highlights
-      -- still finds them under that name rather than under one nui invented.
+      -- The same namespace the drawer has always marked in.
       ns_id = 'sqmeow.drawer',
       prepare_node = prepare_node,
-      -- The id exactly as it was set, rather than nui's default of prefixing it: these are looked
-      -- up by name from elsewhere, and a lookup that has to know about a prefix is one that breaks
-      -- when the prefix changes.
+      -- The id exactly as it was set, rather than nui's default of prefixing it.
       get_node_id = function(node)
         return node.id
       end,
@@ -495,10 +440,6 @@ function M.render()
 end
 
 --- The node the cursor is on, if it is on one.
----
---- Asked of the tree by line rather than of the window it is showing in, so an action fired from
---- somewhere else still reads the drawer's own cursor.
----
 ---@return table|nil
 function M.current_node()
   if not (win and tree and utils.shows(win, buf)) then
@@ -524,10 +465,6 @@ local function opened_database(node)
 end
 
 --- Expand or collapse one database of a cluster, opening a connection for it the first time.
----
---- A PostgreSQL connection reads one database only, so each database a cluster lists is opened as
---- a connection of its own, named after both. Queries, previews and scratchpads under it then run
---- there, with nothing else having to know it came from a cluster.
 local function toggle_database(node)
   local key = node_key(node.conn_id, node.path)
   if opened_database(node) then
@@ -557,11 +494,6 @@ end
 M.actions = {}
 
 --- The parts of a node's path that name something in SQL.
----
---- The tree has a level the database does not: a relation sits under `Tables`, which is a heading
---- rather than something anything is named after. Dropping it is what keeps a yanked name
---- `"public"."users"` instead of `"public"."tables"."users"`.
----
 ---@param path string[]
 ---@return string[]
 local function sql_parts(path)
@@ -581,8 +513,6 @@ local function is_relation(kind)
 end
 
 --- The statement that shows what a relation holds.
----
---- For a Redis key that depends on its type, which is the group the key sits under.
 ---@param limit integer The most rows it may read.
 local function preview_statement(node, limit)
   local sql = require('sqmeow.sql')
@@ -594,10 +524,6 @@ local function preview_statement(node, limit)
 end
 
 --- Open the node under the cursor.
----
---- One key, because what opening means depends on the thing rather than on the user: a branch
---- expands, a scratchpad opens its file, a past query goes back on screen, and a connection that
---- is closed is opened so that there is something to expand.
 function M.actions.toggle()
   local node = M.current_node()
   if not node then
@@ -611,8 +537,7 @@ function M.actions.toggle()
     return require('sqmeow.ui.log').reopen(node.entry)
   end
 
-  -- This key opens things and nothing else. Choosing which database queries run on is `use`, on a
-  -- key of its own, so neither can happen by accident while doing the other.
+  -- This key opens things and nothing else.
   if node.kind == 'connection' and not node.conn_id then
     return require('sqmeow.api').connect_named(node.name)
   end
@@ -646,16 +571,12 @@ function M.actions.toggle()
 end
 
 --- Drop and reload everything at or under one level of one connection's tree.
----
 ---@param conn_id integer
 ---@param path string[]
 local function reload(conn_id, path)
   local prefix = node_key(conn_id, path)
 
-  -- Everything at or under the node is dropped, so everything at or under it has to be asked for
-  -- again. Reloading only the node itself would leave every level someone has open below it with
-  -- no cache entry and nothing on its way, which draws as a level that has quietly lost its
-  -- children rather than as one being refreshed.
+  -- Everything at or under the node is dropped.
   M.invalidate(conn_id, path)
 
   local levels = {}
@@ -676,17 +597,9 @@ local function reload(conn_id, path)
     end
   end
 
-  -- A row is drawn from the level above it, so the count on `Tables (3)` belongs to the schema's
-  -- children and not to the tables themselves. Reloading only what sits under the node would
-  -- leave that number saying what it said before the refresh.
+  -- A row is drawn from the level above it.
   if #path > 0 then
     M.load(conn_id, vim.list_slice(path, 1, #path - 1))
-  end
-
-  -- The relation picker searches a list the engine holds for the whole connection, and a refresh
-  -- that renewed the tree but not that list would have the two disagreeing about what exists.
-  if #path == 0 then
-    require('sqmeow.rpc').request('catalog', { conn_id = conn_id, refresh = true })
   end
 end
 
@@ -712,8 +625,7 @@ function M.actions.refresh()
   local path = node.path or {}
   reload(node.conn_id, path)
 
-  -- The databases opened from a server are connections of their own, drawn inside this one, so
-  -- their trees are cached under their own ids and a refresh of the server has to reach them too.
+  -- The databases opened from a server are connections of their own, drawn inside this one.
   if #path == 0 then
     for _, connection in pairs(require('sqmeow.state').connections) do
       if connection.parent == node.conn_id then
@@ -734,8 +646,7 @@ function M.actions.preview()
   -- Nil for a Redis key of a type nothing reads back.
   local statement = preview_statement(
     node,
-    -- The whole relation, up to the row cap: a filter in the grid then covers the table rather
-    -- than one page of it. One row past the cap is what makes the engine mark it truncated.
+    -- The whole relation, up to the row cap.
     require('sqmeow.config').get().query.max_rows + 1
   )
   if not statement then
@@ -780,9 +691,6 @@ function M.actions.yank_select()
 end
 
 --- Rename the connection or the scratchpad under the cursor.
----
---- The current name is offered as the default, so the prompt is somewhere to edit rather than
---- somewhere to retype, and leaving it alone changes nothing.
 function M.actions.rename()
   local node = M.current_node()
   if node and node.kind == 'connection' then
@@ -790,8 +698,7 @@ function M.actions.rename()
       if not name or name == '' or name == node.name then
         return
       end
-      -- A connection that was saved under the old name is renamed with it, since a user who
-      -- renames what they are looking at meant the connection, not this session's copy of it.
+      -- A connection that was saved under the old name is renamed with it.
       if require('sqmeow.sources').find(node.name) then
         require('sqmeow.api').edit(node.name, { name = name })
         return
@@ -820,10 +727,6 @@ function M.actions.rename()
 end
 
 --- Run queries against the connection under the cursor.
----
---- The only thing that changes the active connection from the drawer. Expanding a connection to
---- read its schemas is a different intention from sending the next query to it, so it is a
---- different key.
 function M.actions.use()
   local node = M.current_node()
   if node and node.kind == 'database' then
@@ -844,18 +747,11 @@ function M.actions.use()
 end
 
 --- Add a connection.
----
---- The same dialog `:Sqmeow add` opens, put on a key because the drawer is where a person is
---- looking when they notice the connection they want is not there.
 function M.actions.add()
   require('sqmeow.ui.connection').create()
 end
 
 --- Create a scratchpad for the connection under the cursor.
----
---- Anywhere inside a connection counts, so a user reading a table does not have to climb back up
---- to the connection's own row first. The name is asked for, and nothing is created if none is
---- given.
 function M.actions.new_scratchpad()
   local node = M.current_node()
   local name = node and node.kind == 'connection' and node.name or nil
@@ -877,8 +773,6 @@ function M.actions.new_scratchpad()
 end
 
 --- Edit the connection under the cursor.
----
---- Everything about it, unlike `rename`, which is the quick version of the same thing.
 function M.actions.edit()
   local node = M.current_node()
   if not node or node.kind ~= 'connection' then
@@ -902,9 +796,6 @@ function M.actions.edit()
 end
 
 --- Delete the scratchpad under the cursor, or empty the query log.
----
---- Asked first, because a scratchpad is a file the user wrote and deleting one cannot be undone.
---- `no` is the first choice, so a `<CR>` meant for something else does nothing.
 function M.actions.delete()
   local node = M.current_node()
   if node and (node.kind == 'history' or node.kind == 'query') then
@@ -944,15 +835,11 @@ function M.actions.delete()
 end
 
 --- Open the history section and put the cursor on it.
----
---- What `:Sqmeow log` does, so the command lands somewhere useful rather than only drawing the
---- tree and leaving the section shut.
 function M.reveal_history()
   expanded[HISTORY] = true
   M.render()
 
-  -- Asked of the tree by node id rather than by walking lines: the tree knows where it put the
-  -- heading, and the id is fixed whatever else the drawer happens to be showing.
+  -- Asked of the tree by node id rather than by walking lines.
   if not tree then
     return
   end
@@ -1038,8 +925,7 @@ end
 
 --- Forget everything. Used when the engine restarts, since its session went with it.
 function M.reset()
-  -- The scratchpad section is kept open if it was: those are the plugin's own files, and the
-  -- engine restarting says nothing about them.
+  -- The scratchpad section is kept open if it was.
   local pads = expanded[SCRATCHPADS]
 
   expanded = { [SCRATCHPADS] = pads }

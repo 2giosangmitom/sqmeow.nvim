@@ -1,14 +1,9 @@
 --- Writing SQL that names things.
----
---- Quoting is per dialect, and getting it wrong is not cosmetic: an unquoted name that happens to
---- be a reserved word, or that has a capital letter in PostgreSQL, refers to something else or to
---- nothing at all.
 
 local M = {}
 
 --- Quote one identifier for a dialect.
----
----@param dialect string|nil 'mysql' uses backticks; everything else uses double quotes.
+---@param dialect string|nil 'mysql' uses backticks.
 ---@param name string
 ---@return string
 function M.quote(dialect, name)
@@ -19,13 +14,11 @@ function M.quote(dialect, name)
 end
 
 --- Join name parts into a qualified name.
----
 ---@param dialect string|nil
 ---@param parts string[] Such as `{ 'public', 'users' }`.
 ---@return string
 function M.qualify(dialect, parts)
-  -- A Redis key is not qualified by its database, which `SELECT` chooses, so the key is the name.
-  -- A MongoDB collection is named the same way: the database is `use` or `$db`, never a prefix.
+  -- A Redis key is not qualified by its database.
   if dialect == 'redis' or dialect == 'mongodb' then
     return parts[#parts]
   end
@@ -38,19 +31,13 @@ function M.qualify(dialect, parts)
 end
 
 --- A `SELECT` over a relation.
----
---- The limit is there because a drawer action should never be the thing that pulls a hundred
---- million rows across a network.
----
 ---@param dialect string|nil
 ---@param parts string[]
 ---@param limit integer
 ---@return string
 function M.select_from(dialect, parts, limit)
   if dialect == 'mongodb' then
-    -- Written by hand rather than encoded from a table: the command name must be the first key,
-    -- and a Lua table has no order. `$db` reads the collection's database without switching the
-    -- one the scratchpad is on.
+    -- Written by hand rather than encoded from a table.
     return ('{"find": %s, "limit": %d, "$db": %s}'):format(
       vim.json.encode(parts[#parts]),
       limit,
@@ -61,11 +48,6 @@ function M.select_from(dialect, parts, limit)
 end
 
 --- The command that reads a Redis key back, by the drawer group it is listed under.
----
---- The key is double quoted with the escapes the engine reads, so a name with a space or a quote
---- in it is still one word. A hash and a set have no range to ask for, so those two come back whole
---- and the engine's row cap is what limits them.
----
 ---@param group string A drawer group key, such as `hashes`.
 ---@param key string
 ---@param limit integer

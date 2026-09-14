@@ -1,6 +1,5 @@
 local MiniTest = require('mini.test')
--- The result grid against a real engine and SQLite: filtering and sorting in the engine, editing
--- through a review, copying to the clipboard, and showing a query plan.
+-- The result grid against a real engine and SQLite.
 local helpers = dofile('tests/helpers.lua')
 
 local eq = MiniTest.expect.equality
@@ -114,9 +113,7 @@ T['a cell is changed straight from the split, and q leaves the editor'] = functi
   -- Line three is the first row, and column zero of it is `id`.
   vim.api.nvim_win_set_cursor(win, { 3, 0 })
 
-  -- Pressed as a user presses it, in one go: `feedkeys` ends an insert left open when its keys run
-  -- out. The editor opens typing, after what the cell holds, so the `9` goes on the end of the
-  -- value. Opened in normal mode, the `9` would be a count and `<Esc>` would cancel the editor.
+  -- Pressed as a user presses it, in one go.
   local value = tostring(result.current_cell().value)
   vim.api.nvim_feedkeys(vim.keycode('i9<Esc><CR>'), 'mx', false)
   eq(edit.staged(0, 0), value .. '9')

@@ -1,9 +1,4 @@
 --- Changes staged against the result on screen, and the windows that make and approve them.
----
---- Nothing is written as it is made. Cells, new rows and deletions collect here, keyed by the row's
---- index in the result, until a review shows the statements the engine planned for them and `<C-s>`
---- runs those statements together. Rows are identified by index rather than by value because the
---- engine holds the original values, keys included, and finds each row again from those.
 
 local M = {}
 
@@ -43,7 +38,7 @@ local function redraw()
   require('sqmeow.ui.result').redraw()
 end
 
---- How many changes are staged: each changed cell, deleted row and new row.
+--- How many changes are staged.
 ---@return integer
 function M.count()
   local total = #inserts
@@ -63,7 +58,6 @@ function M.reset()
 end
 
 --- The staged value of a cell, if it has one.
----
 ---@param row integer Zero-based row of the result.
 ---@param column integer Zero-based column.
 ---@return any value A string, or `vim.NIL`.
@@ -90,9 +84,7 @@ function M.inserts()
 end
 
 --- Stage a new value for a cell of a row the result holds, or of a new row.
----
----@param target { row: integer|nil, insert: integer|nil } Which row: `row` in the result, or the
---- `insert`th new one.
+---@param target { row: integer|nil, insert: integer|nil } Which row: `row` in the result, or the `insert`th new one.
 ---@param column integer Zero-based.
 ---@param value any A string, or `vim.NIL` for `NULL`.
 function M.set(target, column, value)
@@ -129,9 +121,6 @@ function M.add_row()
 end
 
 --- Stage rows for deletion, or take them back out when every one of them already was.
----
---- A new row is simply dropped: there is nothing in the database to delete.
----
 ---@param targets { row: integer|nil, insert: integer|nil }[]
 function M.toggle_delete(targets)
   local rows, added = {}, {}
@@ -218,8 +207,7 @@ end
 
 -- -- windows ---------------------------------------------------------------------------------
 
---- What a cell holds now: its staged value, or what the result holds for it.
----
+--- What a cell holds now.
 ---@param call sqmeow.CallSummary
 ---@param target { row: integer|nil, insert: integer|nil }
 ---@param column integer
@@ -248,10 +236,7 @@ local function current_text(call, target, column)
   return cell.value
 end
 
---- How big the cell editor has to be to show every line whole: as wide as the longest line, up to
---- most of the editor, and as tall as the rows those lines take once wrapped at that width, up to
---- half of it.
----
+--- How big the cell editor has to be to show every line whole.
 ---@param lines string[]
 ---@return { width: integer, height: integer }
 local function editor_size(lines)
@@ -272,11 +257,6 @@ local function editor_size(lines)
 end
 
 --- Open a float to change one cell.
----
---- An ordinary buffer, so every motion works and a value with line breaks keeps them. It opens in
---- insert mode after the value, since changing it is what it was opened for. `<C-s>` in either
---- mode, or `<CR>` in normal mode, stages what the buffer holds; `q` leaves it as it was.
----
 ---@param target { row: integer|nil, insert: integer|nil, column: integer, name: string }
 function M.edit_cell(target)
   local call = require('sqmeow.state').call
@@ -338,8 +318,7 @@ function M.edit_cell(target)
   popup:map('n', '<Esc>', close, { nowait = true })
   popup:on('BufLeave', close, { once = true })
 
-  -- Grown and shrunk with what is typed, so a line break or a long line never hides the rest of
-  -- the value behind the one line the window started with. Size alone, so it stays where it is.
+  -- Grown and shrunk with what is typed.
   local editor = popup
   popup:on({ 'TextChanged', 'TextChangedI' }, function()
     if popup ~= editor or not vim.api.nvim_win_is_valid(editor.winid) then
@@ -368,7 +347,6 @@ local function filetype(call)
 end
 
 --- Ask the engine to run approved statements.
----
 ---@param conn_id integer
 ---@param statements string[]
 function M.apply(conn_id, statements)
@@ -379,10 +357,7 @@ function M.apply(conn_id, statements)
   end
 end
 
---- What happened to applied statements. On success the staged changes are gone from the database
---- side too, so they are dropped here and the result's query runs again to show what is there now.
---- On failure they stay, to be fixed and tried again.
----
+--- What happened to applied statements.
 ---@param payload { conn_id: integer, statements: integer, error: string|nil }
 function M.on_applied(payload)
   if payload.error then
@@ -402,8 +377,6 @@ function M.on_applied(payload)
 end
 
 --- Show the statements the staged changes plan into, and apply them on `<C-s>`.
----
---- The review is the only way to apply: what runs is exactly what is on screen.
 function M.review()
   local call = require('sqmeow.state').call
   if M.count() == 0 then

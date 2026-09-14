@@ -22,7 +22,6 @@ T['triple']['names this machine the way rustc does'] = function()
   local architecture, system = triple:match('^([^%-]+)%-(.+)$')
   eq(vim.tbl_contains({ 'x86_64', 'aarch64' }, architecture), true)
   -- These are the systems the release workflow builds for, and the manifest is keyed by them.
-  -- Linux is musl, not gnu: asking for gnu matches nothing and sends every Linux user to a build.
   eq(vim.tbl_contains({ 'unknown-linux-musl', 'apple-darwin', 'pc-windows-msvc' }, system), true)
 end
 
@@ -131,8 +130,7 @@ T['install']['builds with cargo when asked for it'] = function()
   local ok, err = install.install('cargo')
   eq(ok, true)
   eq(err, nil)
-  -- Naming a method decides it. Falling back to a download would install something other than the
-  -- commit the user asked to build.
+  -- Naming a method decides it.
   eq(downloaded, false)
 end
 
@@ -236,8 +234,7 @@ T['install']['gives up rather than waiting for ever'] = function()
   local ok, err = install.install({ timeout = 50 })
   eq(ok, false)
   helpers.contains(assert(err, 'there should be an error'), 'timed out')
-  -- The guard must come back down, or a timeout would cost the user their session: every later
-  -- install would be turned away as a duplicate of one that is never going to finish.
+  -- The guard must come back down, or a timeout would cost the user their session.
   eq(install.installing(), nil)
 end
 

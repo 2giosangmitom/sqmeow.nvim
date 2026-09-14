@@ -1,18 +1,8 @@
 --- The channel to the engine.
----
---- The engine is started with `rpc = true`, which makes it a msgpack-rpc peer rather than a
---- process whose output we parse. Both sides can call the other: the plugin calls methods, and
---- the engine pushes events back through `dispatch` and writes result buffers itself.
----
---- Nothing here blocks for long. Engine methods answer immediately with an acknowledgement or a
---- call id, and anything that touches a database reports its progress as an event.
 
 local M = {}
 
 --- Plugin version, sent at handshake.
----
---- It also names the release |sqmeow.install| downloads an engine from, so it has to move
---- with the tag. release-please bumps it, finding the line by the annotation.
 M.version = '2.0.0' -- x-release-please-version
 
 ---@class sqmeow.EngineInfo
@@ -25,8 +15,7 @@ local info = nil
 local subscribers = {}
 local log = {}
 
--- Jobs we asked to stop, so their exit is not reported as a crash. Keyed by job id rather than a
--- single flag: during a restart the old engine is still exiting while the new one is starting.
+-- Jobs we asked to stop.
 local expected_exit = {}
 
 --- Most recent engine log lines, oldest first.
@@ -44,8 +33,7 @@ local function record(line)
 end
 
 local function forget(job)
-  -- Only the current engine's exit clears the state. A restart starts the new engine before the
-  -- old one has finished dying, and the straggler must not wipe its replacement.
+  -- Only the current engine's exit clears the state.
   if channel == job then
     channel, info = nil, nil
   end
@@ -63,10 +51,6 @@ local function on_exit(job, code)
 end
 
 --- Engine log lines collected from its stderr.
----
---- The engine never writes to stdout, which carries the protocol, so this is where anything it
---- has to say ends up.
----
 ---@return string[]
 function M.messages()
   return vim.deepcopy(log)
@@ -85,7 +69,6 @@ function M.info()
 end
 
 --- Start the engine if it is not already running.
----
 ---@return integer|nil channel
 ---@return string|nil error
 function M.start()
@@ -98,9 +81,7 @@ function M.start()
 
   local path, source = install.resolve()
   if not path then
-    -- Nothing is installed from here. Downloading megabytes because a query was run is not a
-    -- decision this side gets to make, and blocking on it would freeze the editor for as long as
-    -- the download took. The call that found no engine fails, naming what to run.
+    -- Nothing is installed from here.
     local step = install.installing()
     if step then
       return nil, 'the engine is ' .. step
@@ -133,8 +114,7 @@ function M.start()
   end
   channel = spawned
 
-  -- Leaving the editor would kill the job outright, which the engine would report as a crash.
-  -- Asking it to stop first keeps a normal exit looking normal.
+  -- Leaving the editor would kill the job outright.
   vim.api.nvim_create_autocmd('VimLeavePre', {
     group = vim.api.nvim_create_augroup('sqmeow.engine', { clear = true }),
     desc = 'Stop the sqmeow engine',
@@ -158,11 +138,6 @@ function M.start()
 end
 
 --- Mirror the plugin's configuration into the engine.
----
---- Only the settings the engine acts on: how many rows it will hold, and how many finished results
---- it keeps. Sending them rather than duplicating defaults means there is one place a user changes
---- them.
----
 ---@return table|nil applied What the engine says it applied, after clamping.
 function M.configure()
   if not channel then
@@ -170,8 +145,6 @@ function M.configure()
   end
 
   local config = require('sqmeow.config').get()
-  -- Two settings, because two is all the engine still decides. Everything else that used to travel
-  -- described how a result should look, and the engine no longer draws one.
   local ok, applied = pcall(vim.rpcrequest, channel, 'configure', {
     max_rows = config.query.max_rows,
     history_size = config.query.history_size,
@@ -199,7 +172,6 @@ function M.stop()
 end
 
 --- Stop and start the engine.
----
 ---@return integer|nil channel
 ---@return string|nil error
 function M.restart()
@@ -208,10 +180,6 @@ function M.restart()
 end
 
 --- Call an engine method and wait for its answer.
----
---- Engine methods return promptly by contract, so this does not stall the editor. Work that takes
---- real time answers with a call id and reports the rest through events.
----
 ---@param method string
 ---@param args table|nil Keyword arguments for the method.
 ---@return any|nil result
@@ -230,7 +198,6 @@ function M.request(method, args)
 end
 
 --- Call an engine method without waiting.
----
 ---@param method string
 ---@param args table|nil
 ---@return boolean started
@@ -246,7 +213,6 @@ function M.notify(method, args)
 end
 
 --- Subscribe to an engine event.
----
 ---@param event string Event name, such as 'call:state'.
 ---@param callback fun(payload: any)
 ---@return fun() unsubscribe
@@ -265,11 +231,7 @@ function M.on(event, callback)
   end
 end
 
---- Deliver an engine event. Called by the engine, not by user code.
----
---- A failing subscriber is reported and skipped. Letting it propagate would surface as an
---- unrelated error on the engine's next call, which is a miserable thing to debug.
----
+--- Deliver an engine event.
 ---@param event string
 ---@param payload any
 function M.dispatch(event, payload)

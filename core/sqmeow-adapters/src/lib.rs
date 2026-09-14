@@ -1,8 +1,4 @@
 //! Database adapters for sqmeow.nvim.
-//!
-//! Dispatch is an enum rather than `dyn Adapter`. That costs no allocation per call, and it means
-//! adding a database makes the compiler point at every place that must handle it, instead of
-//! leaving a gap to discover at runtime.
 
 pub mod mongodb;
 pub mod mysql;
@@ -24,10 +20,6 @@ pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 pub(crate) const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Open a pool, trying again while the server resets connections, until `CONNECT_TIMEOUT`.
-///
-/// sqlx retries a refused connection itself, but not one reset or cut off mid-handshake, which is
-/// what a server that has just restarted does: a container's port accepts before the database
-/// behind it is ready, so the first attempt after a restart fails when a second would not.
 pub(crate) async fn connect_retrying<T, F, Fut>(mut open: F) -> sqlx::Result<T>
 where
     F: FnMut() -> Fut,
@@ -64,9 +56,6 @@ pub use self::redis::RedisAdapter;
 pub use sqlite::SqliteAdapter;
 
 /// Turn a routine's name and the database's own word for what it is into a node.
-///
-/// Every dialect that has stored routines at all says "procedure" or "function" somewhere in its
-/// catalog, so the mapping is the same one three times and lives here rather than in each adapter.
 pub(crate) fn routine_node(name: String, kind: &str) -> RoutineNode {
     let kind = if kind.eq_ignore_ascii_case("procedure") {
         RoutineKind::Procedure
@@ -93,9 +82,6 @@ impl Backend {
     }
 
     /// Open a connection to one database of the server the URL points at.
-    ///
-    /// PostgreSQL and MongoDB use `database`: a URL that names none reaches a whole server, whose
-    /// databases are each read through a connection of their own.
     pub async fn connect_to(url: &str, database: Option<&str>) -> Result<Self> {
         let dialect =
             Dialect::from_url(url).ok_or_else(|| Error::UnsupportedUrl(url.to_owned()))?;
@@ -181,8 +167,7 @@ impl Backend {
         }
     }
 
-    /// The database commands run on, for the one dialect where that changes under a connection's
-    /// name: MongoDB, through `use`. `None` for the others, whose connection names its database.
+    /// The database MongoDB commands run on.
     pub fn database(&self) -> Option<String> {
         match self {
             Self::MongoDb(adapter) => Some(adapter.database()),

@@ -34,9 +34,6 @@ impl Connection {
     }
 
     /// Read frames until the peer hangs up, dispatching each one.
-    ///
-    /// Responses are matched against in-flight requests here rather than reaching the handler,
-    /// so a handler only ever sees calls the peer originated.
     pub async fn serve<H: Handler>(mut self, handler: Arc<H>) {
         while let Some(message) = self.incoming.recv().await {
             match message {

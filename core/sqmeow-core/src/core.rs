@@ -1,9 +1,4 @@
 //! The method table, and what each method does.
-//!
-//! Every handler returns to the editor immediately. Methods that only read session state answer
-//! from the dispatch call itself; methods that touch a database answer with an acknowledgement or
-//! a call id and report the rest through events. Neovim blocks inside `rpcrequest`, so a handler
-//! that waited on a socket would freeze the editor for as long as the query took.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,8 +9,8 @@ use sqmeow_adapters::Backend;
 use sqmeow_db::export::{self, Format, Rows};
 use sqmeow_db::view::{self, Filter, Op, Sort};
 use sqmeow_db::{
-    CatalogEntry, Cell, Changes, ColumnNode, Dialect, Error as DbError, KeyType, RelationKind,
-    RelationNode, ResultSet, RoutineKind, RoutineNode, SchemaNode, sql,
+    Cell, Changes, ColumnNode, Dialect, Error as DbError, KeyType, RelationKind, RelationNode,
+    ResultSet, RoutineKind, RoutineNode, SchemaNode, sql,
 };
 use sqmeow_rpc::{Handler, Nvim, Reply};
 use tokio::sync::Notify;
@@ -57,17 +52,12 @@ impl Core {
         Ok(map(vec![
             ("core_version", Value::from(env!("CARGO_PKG_VERSION"))),
             ("pid", Value::from(std::process::id())),
-            // Read from the build rather than hardcoded, so the drawer and the connect prompt
-            // cannot offer a database this binary was not compiled with.
+            // Read from the build rather than hardcoded.
             ("adapters", strings(sqmeow_adapters::supported())),
         ]))
     }
 
     /// Mirror the plugin's configuration into the engine.
-    ///
-    /// Only two settings are left here. Everything else that used to travel — the page size, the
-    /// column width cap, what `NULL` reads as, the grid's characters, the column icons — described
-    /// how a result should look, and the engine no longer draws one.
     fn configure(&self, args: &Args) -> Result<Value, String> {
         let options = self.session.configure(OptionsPatch {
             max_rows: args.opt_usize("max_rows"),
@@ -117,8 +107,7 @@ impl Core {
     ) {
         self.emit_connection(id, "connecting", vec![("name", Value::from(name.clone()))]);
 
-        // The expanded URL holds the password and never leaves this function: it is not logged,
-        // not echoed back to the editor, and not put in an error message.
+        // The expanded URL holds the password and never leaves this function.
         let url = match crate::template::expand(&url).await {
             Ok(url) => url,
             Err(error) => {
@@ -137,8 +126,7 @@ impl Core {
                     ("name", Value::from(name.clone())),
                     ("dialect", Value::from(dialect)),
                 ];
-                // Which database a MongoDB connection starts on, for the winbar: a URL naming none
-                // runs on `test`, and nothing else on screen would say so.
+                // Which database a MongoDB connection starts on, for the winbar.
                 if let Some(database) = backend.database() {
                     payload.push(("current_database", Value::from(database)));
                 }
@@ -198,8 +186,7 @@ impl Core {
             return reply.err("there is no statement to run");
         }
 
-        // A line means "run only what the cursor is in". Choosing here rather than in the plugin
-        // keeps one implementation of what a statement is, the same one that split the buffer.
+        // A line means "run only what the cursor is in".
         if let Some(line) = args.opt_usize("line") {
             match sql::statement_at(&statements, line) {
                 Some(chosen) => statements = vec![chosen.clone()],
@@ -210,8 +197,7 @@ impl Core {
         // Where to save the rows once the query is done, when the plugin wants them for its log.
         let archive = args.opt_string("archive").map(PathBuf::from);
 
-        // The id goes back before the query starts, so the editor can show a running state and
-        // offer to cancel it from the moment the call is made.
+        // The id goes back before the query starts.
         let call_id = self.session.next_call_id();
         reply.ok(Value::from(call_id));
 
@@ -233,8 +219,7 @@ impl Core {
         let cancel = self.session.begin_call(call_id);
         let started = Instant::now();
 
-        // The line range travels with the "executing" event so the editor can show which
-        // statement is running, which matters most when only one of several was chosen.
+        // The line range lets the editor show which statement is running.
         let span = statements.first().zip(statements.last());
         self.emit_call(
             call_id,
@@ -280,8 +265,7 @@ impl Core {
 
         // Only the last statement's rows are shown. A script ends with the query worth looking at.
         let mut result = last.unwrap_or_default();
-        // The whole call's time rather than the last statement's, since that is what a saved copy
-        // should say the query took.
+        // The whole call's time rather than the last statement's.
         result.set_elapsed(started.elapsed());
 
         let call = Call {
@@ -307,17 +291,12 @@ impl Core {
     }
 
     /// Read a result saved by an earlier `execute` back into the session.
-    ///
-    /// Answers with a call id straight away and reads the file on a blocking thread, because a
-    /// large result takes a while to decode and Neovim is waiting inside `rpcrequest`. What was
-    /// read arrives as `call:state`, exactly as a query's result does.
     fn spawn_restore(self: Arc<Self>, args: &Args, reply: Reply) {
         let path = match args.string("path") {
             Ok(path) => PathBuf::from(path),
             Err(error) => return reply.err(error),
         };
-        // The connection it ran on, when that is open. Nothing is asked of it: the id only says
-        // which database the rows came from.
+        // The connection it ran on, when that is open.
         let conn_id = args.opt_integer("conn_id").unwrap_or(0);
 
         let call_id = self.session.next_call_id();
@@ -381,14 +360,9 @@ impl Core {
     }
 
     /// Read one level of the schema tree.
-    ///
-    /// One level at a time, on demand. Reading a whole schema up front would stall the drawer on
-    /// a database with ten thousand tables, to fetch information almost none of which is about to
-    /// be looked at.
     async fn run_introspect(self: Arc<Self>, connection: Arc<Connection>, path: Vec<String>) {
         let nodes = match path.as_slice() {
-            // A cluster's databases are each opened as a connection of their own, so the tree
-            // below one of them belongs to that connection rather than continuing this path.
+            // A cluster's databases are each opened as a connection of their own.
             [] => match connection.backend.databases().await {
                 Some(databases) => databases.map(database_nodes),
                 None => connection.backend.schemas().await.map(schema_nodes),
@@ -422,82 +396,7 @@ impl Core {
         }
     }
 
-    fn spawn_catalog(self: Arc<Self>, args: &Args, reply: Reply) {
-        let conn_id = match args.integer("conn_id") {
-            Ok(id) => id,
-            Err(error) => return reply.err(error),
-        };
-        let refresh = args.opt_bool("refresh").unwrap_or(false);
-
-        let Some(connection) = self.session.connection(conn_id) else {
-            return reply.err(format!("no connection with id {conn_id}"));
-        };
-        if refresh {
-            connection.forget_catalog();
-        }
-
-        reply.ok(Value::Boolean(true));
-        tokio::spawn(async move { self.run_catalog(connection).await });
-    }
-
-    /// Read every relation in every schema.
-    ///
-    /// This is what the relation picker searches, so it is one flat list rather than a tree, and
-    /// it is cached on the connection: the cost is one query per schema, which is worth paying
-    /// once and not again on every keystroke.
-    async fn run_catalog(self: Arc<Self>, connection: Arc<Connection>) {
-        let entries = match connection.cached_catalog() {
-            Some(cached) => cached,
-            None => match self.read_catalog(&connection).await {
-                Ok(entries) => connection.store_catalog(entries),
-                Err(error) => {
-                    return self.emit_catalog(connection.id, Err(error.to_string()));
-                }
-            },
-        };
-
-        self.emit_catalog(connection.id, Ok(&entries));
-    }
-
-    async fn read_catalog(&self, connection: &Connection) -> sqmeow_db::Result<Vec<CatalogEntry>> {
-        let mut entries = Vec::new();
-
-        for schema in connection.backend.schemas().await? {
-            // One unreadable schema, which permissions alone can cause, must not empty the whole
-            // catalog: skip it and keep the ones that did answer.
-            let Ok(relations) = connection.backend.relations(&schema.name).await else {
-                continue;
-            };
-            entries.extend(relations.into_iter().map(|relation| CatalogEntry {
-                schema: schema.name.clone(),
-                name: relation.name,
-                kind: relation.kind,
-            }));
-        }
-
-        Ok(entries)
-    }
-
-    fn emit_catalog(&self, conn_id: i64, entries: Result<&[CatalogEntry], String>) {
-        let mut payload = vec![("conn_id", Value::from(conn_id))];
-
-        match entries {
-            Ok(entries) => payload.push(("relations", Value::Array(catalog_entries(entries)))),
-            Err(error) => {
-                payload.push(("relations", Value::Array(vec![])));
-                payload.push(("error", Value::from(error)));
-            }
-        }
-
-        if let Err(error) = self.nvim.emit("schema:catalog", map(payload)) {
-            tracing::warn!(%error, "could not report the catalog");
-        }
-    }
-
     /// One row of a stored result, for the detail view.
-    ///
-    /// Answered from the dispatch call rather than a task: a row is bounded by the column count,
-    /// so formatting it is not the kind of work the editor should wait on a task for.
     fn row(&self, args: &Args) -> Result<Value, String> {
         let call_id = args.integer("call_id")? as u64;
         let index = args.opt_usize("row").unwrap_or(0);
@@ -521,9 +420,6 @@ impl Core {
                                 ("type_name", Value::from(cell.type_name())),
                                 ("declared_type", Value::from(meta.type_name.clone())),
                                 ("is_null", Value::from(cell.is_null())),
-                                // The unescaped text: a detail view has room for the line breaks
-                                // a grid cell has to flatten away. Empty for `NULL`, which the
-                                // editor recognises from `is_null` and shows in its own words.
                                 ("value", Value::from(cell.text("").into_owned())),
                             ])
                         })
@@ -545,8 +441,6 @@ impl Core {
             Err(error) => return reply.err(error),
         };
 
-        // The selected rows, which only the editor knows, so it sends the range rather than the
-        // engine guessing. Without an `offset` the whole result is written.
         let rows = match args.opt_usize("offset") {
             Some(start) => Rows {
                 start,
@@ -573,9 +467,6 @@ impl Core {
     }
 
     /// The start of an export, as the text it would write, for the export dialog to show.
-    ///
-    /// Answered from the dispatch call rather than a task: it is capped at [`PREVIEW_ROWS`] rows, so
-    /// it is a page's worth of work, and the dialog redraws it as each answer changes.
     fn export_preview(&self, args: &Args) -> Result<Value, String> {
         let call_id = args.integer("call_id")? as u64;
         let format = format(args)?;
@@ -607,10 +498,6 @@ impl Core {
     }
 
     /// Render part of a result and write it to a file.
-    ///
-    /// The text never travels back as a reply. A hundred thousand rows of CSV would be a very
-    /// large message for the editor to decode only to write straight back out, so the engine
-    /// writes the file itself.
     async fn run_export(
         self: Arc<Self>,
         call_id: u64,
@@ -668,10 +555,6 @@ impl Core {
     }
 
     /// Narrow and order the rows of a stored result, for the grid to page through.
-    ///
-    /// Answers straight away and builds the view on a blocking thread: sorting a hundred thousand
-    /// rows is quick, but not quick enough to hold the editor inside `rpcrequest` for. The row count
-    /// arrives as `call:view`. Empty filters, sort and scope put every row back in its first order.
     fn spawn_view(self: Arc<Self>, args: &Args, reply: Reply) {
         let call_id = match args.integer("call_id") {
             Ok(id) => id as u64,
@@ -733,9 +616,6 @@ impl Core {
     }
 
     /// Plan staged changes to a stored result into the statements that make them, for review.
-    ///
-    /// Answered from the dispatch call: planning reads only the cells being changed, and touches no
-    /// database.
     fn plan(&self, args: &Args) -> Result<Value, String> {
         let call_id = args.integer("call_id")? as u64;
         let changes = changes(args.get("changes"))?;
@@ -788,15 +668,6 @@ impl Core {
     }
 
     /// Hand the editor a slice of a result's rows.
-    ///
-    /// Answered from the dispatch call rather than a task. A page is bounded by what fits on a
-    /// screen, so building it is not work the editor should wait on a task for, and paging that
-    /// takes a round trip through the scheduler feels slower than paging that does not.
-    ///
-    /// Each row is an array of values in column order, in whatever msgpack type the value really
-    /// is: a number stays a number so the editor can align it, and `NULL` is nil. Text arrives
-    /// already flattened to one line, since a grid row is one line and only this side knows the
-    /// original.
     fn rows(&self, args: &Args) -> Result<Value, String> {
         let call_id = args.integer("call_id")? as u64;
         let offset = args.opt_usize("offset").unwrap_or(0);
@@ -807,8 +678,7 @@ impl Core {
             let view = call.view.lock().expect("view poisoned").clone();
             let total = view.as_ref().map_or(result.row_count(), |view| view.len());
             let end = offset.saturating_add(limit).min(total);
-            // An out-of-range offset yields no rows rather than an error: a page request can race a
-            // result being replaced, and an empty page is the honest answer.
+            // An out-of-range offset yields no rows rather than an error.
             let chosen: Vec<usize> = match (&view, offset < end) {
                 (_, false) => Vec::new(),
                 (Some(view), true) => view[offset..end].to_vec(),
@@ -829,16 +699,14 @@ impl Core {
                 })
                 .collect();
 
-            // Which row of the result each one is, since a filtered or sorted page is not a run of
-            // consecutive rows, and editing one or showing its detail needs to know which it was.
+            // Which row of the result each one is.
             map(vec![
                 (
                     "indices",
                     Value::Array(chosen.iter().map(|row| Value::from(*row as u64)).collect()),
                 ),
                 ("rows", Value::Array(rows)),
-                // How many rows the view holds, so the editor pages through a filter without
-                // keeping a count of its own that could fall behind.
+                // How many rows the view holds.
                 ("total", Value::from(total as u64)),
             ])
         });
@@ -871,8 +739,7 @@ impl Core {
     }
 }
 
-/// The drawer draws every level the same way, so every level answers with the same fields:
-/// a name, what kind of thing it is, and whether it has children worth expanding.
+/// The drawer draws every level the same way.
 fn schema_nodes(schemas: Vec<SchemaNode>) -> Vec<Value> {
     schemas
         .into_iter()
@@ -902,15 +769,10 @@ fn database_nodes(databases: Vec<String>) -> Vec<Value> {
 }
 
 /// The four groups a schema is drawn as, each with how many things it holds.
-///
-/// The counts are what makes the groups worth having: `Functions (0)` answers the question without
-/// being opened, and a schema of three hundred tables says so before it is expanded into them.
-/// Reading them costs the two queries that expanding a group would have cost anyway.
 async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>, DbError> {
     let relations = connection.backend.relations(schema).await?;
 
-    // Redis holds keys and nothing else, and what a key holds decides how it is read back, so its
-    // groups are the types rather than tables and views.
+    // Redis holds keys and nothing else, and what a key holds decides how it is read back.
     if connection.backend.dialect() == Dialect::Redis {
         return Ok(KeyType::ALL
             .into_iter()
@@ -952,9 +814,6 @@ async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>
 }
 
 /// Whether a relation belongs under Tables rather than under Views.
-///
-/// Anything the server reports that is neither a table nor a view, such as a foreign table, goes
-/// with the tables: it is queried the same way, and a group of its own for one row would be noise.
 fn is_table(kind: RelationKind) -> bool {
     !matches!(kind, RelationKind::View | RelationKind::MaterializedView)
 }
@@ -991,9 +850,7 @@ async fn members(
             ))
         }
         other => {
-            // Anything else is a Redis type's group, or a path the plugin invented: every group it
-            // can ask for came from a node this engine emitted, and an error line beats a group
-            // that opens onto nothing.
+            // Anything else is a Redis type's group, or a path the plugin invented.
             let Some(wanted) = KeyType::ALL
                 .into_iter()
                 .find(|kind| kind.group().0 == other)
@@ -1012,11 +869,6 @@ async fn members(
 }
 
 /// One group heading.
-///
-/// `key` is what the path is built from and `name` is what is drawn, so the engine matches on a
-/// stable word rather than on whatever the drawer happens to print. `kind` picks the icon, which
-/// the six Redis groups share. An empty group is not expandable: opening it would show nothing,
-/// and the count already says why.
 fn group_node(key: &str, name: &str, kind: &str, count: usize) -> Value {
     map(vec![
         ("key", Value::from(key)),
@@ -1034,8 +886,7 @@ fn routine_nodes(routines: Vec<RoutineNode>) -> Vec<Value> {
             map(vec![
                 ("name", Value::from(routine.name)),
                 ("kind", Value::from(routine.kind.name())),
-                // A routine is a leaf. Its body and its arguments are not something the drawer
-                // shows, and pretending otherwise would open onto nothing.
+                // A routine is a leaf.
                 ("expandable", Value::from(false)),
             ])
         })
@@ -1076,13 +927,7 @@ fn column_nodes(columns: Vec<ColumnNode>) -> Vec<Value> {
                 ("primary_key", Value::from(column.primary_key)),
             ];
 
-            // What the column points at, as the drawer shows it: `authors.id`. One string rather
-            // than two fields, because the drawer has nothing to do with the halves separately and
-            // a qualified name is what a reader is looking for.
-            //
-            // Left out entirely rather than sent as nil: a msgpack nil arrives in Lua as `vim.NIL`,
-            // which is a userdata that tests as true, so a nil here would make every column look
-            // like it references something.
+            // What the column points at, as the drawer shows it.
             if let Some(key) = column.foreign_key {
                 pairs.push((
                     "references",
@@ -1091,20 +936,6 @@ fn column_nodes(columns: Vec<ColumnNode>) -> Vec<Value> {
             }
 
             map(pairs)
-        })
-        .collect()
-}
-
-/// The flat catalog the relation picker searches, one entry per relation.
-fn catalog_entries(entries: &[CatalogEntry]) -> Vec<Value> {
-    entries
-        .iter()
-        .map(|entry| {
-            map(vec![
-                ("schema", Value::from(entry.schema.clone())),
-                ("name", Value::from(entry.name.clone())),
-                ("kind", Value::from(entry.kind.name())),
-            ])
         })
         .collect()
 }
@@ -1121,8 +952,7 @@ fn format(args: &Args) -> Result<Format, String> {
     }
 }
 
-/// The elements of an array argument. Lua sends an empty table as an empty map, and a missing one
-/// as nothing, and both are no elements.
+/// The elements of an array argument.
 fn items(value: Option<&Value>) -> Vec<&Value> {
     match value {
         Some(Value::Array(items)) => items.iter().collect(),
@@ -1170,8 +1000,7 @@ fn filters(value: Option<&Value>) -> Result<Vec<Filter>, String> {
         .collect()
 }
 
-/// The staged changes a `plan` call carries: `updates` of `{ row, cells }`, `deletes` of rows, and
-/// `inserts` of cell lists, where a cell is `{ column, value }` and a missing value is `NULL`.
+/// The staged changes a `plan` call carries.
 fn changes(value: Option<&Value>) -> Result<Changes, String> {
     let Some(value) = value else {
         return Ok(Changes::default());
@@ -1208,32 +1037,18 @@ fn changes(value: Option<&Value>) -> Result<Changes, String> {
 }
 
 /// One cell, as the value it really is rather than as text.
-///
-/// This is what "structured" means on the wire: a number reaches Lua as a number, so the editor can
-/// align it without parsing it back; a boolean as a boolean; `NULL` as nil, which Neovim decodes to
-/// `vim.NIL` and so survives being an element of an array.
-///
-/// Everything else arrives as a string, already flattened to a single line. A grid row is one line,
-/// and the escaping has to happen on the side that still has the original: a value holding a line
-/// break would otherwise arrive as two rows, and the width this column was measured to would be
-/// wrong. Exports do not come through here, so nothing they carry is flattened.
 fn cell_value(cell: &Cell) -> Value {
     match cell {
         Cell::Null => Value::Nil,
         Cell::Bool(value) => Value::from(*value),
         Cell::Int(value) => Value::from(*value),
         Cell::Float(value) => Value::from(*value),
-        // Exact numerics stay text: they do not fit a float without losing digits, which is the
-        // whole reason the database has the type.
+        // Exact numerics stay text.
         other => Value::from(other.display("").into_owned()),
     }
 }
 
 /// What the editor needs to describe a result and lay its columns out.
-///
-/// Each column carries what it is and how wide its widest value is, measured over every row. That
-/// measurement is the one thing the editor cannot work out for itself: it is sent one page at a
-/// time, and a column sized from one page would change width when the user turned to the next.
 fn summarize(call: &Call) -> Vec<(&'static str, Value)> {
     let result = &call.result;
 
@@ -1247,14 +1062,12 @@ fn summarize(call: &Call) -> Vec<(&'static str, Value)> {
                 ("name", Value::from(column.name.clone())),
                 ("type_name", Value::from(column.type_name.clone())),
                 ("class", Value::from(column.class.name())),
-                // Display columns taken by the widest value, `NULL`s excluded, since what one
-                // reads as is the editor's choice and so only the editor can measure it.
+                // Display columns taken by the widest value, `NULL`s excluded.
                 ("widest", Value::from(stats.widest as u64)),
                 ("nulls", Value::from(stats.nulls)),
                 ("numeric", Value::from(stats.numeric)),
             ];
-            // Left out rather than sent as nil for a column that is no kind of key: a msgpack nil
-            // reaches Lua as `vim.NIL`, which is a userdata and tests as true.
+            // Left out rather than sent as nil for a column that is no kind of key.
             if let Some(key) = column.key.name() {
                 pairs.push(("key", Value::from(key)));
             }
@@ -1274,14 +1087,11 @@ fn summarize(call: &Call) -> Vec<(&'static str, Value)> {
         ("call_id", Value::from(call.id)),
         ("conn_id", Value::from(call.conn_id)),
         ("rows", Value::from(result.row_count() as u64)),
-        // The statement that produced these rows, which is what running them again means: the
-        // editor sent a whole buffer, and only this one of its statements is on screen.
+        // The statement that produced these rows.
         ("sql", Value::from(result.statement())),
         ("truncated", Value::from(result.is_truncated())),
     ];
-    // Left out rather than sent as nil when nothing was written, for the reason `key` is above: a
-    // MongoDB `find` that matches nothing has neither rows nor a count, and a nil here would reach
-    // the winbar as a number to print.
+    // Left out rather than sent as nil when nothing was written, for the reason `key` is above.
     if let Some(source) = result.source() {
         pairs.push((
             "source",
@@ -1298,10 +1108,6 @@ fn summarize(call: &Call) -> Vec<(&'static str, Value)> {
 }
 
 /// Save a finished result where the plugin asked, for its query log to show again later.
-///
-/// Started after `done` has gone out rather than before it: writing a hundred thousand rows takes
-/// time the user should spend looking at them. A statement that returned no columns has nothing to
-/// save, and the plugin knows not to point at a file for one.
 fn save(path: PathBuf, call: Arc<Call>) {
     if call.result.columns().is_empty() {
         return;
@@ -1327,8 +1133,7 @@ impl Handler for Core {
             Err(error) => return reply.err(format!("{method}: {error}")),
         };
 
-        // Anything that only reads session state answers here. Anything that touches a database
-        // hands `reply` to a task, which answers as soon as it has an id to give back.
+        // Anything that only reads session state answers here.
         let immediate = match method.as_str() {
             "handshake" => self.handshake(&args),
             "ping" => Ok(Value::from("pong")),
@@ -1351,7 +1156,6 @@ impl Handler for Core {
             "view" => return self.spawn_view(&args, reply),
             "apply" => return self.spawn_apply(&args, reply),
             "introspect" => return self.spawn_introspect(&args, reply),
-            "catalog" => return self.spawn_catalog(&args, reply),
             "export" => return self.spawn_export(&args, reply),
 
             other => Err(format!("unknown method `{other}`")),

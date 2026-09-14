@@ -5,10 +5,6 @@ use rmpv::Value;
 use crate::client::Client;
 
 /// A request that still owes the peer an answer.
-///
-/// Handlers are synchronous by design: they take a `Reply`, spawn whatever work they need, and
-/// return immediately. That is what keeps the editor from blocking on a database round trip.
-/// The `Reply` can travel into a spawned task and answer from there.
 pub struct Reply {
     inner: Option<(Client, u32)>,
 }
@@ -43,8 +39,7 @@ impl Reply {
 
 impl Drop for Reply {
     fn drop(&mut self) {
-        // Neovim blocks the editor inside `rpcrequest` until it gets an answer. Losing a `Reply`
-        // would hang the UI, so a dropped one still answers, with an error.
+        // Neovim blocks the editor inside `rpcrequest` until it gets an answer.
         self.finish(Err(
             "the handler dropped this request without answering".into()
         ));

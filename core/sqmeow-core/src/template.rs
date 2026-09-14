@@ -1,21 +1,13 @@
-//! Filling in the secret parts of a connection URL.
-//!
-//! A URL is the one place a password would otherwise sit in plain text in a config file. Writing
-//! it as a directive instead means the file can be committed and the secret stays where it lives:
+//! Expands secret directives in a connection URL:
 //!
 //! ```text
 //! postgres://app:{{ env "PGPASSWORD" }}@localhost/dev
 //! postgres://app:{{ exec "pass show db/prod" }}@db.internal/app
 //! ```
 //!
-//! Expansion happens here, in the engine, and the expanded URL is never logged or sent back to the
-//! editor. What the editor holds, and therefore what any interface can accidentally display, stays
-//! the unexpanded form.
+//! The expanded URL is never logged or sent back to the editor.
 
 /// Expand every `{{ ... }}` directive in a string.
-///
-/// Text outside a directive is copied unchanged, so a URL with no directives costs one scan and no
-/// allocation beyond the copy.
 pub async fn expand(input: &str) -> Result<String, String> {
     if !input.contains("{{") {
         return Ok(input.to_owned());
@@ -54,9 +46,6 @@ async fn evaluate(directive: &str) -> Result<String, String> {
 }
 
 /// Split `env "NAME"` into its directive and its argument.
-///
-/// Both quote styles are accepted, because a shell command in a URL frequently contains double
-/// quotes of its own and backticks let it stay readable.
 fn split(directive: &str) -> Result<(&str, String), String> {
     let (name, rest) = directive
         .split_once(char::is_whitespace)
@@ -78,10 +67,6 @@ fn split(directive: &str) -> Result<(&str, String), String> {
 }
 
 /// Run a command and take its output as the value.
-///
-/// This is a shell command from the user's own configuration, which is why it is allowed at all.
-/// It is also why the failure message repeats the command: a password manager that is locked fails
-/// here, and the user needs to see which command to unlock.
 async fn run(command: &str) -> Result<String, String> {
     let output = shell(command)
         .await
@@ -92,8 +77,7 @@ async fn run(command: &str) -> Result<String, String> {
         return Err(format!("`{command}` failed: {}", stderr.trim()));
     }
 
-    // A secret manager prints a trailing newline. Keeping it would produce a password with a
-    // newline in it, and an authentication failure nobody could explain.
+    // A secret manager prints a trailing newline.
     Ok(String::from_utf8_lossy(&output.stdout)
         .trim_end()
         .to_owned())
@@ -171,8 +155,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_commands_trailing_newline_is_dropped() {
-        // A password with a newline on the end authenticates against nothing, and the failure
-        // would look like a wrong password rather than a formatting problem.
+        // A password with a newline on the end authenticates against nothing, and the failure would
+        // look like a wrong password rather than a formatting problem.
         assert_eq!(
             expand("{{ exec \"printf 'a\\n\\n'\" }}").await.unwrap(),
             "a"

@@ -1,7 +1,4 @@
 //! The SQLite adapter against a real database.
-//!
-//! Every test uses an in-memory database, so the suite needs no server, no fixture file, and no
-//! cleanup, and still exercises the real driver rather than a stand-in.
 
 use sqmeow_adapters::Backend;
 use sqmeow_db::{Cell, Changes, Error, ForeignKey, KeyKind, RelationKind, Source, TypeClass};
@@ -109,8 +106,7 @@ async fn decodes_null_in_every_column_type() {
 
 #[tokio::test]
 async fn honours_sqlite_dynamic_typing() {
-    // SQLite stores what it is given, so an integer column can hold text. The value decides the
-    // cell type, not the declared column type.
+    // SQLite stores what it is given.
     let backend = database().await;
     run(&backend, "create table loose (v integer)").await;
     run(

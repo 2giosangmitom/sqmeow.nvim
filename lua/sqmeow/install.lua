@@ -1,26 +1,4 @@
 --- Finding, and when asked, fetching the engine binary.
----
---- Two places are checked, in order: the installed copy under `core.path`, and a local
---- `cargo build` inside the plugin directory. The last one exists so that working on the engine
---- needs no install step.
----
---- Nothing is ever installed on its own. Downloading several megabytes is not something a plugin
---- should decide to do because a session happened to start, so |sqmeow.install()| is a function the
---- user calls, from their plugin manager's build hook or by hand. A call that needs an engine and
---- finds none fails saying so, rather than quietly starting a download the user did not ask for.
----
---- Two ways to get one, and the caller may name either. A release build is downloaded, which keeps
---- installation free of a Rust toolchain: the release workflow cross-compiles for every target it
---- supports and publishes a manifest naming each archive and its checksum, and this reads that.
---- Or `cargo build` compiles the checkout, which is how to run a commit that has not been released.
---- Both put the engine in the same place, so neither can end up shadowing the other.
----
---- Nothing here waits, with one exception. A download is minutes of work on a slow connection, and
---- an editor that cannot be typed in for those minutes is indistinguishable from one that has hung,
---- so every step that runs a program hands back a callback. The exception is |sqmeow.install()|
---- called without a callback, which is the build-hook case: a plugin manager treats the hook
---- returning as the install being over, so one that returned early would report success before
---- there was anything installed.
 
 local M = {}
 
@@ -31,22 +9,12 @@ M.repository = '2giosangmitom/sqmeow.nvim'
 M.binary = vim.fn.has('win32') == 1 and 'sqmeow-core.exe' or 'sqmeow-core'
 
 --- The ways an engine can be obtained, as |sqmeow.install()| accepts them.
----
---- The first three name a download tool, for a machine that has more than one and where the
---- detected one does not work. `cargo` compiles the checkout instead of downloading anything, which
---- is what to ask for to run a commit that has not been released yet.
 M.methods = { 'curl', 'wget', 'powershell', 'cargo' }
 
 --- How long |sqmeow.install()| waits when it was given no callback, in milliseconds.
----
---- Long enough for a cargo build on a slow machine, since that is the longest of the two. It is a
---- backstop against waiting for ever, not a budget: an install that takes this long has gone wrong.
 M.timeout = 10 * 60 * 1000
 
 --- The install now running, if there is one.
----
---- Held so that a second one is not started alongside it: both write to the same paths, and the
---- one thing worse than waiting for a download is two of them unpacking over each other.
 ---@type table|nil
 local running = nil
 
@@ -57,10 +25,6 @@ local root = vim.fs.normalize(
 local notify = require('sqmeow.utils').notify
 
 --- Show how far the install has got, on the message line rather than in the notification history.
----
---- A notification per percent would bury everything else that happened today. This writes over
---- itself instead, and the last one is cleared when the install ends.
----
 ---@param message string|nil nil clears the line.
 local function progress(message)
   if not message then
@@ -70,25 +34,17 @@ local function progress(message)
 end
 
 --- Start a program and answer when it is done, without waiting for it.
----
 ---@param command string[]
 ---@param opts table
 ---@param callback fun(result: table)
 local function spawn(command, opts, callback)
   local ok, err = pcall(vim.system, command, opts, vim.schedule_wrap(callback))
   if not ok then
-    -- `vim.system` throws when the program cannot be started at all, which is a failure like any
-    -- other to everything upstream of here.
+    -- `vim.system` throws when the program cannot be started at all.
     vim.schedule(function()
       callback({ code = -1, stderr = tostring(err) })
     end)
   end
-end
-
---- Directory the plugin was installed into.
----@return string
-function M.plugin_root()
-  return root
 end
 
 --- Where a downloaded engine is kept.
@@ -110,7 +66,6 @@ function M.dev_path()
 end
 
 --- Find an engine to run.
----
 ---@return string|nil path Absolute path to the engine.
 ---@return string source One of 'managed', 'dev', or 'missing'.
 function M.resolve()
@@ -128,25 +83,12 @@ function M.resolve()
 end
 
 --- Whether an install is under way, and what it is doing.
----
---- The engine cannot be started while this is true, so callers use it to tell a user who is
---- waiting on a download from one who has no engine at all.
----
 ---@return string|nil step One of 'downloading', 'unpacking' or 'building', or nil when idle.
 function M.installing()
   return running and running.step or nil
 end
 
 --- The Rust target triple for this machine.
----
---- Named the way the release archives are, since matching one of them is the only thing this is
---- for. Linux is musl rather than gnu: the release workflow builds statically against musl so the
---- binary is not tied to a distribution newer than the one running it, and a triple of `gnu` here
---- would match nothing in the manifest and send every Linux user to a cargo build instead.
----
---- An unrecognised pair answers with nil rather than a guess: downloading the wrong binary fails
---- in a much more confusing way than not downloading one at all.
----
 ---@return string|nil triple
 ---@return string|nil error
 function M.triple()
@@ -175,11 +117,6 @@ function M.triple()
 end
 
 --- Where the manifest for a release lives.
----
---- The release asked for is the plugin's own version, which lives in |sqmeow.rpc|. A plugin
---- manager may have checked out a commit that is not a tag at all, so it is written down rather
---- than read from the checkout.
----
 ---@param version string|nil Defaults to this plugin's version.
 ---@return string
 function M.manifest_url(version)
@@ -190,21 +127,14 @@ function M.manifest_url(version)
 end
 
 --- Download something, with whichever tool this machine has.
----
---- curl first, then wget, then PowerShell, which between them covers every platform the engine is
---- built for without adding a dependency to any of them. They are tried in turn, and only a tool
---- that is installed and then fails moves on to the next.
----
 ---@param url string
 ---@param destination string
----@param opts table|nil `label` names the download in the progress line; `method` uses only that
----  tool, so a machine with three of them can be told which one to use.
+---@param opts table|nil `label` names the download in the progress line.
 ---@param callback fun(ok: boolean, err: string|nil)
 function M.fetch(url, destination, opts, callback)
   opts = opts or {}
 
-  -- curl draws a progress bar when its output is a file and it is not asked to be silent, which is
-  -- the only one of the three that can say how far along it is.
+  -- curl draws a progress bar when its output is a file and it is not asked to be silent.
   local attempts = {
     {
       'curl',
@@ -226,8 +156,6 @@ function M.fetch(url, destination, opts, callback)
   }
 
   if opts.method then
-    -- Asked for by name, so the others are not tried: a caller naming a tool wants to know that
-    -- one failed, not to be handed the result of a different one.
     attempts = vim.tbl_filter(function(command)
       return command[1] == opts.method
     end, attempts)
@@ -247,14 +175,10 @@ function M.fetch(url, destination, opts, callback)
       return attempt()
     end
 
-    -- Reading stderr as it arrives is what turns curl's bar into a percentage, so it cannot also
-    -- be collected into the result; the tail of it is kept by hand for the error message.
+    -- Reading stderr as it arrives is what turns curl's bar into a percentage.
     local tail = {}
 
-    -- curl redraws its bar by returning to the start of the line, so a carriage return is what
-    -- ends one. A chunk can arrive split through the middle of a number, and reading that half
-    -- would show 5.9% in the middle of a download that is really at 65.9%, so an unfinished tail
-    -- is carried over to the next chunk instead of being matched.
+    -- curl redraws its bar by returning to the start of the line.
     local carry = ''
     local function on_stderr(_, data)
       if not data then
@@ -297,7 +221,6 @@ function M.fetch(url, destination, opts, callback)
 end
 
 --- The SHA-256 of a file, as lowercase hex.
----
 ---@param path string
 ---@return string|nil digest
 ---@return string|nil error
@@ -314,7 +237,6 @@ function M.checksum(path)
 end
 
 --- Read the manifest for a release.
----
 ---@param version string|nil
 ---@param method string|nil A download tool to use rather than the detected one.
 ---@param callback fun(targets: table|nil, err: string|nil) Target triple to `{ url, sha256, size }`.
@@ -340,7 +262,6 @@ function M.manifest(version, method, callback)
 end
 
 --- Unpack an archive next to itself.
----
 ---@param archive string
 ---@param directory string
 ---@param callback fun(ok: boolean, err: string|nil)
@@ -364,7 +285,6 @@ function M.unpack(archive, directory, callback)
 end
 
 --- Download the engine for this machine into the managed location.
----
 ---@param opts table|nil `version` to fetch a particular release, `method` to name a download tool.
 ---@param callback fun(path: string|nil, err: string|nil)
 function M.download(opts, callback)
@@ -401,8 +321,7 @@ function M.download(opts, callback)
         return callback(nil, fetch_err)
       end
 
-      -- Checked before unpacking, not after: an archive that is not what the release says it is
-      -- has no business being written anywhere but the file it already occupies.
+      -- Checked before unpacking, not after.
       local digest = M.checksum(archive)
       if digest ~= entry.sha256 then
         vim.fn.delete(archive)
@@ -436,15 +355,6 @@ function M.download(opts, callback)
 end
 
 --- Build the engine from the checkout with cargo.
----
---- How to run a commit that has not been released, and the only way to get an engine on a target
---- the release workflow does not build for.
----
---- The result is copied into the managed location rather than left in `target/`. Both ways of
---- installing then put the engine in the same place, so a build cannot be quietly ignored in favour
---- of a download that happens to still be sitting there, which is exactly the confusion of having
---- two engines and no way to tell which one is running.
----
 ---@param callback fun(path: string|nil, err: string|nil)
 function M.build(callback)
   if vim.fn.executable('cargo') ~= 1 then
@@ -482,34 +392,7 @@ function M.build(callback)
   end)
 end
 
---- Install the engine.
----
---- Never called by the plugin itself. This is the function to put in a plugin manager's build hook,
---- so that fetching several megabytes happens at a moment the user chose: >lua
----   {
----     '2giosangmitom/sqmeow.nvim',
----     build = function()
----       require('sqmeow').install()
----     end,
----     config = function()
----       require('sqmeow').setup()
----     end,
----   }
---- <
---- With no argument it works out how to install on its own: a release build is downloaded with
---- whichever tool the machine has, and cargo compiles the checkout if there is no release for this
---- target or the download fails. Name a method to decide instead. `'cargo'` is how to run a commit
---- that has not been released; the rest name a download tool, for a machine where the detected one
---- does not work: >lua
----   require('sqmeow').install('cargo')
----   require('sqmeow').install('wget')
----   require('sqmeow').install({ version = '1.0.2' })
---- <
---- Waits, unless given a `callback`. A build hook that returned before the install had finished
---- would have the plugin manager report success over an engine that is not there yet. Everything
---- inside a session passes a callback instead and is not blocked; the waiting is done with
---- |vim.wait()|, so the editor still redraws and the install still reports its progress.
----
+--- Install the engine. See |sqmeow.install()|.
 ---@param opts string|table|nil A method name, or `method`, `version`, `callback` and `timeout`.
 ---@return boolean|nil ok Whether an engine was installed, or nil when a `callback` was given.
 ---@return string|nil err
@@ -559,8 +442,7 @@ function M.install(opts)
     done, installed, failure = true, path, err
   end
 
-  -- Nothing is said at the start. The progress line is already saying what is happening, and a
-  -- notification as well would be the same thing twice in two places.
+  -- Nothing is said at the start.
   if opts.method == 'cargo' then
     M.build(settle)
   elseif opts.method then
@@ -570,8 +452,7 @@ function M.install(opts)
       if path then
         return settle(path)
       end
-      -- Building is the fallback rather than the first try: most people have no Rust toolchain, and
-      -- the ones who do would still rather not spend two minutes on it.
+      -- Building is the fallback rather than the first try.
       M.build(function(built, build_err)
         if built then
           return settle(built)
@@ -585,15 +466,10 @@ function M.install(opts)
     return
   end
 
-  -- The build-hook case. `vim.wait` runs the event loop, so the callbacks above still fire and the
-  -- progress line still moves; what it does not do is return before the install is over.
   if not vim.wait(opts.timeout or M.timeout, function()
     return done
   end, 100) then
-    -- The guard comes back down even though whatever was started may still be out there. It exists
-    -- to stop two installs being asked for at once, not to latch: an install that has run this long
-    -- is not coming back, and refusing every later attempt until Neovim restarts is worse than the
-    -- unlikely pair of writers.
+    -- The guard comes back down even though whatever was started may still be out there.
     running = nil
     progress(nil)
     local err = ('installing %s timed out'):format(M.binary)
@@ -605,10 +481,6 @@ function M.install(opts)
 end
 
 --- Ask an engine binary what version it is.
----
---- Runs `--version`, which the engine answers without opening a channel, so this is safe to call
---- from `:checkhealth` on a binary that is never started.
----
 ---@param path string Absolute path to an engine.
 ---@return string|nil version
 ---@return string|nil error

@@ -1,10 +1,4 @@
 //! The MongoDB adapter.
-//!
-//! MongoDB speaks no SQL, and the mongosh syntax people know is JavaScript run by Node, which no
-//! Rust library reads. So a statement is a database command written as Extended JSON, the form
-//! `bson` reads itself: `{"find": "users", "filter": {"age": {"$gt": 30}}}`. Documents are rows,
-//! with a column per top-level field. The drawer's schemas are databases and its relations are
-//! collections.
 
 use std::collections::HashSet;
 use std::sync::{PoisonError, RwLock};
@@ -58,9 +52,6 @@ enum Statement {
 
 impl MongoAdapter {
     /// Open a connection, on `database` when given and otherwise on the one the URL names.
-    ///
-    /// The driver keeps a pool of its own, and a `use` is this adapter's state rather than the
-    /// server's, so nothing depends on one socket staying the same.
     pub async fn connect(url: &str, database: Option<&str>) -> Result<Self> {
         let mut options = ClientOptions::parse(url).await.map_err(Error::driver)?;
         // The driver waits thirty seconds for a server by default, a long time to watch a
@@ -76,8 +67,7 @@ impl MongoAdapter {
             .unwrap_or_else(|| "test".to_owned());
         let client = Client::with_options(options).map_err(Error::driver)?;
 
-        // The driver connects lazily, so without this a wrong host would only be reported by the
-        // first query.
+        // The driver connects lazily.
         client
             .database("admin")
             .run_command(doc! { "ping": 1 })
@@ -92,9 +82,6 @@ impl MongoAdapter {
     }
 
     /// Every database the user may read when the URL named none, and `None` otherwise.
-    ///
-    /// Each is then opened as a connection of its own, as a PostgreSQL cluster's are, so the one to
-    /// query is chosen with the drawer's `u` rather than a `use` typed into a scratchpad.
     pub async fn databases(&self) -> Option<Result<Vec<String>>> {
         if !self.cluster {
             return None;
@@ -196,9 +183,7 @@ impl Adapter for MongoAdapter {
         Ok(result)
     }
 
-    /// The database commands run on, which `use` changes, even before it holds anything.
-    ///
-    /// Only that one. A URL that names no database has the others listed as databases of their own.
+    /// The database commands run on.
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
         Ok(vec![SchemaNode {
             name: self.database(),
@@ -254,8 +239,7 @@ impl Adapter for MongoAdapter {
         Ok(field_nodes(&documents))
     }
 
-    /// Close the pool without waiting on a cursor a running query still holds, which the driver
-    /// would otherwise wait for indefinitely.
+    /// Close the pool without waiting on a cursor a running query still holds.
     async fn close(&self) {
         self.client.clone().shutdown().immediate(true).await;
     }
@@ -346,8 +330,7 @@ async fn run(
     if truncated {
         result.mark_truncated();
     }
-    // Documents a `find` returned are found again by `_id`, unless a projection left it out. An
-    // empty collection has no columns at all, and can still be added to.
+    // Documents a `find` returned are found again by `_id`, unless a projection left it out.
     if name == "find"
         && let Some(collection) = collection
         && (result.row_count() == 0
@@ -415,8 +398,7 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
     Ok(commands)
 }
 
-/// A value typed into a cell: JSON when it reads as JSON, so `42`, `true` and `{"$oid": "…"}` keep
-/// their type, and a string otherwise. Quote a number to keep it text.
+/// A value typed into a cell.
 fn value_bson(value: Option<&str>) -> Bson {
     let Some(text) = value else {
         return Bson::Null;
@@ -428,9 +410,6 @@ fn value_bson(value: Option<&str>) -> Bson {
 }
 
 /// The `_id` a row was read with, as the BSON that matches it again.
-///
-/// The grid holds an `ObjectId` as its hex, so the column's type is what says to read it back as
-/// one rather than as a string that matches nothing.
 fn id_bson(cell: &Cell, kind: &str) -> Result<Bson> {
     Ok(match cell {
         Cell::Text(hex) if kind == "objectId" => {
@@ -461,9 +440,6 @@ fn count(value: &Bson) -> Option<u64> {
 }
 
 /// Lay documents out as rows, a column per top-level field in the order fields are first seen.
-///
-/// `_id` comes first, as it does in every stored document. A document without a field has a null
-/// in its column.
 fn to_result(statement: &str, documents: Vec<Document>) -> ResultSet {
     let mut names: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
@@ -496,8 +472,6 @@ fn to_result(statement: &str, documents: Vec<Document>) -> ResultSet {
 }
 
 /// The BSON type every value of a field shares, or nothing when they differ.
-///
-/// Nulls and missing fields are skipped: they say nothing about what the others hold.
 fn common_type(documents: &[Document], field: &str) -> &'static str {
     let mut kinds = documents
         .iter()
@@ -542,8 +516,6 @@ fn type_name(value: &Bson) -> &'static str {
 }
 
 /// The fields a sample of documents has, for the drawer.
-///
-/// A field is nullable when any sampled document holds null in it or lacks it altogether.
 fn field_nodes(documents: &[Document]) -> Vec<ColumnNode> {
     let mut columns: Vec<ColumnNode> = Vec::new();
     for document in documents {

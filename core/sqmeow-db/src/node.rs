@@ -1,14 +1,8 @@
 //! What the schema drawer shows.
-//!
-//! One shape for every database, so the drawer draws a tree without knowing which one it is
-//! looking at. What differs between dialects is the query that fills these in, not what comes out.
 
 use crate::types::{ForeignKey, KeyKind, TypeClass};
 
 /// What kind of thing a relation is.
-///
-/// The drawer shows tables and views differently, and the distinction matters when offering
-/// actions: a view has no primary key to write back through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelationKind {
     Table,
@@ -34,9 +28,6 @@ impl RelationKind {
 }
 
 /// What a Redis key holds.
-///
-/// Also the group the drawer lists a key under, because the command that reads a key back depends
-/// on it: there is no one statement that shows a hash and a list alike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyType {
     String,
@@ -62,9 +53,6 @@ impl KeyType {
     ];
 
     /// Read the answer `TYPE` gives.
-    ///
-    /// `none`, for a key that has gone, and a type nothing reads back yet, such as a Bloom filter's
-    /// `MBbloom--`, answer nothing.
     pub fn from_redis(name: &str) -> Option<Self> {
         match name {
             "string" => Some(Self::String),
@@ -94,10 +82,6 @@ impl KeyType {
 }
 
 /// What kind of routine a schema holds.
-///
-/// A function returns a value and a procedure is called for its effect. Which of the two something
-/// is decides nothing the plugin does with it yet, but the drawer groups them apart because that
-/// is how every database's own tooling presents them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoutineKind {
     Function,
@@ -126,26 +110,12 @@ pub struct RoutineNode {
 pub struct SchemaNode {
     pub name: String,
     /// Whether this is the one unqualified names resolve to.
-    ///
-    /// The drawer expands it first, because it is almost always the one the user wants.
     pub is_default: bool,
 }
 
 /// A table or a view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationNode {
-    pub name: String,
-    pub kind: RelationKind,
-}
-
-/// A relation together with the schema holding it.
-///
-/// The drawer walks the tree one level at a time, but the relation picker searches a whole
-/// connection at once, so it needs the schema name alongside each relation rather than implied by
-/// where the node sits.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CatalogEntry {
-    pub schema: String,
     pub name: String,
     pub kind: RelationKind,
 }
@@ -169,9 +139,6 @@ impl ColumnNode {
     }
 
     /// Which key this column is, preferring the primary one.
-    ///
-    /// A column can be both: the child half of a composite primary key is often a foreign key as
-    /// well. The primary key wins, because it is the stronger statement about the row.
     pub fn key(&self) -> KeyKind {
         if self.primary_key {
             KeyKind::Primary
@@ -210,8 +177,8 @@ mod tests {
 
     #[test]
     fn the_primary_key_wins_over_a_foreign_one() {
-        // The child half of a composite primary key is often a foreign key as well, and the
-        // primary key is the stronger statement about the row.
+        // The child half of a composite primary key is often a foreign key as well, and the primary
+        // key is the stronger statement about the row.
         let mut both = column("int4");
         both.primary_key = true;
         both.foreign_key = Some(ForeignKey {

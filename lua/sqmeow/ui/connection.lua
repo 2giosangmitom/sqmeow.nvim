@@ -1,20 +1,12 @@
 --- Adding and editing a connection without typing a URL.
----
---- Two steps, the way a graphical client does it: choose which database, then fill in a form of
---- named fields. The URL is assembled from the answers, so nobody has to remember where the colon
---- goes or how to escape a `#` in a password.
----
---- Editing works the same way in reverse. A saved URL is taken apart into the same fields, so what
---- opens is the connection as it stands rather than a string to edit in place.
 
 local M = {}
 
 local utils = require('sqmeow.utils')
 
 --- What is wrong with the answers, if anything.
----
 ---@param dialect string
----@param existing string|nil The name being edited, which may keep its own name.
+---@param existing string|nil The name being edited.
 ---@return fun(values: table<string, string>): string|nil
 local function validator(dialect, existing)
   return function(values)
@@ -38,7 +30,6 @@ local function validator(dialect, existing)
 end
 
 --- Open the form for one dialect.
----
 ---@param dialect string
 ---@param values table<string, string> What the fields start as.
 ---@param existing string|nil The name of the saved connection being changed, if it is one.
@@ -48,9 +39,7 @@ local function form(dialect, values, existing)
     title = existing and ('Edit %s'):format(existing) or ('New %s connection'):format(spec.label),
     fields = require('sqmeow.dialects').fields(dialect),
     values = values,
-    -- A new connection is a run of questions with no answers yet, so the dialog starts asking.
-    -- An existing one is opened to be looked at, and jumping straight into a field would fight
-    -- whoever only wanted to change the port.
+    -- A new connection is a run of questions with no answers yet.
     wizard = existing == nil,
     validate = validator(dialect, existing),
     on_submit = function(answers)
@@ -76,10 +65,6 @@ local function form(dialect, values, existing)
 end
 
 --- Ask for a name and a whole URL, for someone who already has one.
----
---- The URL is saved as typed, so a `{{ env }}` or `{{ exec }}` template for the password survives,
---- which the form of separate fields would percent encode away.
----
 ---@param values table<string, string>|nil What the fields start as.
 function M.from_url(values)
   local opened, err = require('sqmeow.ui.form').open({
@@ -118,8 +103,6 @@ function M.from_url(values)
 end
 
 --- Ask which database, then ask for its details.
----
---- The entry point behind `:Sqmeow add` and `A` in the drawer.
 function M.create()
   local icons = require('sqmeow.icons')
 
@@ -151,15 +134,10 @@ function M.create()
 end
 
 --- Open a saved connection in the form.
----
---- A URL the plugin cannot take apart, such as one holding a `{{ exec }}` template for a password,
---- is left to the older prompt: rewriting it through fields would throw the template away.
----
 ---@param spec sqmeow.ConnectionSpec
 ---@return boolean opened
 function M.edit(spec)
-  -- A template is expanded by the engine at connect time. Splitting one into fields and writing it
-  -- back would percent encode the braces and leave a connection that reaches nothing.
+  -- A template is expanded by the engine at connect time.
   if spec.url:find('{{', 1, true) then
     return false
   end

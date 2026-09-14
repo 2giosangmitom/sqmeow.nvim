@@ -1,7 +1,4 @@
 --- The `?` cheatsheet.
----
---- Built from the same table the mappings come from, so it cannot describe a key the surface does
---- not actually have, and a user's override shows up here without anything else being touched.
 
 local M = {}
 
@@ -10,7 +7,6 @@ local utils = require('sqmeow.utils')
 local popup = nil
 
 --- The lines describing one surface's mappings.
----
 ---@param surface string
 ---@return string[]
 function M.lines(surface)
@@ -47,7 +43,6 @@ function M.close()
 end
 
 --- Show one surface's mappings in a float.
----
 ---@param surface string
 function M.open(surface)
   M.close()

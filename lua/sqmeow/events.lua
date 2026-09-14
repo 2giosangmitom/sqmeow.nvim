@@ -1,8 +1,4 @@
 --- Turning engine events into interface updates.
----
---- Subscriptions are made once and never torn down, because the engine restarting does not change
---- what the plugin wants to hear about. Each handler updates the mirrored state first and touches
---- the interface second, so state stays correct even when no window is open.
 
 local M = {}
 
@@ -24,15 +20,13 @@ function M.on_connection(payload)
   connection.current_database = payload.current_database or connection.current_database
   connection.error = payload.error
 
-  -- Forgotten before the drawer is drawn. Drawn first, a failed connection stays on screen with
-  -- an id nothing answers to, and choosing it again does nothing instead of trying again.
+  -- Forgotten before the drawer is drawn.
   if payload.state == 'error' or payload.state == 'closed' then
     state.remove_connection(payload.id)
   end
   state.failures[connection.name] = payload.state == 'error' and payload.error or nil
 
-  -- A database opened from a cluster is drawn already open, so what it holds is read straight
-  -- away. Scheduled, so the request is not made from inside the engine's own event.
+  -- A database opened from a cluster is drawn already open.
   if payload.state == 'connected' and connection.parent then
     vim.schedule(function()
       local drawer = require('sqmeow.ui.drawer')
@@ -47,8 +41,7 @@ function M.on_connection(payload)
   require('sqmeow.ui.drawer').render()
   require('sqmeow.ui.editor').update_winbar()
 
-  -- Connecting says nothing: the drawer already shows the dot beside the connection, and a line
-  -- in the message area for something visible on screen is noise.
+  -- Connecting says nothing.
   if payload.state == 'error' then
     notify(
       ('could not connect to %s: %s'):format(connection.name, payload.error),
@@ -76,22 +69,18 @@ function M.on_call(payload)
     notify('query cancelled', vim.log.levels.WARN)
   end
 
-  -- A `use` moves a MongoDB connection to another database, and both winbars say which one the
-  -- next query goes to. Settled before drawing, or the result's winbar names the old one.
+  -- A MongoDB `use` changes the database both winbars show.
   local connection = state.connections[payload.conn_id]
   if connection and payload.current_database then
     connection.current_database = payload.current_database
     require('sqmeow.ui.editor').update_winbar()
   end
 
-  -- Drawing comes after the state above is settled, because the grid reads it: the rows it asks
-  -- for and the label it writes both come from the summary that just arrived.
+  -- Drawing comes after the state above is settled.
   result.render(state.call)
 
   if payload.state ~= 'executing' then
     state.record_call(state.call)
-    -- Separate from the registry above: that one mirrors what the engine still holds, and this one
-    -- outlives both the engine and the editor.
     require('sqmeow.history').append(state.call)
     -- The drawer lists the log, so a finished query shows up there without anyone asking.
     require('sqmeow.ui.drawer').render()
@@ -99,9 +88,6 @@ function M.on_call(payload)
 end
 
 --- Handle an export finishing.
----
---- An export with no file comes back as text, which goes on the system clipboard, and in the
---- unnamed register as well so a `p` pastes it where there is no clipboard provider.
 ---@param payload table
 function M.on_export(payload)
   if payload.error then
@@ -129,12 +115,6 @@ function M.on_nodes(payload)
   require('sqmeow.ui.drawer').on_nodes(payload)
 end
 
---- Handle a connection's catalog arriving.
----@param payload table
-function M.on_catalog(payload)
-  require('sqmeow.state').set_catalog(payload.conn_id, payload.relations or {}, payload.error)
-end
-
 --- Subscribe to engine events. Safe to call repeatedly.
 function M.ensure()
   if wired then
@@ -146,11 +126,9 @@ function M.ensure()
   rpc.on('conn:state', M.on_connection)
   rpc.on('call:state', M.on_call)
   rpc.on('schema:nodes', M.on_nodes)
-  rpc.on('schema:catalog', M.on_catalog)
   rpc.on('export:done', M.on_export)
   -- Both of these ask the engine for more, and the engine can send them before Neovim has read its
-  -- answer to the request that started them. Asking from inside the event would nest a request
-  -- inside that one, and the answers would come back out of order, so they wait their turn.
+  -- answer to the request that started them.
   rpc.on('call:view', function(payload)
     vim.schedule(function()
       require('sqmeow.ui.result').on_view(payload)

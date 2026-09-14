@@ -1,6 +1,5 @@
 local MiniTest = require('mini.test')
--- Staging changes against a result, without an engine: what is counted, what undo takes back, and
--- the shape the engine's `plan` is sent.
+-- Staging changes against a result, without an engine.
 
 local eq = MiniTest.expect.equality
 local edit = require('sqmeow.ui.edit')

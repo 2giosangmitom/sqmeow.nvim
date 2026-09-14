@@ -1,15 +1,10 @@
 --- The `:Sqmeow` command.
----
---- One command with subcommands, rather than a command per action. It keeps one name in the user's
---- command space, gives completion a single place to live, and means the plugin adds exactly one
---- entry to `:command`.
 
 local M = {}
 
 local notify = require('sqmeow.utils').notify
 
---- Discard a return value, so `return api.execute(...)` stays a statement rather than making the
---- command handler answer with a call id nobody reads.
+--- Discard a return value.
 local function void(_) end
 
 ---@class sqmeow.Subcommand
@@ -52,8 +47,7 @@ M.subcommands = {
   edit = {
     desc = 'Change a saved connection: what it is called, or where it points',
     run = function(args)
-      -- The form is the way in. The prompts stay for a URL it cannot take apart, such as one
-      -- holding a template, where fields would lose more than they gain.
+      -- The form is the way in.
       local function prompt(spec)
         if require('sqmeow.ui.connection').edit(spec) then
           return
@@ -335,9 +329,7 @@ M.subcommands = {
       end, require('sqmeow.install').methods)
     end,
     run = function(args)
-      -- Nothing is said here, and nothing is waited for: the install reports each step it takes
-      -- and calls back when it is done, and the editor is usable throughout. A build hook wants
-      -- the opposite and calls `require('sqmeow').install()`, which waits.
+      -- Nothing is said here, and nothing is waited for.
       local method = args[1]
       require('sqmeow.install').install({
         method = method ~= '' and method or nil,
@@ -453,8 +445,7 @@ local function complete(lead, line)
     if subcommand and subcommand.complete then
       return subcommand.complete(lead)
     end
-    -- A subcommand's own arguments are not subcommand names, so offer nothing rather than
-    -- something misleading.
+    -- A subcommand's own arguments are not subcommand names.
     return {}
   end
 

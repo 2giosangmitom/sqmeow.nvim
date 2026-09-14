@@ -1,7 +1,4 @@
 //! The MySQL adapter against a real server.
-//!
-//! Needs a server. `just db-up` starts one and `just test-rust` passes its URL in. Without
-//! `SQMEOW_TEST_MYSQL_URL` these tests report that they were skipped rather than failing.
 
 use sqmeow_adapters::Backend;
 use sqmeow_db::{
@@ -12,9 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
 
-// Introspection reads the catalogue, which a temporary table does not appear in. Each test
-// therefore owns a differently named real table, so the cases stay independent while running in
-// parallel.
+// Introspection reads the catalogue.
 const SCHEMA: &str = "sqmeow";
 
 async fn fixture(backend: &Backend, table: &str) {
@@ -142,8 +137,7 @@ async fn decodes_the_types_a_real_schema_holds() {
 async fn an_unsigned_bigint_stays_exact() {
     let backend = connect(&server!()).await;
     run(&backend, "create temporary table big (v bigint unsigned)").await;
-    // One past what an i64 holds. Wrapping it would show a negative number, which is worse than
-    // showing it as an exact decimal.
+    // One past what an i64 holds.
     run(&backend, "insert into big values (18446744073709551615)").await;
 
     let result = run(&backend, "select v from big").await;
@@ -315,8 +309,7 @@ async fn lists_tables_and_views() {
 
 #[tokio::test]
 async fn lists_functions_and_procedures_apart() {
-    // Creating a function needs SUPER while binary logging is on, which is why the test server
-    // hands out its root account.
+    // Creating a function needs SUPER while binary logging is on.
     let backend = connect(&server!()).await;
     run(&backend, "drop function if exists listed_fn").await;
     run(&backend, "drop procedure if exists listed_proc").await;

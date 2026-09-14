@@ -1,15 +1,11 @@
 --- Where connections come from.
----
---- Sources are read in the order they are configured, and every one contributes. A later source
---- does not shadow an earlier one: a duplicate name is reported, because two different databases
---- answering to one name is a mistake worth seeing rather than a preference to resolve silently.
 
 local M = {}
 
 ---@class sqmeow.ConnectionSpec
 ---@field name string
 ---@field url string
----@field source string|nil Which source it came from. Added by the loader.
+---@field source string|nil Which source it came from.
 
 --- The sources that ship with the plugin.
 ---@type table<string, { load: fun(opts: table|nil): sqmeow.ConnectionSpec[], string|nil }>
@@ -27,9 +23,8 @@ local function valid(entry)
 end
 
 --- Read every configured source.
----
 ---@return sqmeow.ConnectionSpec[] connections In configured order, names unique.
----@return string[] problems Everything that went wrong, so one call reports it all.
+---@return string[] problems Everything that went wrong.
 function M.load()
   local config = require('sqmeow.config').get()
   local connections = {}
@@ -71,7 +66,6 @@ function M.load()
 end
 
 --- Find one connection by name.
----
 ---@param name string
 ---@return sqmeow.ConnectionSpec|nil
 function M.find(name)
@@ -84,9 +78,6 @@ function M.find(name)
 end
 
 --- The options of the configured file source.
----
---- The file source is the only writable one: a connection read from the environment or from
---- dadbod belongs to whatever wrote it there, and this plugin has nowhere to put a change to it.
 local function writable()
   for _, spec in ipairs(require('sqmeow.config').get().sources) do
     if spec.type == 'file' then
@@ -97,7 +88,6 @@ local function writable()
 end
 
 --- Save a connection to the file source.
----
 ---@param connection sqmeow.ConnectionSpec
 ---@return boolean written
 ---@return string|nil error
@@ -109,7 +99,6 @@ function M.save(connection)
 end
 
 --- Change a saved connection, by the name it is saved under.
----
 ---@param name string
 ---@param connection sqmeow.ConnectionSpec The name and url to save instead.
 ---@return boolean written

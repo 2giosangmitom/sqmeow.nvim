@@ -1,14 +1,4 @@
 --- Scratchpad buffers.
----
---- Files under `core.path`, created only when asked for: `a` in the drawer, `:Sqmeow scratch`, or
---- `<Plug>(sqmeow-scratch)`. Each lives in a folder named after its connection, which is what ties
---- it to that database, and has the extension of what the connection speaks: `.sql`, `.redis`, or
---- `.json` for MongoDB.
---- Real files rather than scratch buffers, so they survive a restart, `:w` does what `:w` always
---- does, and every SQL plugin the user already has keeps working in them.
----
---- A file straight under the directory and named after a connection is how scratchpads were kept
---- before they had folders. It is still listed, and still tied to that connection.
 
 local M = {}
 
@@ -25,7 +15,6 @@ function M.directory()
 end
 
 --- Turn a connection or scratchpad name into something safe to use as a file name.
----
 ---@param name string
 ---@return string
 function M.slug(name)
@@ -34,7 +23,6 @@ function M.slug(name)
 end
 
 --- The filetype a scratchpad file opens with, or nil for a file that is not one.
----
 ---@param path string
 ---@return string|nil
 function M.filetype(path)
@@ -55,9 +43,6 @@ local function dialect_of(name)
 end
 
 --- Where a connection's scratchpad of this name is kept.
----
---- The extension follows the connection's dialect, so a Redis script is not opened as SQL.
----
 ---@param connection string Connection name.
 ---@param name string Scratchpad name, without an extension.
 ---@return string
@@ -66,11 +51,7 @@ function M.path(connection, name)
   return vim.fs.joinpath(M.directory(), M.slug(connection), M.slug(name) .. '.' .. extension)
 end
 
---- Whether a path is somewhere a scratchpad can be: in the directory, or one folder below it.
----
---- Every rename and delete is checked against this, because a path from anywhere else reaching
---- them would change a file nobody was asked about.
----
+--- Whether a path is somewhere a scratchpad can be.
 ---@param path string Already normalised.
 ---@return boolean
 local function is_pad_path(path)
@@ -80,12 +61,6 @@ local function is_pad_path(path)
 end
 
 --- The connection a scratchpad belongs to.
----
---- The folder it is in names the connection. A file straight under the directory is one from
---- before folders, and its own name does instead. Every connection the plugin knows about is
---- checked, open or merely saved, so a scratchpad written for a database that is not open still
---- knows which one it wants.
----
 ---@param path string
 ---@return string|nil name
 function M.connection_for(path)
@@ -112,7 +87,6 @@ function M.connection_for(path)
 end
 
 --- Every loaded buffer holding one file.
----
 ---@param path string Already normalised.
 ---@return integer[]
 function M.buffers_for(path)
@@ -123,12 +97,7 @@ function M.buffers_for(path)
 end
 
 --- Every scratchpad that has been saved.
----
---- Read from the directory each time rather than remembered, so one written in another Neovim, or
---- deleted outside the editor, is right without a refresh.
----
----@return { name: string, path: string, folder: string|nil, modified: integer }[] # Most recently
---- written first. `folder` is the connection folder it is in, and nil for one from before folders.
+---@return { name: string, path: string, folder: string|nil, modified: integer }[] # Most recently written first.
 function M.list()
   local directory = M.directory()
   local pads = {}
@@ -166,14 +135,6 @@ function M.list()
 end
 
 --- Open a scratchpad by its path.
----
---- Used by the drawer, which already knows where the file is and should not have to turn a name
---- back into one.
----
---- The window is chosen rather than assumed. A plain `:edit` opens in the current window, and the
---- current window when the drawer's `<CR>` fires is the drawer itself, which would put a file
---- where the tree was.
----
 ---@param path string
 ---@return integer buf
 function M.open_path(path)
@@ -187,11 +148,6 @@ function M.open_path(path)
 end
 
 --- Create a scratchpad for a connection, and open it.
----
---- The file is written straight away, empty, so the drawer lists it before anything is typed. A
---- name that is already taken opens that scratchpad rather than failing: somewhere to write under
---- that name is what was asked for, and it is there.
----
 ---@param connection string Connection name.
 ---@param name string
 ---@return integer|nil buf
@@ -210,11 +166,6 @@ function M.create(connection, name)
 end
 
 --- Rename a scratchpad.
----
---- The new name goes through the same slug as every other one, so a name typed with a slash or a
---- space cannot land outside the scratchpad's folder or produce a file nobody can open again. The
---- folder and the extension stay, so a renamed scratchpad keeps its connection and its filetype.
----
 ---@param path string
 ---@param name string The new name, without the extension.
 ---@return string|nil renamed Where the scratchpad now is.
@@ -237,8 +188,7 @@ function M.rename(path, name)
   if target == path then
     return target
   end
-  -- The slug should make this impossible. Checked anyway, because the cost of being wrong is
-  -- writing over a file somewhere else on the disk.
+  -- The slug should make this impossible.
   if vim.fs.dirname(target) ~= folder then
     return nil, ('`%s` is not a usable scratchpad name'):format(name)
   end
@@ -252,17 +202,14 @@ function M.rename(path, name)
   end
 
   for _, handle in ipairs(M.buffers_for(path)) do
-    -- A buffer still holding the old path would write the scratchpad back under its old name on
-    -- the next `:w`. Renaming it and writing once settles it: the file is already there, so an
-    -- ordinary write would refuse, and the contents are what was just renamed.
+    -- Otherwise `:w` writes the scratchpad back under its old name.
     vim.api.nvim_buf_set_name(handle, target)
     vim.api.nvim_buf_call(handle, function()
       vim.cmd('silent! write!')
     end)
   end
 
-  -- Renaming a buffer leaves an unlisted one behind under the old name, which would put the old
-  -- scratchpad back if anything ever wrote it.
+  -- Renaming a buffer leaves an unlisted one behind under the old name.
   for _, stale in ipairs(M.buffers_for(path)) do
     pcall(vim.api.nvim_buf_delete, stale, { force = true })
   end
@@ -271,10 +218,6 @@ function M.rename(path, name)
 end
 
 --- Delete a scratchpad.
----
---- The buffer goes with the file. Leaving it loaded would write the scratchpad back on the next
---- `:w`, which is a confusing way to learn that a delete did not stick.
----
 ---@param path string
 ---@return boolean removed
 ---@return string|nil error
@@ -320,10 +263,6 @@ M.actions = {
 }
 
 --- Bind the scratchpad's keys in a buffer.
----
---- Only scratchpads get these. A user's own `.sql` file is theirs, and taking `<CR>` in it would
---- be an unpleasant surprise; `<Plug>(sqmeow-execute)` is there for that.
----
 ---@param target integer
 ---@param connection string|nil The database this buffer runs against, whatever else is active.
 function M.attach(target, connection)
@@ -334,10 +273,6 @@ function M.attach(target, connection)
 end
 
 --- Say which database the buffer under the cursor will run against.
----
---- On the scratchpad rather than only on the result window, because the result window may be
---- closed, or showing something from another database entirely, at the moment someone presses
---- `<CR>`. The one place a person is looking when they run a query is the query.
 function M.update_winbar()
   if not require('sqmeow.config').get().ui.winbar then
     return

@@ -1,13 +1,4 @@
 --- Every mapping the plugin makes.
----
---- One table, keyed by surface and then by action name. It is the only source: the mappings that
---- get applied, the `?` cheatsheet, and the help file all read from here, so none of the three can
---- drift from the others.
----
---- The plugin takes no key outside its own windows. Mappings are buffer-local, applied when a
---- surface's buffer is created. Anything worth putting on a global key is offered as a `<Plug>`
---- mapping instead, for the user to bind or ignore.
----
 ---@tag sqmeow-keymaps
 ---@toc_entry Keymaps
 
@@ -27,12 +18,6 @@ local M = {}
 ---@field desc string
 
 --- Built-in mappings, per surface.
----
---- A list rather than a table, so the cheatsheet and the help file present them in a deliberate
---- order rather than whatever order Lua happens to iterate in.
----
---- What follows is generated from this table when the help file is built, so it is the mappings
---- the plugin actually applies rather than a second list that can fall behind them.
 ---@eval return require('sqmeow.keymap').summary()
 ---@type table<string, sqmeow.Keymap[]>
 M.defaults = {
@@ -42,8 +27,7 @@ M.defaults = {
     { action = 'refresh', lhs = 'r', desc = 'Reload this subtree' },
     { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified name' },
     { action = 'yank_select', lhs = 's', desc = 'Yank a SELECT for this relation' },
-    -- `r` refreshes on every surface, so renaming takes the shifted key rather than the one a
-    -- user has already learned means something harmless.
+    -- `r` refreshes on every surface.
     { action = 'rename', lhs = 'R', desc = 'Rename the connection or scratchpad under the cursor' },
     { action = 'use', lhs = 'u', desc = 'Run queries against this connection' },
     { action = 'add', lhs = 'A', desc = 'Add a connection' },
@@ -64,12 +48,10 @@ M.defaults = {
     { action = 'first_page', lhs = 'gg', desc = 'First page' },
     { action = 'last_page', lhs = 'G', desc = 'Last page' },
     { action = 'detail', lhs = 'K', desc = 'Show this row down the page' },
-    -- Not `e`: a wide grid is crossed with the word motions, and `x` edits nothing in a buffer
-    -- that cannot be edited.
+    -- Not `e`, which is a word motion.
     { action = 'export', lhs = 'x', desc = 'Export the result to a file' },
     { action = 'export_selection', lhs = 'x', mode = 'x', desc = 'Export the selected rows' },
-    -- How rows are shown. None of these is a motion along a line: `f`, `F`, `E` and the like stay
-    -- free for crossing a wide grid, which is why filtering is `=` and editing is "change".
+    -- How rows are shown.
     {
       action = 'filter_cell',
       lhs = '=',
@@ -106,9 +88,7 @@ M.defaults = {
     { action = 'close', lhs = 'q', desc = 'Close the result window' },
   },
 
-  -- A scratchpad is an ordinary editing buffer, so it gets none of the single-letter keys the
-  -- read-only surfaces use. `?` and `q` in particular stay what they always are: a search and a
-  -- macro recording.
+  -- A scratchpad is an ordinary editing buffer.
   editor = {
     { action = 'execute_statement', lhs = '<CR>', desc = 'Run the statement under the cursor' },
     { action = 'execute_selection', lhs = '<CR>', mode = 'x', desc = 'Run the selection' },
@@ -118,9 +98,6 @@ M.defaults = {
 }
 
 --- Actions that are worth a key of the user's own choosing.
----
---- Defined globally as `<Plug>` mappings and bound to nothing. Offering them this way is what lets
---- the plugin be convenient without taking a key someone else is using.
 ---@type table<string, { desc: string, run: fun() }>
 M.plug = {
   ['sqmeow-toggle'] = {
@@ -178,18 +155,13 @@ local function as_list(value)
 end
 
 --- The mappings for one surface, after the user's overrides.
----
---- Overriding one action does not require restating the rest, because the merge is by action name
---- rather than by position.
----
 ---@param surface string 'drawer' or 'result'.
----@return sqmeow.ResolvedKeymap[] # In presentation order. An action the user disabled has no keys.
+---@return sqmeow.ResolvedKeymap[] # In presentation order.
 function M.resolve(surface)
   local overrides = (require('sqmeow.config').get().keymaps or {})[surface] or {}
 
   return vim.tbl_map(function(entry)
-    -- Written out rather than as an `and`/`or` expression: `false` is a meaningful override here,
-    -- and that idiom cannot express it.
+    -- Written out rather than as an `and`/`or` expression.
     local lhs = entry.lhs
     if overrides[entry.action] ~= nil then
       lhs = overrides[entry.action]
@@ -204,8 +176,7 @@ function M.resolve(surface)
   end, M.defaults[surface] or {})
 end
 
---- Actions that were taken out, and what took their place, so an override naming one says why it
---- no longer does anything.
+--- Actions that were taken out, and what took their place.
 local REMOVED = {
   yank_cell = 'yanking was replaced by exporting: `x`, or `x` on a visual selection',
   yank_row = 'yanking was replaced by exporting: `x`, or `x` on a visual selection',
@@ -213,10 +184,6 @@ local REMOVED = {
 }
 
 --- Overrides that name an action the surface does not have.
----
---- Reported by `:checkhealth` rather than silently ignored: a mistyped action name would otherwise
---- look exactly like a mapping that refuses to work.
----
 ---@return string[]
 function M.problems()
   local problems = {}
@@ -248,11 +215,9 @@ function M.problems()
 end
 
 --- Bind a surface's mappings in one buffer.
----
 ---@param surface string
 ---@param buf integer
----@param actions table<string, fun()> Action name to what it does. An action with no function is
---- skipped, so a surface can leave one unimplemented without breaking the rest.
+---@param actions table<string, fun()> Action name to what it does.
 function M.apply(surface, buf, actions)
   for _, entry in ipairs(M.resolve(surface)) do
     local run = actions[entry.action]
@@ -270,10 +235,6 @@ function M.apply(surface, buf, actions)
 end
 
 --- Every surface's mappings, as lines, for the help file.
----
---- The same lines the `?` cheatsheet shows, so the two cannot disagree and neither can disagree
---- with what is bound: all three read `M.resolve`.
----
 ---@return string[]
 function M.summary()
   local lines = {}
