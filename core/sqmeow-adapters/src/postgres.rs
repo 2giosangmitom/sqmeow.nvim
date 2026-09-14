@@ -6,11 +6,14 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use sqlx::postgres::types::Oid;
-use sqlx::postgres::{PgColumn, PgConnectOptions, PgHasArrayType, PgPool, PgPoolOptions, PgRow};
-use sqlx::{Decode, Postgres, Row, Statement as _, Type, TypeInfo, ValueRef, types};
+use sqlx::postgres::{
+    PgColumn, PgConnectOptions, PgConnection, PgHasArrayType, PgPool, PgPoolOptions, PgRow,
+};
+use sqlx::{Connection, Decode, Postgres, Row, Statement as _, Type, TypeInfo, ValueRef, types};
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
     ResultSet, RoutineNode, SchemaNode, Source,
@@ -27,16 +30,20 @@ pub struct PostgresAdapter {
     ///
     /// Looked up once per column and then held for the life of the connection. A result's columns
     /// are almost always the same columns as the last result's, so the cache means running a query
-    /// twice costs one catalog lookup rather than two. It is never invalidated: a schema changed
-    /// under a live connection leaves an icon one query out of date, which is a smaller price than
-    /// a catalog round trip before every execution.
+    /// twice costs one catalog lookup rather than two. It is emptied after any statement that may
+    /// change a table. A schema changed by another client still leaves an icon out of date, which
+    /// is a smaller price than a catalog round trip before every execution.
     keys: Mutex<HashMap<(Oid, i16), KeyKind>>,
     /// What a table is called, its columns by attribute number, and its primary key, by OID.
     ///
-    /// Held for the life of the connection, as `keys` is, and for the same reason.
+    /// Held until a statement that may change a table runs, as `keys` is, and for the same reason.
     relations: Mutex<HashMap<Oid, Relation>>,
     /// Whether the URL named no database, so the drawer lists the server's databases instead.
     cluster: bool,
+    /// How the pool connects, for the second connection that stops a cancelled query.
+    options: PgConnectOptions,
+    /// The server process behind the pool's one connection, which is what a cancel names.
+    backend_pid: Arc<AtomicI32>,
 }
 
 impl PostgresAdapter {
@@ -49,19 +56,37 @@ impl PostgresAdapter {
     /// A URL naming no database reaches the whole cluster. It connects to `postgres`, which every
     /// server has, rather than to the database named after the user, which most servers do not.
     pub async fn connect(url: &str, database: Option<&str>) -> Result<Self> {
-        let mut options = PgConnectOptions::from_str(url).map_err(Error::driver)?;
+        // Preparing a statement is how a result learns its columns, and a cached statement keeps
+        // the columns its table had when it was first prepared, so after an `ALTER TABLE` a
+        // `select *` would leave the new column out.
+        let mut options = PgConnectOptions::from_str(url)
+            .map_err(Error::driver)?
+            .statement_cache_capacity(0);
         let cluster = database.is_none() && options.get_database().is_none();
         if let Some(database) = database {
             options = options.database(database);
         } else if cluster {
             options = options.database("postgres");
         }
+        let backend_pid = Arc::new(AtomicI32::new(0));
         let pool = crate::connect_retrying(|| {
+            let backend_pid = backend_pid.clone();
             PgPoolOptions::new()
                 .max_connections(1)
                 // sqlx retries a refused connection until this expires. A mistyped host should
                 // say so while the user still remembers typing it, not half a minute later.
                 .acquire_timeout(crate::CONNECT_TIMEOUT)
+                // Read on every connect, since the pool opens a new session after losing one.
+                .after_connect(move |connection, _| {
+                    let backend_pid = backend_pid.clone();
+                    Box::pin(async move {
+                        let pid: i32 = sqlx::query_scalar("select pg_backend_pid()")
+                            .fetch_one(&mut *connection)
+                            .await?;
+                        backend_pid.store(pid, Ordering::Relaxed);
+                        Ok(())
+                    })
+                })
                 .connect_with(options.clone())
         })
         .await
@@ -72,6 +97,8 @@ impl PostgresAdapter {
             keys: Mutex::default(),
             relations: Mutex::default(),
             cluster,
+            options,
+            backend_pid,
         })
     }
 
@@ -92,6 +119,37 @@ impl PostgresAdapter {
             .await
             .map_err(Error::driver),
         )
+    }
+
+    /// Stop the query the session is running, from a connection of its own.
+    ///
+    /// Dropping a query only stops reading its rows. The server goes on running it, and the session
+    /// cannot take the next statement until it ends, which for a long query is a long wait.
+    async fn stop_running(&self) {
+        let pid = self.backend_pid.load(Ordering::Relaxed);
+        let stop = async {
+            let mut connection = PgConnection::connect_with(&self.options).await?;
+            sqlx::query("select pg_cancel_backend($1)")
+                .bind(pid)
+                .execute(&mut connection)
+                .await?;
+            connection.close().await
+        };
+        match tokio::time::timeout(crate::STOP_TIMEOUT, stop).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::debug!(%error, "could not stop a cancelled query"),
+            Err(_) => tracing::debug!("stopping a cancelled query took too long"),
+        }
+    }
+
+    /// Forget every table read so far, so each is read again the next time a result comes from it.
+    fn forget(&self) {
+        if let Ok(mut keys) = self.keys.lock() {
+            keys.clear();
+        }
+        if let Ok(mut relations) = self.relations.lock() {
+            relations.clear();
+        }
     }
 
     /// What a statement's result looks like, with the columns that are keys marked.
@@ -359,7 +417,7 @@ impl Adapter for PostgresAdapter {
     }
 
     async fn apply(&self, statements: &[String]) -> Result<()> {
-        stream::transact(&self.pool, statements).await
+        stream::transact(&self.pool, statements, |outcome| outcome.rows_affected()).await
     }
 
     async fn execute(
@@ -369,7 +427,7 @@ impl Adapter for PostgresAdapter {
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
         let (columns, source) = self.columns(statement).await;
-        let mut result = stream::execute(
+        let outcome = stream::execute(
             &self.pool,
             statement,
             columns,
@@ -378,7 +436,14 @@ impl Adapter for PostgresAdapter {
             |outcome| outcome.rows_affected(),
             decode_cell,
         )
-        .await?;
+        .await;
+        if matches!(outcome, Err(Error::Cancelled)) {
+            self.stop_running().await;
+        }
+        if stream::may_change_schema(statement) {
+            self.forget();
+        }
+        let mut result = outcome?;
         result.set_source(source);
         Ok(result)
     }

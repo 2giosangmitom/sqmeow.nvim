@@ -4,6 +4,8 @@
 //! comment, or a Postgres function body. This walks the text once, tracking what it is inside, so
 //! only a semicolon at the top level ends a statement.
 
+use crate::adapter::Dialect;
+
 /// One statement, with enough position information to point an error back at the buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Statement {
@@ -142,7 +144,11 @@ pub fn split_documents(input: &str) -> Vec<Statement> {
 ///
 /// Whitespace-only and comment-only fragments are dropped, so a trailing semicolon or a trailing
 /// comment does not produce an empty statement that the database would reject.
-pub fn split(input: &str) -> Vec<Statement> {
+///
+/// The dialect decides what a string and a comment are: MySQL reads a backslash in a string as an
+/// escape and `#` as a comment, PostgreSQL reads a backslash as one only in an `E'…'` string and is
+/// the only one with dollar-quoted bodies, and SQLite does neither.
+pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
     let mut statements = Vec::new();
     let chars: Vec<char> = input.chars().collect();
 
@@ -150,6 +156,14 @@ pub fn split(input: &str) -> Vec<Statement> {
     let mut block_depth = 0usize;
     // The Postgres tag currently open, such as `$$` or `$body$`.
     let mut dollar_tag: Option<String> = None;
+    // Whether a backslash in the quoted run currently open escapes the character after it.
+    let mut escapes = false;
+    // Whether the statement being read starts with `CREATE`, once its first word is read; whether
+    // it creates a routine or a trigger; and how many `BEGIN … END` and `CASE … END` blocks of that
+    // body are open. A semicolon inside one ends a statement of the body, not the `CREATE`.
+    let mut creating: Option<bool> = None;
+    let mut routine = false;
+    let mut body_depth = 0usize;
 
     let mut start = 0usize;
     let mut line = 0usize;
@@ -192,25 +206,96 @@ pub fn split(input: &str) -> Vec<Statement> {
                     index += 2;
                     continue;
                 }
-                '\'' => mode = Mode::SingleQuote,
-                '"' => mode = Mode::DoubleQuote,
+                '#' if dialect == Dialect::MySql => {
+                    mode = Mode::LineComment;
+                    index += 1;
+                    continue;
+                }
+                '\'' => {
+                    mode = Mode::SingleQuote;
+                    escapes = dialect == Dialect::MySql
+                        || (dialect == Dialect::Postgres && is_escape_string(&chars, index));
+                }
+                '"' => {
+                    mode = Mode::DoubleQuote;
+                    escapes = dialect == Dialect::MySql;
+                }
                 '`' => mode = Mode::Backtick,
-                '$' => {
+                // A `$` inside a word is part of an identifier, such as `price$usd`, not a tag.
+                '$' if dialect == Dialect::Postgres
+                    && !index
+                        .checked_sub(1)
+                        .is_some_and(|before| is_word(chars[before])) =>
+                {
                     if let Some(tag) = read_dollar_tag(&chars, index) {
                         index += tag.chars().count();
                         dollar_tag = Some(tag);
                         continue;
                     }
                 }
-                ';' => {
-                    push(&mut statements, &chars, start, index, start_line, line);
+                ';' if body_depth == 0 => {
+                    push(
+                        &mut statements,
+                        dialect,
+                        &chars,
+                        start,
+                        index,
+                        start_line,
+                        line,
+                    );
+                    creating = None;
+                    routine = false;
                     index += 1;
                     start = index;
                     start_line = line;
                     continue;
                 }
+                _ if character.is_alphabetic()
+                    && !index
+                        .checked_sub(1)
+                        .is_some_and(|before| is_word(chars[before])) =>
+                {
+                    let mut end = word_end(&chars, index);
+                    let word = chars[index..end].iter().collect::<String>().to_lowercase();
+                    match word.as_str() {
+                        _ if creating.is_none() => creating = Some(word == "create"),
+                        "trigger" | "procedure" | "function" | "event"
+                            if creating == Some(true) =>
+                        {
+                            routine = true;
+                        }
+                        "begin" | "case" if routine => body_depth += 1,
+                        "end" if routine => {
+                            let (next, after) = next_word(&chars, end);
+                            // `END IF`, `END LOOP`, `END WHILE` and `END REPEAT` close blocks that
+                            // were never counted open. The word after `END` belongs to it, so it
+                            // is not read again as a block of its own.
+                            let closes =
+                                matches!(next.as_str(), "if" | "loop" | "while" | "repeat");
+                            if !closes {
+                                body_depth = body_depth.saturating_sub(1);
+                            }
+                            if closes || next == "case" {
+                                line += chars[end..after].iter().filter(|c| **c == '\n').count();
+                                end = after;
+                            }
+                        }
+                        _ => {}
+                    }
+                    index = end;
+                    continue;
+                }
                 _ => {}
             },
+
+            // An escaped character is taken as it is, even a quote or a line break.
+            Mode::SingleQuote | Mode::DoubleQuote if escapes && character == '\\' => {
+                if peek!(1) == Some('\n') {
+                    line += 1;
+                }
+                index += 2;
+                continue;
+            }
 
             // A doubled quote inside a quoted run is an escaped quote, not the end of it. Skipping
             // both characters leaves the mode unchanged, which is exactly right.
@@ -260,6 +345,7 @@ pub fn split(input: &str) -> Vec<Statement> {
 
     push(
         &mut statements,
+        dialect,
         &chars,
         start,
         chars.len(),
@@ -271,6 +357,7 @@ pub fn split(input: &str) -> Vec<Statement> {
 
 fn push(
     statements: &mut Vec<Statement>,
+    dialect: Dialect,
     chars: &[char],
     start: usize,
     end: usize,
@@ -278,7 +365,7 @@ fn push(
     end_line: usize,
 ) {
     let text: String = chars[start..end].iter().collect();
-    if !has_code(&text) {
+    if !has_code(&text, dialect) {
         return;
     }
 
@@ -301,22 +388,25 @@ fn push(
 }
 
 /// Whether a fragment holds anything a database would act on.
-fn has_code(text: &str) -> bool {
+fn has_code(text: &str, dialect: Dialect) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return false;
     }
     // A fragment of only comments is not a statement.
-    !split_comments_only(trimmed)
+    !split_comments_only(trimmed, dialect)
 }
 
-fn split_comments_only(text: &str) -> bool {
+fn split_comments_only(text: &str, dialect: Dialect) -> bool {
     let mut rest = text.trim();
     loop {
         if rest.is_empty() {
             return true;
         }
-        if let Some(after) = rest.strip_prefix("--") {
+        let line_comment = rest
+            .strip_prefix("--")
+            .or_else(|| rest.strip_prefix('#').filter(|_| dialect == Dialect::MySql));
+        if let Some(after) = line_comment {
             rest = after
                 .split_once('\n')
                 .map(|(_, tail)| tail)
@@ -340,19 +430,61 @@ fn read_dollar_tag(chars: &[char], index: usize) -> Option<String> {
     let mut tag = String::from("$");
     let mut cursor = index + 1;
 
+    // A tag does not start with a digit, so `$1` is a parameter even when a `$` follows it.
+    if chars.get(cursor).is_some_and(char::is_ascii_digit) {
+        return None;
+    }
     while let Some(&character) = chars.get(cursor) {
         if character == '$' {
             tag.push('$');
             return Some(tag);
         }
         // Tags are identifiers. Anything else means this `$` was arithmetic or a parameter.
-        if !character.is_alphanumeric() && character != '_' {
+        if !is_word(character) {
             return None;
         }
         tag.push(character);
         cursor += 1;
     }
     None
+}
+
+/// Whether a character can be part of an unquoted identifier.
+fn is_word(character: char) -> bool {
+    character.is_alphanumeric() || character == '_' || character == '$'
+}
+
+/// Where the word starting at `index` ends.
+fn word_end(chars: &[char], index: usize) -> usize {
+    chars[index..]
+        .iter()
+        .position(|character| !is_word(*character))
+        .map_or(chars.len(), |length| index + length)
+}
+
+/// The word after `index`, past any whitespace, in lower case, and where it ends.
+fn next_word(chars: &[char], index: usize) -> (String, usize) {
+    let start = chars[index..]
+        .iter()
+        .position(|character| !character.is_whitespace())
+        .map_or(chars.len(), |gap| index + gap);
+    let end = word_end(chars, start);
+    (
+        chars[start..end].iter().collect::<String>().to_lowercase(),
+        end,
+    )
+}
+
+/// Whether the quote at `index` opens a PostgreSQL escape string, `E'…'`, in which a backslash
+/// escapes.
+fn is_escape_string(chars: &[char], index: usize) -> bool {
+    let Some(before) = index.checked_sub(1) else {
+        return false;
+    };
+    matches!(chars[before], 'e' | 'E')
+        && !before
+            .checked_sub(1)
+            .is_some_and(|word| is_word(chars[word]))
 }
 
 fn starts_with(chars: &[char], index: usize, needle: &str) -> bool {
@@ -367,7 +499,11 @@ mod tests {
     use super::*;
 
     fn sqls(input: &str) -> Vec<String> {
-        split(input).into_iter().map(|s| s.sql).collect()
+        sqls_as(input, Dialect::Postgres)
+    }
+
+    fn sqls_as(input: &str, dialect: Dialect) -> Vec<String> {
+        split(input, dialect).into_iter().map(|s| s.sql).collect()
     }
 
     #[test]
@@ -490,8 +626,140 @@ mod tests {
     }
 
     #[test]
+    fn mysql_reads_a_backslash_in_a_string_as_an_escape() {
+        let input = "select 'it\\'s; fine', \"a\\\"; b\"; select 2";
+        assert_eq!(
+            sqls_as(input, Dialect::MySql),
+            vec!["select 'it\\'s; fine', \"a\\\"; b\"", "select 2"]
+        );
+    }
+
+    #[test]
+    fn a_trailing_backslash_ends_a_standard_string() {
+        // PostgreSQL and SQLite take a backslash literally, so this string is `C:\`.
+        for dialect in [Dialect::Postgres, Dialect::Sqlite] {
+            assert_eq!(
+                sqls_as("select 'C:\\'; select 2", dialect),
+                vec!["select 'C:\\'", "select 2"],
+                "{dialect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_postgres_escape_string_reads_backslashes() {
+        assert_eq!(
+            sqls("select E'it\\'s; fine'; select e'\\\\'; select 3"),
+            vec!["select E'it\\'s; fine'", "select e'\\\\'", "select 3"]
+        );
+        // A word ending in `e` before a string is not an escape string's prefix.
+        assert_eq!(
+            sqls("select 1 where name = 'a\\'; select 2"),
+            vec!["select 1 where name = 'a\\'", "select 2"]
+        );
+    }
+
+    #[test]
+    fn an_escaped_line_break_still_counts_as_a_line() {
+        let statements = split("select 'a\\\n';\nselect 2", Dialect::MySql);
+        assert_eq!((statements[1].start_line, statements[1].end_line), (2, 2));
+    }
+
+    #[test]
+    fn mysql_reads_a_hash_as_a_line_comment() {
+        assert_eq!(
+            sqls_as(
+                "select 1 # it's; a note\n, 2; # only a note",
+                Dialect::MySql
+            ),
+            vec!["select 1 # it's; a note\n, 2"]
+        );
+        // PostgreSQL's `#` is an operator.
+        assert_eq!(sqls("select 1 # 2; select 3").len(), 2);
+    }
+
+    #[test]
+    fn a_dollar_inside_a_word_is_not_a_tag() {
+        assert_eq!(
+            sqls("select price$usd$ from t; select 2"),
+            vec!["select price$usd$ from t", "select 2"]
+        );
+        assert_eq!(sqls("select $1$2; select 3").len(), 2);
+    }
+
+    #[test]
+    fn only_postgres_has_dollar_quoting() {
+        assert_eq!(
+            sqls_as("select $a$; select 2", Dialect::MySql),
+            vec!["select $a$", "select 2"]
+        );
+    }
+
+    #[test]
+    fn a_trigger_body_is_part_of_its_create() {
+        let input = "create trigger audit after update on people begin\n  insert into log values (1);\n  update t set n = case when n > 1 then 0 else n end;\nend;\nselect 1";
+        let statements = sqls_as(input, Dialect::Sqlite);
+        assert_eq!(statements.len(), 2, "{statements:?}");
+        assert!(statements[0].ends_with("end"), "{}", statements[0]);
+        assert_eq!(statements[1], "select 1");
+    }
+
+    #[test]
+    fn a_mysql_procedure_body_is_part_of_its_create() {
+        let input = "CREATE PROCEDURE p(n INT)\nlabel: BEGIN\n  IF n > 0 THEN\n    SELECT 1;\n  END IF;\n  CASE n WHEN 1 THEN SELECT 2; ELSE BEGIN SELECT 3; END; END CASE;\n  WHILE n > 0 DO SET n = n - 1; END WHILE;\n  REPEAT SET n = n + 1; UNTIL n > 2 END REPEAT;\nEND label;\nCALL p(1)";
+        let statements = sqls_as(input, Dialect::MySql);
+        assert_eq!(statements.len(), 2, "{statements:?}");
+        assert!(statements[0].ends_with("END label"), "{}", statements[0]);
+        assert_eq!(statements[1], "CALL p(1)");
+        assert_eq!(
+            split(input, Dialect::MySql)[1].start_line,
+            input.lines().count() - 1
+        );
+        // A line break between `END` and what it closes still counts.
+        let statements = split(
+            "create procedure p() begin\nif 1 then select 1; end\nif;\nend;\nselect 2",
+            Dialect::MySql,
+        );
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[1].start_line, 4);
+    }
+
+    #[test]
+    fn a_postgres_begin_atomic_body_is_part_of_its_create() {
+        assert_eq!(
+            sqls(
+                "create function one() returns int language sql begin atomic select 1; end; select one()"
+            ),
+            vec![
+                "create function one() returns int language sql begin atomic select 1; end",
+                "select one()"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_transaction_begin_is_a_statement_of_its_own() {
+        assert_eq!(
+            sqls_as(
+                "BEGIN; select 1; END; begin transaction; commit",
+                Dialect::Sqlite
+            ),
+            vec!["BEGIN", "select 1", "END", "begin transaction", "commit"]
+        );
+        // Outside a routine, `CASE … END` is an expression that ends with its statement.
+        assert_eq!(
+            sqls("create view v as select case when true then 1 end; select 2").len(),
+            2
+        );
+        assert_eq!(
+            sqls("create table t (id int); create index i on t (id); select 3").len(),
+            3
+        );
+    }
+
+    #[test]
     fn the_statement_at_a_line_is_the_one_containing_it() {
-        let statements = split("select 1;\n\nselect\n  2;\n\nselect 3;");
+        let statements = split("select 1;\n\nselect\n  2;\n\nselect 3;", Dialect::Postgres);
 
         assert_eq!(statement_at(&statements, 0).unwrap().sql, "select 1");
         assert_eq!(statement_at(&statements, 2).unwrap().sql, "select\n  2");
@@ -501,30 +769,30 @@ mod tests {
 
     #[test]
     fn a_line_between_statements_picks_the_one_above() {
-        let statements = split("select 1;\n\nselect 2;");
+        let statements = split("select 1;\n\nselect 2;", Dialect::Postgres);
         assert_eq!(statement_at(&statements, 1).unwrap().sql, "select 1");
     }
 
     #[test]
     fn a_line_before_every_statement_picks_the_first() {
-        let statements = split("\n\nselect 1;");
+        let statements = split("\n\nselect 1;", Dialect::Postgres);
         assert_eq!(statement_at(&statements, 0).unwrap().sql, "select 1");
     }
 
     #[test]
     fn a_line_past_every_statement_picks_the_last() {
-        let statements = split("select 1;\nselect 2;");
+        let statements = split("select 1;\nselect 2;", Dialect::Postgres);
         assert_eq!(statement_at(&statements, 99).unwrap().sql, "select 2");
     }
 
     #[test]
     fn there_is_no_statement_in_an_empty_buffer() {
-        assert!(statement_at(&split(""), 0).is_none());
+        assert!(statement_at(&split("", Dialect::Postgres), 0).is_none());
     }
 
     #[test]
     fn statements_report_the_lines_they_occupy() {
-        let statements = split("select 1;\n\nselect\n  2;\n");
+        let statements = split("select 1;\n\nselect\n  2;\n", Dialect::Postgres);
         assert_eq!(statements[0].start_line, 0);
         assert_eq!(statements[0].end_line, 0);
         assert_eq!(statements[1].start_line, 2);

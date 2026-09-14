@@ -5,7 +5,8 @@
 
 use sqmeow_adapters::Backend;
 use sqmeow_db::{
-    Cell, Error, ForeignKey, KeyKind, RelationKind, ResultSet, RoutineKind, TypeClass,
+    Cell, Changes, Error, ForeignKey, KeyKind, RelationKind, ResultSet, RoutineKind, Source,
+    TypeClass,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -521,4 +522,423 @@ async fn a_plain_explain_is_a_table() {
     let names: Vec<&str> = plan.columns().iter().map(|c| c.name.as_str()).collect();
     assert!(names.contains(&"select_type"), "{names:?}");
     assert!(names.len() > 1);
+}
+
+fn text(value: &str) -> Cell {
+    Cell::Text(value.into())
+}
+
+#[tokio::test]
+async fn a_select_from_one_table_is_edited_through_its_primary_key() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "my_edited").await;
+    run(
+        &backend,
+        "insert into my_edited values (1, 'a', null), (2, 'b', 'x')",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select id, label as name, optional from my_edited order by id",
+    )
+    .await;
+    match result.source() {
+        Some(Source::Table { name, key, .. }) => {
+            assert_eq!(name, "my_edited");
+            assert_eq!(key, &vec![0]);
+        }
+        other => panic!("expected a table source, got {other:?}"),
+    }
+
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some(r"c:\x".into())), (2, Some("it's".into()))])],
+        deletes: vec![1],
+        inserts: vec![vec![
+            (0, Some("3".into())),
+            (1, Some("new".into())),
+            (2, None),
+        ]],
+    };
+    let plan = backend
+        .plan(&result, &changes)
+        .expect("the changes should plan");
+    backend.apply(&plan).await.expect("the plan should apply");
+
+    let after = run(
+        &backend,
+        "select id, label, optional from my_edited order by id",
+    )
+    .await;
+    assert_eq!(after.row_count(), 2);
+    assert_eq!(after.cell(0, 1), Some(&text(r"c:\x")));
+    assert_eq!(after.cell(0, 2), Some(&text("it's")));
+    assert_eq!(after.cell(1, 0), Some(&Cell::Int(3)));
+    assert_eq!(after.cell(1, 2), Some(&Cell::Null));
+}
+
+#[tokio::test]
+async fn setting_a_value_to_what_it_already_is_applies() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "my_same").await;
+    run(&backend, "insert into my_same (id, label) values (1, 'a')").await;
+    let result = run(&backend, "select id, label from my_same").await;
+
+    // MySQL counts the rows it changed rather than the rows it found, and this changes none.
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some("a".into()))])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend
+        .apply(&plan)
+        .await
+        .expect("an update that changes nothing is not a missing row");
+}
+
+#[tokio::test]
+async fn a_composite_key_finds_its_row_by_every_part() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists my_pair").await;
+    run(
+        &backend,
+        "create table my_pair (a int, b varchar(5), v text, primary key (a, b))",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into my_pair values (1, 'x', 'one'), (1, 'y', 'two')",
+    )
+    .await;
+
+    let result = run(&backend, "select v, b, a from my_pair order by b").await;
+    assert!(result.source().is_some(), "{:?}", result.columns());
+    let changes = Changes {
+        updates: vec![(1, vec![(0, Some("changed".into()))])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.unwrap();
+
+    let after = run(&backend, "select v from my_pair order by b").await;
+    assert_eq!(after.cell(0, 0), Some(&text("one")));
+    assert_eq!(after.cell(1, 0), Some(&text("changed")));
+}
+
+#[tokio::test]
+async fn a_failing_statement_rolls_back_the_ones_before_it() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "my_rollback").await;
+    run(
+        &backend,
+        "insert into my_rollback (id, label) values (1, 'a')",
+    )
+    .await;
+
+    let error = backend
+        .apply(&[
+            "update my_rollback set label = 'z' where id = 1".into(),
+            "insert into my_rollback_nowhere values (1)".into(),
+        ])
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("my_rollback_nowhere"), "{error}");
+    assert_eq!(
+        run(&backend, "select label from my_rollback")
+            .await
+            .cell(0, 0),
+        Some(&text("a"))
+    );
+}
+
+#[tokio::test]
+async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "my_vanished").await;
+    run(
+        &backend,
+        "insert into my_vanished (id, label) values (1, 'a'), (2, 'b')",
+    )
+    .await;
+    let result = run(&backend, "select id, label from my_vanished order by id").await;
+    run(&backend, "delete from my_vanished where id = 2").await;
+
+    let changes = Changes {
+        updates: vec![
+            (0, vec![(1, Some("first".into()))]),
+            (1, vec![(1, Some("gone".into()))]),
+        ],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    let error = backend.apply(&plan).await.unwrap_err();
+    assert!(error.to_string().contains("no row"), "{error}");
+    assert_eq!(
+        run(&backend, "select label from my_vanished")
+            .await
+            .cell(0, 0),
+        Some(&text("a"))
+    );
+}
+
+#[tokio::test]
+async fn a_transaction_spans_statements_run_one_at_a_time() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "my_tx").await;
+
+    run(&backend, "start transaction").await;
+    run(&backend, "insert into my_tx (id, label) values (1, 'a')").await;
+    run(&backend, "rollback").await;
+    assert_eq!(run(&backend, "select id from my_tx").await.row_count(), 0);
+
+    run(&backend, "begin").await;
+    run(&backend, "insert into my_tx (id, label) values (2, 'b')").await;
+    run(&backend, "commit").await;
+    assert_eq!(run(&backend, "select id from my_tx").await.row_count(), 1);
+}
+
+#[tokio::test]
+async fn upserts_count_the_way_mysql_does() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "my_upsert").await;
+    run(
+        &backend,
+        "insert into my_upsert (id, label) values (1, 'a')",
+    )
+    .await;
+
+    // MySQL counts a row updated through a duplicate key twice: once found, once changed.
+    let updated = run(
+        &backend,
+        "insert into my_upsert (id, label) values (1, 'b') as new
+         on duplicate key update label = new.label",
+    )
+    .await;
+    assert_eq!(updated.affected(), Some(2));
+
+    let replaced = run(
+        &backend,
+        "replace into my_upsert (id, label) values (1, 'c')",
+    )
+    .await;
+    assert_eq!(replaced.affected(), Some(2));
+
+    let ignored = run(
+        &backend,
+        "insert ignore into my_upsert (id, label) values (1, 'd')",
+    )
+    .await;
+    assert_eq!(ignored.affected(), Some(0));
+    assert_eq!(
+        run(&backend, "select label from my_upsert")
+            .await
+            .cell(0, 0),
+        Some(&text("c"))
+    );
+}
+
+#[tokio::test]
+async fn show_and_describe_read_as_text() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "my_show").await;
+
+    let tables = run(&backend, "show tables like 'my_show'").await;
+    assert_eq!(tables.cell(0, 0), Some(&text("my_show")));
+
+    let described = run(&backend, "describe my_show").await;
+    let names: Vec<&str> = described
+        .columns()
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["Field", "Type", "Null", "Key", "Default", "Extra"]
+    );
+    assert_eq!(described.cell(0, 0), Some(&text("id")));
+    assert_eq!(described.cell(0, 1), Some(&text("int")));
+    assert_eq!(described.cell(0, 3), Some(&text("PRI")));
+
+    let created = run(&backend, "show create table my_show").await;
+    match created.cell(0, 1) {
+        Some(Cell::Text(sql)) => assert!(sql.starts_with("CREATE TABLE"), "{sql}"),
+        other => panic!("expected the statement as text, got {other:?}"),
+    }
+
+    let variables = run(&backend, "show variables like 'max_connections'").await;
+    assert_eq!(variables.cell(0, 0), Some(&text("max_connections")));
+    assert!(matches!(variables.cell(0, 1), Some(Cell::Text(_))));
+
+    let indexes = run(&backend, "show index from my_show").await;
+    assert_eq!(indexes.row_count(), 1);
+}
+
+#[tokio::test]
+async fn a_procedure_call_shows_the_rows_it_selects() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop procedure if exists my_rows").await;
+    run(
+        &backend,
+        "create procedure my_rows(in n int)
+         begin
+             if n > 0 then
+                 select n as given, n * 2 as doubled;
+             end if;
+         end",
+    )
+    .await;
+
+    let result = run(&backend, "call my_rows(21)").await;
+    assert_eq!(result.row_count(), 1, "{:?}", result.columns());
+    assert_eq!(result.cell(0, 1), Some(&Cell::Int(42)));
+
+    // A call that selects nothing still runs.
+    assert_eq!(run(&backend, "call my_rows(0)").await.row_count(), 0);
+}
+
+#[tokio::test]
+async fn a_user_variable_lasts_the_session() {
+    let backend = connect(&server!()).await;
+    run(&backend, "set @answer = 42").await;
+    assert_eq!(
+        run(&backend, "select @answer as answer").await.cell(0, 0),
+        Some(&Cell::Int(42))
+    );
+}
+
+#[tokio::test]
+async fn decodes_unsigned_bit_set_and_binary_columns() {
+    let backend = connect(&server!()).await;
+    run(
+        &backend,
+        "create temporary table more_kinds (
+            tiny tinyint unsigned, small smallint unsigned, medium mediumint unsigned,
+            whole int unsigned, bits bit(8), choices set('a', 'b', 'c'), fixed char(3),
+            raw varbinary(4), negative decimal(5, 2)
+        )",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into more_kinds values
+            (255, 65535, 16777215, 4294967295, b'101', 'a,c', 'ab', x'00ff', -1.50)",
+    )
+    .await;
+
+    let result = run(&backend, "select * from more_kinds").await;
+    let expected = [
+        Cell::Int(255),
+        Cell::Int(65535),
+        Cell::Int(16_777_215),
+        Cell::Int(4_294_967_295),
+        Cell::Int(5),
+        text("a,c"),
+        text("ab"),
+        Cell::bytes(&[0x00, 0xff]),
+        Cell::Decimal("-1.50".into()),
+    ];
+    for (index, want) in expected.iter().enumerate() {
+        let column = &result.columns()[index].name;
+        assert_eq!(result.cell(0, index), Some(want), "column `{column}`");
+    }
+}
+
+#[tokio::test]
+async fn json_functions_answer_json() {
+    let backend = connect(&server!()).await;
+    let result = run(
+        &backend,
+        r#"select json_object('a', 1) as doc, json_extract('{"a": [1, 2]}', '$.a') as list"#,
+    )
+    .await;
+    assert_eq!(result.cell(0, 0), Some(&Cell::Json(r#"{"a":1}"#.into())));
+    assert_eq!(result.cell(0, 1), Some(&Cell::Json("[1,2]".into())));
+}
+
+#[tokio::test]
+async fn common_table_expressions_and_window_functions() {
+    let backend = connect(&server!()).await;
+    let result = run(
+        &backend,
+        "with recursive n(x) as (select 1 union all select x + 1 from n where x < 3)
+         select x, sum(x) over (order by x) as running, lag(x) over (order by x) as previous
+         from n",
+    )
+    .await;
+    assert_eq!(result.row_count(), 3);
+    assert!(
+        matches!(
+            result.cell(2, 1),
+            Some(Cell::Int(6)) | Some(Cell::Decimal(_))
+        ),
+        "{:?}",
+        result.cell(2, 1)
+    );
+    assert_eq!(result.cell(0, 2), Some(&Cell::Null));
+}
+
+#[tokio::test]
+async fn a_cancelled_query_leaves_the_connection_ready_for_the_next() {
+    let backend = connect(&server!()).await;
+    let cancel = CancellationToken::new();
+
+    let stopper = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stopper.cancel();
+    });
+    let error = backend
+        .execute("select sleep(8)", NO_CAP, cancel)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Cancelled), "{error}");
+
+    let started = std::time::Instant::now();
+    let next = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.execute("select 1", NO_CAP, CancellationToken::new()),
+    )
+    .await;
+    assert!(
+        matches!(next, Ok(Ok(_))),
+        "the next query should not wait out the cancelled one: {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn a_query_run_again_after_its_table_changed_shows_the_change() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "my_altered").await;
+    run(
+        &backend,
+        "insert into my_altered (id, label) values (1, 'a')",
+    )
+    .await;
+    run(&backend, "select * from my_altered").await;
+    run(
+        &backend,
+        "alter table my_altered rename column optional to note",
+    )
+    .await;
+    run(
+        &backend,
+        "alter table my_altered add column added int default 7",
+    )
+    .await;
+
+    let result = run(&backend, "select * from my_altered").await;
+    let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["id", "label", "note", "added"]);
+    assert_eq!(result.cell(0, 3), Some(&Cell::Int(7)));
+
+    let changes = Changes {
+        updates: vec![(0, vec![(2, Some("n".into()))])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend
+        .apply(&plan)
+        .await
+        .expect("the renamed column should be written");
 }

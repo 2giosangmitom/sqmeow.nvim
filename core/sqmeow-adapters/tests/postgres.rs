@@ -6,7 +6,8 @@
 
 use sqmeow_adapters::Backend;
 use sqmeow_db::{
-    Cell, Error, ForeignKey, KeyKind, RelationKind, ResultSet, RoutineKind, TypeClass,
+    Cell, Changes, Error, ForeignKey, KeyKind, RelationKind, ResultSet, RoutineKind, Source,
+    TypeClass,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -531,4 +532,458 @@ async fn an_explain_is_a_column_of_plan_lines() {
     let json = run(&backend, "explain (format json) select * from explained").await;
     assert_eq!(json.columns().len(), 1);
     assert_eq!(json.row_count(), 1);
+}
+
+fn text(value: &str) -> Cell {
+    Cell::Text(value.into())
+}
+
+#[tokio::test]
+async fn a_write_returning_rows_shows_them_and_counts_them() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "pg_returning").await;
+
+    let inserted = run(
+        &backend,
+        "insert into pg_returning (id, label) values (1, 'a'), (2, 'b') returning id, label",
+    )
+    .await;
+    assert_eq!(inserted.row_count(), 2);
+    assert_eq!(inserted.affected(), Some(2));
+    assert_eq!(inserted.cell(1, 1), Some(&text("b")));
+
+    let updated = run(
+        &backend,
+        "update pg_returning set label = upper(label) returning label",
+    )
+    .await;
+    assert_eq!(updated.affected(), Some(2));
+    assert_eq!(updated.cell(0, 0), Some(&text("A")));
+
+    let deleted = run(&backend, "delete from pg_returning where id = 1").await;
+    assert_eq!(deleted.affected(), Some(1));
+    assert_eq!(deleted.row_count(), 0);
+}
+
+#[tokio::test]
+async fn a_transaction_spans_statements_run_one_at_a_time() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "pg_tx").await;
+
+    run(&backend, "begin").await;
+    run(&backend, "insert into pg_tx (id, label) values (1, 'a')").await;
+    assert_eq!(run(&backend, "select id from pg_tx").await.row_count(), 1);
+    run(&backend, "rollback").await;
+    assert_eq!(run(&backend, "select id from pg_tx").await.row_count(), 0);
+
+    run(&backend, "begin").await;
+    run(&backend, "insert into pg_tx (id, label) values (2, 'b')").await;
+    run(&backend, "savepoint half").await;
+    run(&backend, "insert into pg_tx (id, label) values (3, 'c')").await;
+    run(&backend, "rollback to savepoint half").await;
+    run(&backend, "commit").await;
+    assert_eq!(run(&backend, "select id from pg_tx").await.row_count(), 1);
+}
+
+#[tokio::test]
+async fn an_upsert_counts_the_row_it_touched() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "pg_upsert").await;
+    run(
+        &backend,
+        "insert into pg_upsert (id, label) values (1, 'a')",
+    )
+    .await;
+
+    let updated = run(
+        &backend,
+        "insert into pg_upsert (id, label) values (1, 'b')
+         on conflict (id) do update set label = excluded.label",
+    )
+    .await;
+    assert_eq!(updated.affected(), Some(1));
+
+    let skipped = run(
+        &backend,
+        "insert into pg_upsert (id, label) values (1, 'c') on conflict do nothing",
+    )
+    .await;
+    assert_eq!(skipped.affected(), Some(0));
+
+    let merged = run(
+        &backend,
+        "merge into pg_upsert t using (values (1, 'm'), (2, 'n')) as s(id, label) on t.id = s.id
+         when matched then update set label = s.label
+         when not matched then insert (id, label) values (s.id, s.label)",
+    )
+    .await;
+    assert_eq!(merged.affected(), Some(2));
+    let labels = run(&backend, "select label from pg_upsert order by id").await;
+    assert_eq!(labels.cell(0, 0), Some(&text("m")));
+    assert_eq!(labels.cell(1, 0), Some(&text("n")));
+}
+
+#[tokio::test]
+async fn schema_changes_are_seen_by_the_drawer() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "pg_ddl").await;
+    run(
+        &backend,
+        "alter table pg_ddl add column extra int default 7",
+    )
+    .await;
+    run(
+        &backend,
+        "alter table pg_ddl rename column optional to note",
+    )
+    .await;
+    run(&backend, "create index pg_ddl_label on pg_ddl (label)").await;
+    run(
+        &backend,
+        "comment on table pg_ddl is 'a note; with a semicolon'",
+    )
+    .await;
+    run(&backend, "insert into pg_ddl (id, label) values (1, 'a')").await;
+    assert_eq!(
+        run(&backend, "select extra from pg_ddl").await.cell(0, 0),
+        Some(&Cell::Int(7))
+    );
+    run(&backend, "truncate pg_ddl").await;
+    run(&backend, "drop index pg_ddl_label").await;
+
+    let columns = backend.columns(SCHEMA, "pg_ddl").await.unwrap();
+    let names: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["id", "label", "note", "extra"]);
+    assert_eq!(run(&backend, "select * from pg_ddl").await.row_count(), 0);
+}
+
+#[tokio::test]
+async fn a_do_block_and_a_procedure_call_run() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "pg_called").await;
+    run(
+        &backend,
+        "do $$ begin insert into pg_called (id, label) values (1, 'do'); end $$",
+    )
+    .await;
+    run(
+        &backend,
+        "create or replace procedure pg_called_add(n int) language plpgsql as $$
+         begin insert into pg_called (id, label) values (n, 'call'); end $$",
+    )
+    .await;
+    run(&backend, "call pg_called_add(2)").await;
+
+    let rows = run(&backend, "select label from pg_called order by id").await;
+    assert_eq!(rows.cell(0, 0), Some(&text("do")));
+    assert_eq!(rows.cell(1, 0), Some(&text("call")));
+}
+
+#[tokio::test]
+async fn a_setting_changed_with_set_is_read_back_with_show() {
+    let backend = connect(&server!()).await;
+    run(&backend, "set application_name = 'sqmeow test'").await;
+
+    let shown = run(&backend, "show application_name").await;
+    assert_eq!(shown.columns()[0].name, "application_name");
+    assert_eq!(shown.cell(0, 0), Some(&text("sqmeow test")));
+}
+
+#[tokio::test]
+async fn common_table_expressions_and_window_functions() {
+    let backend = connect(&server!()).await;
+    let result = run(
+        &backend,
+        "with recursive n(x) as (select 1 union all select x + 1 from n where x < 3)
+         select x, sum(x) over (order by x) as running, lag(x) over (order by x) as previous
+         from n",
+    )
+    .await;
+
+    assert_eq!(result.row_count(), 3);
+    assert_eq!(result.cell(2, 1), Some(&Cell::Int(6)));
+    assert_eq!(result.cell(0, 2), Some(&Cell::Null));
+    assert_eq!(result.cell(2, 2), Some(&Cell::Int(2)));
+}
+
+#[tokio::test]
+async fn arrays_and_special_values_decode() {
+    let backend = connect(&server!()).await;
+    let result = run(
+        &backend,
+        "select array[true, false] as flags, array[1.5::float8] as floats,
+                array['0b7c1e6a-1f4d-4c2a-9a3e-5f6d7c8b9a01'::uuid] as idents,
+                '{}'::int4[] as empty, '-0.5'::numeric as negative,
+                'infinity'::timestamp as forever, 'NaN'::numeric as nan",
+    )
+    .await;
+
+    assert_eq!(
+        result.cell(0, 0),
+        Some(&Cell::Array(vec![Cell::Bool(true), Cell::Bool(false)]))
+    );
+    assert_eq!(
+        result.cell(0, 1),
+        Some(&Cell::Array(vec![Cell::Float(1.5)]))
+    );
+    assert_eq!(
+        result.cell(0, 2),
+        Some(&Cell::Array(vec![Cell::Uuid(
+            "0b7c1e6a-1f4d-4c2a-9a3e-5f6d7c8b9a01".into()
+        )]))
+    );
+    assert_eq!(result.cell(0, 3), Some(&Cell::Array(Vec::new())));
+    assert_eq!(result.cell(0, 4), Some(&Cell::Decimal("-0.5".into())));
+    // Values nothing decodes still show the server's own text.
+    for (column, want) in [(5, "infinity"), (6, "NaN")] {
+        match result.cell(0, column) {
+            Some(
+                Cell::Unsupported { raw: value, .. }
+                | Cell::Text(value)
+                | Cell::Timestamp(value)
+                | Cell::Decimal(value),
+            ) => assert_eq!(value, want),
+            other => panic!("expected {want}, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn lists_materialized_views_and_partitioned_tables() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop materialized view if exists pg_mv").await;
+    run(&backend, "drop table if exists pg_parted cascade").await;
+    run(&backend, "create materialized view pg_mv as select 1 as x").await;
+    run(&backend, "refresh materialized view pg_mv").await;
+    run(
+        &backend,
+        "create table pg_parted (id int, made date) partition by range (made)",
+    )
+    .await;
+
+    let relations = backend.relations(SCHEMA).await.unwrap();
+    let kind = |name: &str| relations.iter().find(|r| r.name == name).map(|r| r.kind);
+    assert_eq!(kind("pg_mv"), Some(RelationKind::MaterializedView));
+    assert_eq!(kind("pg_parted"), Some(RelationKind::Table));
+}
+
+#[tokio::test]
+async fn a_select_from_one_table_is_edited_through_its_primary_key() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "pg_edited").await;
+    run(
+        &backend,
+        "insert into pg_edited values (1, 'a', null), (2, 'b', 'x')",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select id, label as name, optional from pg_edited order by id",
+    )
+    .await;
+    match result.source() {
+        Some(Source::Table { schema, name, key }) => {
+            assert_eq!(schema.as_deref(), Some(SCHEMA));
+            assert_eq!(name, "pg_edited");
+            assert_eq!(key, &vec![0]);
+        }
+        other => panic!("expected a table source, got {other:?}"),
+    }
+
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some(r"c:\x".into())), (2, Some("it's".into()))])],
+        deletes: vec![1],
+        inserts: vec![vec![
+            (0, Some("3".into())),
+            (1, Some("new".into())),
+            (2, None),
+        ]],
+    };
+    let plan = backend
+        .plan(&result, &changes)
+        .expect("the changes should plan");
+    backend.apply(&plan).await.expect("the plan should apply");
+
+    let after = run(
+        &backend,
+        "select id, label, optional from pg_edited order by id",
+    )
+    .await;
+    assert_eq!(after.row_count(), 2);
+    assert_eq!(after.cell(0, 1), Some(&text(r"c:\x")));
+    assert_eq!(after.cell(0, 2), Some(&text("it's")));
+    assert_eq!(after.cell(1, 0), Some(&Cell::Int(3)));
+    assert_eq!(after.cell(1, 2), Some(&Cell::Null));
+}
+
+#[tokio::test]
+async fn a_composite_key_finds_its_row_by_every_part() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists pg_pair").await;
+    run(
+        &backend,
+        "create table pg_pair (a int, b text, v text, primary key (a, b))",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into pg_pair values (1, 'x', 'one'), (1, 'y', 'two')",
+    )
+    .await;
+
+    let result = run(&backend, "select v, b, a from pg_pair order by b").await;
+    assert!(result.source().is_some(), "{:?}", result.columns());
+    let changes = Changes {
+        updates: vec![(1, vec![(0, Some("changed".into()))])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.unwrap();
+
+    let after = run(&backend, "select v from pg_pair order by b").await;
+    assert_eq!(after.cell(0, 0), Some(&text("one")));
+    assert_eq!(after.cell(1, 0), Some(&text("changed")));
+}
+
+#[tokio::test]
+async fn a_column_added_after_its_table_was_read_can_be_edited() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "pg_altered").await;
+    run(
+        &backend,
+        "insert into pg_altered (id, label) values (1, 'a')",
+    )
+    .await;
+    // Reading the table once is what fills the adapter's picture of it.
+    run(&backend, "select * from pg_altered").await;
+    run(
+        &backend,
+        "alter table pg_altered rename column optional to note",
+    )
+    .await;
+    run(&backend, "alter table pg_altered add column added text").await;
+
+    let result = run(&backend, "select * from pg_altered").await;
+    let origins: Vec<Option<&str>> = result
+        .columns()
+        .iter()
+        .map(|column| column.origin.as_deref())
+        .collect();
+    assert_eq!(
+        origins,
+        vec![Some("id"), Some("label"), Some("note"), Some("added")]
+    );
+
+    let changes = Changes {
+        updates: vec![(0, vec![(2, Some("n".into())), (3, Some("new".into()))])],
+        ..Changes::default()
+    };
+    let plan = backend
+        .plan(&result, &changes)
+        .expect("the new column should be editable");
+    backend.apply(&plan).await.expect("the plan should apply");
+    let after = run(&backend, "select note, added from pg_altered").await;
+    assert_eq!(after.cell(0, 1), Some(&text("new")));
+}
+
+#[tokio::test]
+async fn a_failing_statement_rolls_back_the_ones_before_it() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "pg_rollback").await;
+    run(
+        &backend,
+        "insert into pg_rollback (id, label) values (1, 'a')",
+    )
+    .await;
+
+    let error = backend
+        .apply(&[
+            "update pg_rollback set label = 'z' where id = 1".into(),
+            "insert into pg_rollback_nowhere values (1)".into(),
+        ])
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("pg_rollback_nowhere"), "{error}");
+    assert_eq!(
+        run(&backend, "select label from pg_rollback")
+            .await
+            .cell(0, 0),
+        Some(&text("a"))
+    );
+}
+
+#[tokio::test]
+async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
+    let backend = connect(&server!()).await;
+    fixture(&backend, "pg_vanished").await;
+    run(
+        &backend,
+        "insert into pg_vanished (id, label) values (1, 'a'), (2, 'b')",
+    )
+    .await;
+    let result = run(&backend, "select id, label from pg_vanished order by id").await;
+    run(&backend, "delete from pg_vanished where id = 2").await;
+
+    let changes = Changes {
+        updates: vec![
+            (0, vec![(1, Some("first".into()))]),
+            (1, vec![(1, Some("gone".into()))]),
+        ],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    let error = backend.apply(&plan).await.unwrap_err();
+    assert!(error.to_string().contains("no row"), "{error}");
+    assert_eq!(
+        run(&backend, "select label from pg_vanished")
+            .await
+            .cell(0, 0),
+        Some(&text("a"))
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_query_leaves_the_connection_ready_for_the_next() {
+    let backend = connect(&server!()).await;
+    let cancel = CancellationToken::new();
+
+    let stopper = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stopper.cancel();
+    });
+    let error = backend
+        .execute("select pg_sleep(8)", NO_CAP, cancel)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Cancelled), "{error}");
+
+    let started = std::time::Instant::now();
+    let next = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.execute("select 1", NO_CAP, CancellationToken::new()),
+    )
+    .await;
+    assert!(
+        matches!(next, Ok(Ok(_))),
+        "the next query should not wait out the cancelled one: {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn a_copy_to_stdout_answers_rather_than_hanging() {
+    let backend = connect(&server!()).await;
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.execute(
+            "copy (select 1) to stdout",
+            NO_CAP,
+            CancellationToken::new(),
+        ),
+    )
+    .await;
+    assert!(outcome.is_ok(), "copy should answer, with rows or an error");
+    assert_eq!(run(&backend, "select 1").await.row_count(), 1);
 }
