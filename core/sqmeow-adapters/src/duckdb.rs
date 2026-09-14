@@ -93,14 +93,20 @@ impl Adapter for DuckDbAdapter {
     ) -> Result<ResultSet> {
         let statement = statement.to_owned();
         let work = self.run(move |connection| read(connection, &statement, max_rows));
+        tokio::pin!(work);
         tokio::select! {
             biased;
 
-            () = cancel.cancelled() => {
-                self.interrupt.interrupt();
-                Err(Error::Cancelled)
+            () = cancel.cancelled() => {}
+            result = &mut work => return result,
+        }
+        // An interrupt that lands before the query starts is lost, so repeat it until the query stops.
+        loop {
+            self.interrupt.interrupt();
+            tokio::select! {
+                _ = &mut work => return Err(Error::Cancelled),
+                () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
             }
-            result = work => result,
         }
     }
 
