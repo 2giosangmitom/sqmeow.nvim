@@ -57,7 +57,7 @@ jobs:
         run: cargo install cross --locked
 
       - name: Build
-        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }} -p sqmeow-core
+        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }} -p sqmeow-core --features bundled-duckdb
 
       - name: Package
         shell: bash

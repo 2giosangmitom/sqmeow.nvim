@@ -59,7 +59,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```
 
 > [!NOTE]
-> To track `master`, remove `version` and build with `install('cargo')`, which needs a Rust toolchain.
+> To track `master`, remove `version` and build with `install('cargo')`, which needs a Rust toolchain and DuckDB installed.
 > Run `:checkhealth sqmeow` to verify the installation.
 
 ## ⚡ Quick Start

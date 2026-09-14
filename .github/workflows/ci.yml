@@ -11,6 +11,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The runners have no libduckdb.
+  SQMEOW_CARGO_FLAGS: --features bundled-duckdb
 
 jobs:
   lint:
@@ -113,5 +115,5 @@ jobs:
       # A service container cannot take ScyllaDB's start-up flags.
       - run: docker compose up -d --wait scylla cassandra
       - run: cargo test --all-features
-      - run: cargo build
+      - run: cargo build --features bundled-duckdb
       - run: nvim -l tests/minit.lua
