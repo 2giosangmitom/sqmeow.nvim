@@ -981,7 +981,6 @@ local function filter_dialog()
   local ok, err = require('sqmeow.ui.form').open({
     title = 'Filter',
     fields = {
-      -- ponytail: the column is cycled through with <CR>; a menu once results this wide are common
       { key = 'column', label = 'Column', options = labels },
       { key = 'condition', label = 'Condition', options = conditions },
       { key = 'value', label = 'Value', enabled = needs_value },

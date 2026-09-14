@@ -19,7 +19,6 @@ use sqmeow_db::{
 use tokio_util::sync::CancellationToken;
 
 /// How many documents a collection's fields are read from.
-// ponytail: a random sample, so a field only rare documents have can be missed; widen it if so
 const SAMPLE_SIZE: i32 = 100;
 
 /// Commands that answer with a cursor to drain rather than with one document.
@@ -120,8 +119,6 @@ impl Adapter for MongoAdapter {
     }
 
     /// One command after another, stopping at the first that fails.
-    // ponytail: not atomic; a multi-document transaction needs a replica set, so wrap these in a
-    // session with `start_transaction` if one is guaranteed.
     async fn apply(&self, statements: &[String]) -> Result<()> {
         for (done, statement) in statements.iter().enumerate() {
             let Statement::Command { db, command } = parse(statement)? else {
