@@ -105,10 +105,25 @@ function M.on_call(payload)
 end
 
 --- Handle an export finishing.
+---
+--- An export with no file comes back as text, which goes on the system clipboard, and in the
+--- unnamed register as well so a `p` pastes it where there is no clipboard provider.
 ---@param payload table
 function M.on_export(payload)
   if payload.error then
     return notify(payload.error, vim.log.levels.ERROR)
+  end
+
+  if payload.text then
+    vim.fn.setreg('"', payload.text)
+    pcall(vim.fn.setreg, '+', payload.text)
+    return notify(
+      ('copied %d row%s (%d bytes)'):format(
+        payload.rows,
+        payload.rows == 1 and '' or 's',
+        payload.bytes
+      )
+    )
   end
 
   notify(('wrote %s (%d bytes)'):format(payload.path, payload.bytes))
@@ -139,6 +154,19 @@ function M.ensure()
   rpc.on('schema:nodes', M.on_nodes)
   rpc.on('schema:catalog', M.on_catalog)
   rpc.on('export:done', M.on_export)
+  -- Both of these ask the engine for more, and the engine can send them before Neovim has read its
+  -- answer to the request that started them. Asking from inside the event would nest a request
+  -- inside that one, and the answers would come back out of order, so they wait their turn.
+  rpc.on('call:view', function(payload)
+    vim.schedule(function()
+      require('sqmeow.ui.result').on_view(payload)
+    end)
+  end)
+  rpc.on('apply:done', function(payload)
+    vim.schedule(function()
+      require('sqmeow.ui.edit').on_applied(payload)
+    end)
+  end)
 end
 
 return M

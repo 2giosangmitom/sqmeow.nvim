@@ -101,6 +101,9 @@ pub struct Call {
     pub id: u64,
     pub conn_id: i64,
     pub result: ResultSet,
+    /// The rows the editor is paging through, when it filtered or sorted them: indices into
+    /// `result`, in the order shown. `None` is every row in the order the query returned them.
+    pub view: Mutex<Option<Arc<Vec<usize>>>>,
 }
 
 /// The state one editor session owns.
@@ -263,6 +266,7 @@ mod tests {
             id,
             conn_id: 1,
             result,
+            view: Default::default(),
         }
     }
 

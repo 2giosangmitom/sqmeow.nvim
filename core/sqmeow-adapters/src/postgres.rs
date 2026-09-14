@@ -13,7 +13,7 @@ use sqlx::postgres::{PgColumn, PgConnectOptions, PgHasArrayType, PgPool, PgPoolO
 use sqlx::{Decode, Postgres, Row, Statement as _, Type, TypeInfo, ValueRef, types};
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode,
+    ResultSet, RoutineNode, SchemaNode, Source,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -31,6 +31,10 @@ pub struct PostgresAdapter {
     /// under a live connection leaves an icon one query out of date, which is a smaller price than
     /// a catalog round trip before every execution.
     keys: Mutex<HashMap<(Oid, i16), KeyKind>>,
+    /// What a table is called, its columns by attribute number, and its primary key, by OID.
+    ///
+    /// Held for the life of the connection, as `keys` is, and for the same reason.
+    relations: Mutex<HashMap<Oid, Relation>>,
     /// Whether the URL named no database, so the drawer lists the server's databases instead.
     cluster: bool,
 }
@@ -66,6 +70,7 @@ impl PostgresAdapter {
         Ok(Self {
             pool,
             keys: Mutex::default(),
+            relations: Mutex::default(),
             cluster,
         })
     }
@@ -90,13 +95,14 @@ impl PostgresAdapter {
     }
 
     /// What a statement's result looks like, with the columns that are keys marked.
-    async fn columns(&self, statement: &str) -> Vec<Column> {
+    async fn columns(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
         let Some(prepared) = prepare(&self.pool, statement).await else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
         let mut columns = result_columns(prepared.columns());
         self.mark_keys(prepared.columns(), &mut columns).await;
-        columns
+        let source = self.source(prepared.columns(), &mut columns).await;
+        (columns, source)
     }
 
     /// Mark the result columns that are keys in the table they came from.
@@ -196,6 +202,140 @@ impl PostgresAdapter {
     }
 }
 
+/// A table a result column came from, as the catalog describes it.
+#[derive(Debug)]
+struct Relation {
+    schema: String,
+    name: String,
+    /// Column names by attribute number.
+    columns: HashMap<i16, String>,
+    /// The attribute numbers of the primary key.
+    primary: Vec<i16>,
+}
+
+impl PostgresAdapter {
+    /// Name each result column's table column, and say where the rows are stored when every column
+    /// that is not an expression comes from one table and that table's whole primary key is among
+    /// them.
+    async fn source(&self, prepared: &[PgColumn], columns: &mut [Column]) -> Option<Source> {
+        let sources: Vec<Option<(Oid, i16)>> = prepared
+            .iter()
+            .map(|column| column.relation_id().zip(column.relation_attribute_no()))
+            .collect();
+        let mut wanted: Vec<Oid> = sources.iter().flatten().map(|(oid, _)| *oid).collect();
+        wanted.sort_unstable_by_key(|oid| oid.0);
+        wanted.dedup();
+        if wanted.is_empty() {
+            return None;
+        }
+
+        let missing: Vec<Oid> = {
+            let known = self.relations.lock().ok()?;
+            wanted
+                .iter()
+                .filter(|oid| !known.contains_key(oid))
+                .copied()
+                .collect()
+        };
+        if !missing.is_empty() {
+            let found = self.read_relations(&missing).await;
+            self.relations.lock().ok()?.extend(found);
+        }
+
+        let known = self.relations.lock().ok()?;
+        for (column, source) in columns.iter_mut().zip(&sources) {
+            if let Some((oid, attribute)) = source {
+                column.origin = known
+                    .get(oid)
+                    .and_then(|relation| relation.columns.get(attribute))
+                    .cloned();
+            }
+        }
+
+        let [oid] = wanted.as_slice() else {
+            return None;
+        };
+        // The same table column twice is a self-join, whose rows are not one table row each.
+        let mut seen = std::collections::HashSet::new();
+        if !sources.iter().flatten().all(|source| seen.insert(*source)) {
+            return None;
+        }
+        let relation = known.get(oid)?;
+        if relation.primary.is_empty() {
+            return None;
+        }
+        let key = relation
+            .primary
+            .iter()
+            .map(|attribute| {
+                sources
+                    .iter()
+                    .position(|source| *source == Some((*oid, *attribute)))
+            })
+            .collect::<Option<Vec<usize>>>()?;
+        Some(Source::Table {
+            schema: Some(relation.schema.clone()),
+            name: relation.name.clone(),
+            key,
+        })
+    }
+
+    /// Ask the catalog what these tables are called, what their columns are, and which of those
+    /// make up the primary key.
+    ///
+    /// A failure answers with nothing: the result still shows, it just cannot be edited.
+    async fn read_relations(&self, wanted: &[Oid]) -> HashMap<Oid, Relation> {
+        let rows = sqlx::query(
+            "select c.oid as relation, n.nspname::text as schema, c.relname::text as name,
+                    a.attnum as attribute, a.attname::text as column_name,
+                    coalesce(a.attnum = any(pk.conkey), false) as primary_key
+             from pg_catalog.pg_class c
+             join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+             join pg_catalog.pg_attribute a
+               on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+             left join pg_catalog.pg_constraint pk
+               on pk.conrelid = c.oid and pk.contype = 'p'
+             where c.oid = any($1::oid[])",
+        )
+        .bind(wanted.to_vec())
+        .fetch_all(&self.pool)
+        .await;
+
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::debug!(%error, "could not read which tables result columns come from");
+                return HashMap::new();
+            }
+        };
+
+        let mut relations: HashMap<Oid, Relation> = HashMap::new();
+        for row in &rows {
+            let (Ok(oid), Ok(schema), Ok(name), Ok(attribute), Ok(column), Ok(primary)) = (
+                row.try_get::<Oid, _>("relation"),
+                row.try_get::<String, _>("schema"),
+                row.try_get::<String, _>("name"),
+                row.try_get::<i16, _>("attribute"),
+                row.try_get::<String, _>("column_name"),
+                row.try_get::<bool, _>("primary_key"),
+            ) else {
+                continue;
+            };
+            let relation = relations.entry(oid).or_insert_with(|| Relation {
+                schema,
+                name,
+                columns: HashMap::new(),
+                primary: Vec::new(),
+            });
+            relation.columns.insert(attribute, column);
+            if primary {
+                relation.primary.push(attribute);
+            }
+        }
+        relations
+    }
+}
+
 /// Which key a catalog row says a column is.
 fn key_kind(row: &PgRow) -> KeyKind {
     let flag = |name| row.try_get::<Option<bool>, _>(name).ok().flatten() == Some(true);
@@ -218,14 +358,18 @@ impl Adapter for PostgresAdapter {
         format!("\"{}\"", name.replace('"', "\"\""))
     }
 
+    async fn apply(&self, statements: &[String]) -> Result<()> {
+        stream::transact(&self.pool, statements).await
+    }
+
     async fn execute(
         &self,
         statement: &str,
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let columns = self.columns(statement).await;
-        stream::execute(
+        let (columns, source) = self.columns(statement).await;
+        let mut result = stream::execute(
             &self.pool,
             statement,
             columns,
@@ -234,7 +378,9 @@ impl Adapter for PostgresAdapter {
             |outcome| outcome.rows_affected(),
             decode_cell,
         )
-        .await
+        .await?;
+        result.set_source(source);
+        Ok(result)
     }
 
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {

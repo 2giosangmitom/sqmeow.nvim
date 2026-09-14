@@ -583,10 +583,10 @@ end
 --- The statement that shows what a relation holds.
 ---
 --- For a Redis key that depends on its type, which is the group the key sits under.
-local function preview_statement(node)
+---@param limit integer The most rows it may read.
+local function preview_statement(node, limit)
   local sql = require('sqmeow.sql')
   local dialect = dialect_of(node.conn_id)
-  local limit = require('sqmeow.config').get().ui.result.page_size
   if dialect == 'redis' then
     return sql.read_key(node.path[2], node.path[#node.path], limit)
   end
@@ -732,7 +732,12 @@ function M.actions.preview()
   end
 
   -- Nil for a Redis key of a type nothing reads back.
-  local statement = preview_statement(node)
+  local statement = preview_statement(
+    node,
+    -- The whole relation, up to the row cap: a filter in the grid then covers the table rather
+    -- than one page of it. One row past the cap is what makes the engine mark it truncated.
+    require('sqmeow.config').get().query.max_rows + 1
+  )
   if not statement then
     return
   end
@@ -766,7 +771,7 @@ function M.actions.yank_select()
     return
   end
 
-  local statement = preview_statement(node)
+  local statement = preview_statement(node, require('sqmeow.config').get().ui.result.page_size)
   if not statement then
     return
   end

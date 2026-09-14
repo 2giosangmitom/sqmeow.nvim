@@ -243,13 +243,20 @@ end
 ---@param sql string One or more statements. Only the last one's rows are shown.
 ---@param opts table|nil `line` runs only the statement at that zero-based line; `source_buf` is
 --- the buffer an error should be reported in; `history = false` keeps the query out of the log,
---- for SQL the plugin wrote rather than the user.
+--- for SQL the plugin wrote rather than the user; `conn_id` runs on that connection rather than the
+--- one the buffer belongs to.
 ---@return integer|nil call_id
 ---@return string|nil error
 function M.execute(sql, opts)
   opts = opts or {}
   local state = require('sqmeow.state')
-  local connection, reason = M.target(opts.source_buf)
+  local connection, reason
+  if opts.conn_id then
+    connection = state.connections[opts.conn_id]
+    reason = 'the connection this result came from is not open'
+  else
+    connection, reason = M.target(opts.source_buf)
+  end
 
   if not connection then
     reason = reason or 'connect to a database first'
@@ -370,7 +377,7 @@ local function turn_page(to)
   end
 
   local size = math.max(require('sqmeow.config').get().ui.result.page_size, 1)
-  result.show_page(to(result.offset(), size, call.rows or 0))
+  result.show_page(to(result.offset(), size, call.view_rows or call.rows or 0))
 end
 
 --- Show the next page of the current result.
@@ -399,6 +406,37 @@ function M.last_page()
   turn_page(function(_, size, rows)
     return math.max(math.ceil(rows / size) - 1, 0) * size
   end)
+end
+
+--- Show the result in a float, or put it back in its split.
+---
+--- A bigger window on the same grid, with the same keys.
+function M.toggle_float()
+  require('sqmeow.ui.result').toggle_float()
+end
+
+--- Show the statements the changes staged in the result plan into, to apply with `<C-s>`.
+function M.review()
+  require('sqmeow.ui.edit').review()
+end
+
+--- Filter and sort the current result's rows.
+---
+--- The engine does it over the rows it holds, so nothing is asked of the database again. Columns
+--- are zero-based; a filter without one searches every column.
+---
+---@param view { filters: { column: integer|nil, op: string, value: string|nil }[]|nil, sort: { column: integer, descending: boolean|nil }[]|nil }
+--- `op` is one of `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `starts_with`, `is_null`,
+--- `not_null`. Either list left out is kept as it is.
+---@usage >lua
+---   require('sqmeow.api').view({ filters = { { column = 1, op = 'contains', value = 'al' } } })
+--- <
+function M.view(view)
+  local result = require('sqmeow.ui.result')
+  local spec = result.spec()
+  spec.filters = view.filters or spec.filters
+  spec.sort = view.sort or spec.sort
+  result.send_view()
 end
 
 --- Open the result window.
@@ -474,8 +512,10 @@ end
 --- Without a `path`, asks for the format, file and whether to write a header in a dialog that
 --- shows the query being exported.
 ---
----@param opts table|nil `path` skips the dialog; `format` is 'csv' or 'json'; `headers` defaults to
---- true; `offset` and `limit` write that many rows from that one, zero-based, rather than all rows.
+---@param opts table|nil `path` skips the dialog; `clipboard = true` skips it too and copies instead;
+--- `format` is 'csv' or 'json'; `headers` defaults to true; `offset` and `limit` write that many rows
+--- from that one, zero-based, rather than all rows. Rows are written as the grid shows them:
+--- filtered, sorted, and without the hidden columns.
 function M.export(opts)
   opts = opts or {}
   local state = require('sqmeow.state')
@@ -485,6 +525,7 @@ function M.export(opts)
     return
   end
 
+  --- Without a path the engine sends the text back, and `export:done` puts it on the clipboard.
   local function write(format, path, headers)
     local _, err = engine().request('export', {
       call_id = call.call_id,
@@ -492,14 +533,15 @@ function M.export(opts)
       headers = headers,
       offset = opts.offset,
       limit = opts.limit,
-      path = vim.fn.fnamemodify(vim.fs.normalize(path), ':p'),
+      columns = require('sqmeow.ui.result').visible_columns(),
+      path = path and vim.fn.fnamemodify(vim.fs.normalize(path), ':p') or nil,
     })
     if err then
       notify(err, vim.log.levels.ERROR)
     end
   end
 
-  if opts.path then
+  if opts.path or opts.clipboard then
     return write(opts.format or 'csv', opts.path, opts.headers ~= false)
   end
 
@@ -510,12 +552,21 @@ function M.export(opts)
   local connection = call.connection or (state.connections[call.conn_id] or {}).name or 'result'
   local stem = (relation or connection):gsub('[^%w_-]', '_') .. os.date('_%Y%m%d_%H%M%S')
 
-  local count = opts.limit or call.rows or 0
+  local result = require('sqmeow.ui.result')
+  local count = opts.limit or call.view_rows or call.rows or 0
   local plural = count == 1 and '' or 's'
-  local summary = opts.limit and ('-- Exporting %d selected row%s'):format(count, plural)
-    or ('-- Exporting all %d row%s'):format(count, plural)
+  -- The engine renders at most this many rows for the preview.
+  local shown = math.min(count, 100)
+  local title = opts.limit and ('Preview of %d selected row%s'):format(count, plural)
+    or ('Preview of all %d row%s'):format(count, plural)
+  if shown < count then
+    title = ('%s, first %d'):format(title, shown)
+  end
 
   local format = (opts.format or 'csv'):upper()
+  local function to_file(values)
+    return values.destination ~= 'Clipboard'
+  end
   -- The file the last refused save would have replaced. Saving again with the same answers is the
   -- confirmation, so overwriting takes one more key rather than a prompt of its own.
   local confirmed
@@ -524,8 +575,8 @@ function M.export(opts)
     title = 'Export',
     fields = {
       { key = 'format', label = 'Format', options = { 'CSV', 'JSON' } },
-      { key = 'filename', label = 'Filename' },
-      { key = 'path', label = 'Path' },
+      { key = 'filename', label = 'Filename', enabled = to_file },
+      { key = 'path', label = 'Path', enabled = to_file },
       {
         key = 'headers',
         label = 'Include headers',
@@ -535,17 +586,36 @@ function M.export(opts)
           return values.format == 'CSV'
         end,
       },
+      { key = 'destination', label = 'Destination', options = { 'File', 'Clipboard' } },
     },
     values = {
       format = format,
+      destination = 'File',
       filename = stem .. '.' .. format:lower(),
       path = vim.fn.fnamemodify(vim.uv.cwd() or '.', ':~'),
       headers = 'yes',
     },
+    -- What will be written, in the format chosen: the rows and columns the grid shows, with or
+    -- without the header. The engine renders it, so it is exactly what the file will hold.
     preview = {
-      title = 'Query',
-      filetype = 'sql',
-      lines = vim.list_extend({ summary }, vim.split(call.statement or '', '\n')),
+      title = title,
+      filetype = function(values)
+        return values.format:lower()
+      end,
+      lines = function(values)
+        local text, problem = engine().request('export_preview', {
+          call_id = call.call_id,
+          format = values.format:lower(),
+          headers = values.headers == 'yes',
+          offset = opts.offset,
+          limit = opts.limit,
+          columns = result.visible_columns(),
+        })
+        if not text then
+          return { problem or 'there is nothing to preview' }
+        end
+        return vim.split((text:gsub('\n$', '')), '\n', { plain = true })
+      end,
     },
     on_change = function(values, key)
       -- The extension follows the format, unless the user named the file something else.
@@ -557,6 +627,9 @@ function M.export(opts)
       end
     end,
     validate = function(values)
+      if not to_file(values) then
+        return
+      end
       if vim.trim(values.filename) == '' then
         return 'a file name is needed'
       end
@@ -577,7 +650,7 @@ function M.export(opts)
     on_submit = function(values)
       write(
         values.format:lower(),
-        vim.fs.joinpath(values.path, values.filename),
+        to_file(values) and vim.fs.joinpath(values.path, values.filename) or nil,
         values.headers == 'yes'
       )
     end,

@@ -18,7 +18,10 @@ Query your database from your favorite editor. _sqmeow.nvim_ is a database clien
 - ▶️ Run the statement under the cursor, a selection or the whole buffer. Errors show up as diagnostics on their own lines.
 - 📄 Scratchpads you create and name from the drawer, as many per connection as you like. They survive a restart and stay tied to their connection, so two of them can query two databases side by side.
 - 🕘 A query log that keeps every result, so you can look at yesterday's answer without running the query again.
-- ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Export the result, or just the rows you select, to CSV or JSON.
+- ⚡ Rows are decoded in Rust and shown a page at a time, so a large result never stalls the editor. Export the result, or just the rows you select, to CSV or JSON, in a file or on the clipboard.
+- 🔎 Filter, search every column, sort and hide columns in the grid. The engine does it over the rows it holds, so nothing is queried again.
+- ✏️ Edit rows right in the grid: change cells, add and delete rows, review the statements, then apply them together. Works on PostgreSQL, MySQL, SQLite, MongoDB and Redis.
+- 🧭 Run an `EXPLAIN` and its plan shows in the result window as the database writes it, rather than cut short in a grid column.
 - 🔐 Passwords can come from `{{ env "VAR" }}` or `{{ exec "cmd" }}`, and are masked wherever a URL is shown.
 - ⌨️ No global keymaps. Every key is buffer-local and configurable, with `<Plug>` mappings for your own bindings.
 
@@ -87,6 +90,9 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 | `:Sqmeow execute [sql]`      | Run the buffer, the selection, or the given SQL     |
 | `:Sqmeow cancel`             | Stop the running query                              |
 | `:Sqmeow export <csv\|json>` | Write the result to a file                          |
+| `:Sqmeow export csv clipboard` | Copy the result to the clipboard                  |
+| `:Sqmeow float`              | Show the result in a float, or back in its split    |
+| `:Sqmeow review`             | Review the staged changes, and apply them           |
 | `:Sqmeow log [clear]`        | Show a past query's result, or clear the log        |
 | `:Sqmeow install [method]`   | Install the engine                                  |
 | `:Sqmeow health`             | Run the health check                                |
@@ -112,13 +118,29 @@ Subcommands complete with `<Tab>`. See `:h sqmeow` for the rest.
 
 **Result**
 
-| Key        | Action                                             |
-| ---------- | -------------------------------------------------- |
-| `L` / `H`  | Next / previous page                               |
-| `gg` / `G` | First / last page                                  |
-| `K`        | Show the row in detail                             |
-| `x`        | Export the result, or the selection in visual mode |
-| `q`        | Close                                              |
+| Key                  | Action                                                   |
+| -------------------- | -------------------------------------------------------- |
+| `L` / `H`            | Next / previous page                                     |
+| `gg` / `G`           | First / last page                                        |
+| `K`                  | Show the row in detail                                   |
+| `x`                  | Export the result, or the selection in visual mode       |
+| `=` / `gf`           | Filter by the value under the cursor / add a filter      |
+| `s` / `S`            | Sort by this column / add it to the sort                 |
+| `-` / `g-`           | Hide this column / show every column                     |
+| `R`                  | Clear filters, sort and hidden columns                   |
+| `Z`                  | Show the result in a bigger float, or back in its split  |
+| `q`                  | Close                                                    |
+
+Editing:
+
+| Key            | Action                                  |
+| -------------- | --------------------------------------- |
+| `i`, `<CR>`    | Change the cell                         |
+| `X`            | Set the cell to `NULL`                  |
+| `o`            | Add a row                               |
+| `dd` / `d`     | Delete the row / the selected rows      |
+| `u` / `U`      | Undo the last change / discard them all |
+| `gs`, `<C-s>`  | Review the statements; `<C-s>` applies  |
 
 **Scratchpad**
 
@@ -139,6 +161,7 @@ vim.keymap.set('n', '<leader>de', '<Plug>(sqmeow-execute)')
 vim.keymap.set('n', '<leader>dc', '<Plug>(sqmeow-cancel)')
 vim.keymap.set('n', '<leader>da', '<Plug>(sqmeow-add-connection)')
 vim.keymap.set('n', '<leader>ds', '<Plug>(sqmeow-scratch)')
+vim.keymap.set('n', '<leader>df', '<Plug>(sqmeow-result-float)')
 ```
 
 ## ⚙️ Configuration

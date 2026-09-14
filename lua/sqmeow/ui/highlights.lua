@@ -32,6 +32,12 @@ M.links = {
   SqmeowFormValue = 'Normal',
   SqmeowFormEdit = 'Visual',
 
+  -- Staged edits in the result float: a changed cell, a row to delete, and a row to add. The diff
+  -- groups, because that is what every colourscheme already draws a change as.
+  SqmeowChanged = 'DiffChange',
+  SqmeowDeleted = 'DiffDelete',
+  SqmeowInserted = 'DiffAdd',
+
   -- The row detail: a column's name, then its type.
   SqmeowDetailName = 'Identifier',
   SqmeowDetailType = 'Type',

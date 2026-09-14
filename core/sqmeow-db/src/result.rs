@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use crate::edit::Source;
 use crate::types::{KeyKind, TypeClass};
 use crate::value::Cell;
 use crate::width;
@@ -34,6 +35,11 @@ pub struct Column {
     /// `count(*)` is nobody's primary key. An adapter that cannot attribute a column to a table
     /// leaves this alone rather than guessing.
     pub key: KeyKind,
+    /// The column's name in the table it came from, which an alias hides: `name as who` is `name`.
+    ///
+    /// `None` for an expression, and for a result whose adapter cannot say. It is what lets an edit
+    /// to an aliased column update the right one.
+    pub origin: Option<String>,
 }
 
 impl Column {
@@ -48,7 +54,14 @@ impl Column {
             class: TypeClass::from_type_name(&type_name),
             type_name,
             key: KeyKind::None,
+            origin: None,
         }
+    }
+
+    /// The same column, naming the table column it came from.
+    pub fn with_origin(mut self, origin: impl Into<String>) -> Self {
+        self.origin = Some(origin.into());
+        self
     }
 
     /// The same column, marked as a key.
@@ -92,6 +105,8 @@ pub struct ResultSet {
     affected: Option<u64>,
     elapsed: Duration,
     statement: String,
+    /// Where the rows are stored, when the adapter could tell and they can be written back.
+    source: Option<Source>,
 }
 
 impl ResultSet {
@@ -105,6 +120,7 @@ impl ResultSet {
             affected: None,
             elapsed: Duration::ZERO,
             statement: statement.into(),
+            source: None,
         }
     }
 
@@ -118,6 +134,20 @@ impl ResultSet {
             column.push(cell);
         }
         self.row_count += 1;
+    }
+
+    /// Take the columns the first row describes, for a result that started without any.
+    ///
+    /// Preparing a statement is how an adapter learns its columns before running it, and some
+    /// statements that return rows will not prepare: MySQL's `EXPLAIN` is one. Without this, every
+    /// row of such a result would be trimmed to the no columns it was started with. Once a result
+    /// has columns or rows, it keeps them.
+    pub fn adopt_columns(&mut self, columns: Vec<Column>) {
+        if !self.columns.is_empty() || self.row_count > 0 {
+            return;
+        }
+        self.data = columns.iter().map(|_| Vec::new()).collect();
+        self.columns = columns;
     }
 
     /// Measure one column for the editor.
@@ -213,6 +243,16 @@ impl ResultSet {
     /// The statement that produced this result.
     pub fn statement(&self) -> &str {
         &self.statement
+    }
+
+    /// Where the rows are stored, for a result that can be edited.
+    pub fn source(&self) -> Option<&Source> {
+        self.source.as_ref()
+    }
+
+    /// Record where the rows are stored.
+    pub fn set_source(&mut self, source: Option<Source>) {
+        self.source = source;
     }
 
     /// How many pages of `size` rows this result holds. Always at least one, so an empty result
@@ -318,6 +358,19 @@ mod tests {
         assert_eq!(result.cell(0, 0), None);
         assert_eq!(result.cell(0, 9), None);
         assert!(result.column_cells(9).is_empty());
+    }
+
+    #[test]
+    fn a_result_started_without_columns_takes_them_from_its_first_row() {
+        let mut result = ResultSet::new("explain select 1", vec![]);
+        result.adopt_columns(vec![Column::new("EXPLAIN", "TEXT")]);
+        result.push_row(vec![Cell::Text("-> Rows fetched before execution".into())]);
+        assert_eq!(result.columns()[0].name, "EXPLAIN");
+        assert_eq!(result.row_count(), 1);
+
+        // Columns it already has are never replaced.
+        result.adopt_columns(vec![Column::new("other", "TEXT")]);
+        assert_eq!(result.columns()[0].name, "EXPLAIN");
     }
 
     #[test]

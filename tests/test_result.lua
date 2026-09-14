@@ -190,4 +190,23 @@ T['pages']['says one page when nothing has run'] = function()
   eq(total, 1)
 end
 
+T['layout'] = MiniTest.new_set()
+
+T['layout']['closing does not squeeze the editor when a float came and went'] = function()
+  local height = vim.api.nvim_win_get_height(0)
+  -- Another plugin's notification, open while the result opens and gone before it closes.
+  local note = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), false, {
+    relative = 'editor',
+    row = 0,
+    col = 0,
+    width = 20,
+    height = 1,
+  })
+  result.open()
+  vim.api.nvim_win_close(note, true)
+  result.close()
+
+  eq(vim.api.nvim_win_get_height(0), height)
+end
+
 return T

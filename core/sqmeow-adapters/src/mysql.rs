@@ -11,7 +11,7 @@ use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::{Decode, MySql, Row, Statement as _, Type, TypeInfo, ValueRef, types};
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode,
+    ResultSet, RoutineNode, SchemaNode, Source,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -52,19 +52,19 @@ impl MySqlAdapter {
     }
 
     /// What a statement's result looks like, with the columns that are keys marked.
-    async fn columns(&self, statement: &str) -> Vec<Column> {
+    async fn columns(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
         let Some(prepared) = prepare(&self.pool, statement).await else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
         let mut columns = result_columns(prepared.columns());
+        let origins = origins(prepared.columns());
         // MySQL reports the table and column a result column really came from in the column
         // definitions it sends with every result, so the source costs nothing to read.
         self.keys
-            .mark(&origins(prepared.columns()), &mut columns, |table| {
-                self.read_keys(table)
-            })
+            .mark(&origins, &mut columns, |table| self.read_keys(table))
             .await;
-        columns
+        let source = self.keys.source(&origins);
+        (columns, source)
     }
 
     /// Ask `information_schema` which columns of one table are keys.
@@ -142,14 +142,18 @@ impl Adapter for MySqlAdapter {
         format!("`{}`", name.replace('`', "``"))
     }
 
+    async fn apply(&self, statements: &[String]) -> Result<()> {
+        stream::transact(&self.pool, statements).await
+    }
+
     async fn execute(
         &self,
         statement: &str,
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let columns = self.columns(statement).await;
-        stream::execute(
+        let (columns, source) = self.columns(statement).await;
+        let mut result = stream::execute(
             &self.pool,
             statement,
             columns,
@@ -158,7 +162,9 @@ impl Adapter for MySqlAdapter {
             |outcome| outcome.rows_affected(),
             decode_cell,
         )
-        .await
+        .await?;
+        result.set_source(source);
+        Ok(result)
     }
 
     /// MySQL has no schemas within a database, so its databases fill that level of the tree.

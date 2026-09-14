@@ -12,9 +12,10 @@ use redis::aio::MultiplexedConnection;
 use redis::{
     AsyncConnectionConfig, Client, Cmd, FromRedisValue, IntoConnectionInfo, ProtocolVersion, Value,
 };
+use sqmeow_db::edit::{self, Value as Edit, check_column, check_row};
 use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyType, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode,
+    Adapter, Cell, Changes, Column, ColumnNode, Dialect, Error, KeyType, RedisKind, RelationKind,
+    RelationNode, Result, ResultSet, RoutineNode, SchemaNode, Source,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -78,6 +79,39 @@ impl Adapter for RedisAdapter {
         quote(name)
     }
 
+    fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
+        plan(result, changes)
+    }
+
+    /// One `MULTI`/`EXEC`, so no other client sees half the changes. Redis does not roll back a
+    /// command that fails inside one, so that failure is reported as having left the rest applied.
+    async fn apply(&self, statements: &[String]) -> Result<()> {
+        let mut pipeline = redis::pipe();
+        pipeline.atomic();
+        for line in statements {
+            let mut command = Cmd::new();
+            for word in split_command(line).map_err(Error::Driver)? {
+                command.arg(word);
+            }
+            pipeline.add_command(command);
+        }
+
+        let reply: Value = pipeline
+            .query_async(&mut self.connection.clone())
+            .await
+            .map_err(Error::driver)?;
+        if let Value::Array(replies) = &reply
+            && let Some(Value::ServerError(error)) = replies
+                .iter()
+                .find(|reply| matches!(reply, Value::ServerError(_)))
+        {
+            return Err(Error::driver(format!(
+                "a command failed, and Redis kept the ones that did not: {error}"
+            )));
+        }
+        Ok(())
+    }
+
     async fn execute(
         &self,
         statement: &str,
@@ -106,6 +140,7 @@ impl Adapter for RedisAdapter {
         };
 
         let mut result = to_result(statement, reply, max_rows);
+        result.set_source(source(&words));
         result.set_elapsed(started.elapsed());
         Ok(result)
     }
@@ -191,6 +226,160 @@ impl Adapter for RedisAdapter {
 
     /// Nothing to do: the socket closes once the last handle onto it is dropped.
     async fn close(&self) {}
+}
+
+/// Which key a command read, for the commands whose reply can be written back.
+///
+/// Only a reply laid out by one of these can be traced to where each row lives. A negative `LRANGE`
+/// start counts from the end, so the index of each row would depend on the list's length.
+fn source(words: &[Vec<u8>]) -> Option<Source> {
+    let name = String::from_utf8_lossy(words.first()?).to_ascii_uppercase();
+    let key = String::from_utf8(words.get(1)?.clone()).ok()?;
+    let number =
+        |index: usize| -> Option<i64> { String::from_utf8_lossy(words.get(index)?).parse().ok() };
+
+    let kind = match (name.as_str(), words.len()) {
+        ("GET", 2) => RedisKind::String,
+        ("HGETALL", 2) => RedisKind::Hash,
+        ("SMEMBERS", 2) => RedisKind::Set,
+        ("LRANGE", 4) => RedisKind::List {
+            start: number(2).filter(|start| *start >= 0)?,
+        },
+        ("ZRANGE", 5)
+            if words[4].eq_ignore_ascii_case(b"WITHSCORES")
+                && number(2).is_some()
+                && number(3).is_some() =>
+        {
+            RedisKind::SortedSet
+        }
+        _ => return None,
+    };
+    Some(Source::Redis { key, kind })
+}
+
+/// Plan changes to one key into command lines that [`split_command`] reads back.
+///
+/// Updates come first, then deletes, then inserts, so an `LSET` by index runs before an `LREM` can
+/// move the elements after it.
+fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
+    let Some(source @ Source::Redis { key, kind }) = result.source() else {
+        return Err(edit::not_editable());
+    };
+    let kind = *kind;
+    let key = quote(key);
+
+    let original = |row: usize, column: usize| -> Result<String> {
+        check_row(result, row)?;
+        match result.cell(row, column) {
+            Some(Cell::Bytes { .. }) => Err(Error::driver(
+                "a binary value cannot be written back from its text",
+            )),
+            Some(cell) => Ok(quote(&cell.text(""))),
+            None => Ok(quote("")),
+        }
+    };
+    let given = |cells: &[(usize, Edit)], column: usize| -> Result<Option<String>> {
+        cells
+            .iter()
+            .find(|(at, _)| *at == column)
+            .map(|(_, value)| {
+                value
+                    .as_deref()
+                    .map(quote)
+                    .ok_or_else(|| Error::driver("Redis has no NULL: delete the row instead"))
+            })
+            .transpose()
+    };
+
+    let mut commands = Vec::new();
+    for (row, cells) in changes.live_updates() {
+        for (column, _) in cells {
+            check_column(source, result, *column)?;
+        }
+        let row = *row;
+        match kind {
+            RedisKind::String => {
+                if let Some(value) = given(cells, 0)? {
+                    commands.push(format!("SET {key} {value}"));
+                }
+            }
+            RedisKind::Hash => {
+                let field = original(row, 0)?;
+                let value = match given(cells, 1)? {
+                    Some(value) => value,
+                    None => original(row, 1)?,
+                };
+                match given(cells, 0)? {
+                    Some(renamed) if renamed != field => {
+                        commands.push(format!("HDEL {key} {field}"));
+                        commands.push(format!("HSET {key} {renamed} {value}"));
+                    }
+                    _ => commands.push(format!("HSET {key} {field} {value}")),
+                }
+            }
+            RedisKind::Set => {
+                if let Some(member) = given(cells, 0)? {
+                    commands.push(format!("SREM {key} {}", original(row, 0)?));
+                    commands.push(format!("SADD {key} {member}"));
+                }
+            }
+            RedisKind::List { start } => {
+                if let Some(value) = given(cells, 0)? {
+                    check_row(result, row)?;
+                    commands.push(format!("LSET {key} {} {value}", start + row as i64));
+                }
+            }
+            RedisKind::SortedSet => {
+                let member = original(row, 0)?;
+                let score = match given(cells, 1)? {
+                    Some(score) => score,
+                    None => original(row, 1)?,
+                };
+                match given(cells, 0)? {
+                    Some(renamed) if renamed != member => {
+                        commands.push(format!("ZREM {key} {member}"));
+                        commands.push(format!("ZADD {key} {score} {renamed}"));
+                    }
+                    _ => commands.push(format!("ZADD {key} {score} {member}")),
+                }
+            }
+        }
+    }
+
+    for &row in &changes.deletes {
+        commands.push(match kind {
+            RedisKind::String => {
+                check_row(result, row)?;
+                format!("DEL {key}")
+            }
+            RedisKind::Hash => format!("HDEL {key} {}", original(row, 0)?),
+            RedisKind::Set => format!("SREM {key} {}", original(row, 0)?),
+            // ponytail: removes the first element equal to this one, which is this one unless the
+            // list repeats it; an `LSET` to a marker then `LREM` of the marker if order matters.
+            RedisKind::List { .. } => format!("LREM {key} 1 {}", original(row, 0)?),
+            RedisKind::SortedSet => format!("ZREM {key} {}", original(row, 0)?),
+        });
+    }
+
+    for cells in &changes.inserts {
+        let need = |column: usize, what: &str| -> Result<String> {
+            given(cells, column)?.ok_or_else(|| Error::driver(format!("a new row needs a {what}")))
+        };
+        commands.push(match kind {
+            RedisKind::String => {
+                return Err(Error::driver(
+                    "a string key holds one value: edit it rather than adding a row",
+                ));
+            }
+            RedisKind::Hash => format!("HSET {key} {} {}", need(0, "field")?, need(1, "value")?),
+            RedisKind::Set => format!("SADD {key} {}", need(0, "member")?),
+            RedisKind::List { .. } => format!("RPUSH {key} {}", need(0, "value")?),
+            RedisKind::SortedSet => {
+                format!("ZADD {key} {} {}", need(1, "score")?, need(0, "member")?)
+            }
+        });
+    }
+    Ok(commands)
 }
 
 /// The `db=` field of a `CLIENT INFO` line.
@@ -476,6 +665,100 @@ mod tests {
     fn reads_the_current_database_from_client_info() {
         assert_eq!(current_db("id=3 addr=127.0.0.1:1 db=4 sub=0"), Some(4));
         assert_eq!(current_db(""), None);
+    }
+
+    fn hash() -> ResultSet {
+        let reply = Value::Map(vec![(text("name"), text("al \"x\""))]);
+        let mut result = to_result("HGETALL user", reply, usize::MAX);
+        result.set_source(source(&split_command("HGETALL user").unwrap()));
+        result
+    }
+
+    #[test]
+    fn the_commands_that_can_be_written_back_have_a_source() {
+        let kind = |line: &str| match source(&split_command(line).unwrap()) {
+            Some(Source::Redis { kind, .. }) => Some(kind),
+            _ => None,
+        };
+        assert_eq!(kind("get k"), Some(RedisKind::String));
+        assert_eq!(kind("LRANGE k 5 10"), Some(RedisKind::List { start: 5 }));
+        assert_eq!(kind("LRANGE k -5 -1"), None);
+        assert_eq!(kind("ZRANGE k 0 -1 WITHSCORES"), Some(RedisKind::SortedSet));
+        assert_eq!(kind("ZRANGE k 0 -1"), None);
+        assert_eq!(kind("KEYS *"), None);
+    }
+
+    #[test]
+    fn a_hash_field_is_changed_renamed_deleted_and_added() {
+        let result = hash();
+        let changes = Changes {
+            updates: vec![(0, vec![(1, Some("bob".into()))])],
+            ..Changes::default()
+        };
+        assert_eq!(
+            plan(&result, &changes).unwrap(),
+            vec![r#"HSET "user" "name" "bob""#]
+        );
+
+        let changes = Changes {
+            updates: vec![(0, vec![(0, Some("who".into()))])],
+            inserts: vec![vec![(0, Some("age".into())), (1, Some("3".into()))]],
+            ..Changes::default()
+        };
+        assert_eq!(
+            plan(&result, &changes).unwrap(),
+            vec![
+                r#"HDEL "user" "name""#,
+                r#"HSET "user" "who" "al \"x\"""#,
+                r#"HSET "user" "age" "3""#,
+            ]
+        );
+
+        let changes = Changes {
+            deletes: vec![0],
+            ..Changes::default()
+        };
+        assert_eq!(
+            plan(&result, &changes).unwrap(),
+            vec![r#"HDEL "user" "name""#]
+        );
+    }
+
+    #[test]
+    fn a_planned_command_splits_back_into_its_words() {
+        let result = hash();
+        let changes = Changes {
+            updates: vec![(0, vec![(1, Some("a b\n".into()))])],
+            ..Changes::default()
+        };
+        let line = &plan(&result, &changes).unwrap()[0];
+        let words = split_command(line).unwrap();
+        assert_eq!(words[3], b"a b\n");
+    }
+
+    #[test]
+    fn redis_refuses_null_and_a_result_without_a_source() {
+        let result = hash();
+        let changes = Changes {
+            updates: vec![(0, vec![(1, None)])],
+            ..Changes::default()
+        };
+        assert!(plan(&result, &changes).is_err());
+
+        let unsourced = to_result("KEYS *", Value::Array(vec![]), usize::MAX);
+        assert!(plan(&unsourced, &Changes::default()).is_err());
+    }
+
+    #[test]
+    fn a_list_element_is_set_by_its_index() {
+        let reply = Value::Array(vec![text("a"), text("b")]);
+        let mut result = to_result("LRANGE l 10 11", reply, usize::MAX);
+        result.set_source(source(&split_command("LRANGE l 10 11").unwrap()));
+        let changes = Changes {
+            updates: vec![(1, vec![(0, Some("c".into()))])],
+            ..Changes::default()
+        };
+        assert_eq!(plan(&result, &changes).unwrap(), vec![r#"LSET "l" 11 "c""#]);
     }
 
     #[test]

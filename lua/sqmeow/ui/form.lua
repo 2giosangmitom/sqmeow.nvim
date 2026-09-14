@@ -22,7 +22,7 @@ local utils = require('sqmeow.utils')
 ---@field on_submit fun(values: table<string, string>)
 ---@field on_cancel nil|fun()
 ---@field on_change nil|fun(values: table<string, string>, key: string) May adjust other values.
----@field preview nil|{ title: string, lines: string[], filetype: string|nil } Read-only pane below.
+---@field preview nil|{ title: string, lines: string[]|fun(values: table<string, string>): string[], filetype: nil|string|fun(values: table<string, string>): string } Read-only pane below. Given as functions, the lines and filetype are worked out again whenever a value changes.
 
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow-form')
 
@@ -76,6 +76,10 @@ function M.open(spec)
     return false, err
   end
 
+  -- Where focus goes back to. Left to Neovim, closing a dialog lands in whichever window it picks,
+  -- which is rarely the one the dialog was opened from, and never a float.
+  local origin = vim.api.nvim_get_current_win()
+
   local fields = spec.fields
   local values = vim.deepcopy(spec.values or {})
   for _, field in ipairs(fields) do
@@ -127,7 +131,9 @@ function M.open(spec)
   if spec.preview then
     preview = window({
       focusable = false,
-      buf_options = { filetype = spec.preview.filetype },
+      buf_options = {
+        filetype = type(spec.preview.filetype) == 'string' and spec.preview.filetype or nil,
+      },
       win_options = { wrap = false },
     }, spec.preview.title)
     layout = parts.Layout(
@@ -144,6 +150,22 @@ function M.open(spec)
         parts.Layout.Box(preview, { grow = 1 }),
       }, { dir = 'col' })
     )
+  end
+
+  --- Fill the preview from the spec, working its lines and filetype out from the values when it
+  --- gives them as functions.
+  local function show_preview()
+    if not (preview and preview.bufnr and vim.api.nvim_buf_is_valid(preview.bufnr)) then
+      return
+    end
+    local source = spec.preview
+    local lines = type(source.lines) == 'function' and source.lines(values) or source.lines
+    vim.bo[preview.bufnr].modifiable = true
+    vim.api.nvim_buf_set_lines(preview.bufnr, 0, -1, false, lines)
+    vim.bo[preview.bufnr].modifiable = false
+    if type(source.filetype) == 'function' then
+      vim.bo[preview.bufnr].filetype = source.filetype(values)
+    end
   end
 
   local function render()
@@ -204,6 +226,9 @@ function M.open(spec)
       spec.on_change(values, key)
     end
     render()
+    if spec.preview and type(spec.preview.lines) == 'function' then
+      show_preview()
+    end
   end
 
   --- The first field from `index` on that is typed into rather than chosen, for wizard mode.
@@ -267,6 +292,9 @@ function M.open(spec)
 
   local function close()
     (layout or popup):unmount()
+    if vim.api.nvim_win_is_valid(origin) then
+      vim.api.nvim_set_current_win(origin)
+    end
   end
 
   local function submit()
@@ -282,8 +310,7 @@ function M.open(spec)
 
   if layout then
     layout:mount()
-    vim.api.nvim_buf_set_lines(preview.bufnr, 0, -1, false, spec.preview.lines)
-    vim.bo[preview.bufnr].modifiable = false
+    show_preview()
   else
     popup:mount()
   end
@@ -305,11 +332,24 @@ function M.open(spec)
     focus((current() - 2) % #fields + 1)
   end)
   if preview then
-    -- The preview takes no focus, so a query too long for it is scrolled from the fields.
-    for _, key in ipairs({ '<C-d>', '<C-u>' }) do
+    -- The preview takes no focus, so what is too long for it is scrolled from the fields, half a
+    -- window at a time. By moving its top line rather than replaying the keys in it, which does
+    -- nothing in a window that is not the one being typed in.
+    for key, direction in pairs({ ['<C-d>'] = 1, ['<C-u>'] = -1 }) do
       map({ key }, function()
+        if not vim.api.nvim_win_is_valid(preview.winid) then
+          return
+        end
         vim.api.nvim_win_call(preview.winid, function()
-          vim.cmd.normal({ vim.keycode(key), bang = true })
+          local height = vim.api.nvim_win_get_height(0)
+          local last = math.max(vim.api.nvim_buf_line_count(0) - height + 1, 1)
+          local view = vim.fn.winsaveview()
+          view.topline = math.min(
+            math.max(view.topline + direction * math.max(math.floor(height / 2), 1), 1),
+            last
+          )
+          view.lnum = view.topline
+          vim.fn.winrestview(view)
         end)
       end)
     end

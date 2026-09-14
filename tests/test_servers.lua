@@ -138,6 +138,29 @@ for dialect, url in pairs(servers) do
     -- The connection name comes from the URL, and must never carry the password.
     eq(state.current_connection().name:find('sqmeow:sqmeow', 1, true), nil)
   end
+
+  T[dialect]['shows an EXPLAIN as its plan rather than a grid'] = function()
+    run('drop table if exists explained')
+    run('create table explained (id int primary key, label varchar(10))')
+    MiniTest.finally(function()
+      run('drop table if exists explained')
+    end)
+
+    -- PostgreSQL writes a row a line; MySQL's tree is one value holding every line.
+    local sql = dialect == 'mysql'
+        and "explain format=tree select * from explained where label = 'a'"
+      or "explain select * from explained where label = 'a'"
+    eq(run(sql).state, 'done')
+
+    local drawn = grid()
+    local text = table.concat(drawn, '\n')
+    eq(#drawn >= 2, true)
+    eq(drawn[1]:find(dialect == 'mysql' and '-> ' or 'Scan', 1, true) ~= nil, true)
+    -- The filter is there in full: nothing is cut to a column's width or drawn between columns.
+    eq(text:find('label', 1, true) ~= nil, true)
+    eq(text:find('…', 1, true), nil)
+    eq(text:find('│', 1, true), nil)
+  end
 end
 
 -- Redis speaks no SQL, so it gets cases of its own rather than a turn through the loop above.
@@ -241,6 +264,12 @@ for server, url in pairs(redis_servers) do
 end
 
 -- A PostgreSQL URL naming no database reaches every database on the server.
+T['mysql']['keeps a plain EXPLAIN, which is a table, as a grid'] = function()
+  run('explain select 1')
+  eq(header()[1]:find('select_type', 1, true) ~= nil, true)
+  eq(header()[1]:find('│', 1, true) ~= nil, true)
+end
+
 T['postgres cluster'] = MiniTest.new_set({
   hooks = {
     pre_case = function()

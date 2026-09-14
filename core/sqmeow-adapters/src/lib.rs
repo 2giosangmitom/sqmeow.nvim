@@ -12,8 +12,8 @@ pub mod sqlite;
 mod stream;
 
 use sqmeow_db::{
-    Adapter, ColumnNode, Dialect, Error, RelationNode, Result, ResultSet, RoutineKind, RoutineNode,
-    SchemaNode,
+    Adapter, Changes, ColumnNode, Dialect, Error, RelationNode, Result, ResultSet, RoutineKind,
+    RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -143,6 +143,28 @@ impl Backend {
             Self::MySql(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::Redis(adapter) => adapter.execute(statement, max_rows, cancel).await,
             Self::MongoDb(adapter) => adapter.execute(statement, max_rows, cancel).await,
+        }
+    }
+
+    /// Plan staged changes to a result into the statements that make them.
+    pub fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.plan(result, changes),
+            Self::Postgres(adapter) => adapter.plan(result, changes),
+            Self::MySql(adapter) => adapter.plan(result, changes),
+            Self::Redis(adapter) => adapter.plan(result, changes),
+            Self::MongoDb(adapter) => adapter.plan(result, changes),
+        }
+    }
+
+    /// Run planned statements together.
+    pub async fn apply(&self, statements: &[String]) -> Result<()> {
+        match self {
+            Self::Sqlite(adapter) => adapter.apply(statements).await,
+            Self::Postgres(adapter) => adapter.apply(statements).await,
+            Self::MySql(adapter) => adapter.apply(statements).await,
+            Self::Redis(adapter) => adapter.apply(statements).await,
+            Self::MongoDb(adapter) => adapter.apply(statements).await,
         }
     }
 

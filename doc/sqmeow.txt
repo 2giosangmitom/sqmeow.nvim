@@ -423,15 +423,31 @@ drawer
  q         Close the drawer
 
 result
- L       Next page
- H       Previous page
- gg      First page
- G       Last page
- K       Show this row down the page
- x       Export the result to a file
- x (x)   Export the selected rows
- ?       Show these mappings
- q       Close the result window
+ L           Next page
+ H           Previous page
+ gg          First page
+ G           Last page
+ K           Show this row down the page
+ x           Export the result to a file
+ x (x)       Export the selected rows
+ =           Show only rows holding this value in this column
+ gf          Add a filter on a column, or on any column
+ s           Sort by this column: ascending, descending, off
+ S           Add this column to the sort
+ -           Hide this column
+ g-          Show every hidden column
+ R           Clear filters, sort and hidden columns
+ Z           Show the result in a float, or back in its split
+ i, <CR>     Change this cell
+ X           Set this cell to NULL
+ o           Add a row
+ dd          Delete this row, or keep it after all
+ d (x)       Delete the selected rows
+ u           Undo the last change
+ U           Discard every change
+ gs, <C-s>   Review the changes; <C-s> there applies them
+ ?           Show these mappings
+ q           Close the result window
 
 editor
  <CR>        Run the statement under the cursor
@@ -653,7 +669,8 @@ Parameters ~
 {sql} `(string)` One or more statements. Only the last one's rows are shown.
 {opts} `(table|nil)` `line` runs only the statement at that zero-based line; `source_buf` is
 the buffer an error should be reported in; `history = false` keeps the query out of the log,
-for SQL the plugin wrote rather than the user.
+for SQL the plugin wrote rather than the user; `conn_id` runs on that connection rather than the
+one the buffer belongs to.
 Return ~
 `(integer|nil)` call_id
 Return ~
@@ -717,6 +734,34 @@ Show the first page of the current result.
 Show the last page of the current result.
 
 ------------------------------------------------------------------------------
+                                                     *sqmeow.api.toggle_float()*
+                          `sqmeow.api.toggle_float`()
+Show the result in a float, or put it back in its split.
+
+A bigger window on the same grid, with the same keys.
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.api.review()*
+                             `sqmeow.api.review`()
+Show the statements the changes staged in the result plan into, to apply with `<C-s>`.
+
+------------------------------------------------------------------------------
+                                                             *sqmeow.api.view()*
+                           `sqmeow.api.view`({view})
+Filter and sort the current result's rows.
+
+The engine does it over the rows it holds, so nothing is asked of the database again. Columns
+are zero-based; a filter without one searches every column.
+
+Parameters ~
+{view} `({ filters: { column: integer|nil, op: string, value: string|nil }[]|nil, sort: { column: integer, descending: boolean|nil }[]|nil })`
+`op` is one of `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `starts_with`, `is_null`,
+`not_null`. Either list left out is kept as it is.
+Usage ~
+>lua
+  require('sqmeow.api').view({ filters = { { column = 1, op = 'contains', value = 'al' } } })
+<
+------------------------------------------------------------------------------
                                                              *sqmeow.api.open()*
                               `sqmeow.api.open`()
 Open the result window.
@@ -760,8 +805,10 @@ Without a `path`, asks for the format, file and whether to write a header in a d
 shows the query being exported.
 
 Parameters ~
-{opts} `(table|nil)` `path` skips the dialog; `format` is 'csv' or 'json'; `headers` defaults to
-true; `offset` and `limit` write that many rows from that one, zero-based, rather than all rows.
+{opts} `(table|nil)` `path` skips the dialog; `clipboard = true` skips it too and copies instead;
+`format` is 'csv' or 'json'; `headers` defaults to true; `offset` and `limit` write that many rows
+from that one, zero-based, rather than all rows. Rows are written as the grid shows them:
+filtered, sorted, and without the hidden columns.
 
 ------------------------------------------------------------------------------
                                                        *sqmeow.api.scratchpad()*

@@ -11,7 +11,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{AssertSqlSafe, Row, SqlitePool, Statement as _, TypeInfo, ValueRef};
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
-    RelationNode, Result, ResultSet, RoutineNode, SchemaNode,
+    RelationNode, Result, ResultSet, RoutineNode, SchemaNode, Source,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -53,19 +53,19 @@ impl SqliteAdapter {
     }
 
     /// What a statement's result looks like, with the columns that are keys marked.
-    async fn columns(&self, statement: &str) -> Vec<Column> {
+    async fn columns(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
         let Some(prepared) = prepare(&self.pool, statement).await else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
         let mut columns = result_columns(prepared.columns());
+        let origins = origins(prepared.columns());
         // SQLite names the table and column a result column came from, for a prepared statement,
         // without being asked and without a query.
         self.keys
-            .mark(&origins(prepared.columns()), &mut columns, |table| {
-                self.read_keys(table)
-            })
+            .mark(&origins, &mut columns, |table| self.read_keys(table))
             .await;
-        columns
+        let source = self.keys.source(&origins);
+        (columns, source)
     }
 
     /// Ask the pragmas which columns of one table are keys.
@@ -122,14 +122,18 @@ impl Adapter for SqliteAdapter {
         format!("\"{}\"", name.replace('"', "\"\""))
     }
 
+    async fn apply(&self, statements: &[String]) -> Result<()> {
+        stream::transact(&self.pool, statements).await
+    }
+
     async fn execute(
         &self,
         statement: &str,
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let columns = self.columns(statement).await;
-        stream::execute(
+        let (columns, source) = self.columns(statement).await;
+        let mut result = stream::execute(
             &self.pool,
             statement,
             columns,
@@ -138,7 +142,9 @@ impl Adapter for SqliteAdapter {
             |outcome| outcome.rows_affected(),
             decode_cell,
         )
-        .await
+        .await?;
+        result.set_source(source);
+        Ok(result)
     }
 
     /// SQLite calls them databases: `main`, `temp`, and anything attached.

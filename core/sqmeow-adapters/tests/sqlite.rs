@@ -4,7 +4,7 @@
 //! cleanup, and still exercises the real driver rather than a stand-in.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Error, ForeignKey, KeyKind, RelationKind, TypeClass};
+use sqmeow_db::{Cell, Changes, Error, ForeignKey, KeyKind, RelationKind, Source, TypeClass};
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -462,4 +462,91 @@ async fn a_reference_with_no_named_column_points_at_the_rowid() {
 async fn a_relation_that_is_not_there_has_no_columns() {
     let backend = database().await;
     assert!(backend.columns("main", "absent").await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_select_from_one_table_is_edited_through_its_primary_key() {
+    let backend = seeded().await;
+    let result = run(
+        &backend,
+        "select id, name as who, upper(name) as shout from people order by id",
+    )
+    .await;
+
+    match result.source() {
+        Some(Source::Table { name, key, .. }) => {
+            assert_eq!(name, "people");
+            assert_eq!(key, &vec![0]);
+        }
+        other => panic!("expected a table source, got {other:?}"),
+    }
+    // The alias is written back to the column it names, and the expression cannot be written.
+    assert_eq!(result.columns()[1].origin.as_deref(), Some("name"));
+    assert_eq!(result.columns()[2].origin, None);
+
+    let changes = Changes {
+        updates: vec![(0, vec![(1, Some("o'ally".into()))])],
+        deletes: vec![1],
+        inserts: vec![vec![(0, Some("9".into())), (1, Some("zed".into()))]],
+    };
+    let plan = backend
+        .plan(&result, &changes)
+        .expect("the changes should plan");
+    backend.apply(&plan).await.expect("the plan should apply");
+
+    let after = run(&backend, "select id, name from people order by id").await;
+    assert_eq!(
+        after.column_cells(0),
+        &[Cell::Int(1), Cell::Int(3), Cell::Int(9)]
+    );
+    assert_eq!(after.cell(0, 1), Some(&Cell::Text("o'ally".into())));
+    assert_eq!(after.cell(2, 1), Some(&Cell::Text("zed".into())));
+}
+
+#[tokio::test]
+async fn a_failing_statement_rolls_back_the_ones_before_it() {
+    let backend = seeded().await;
+    let error = backend
+        .apply(&[
+            "update people set name = 'changed' where id = 1".into(),
+            "insert into nowhere values (1)".into(),
+        ])
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("nowhere"), "{error}");
+
+    let after = run(&backend, "select name from people where id = 1").await;
+    assert_eq!(after.cell(0, 0), Some(&Cell::Text("alice".into())));
+}
+
+#[tokio::test]
+async fn rows_that_cannot_be_found_again_have_no_source() {
+    let backend = seeded().await;
+    run(&backend, "create table loose (v text)").await;
+
+    for sql in [
+        "select * from loose",
+        "select count(*) from people",
+        "select name from people",
+        "select p.id, q.id from people p join people q on p.id = q.id",
+    ] {
+        assert!(run(&backend, sql).await.source().is_none(), "{sql}");
+    }
+}
+
+#[tokio::test]
+async fn an_explain_query_plan_names_the_row_each_step_sits_under() {
+    let backend = seeded().await;
+    let plan = run(
+        &backend,
+        "explain query plan select * from people where name = 'x'",
+    )
+    .await;
+
+    let names: Vec<&str> = plan.columns().iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["id", "parent", "notused", "detail"]);
+    match plan.cell(0, 3) {
+        Some(Cell::Text(detail)) => assert!(detail.starts_with("SCAN"), "{detail}"),
+        other => panic!("expected a step, got {other:?}"),
+    }
 }

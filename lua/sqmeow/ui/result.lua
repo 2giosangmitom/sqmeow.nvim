@@ -14,6 +14,10 @@
 --- Columns are sized from the measurement the engine took over the *whole* result, not from the
 --- page on screen. A column sized from one page would change width when the user turned to the
 --- next, and the grid would appear to shift under them.
+---
+--- The same buffer is shown either in the split along the bottom or in a nui float, never both,
+--- and every key works in either. Nothing is written as it is edited: changes are staged, and only
+--- a review applies them, so a stray key costs an undo rather than a row.
 
 local M = {}
 
@@ -21,12 +25,27 @@ local utils = require('sqmeow.utils')
 
 local buf = nil
 local win = nil
+--- The float the grid is in, when it is not in its split.
+local popup = nil
 
---- The rows this window is showing, and where they start in the result.
+--- The rows this window is showing, where they start in the view, and which row of the result
+--- each one is.
 ---
 --- Held because the grid is drawn from them: paging, resizing and reopening all redraw from what is
---- here rather than asking the engine again for rows it already sent.
-local page = { offset = 0, rows = {} }
+--- here rather than asking the engine again for rows it already sent. The indices matter once a
+--- view is filtered or sorted, when the tenth row on screen need not be the tenth row of the result.
+local page = { offset = 0, rows = {}, indices = {} }
+
+--- How each result is shown, by call id: the `filters` and `sort` the engine applies, and the
+--- columns `hidden` from the grid, which the engine never hears about. Kept per result, so a result
+--- shown again from the log is shown as it was left.
+local specs = {}
+
+--- The call the grid was last drawn for, which tells a new result from the same one redrawn.
+local drawn = nil
+--- A view to put on the next result, and the call it is waiting for. Set before a result's query
+--- runs again after an apply, so the rows come back filtered and sorted as they went.
+local carried, pending = nil, nil
 
 --- How many lines the grid opens with before the first row: the column names, and the rule.
 local HEADER_LINES = 2
@@ -41,6 +60,23 @@ local NAMESPACE = vim.api.nvim_create_namespace('sqmeow')
 ---@return integer
 local function page_size()
   return math.max(require('sqmeow.config').get().ui.result.page_size, 1)
+end
+
+--- A view that shows everything as the query returned it.
+local function fresh()
+  return { filters = {}, sort = {}, hidden = {} }
+end
+
+--- How the current result is shown.
+---@return { filters: table[], sort: table[], hidden: table<integer, boolean> }
+function M.spec()
+  local call = require('sqmeow.state').call
+  local id = call and call.call_id
+  if not id then
+    return fresh()
+  end
+  specs[id] = specs[id] or fresh()
+  return specs[id]
 end
 
 --- Round a duration for display, keeping it short without lying about the magnitude.
@@ -62,7 +98,7 @@ end
 ---@return integer page
 ---@return integer pages
 function M.pages(summary)
-  local rows = summary and summary.rows or 0
+  local rows = summary and (summary.view_rows or summary.rows) or 0
   local size = page_size()
   local pages = math.max(math.ceil(rows / size), 1)
   return math.min(math.floor(page.offset / size) + 1, pages), pages
@@ -103,6 +139,30 @@ function M.describe(summary, highlight)
 
   if summary.truncated then
     table.insert(parts, 'truncated')
+  end
+  if summary.view_rows then
+    table.insert(parts, ('%d shown'):format(summary.view_rows))
+  end
+
+  local spec = summary.call_id and specs[summary.call_id]
+  if spec then
+    local keys = {}
+    for _, key in ipairs(spec.sort) do
+      local column = summary.columns and summary.columns[key.column + 1]
+      table.insert(keys, (column and column.name or '?') .. (key.descending and '↓' or '↑'))
+    end
+    if #keys > 0 then
+      table.insert(parts, 'sorted by ' .. table.concat(keys, ', '))
+    end
+    local hidden = vim.tbl_count(spec.hidden)
+    if hidden > 0 then
+      table.insert(parts, ('%d hidden'):format(hidden))
+    end
+  end
+
+  local changes = require('sqmeow.ui.edit').count()
+  if changes > 0 and summary.call_id == drawn then
+    table.insert(parts, ('%d change%s'):format(changes, changes == 1 and '' or 's'))
   end
 
   local current, total = M.pages(summary)
@@ -161,7 +221,8 @@ end
 ---
 --- The engine sends values as the types they really are, so `NULL` arrives as `vim.NIL` and a
 --- number as a number. Everything is turned into text here, because that is a presentation
---- question: what `NULL` looks like is the user's to set.
+--- question: what `NULL` looks like is the user's to set. The engine flattens line breaks in what
+--- it sends, and a value typed into the cell editor is flattened the same way here.
 ---
 ---@param value any
 ---@param null_text string
@@ -174,15 +235,16 @@ local function cell_text(value, null_text)
   if type(value) == 'boolean' then
     return value and 'true' or 'false', false
   end
-  return tostring(value), false
+  local text = tostring(value):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
+  return text, false
 end
 
---- Which result column each display column belongs to.
+--- Where each display column starts, how wide it is, and which result column it shows.
 ---
 --- Recorded as the grid is built rather than measured afterwards: the layout is decided here, so
 --- where each column starts is already known and nothing has to be counted back out of the text.
 ---
----@type { start: integer, width: integer }[]
+---@type { start: integer, width: integer, column: integer }[]
 local spans = {}
 
 --- The characters the grid is drawn with.
@@ -223,11 +285,13 @@ local function truncate(text, limit, marker)
   return table.concat(out) .. marker
 end
 
---- What each column of a result is drawn as: how wide, how aligned, and what marks it.
+--- What each shown column of a result is drawn as: which it is, how wide, how aligned, and what
+--- marks it.
 ---
 ---@param columns table[] As the engine described them.
+---@param hidden table<integer, boolean> Zero-based columns left out.
 ---@return table[]
-local function measure(columns)
+local function measure(columns, hidden)
   local config = require('sqmeow.config').get()
   local icons = require('sqmeow.icons')
 
@@ -236,38 +300,41 @@ local function measure(columns)
 
   local measured = {}
   for index, column in ipairs(columns) do
-    -- The icon says what the column holds, or which key it is. Its own piece of the header, so a
-    -- colourscheme can reach it without touching the name beside it.
-    local icon, icon_group
-    if config.ui.result.column_icons then
-      local glyph, group = icons.get(column.key or column.class or 'unknown')
-      if glyph ~= ' ' then
-        icon, icon_group = glyph, group
+    if not hidden[index - 1] then
+      -- The icon says what the column holds, or which key it is. Its own piece of the header, so
+      -- a colourscheme can reach it without touching the name beside it.
+      local icon, icon_group
+      if config.ui.result.column_icons then
+        local glyph, group = icons.get(column.key or column.class or 'unknown')
+        if glyph ~= ' ' then
+          icon, icon_group = glyph, group
+        end
       end
-    end
 
-    local name = truncate(column.name, cap, glyphs().ellipsis)
-    local header = vim.api.nvim_strwidth(name)
-    if icon then
-      -- The icon is chrome rather than content, so it is added on top of the cap instead of
-      -- competing with the value for it: capping the pair together would narrow the values of
-      -- every column to pay for a glyph. A column whose values are already wider pays nothing.
-      header = header + vim.api.nvim_strwidth(icon) + 1
-    end
+      local name = truncate(column.name, cap, glyphs().ellipsis)
+      local header = vim.api.nvim_strwidth(name)
+      if icon then
+        -- The icon is chrome rather than content, so it is added on top of the cap instead of
+        -- competing with the value for it: capping the pair together would narrow the values of
+        -- every column to pay for a glyph. A column whose values are already wider pays nothing.
+        header = header + vim.api.nvim_strwidth(icon) + 1
+      end
 
-    -- Sized from the engine's measurement over every row, so paging does not move the columns.
-    local content = column.widest or 0
-    if column.nulls then
-      content = math.max(content, vim.api.nvim_strwidth(null_text))
-    end
+      -- Sized from the engine's measurement over every row, so paging does not move the columns.
+      local content = column.widest or 0
+      if column.nulls then
+        content = math.max(content, vim.api.nvim_strwidth(null_text))
+      end
 
-    measured[index] = {
-      name = name,
-      icon = icon,
-      icon_group = icon_group,
-      numeric = column.numeric == true,
-      width = math.max(math.min(content, cap), header),
-    }
+      table.insert(measured, {
+        index = index,
+        name = name,
+        icon = icon,
+        icon_group = icon_group,
+        numeric = column.numeric == true,
+        width = math.max(math.min(content, cap), header),
+      })
+    end
   end
 
   return measured
@@ -300,6 +367,7 @@ local function build_row(grid, cells, measured, align)
 
   local at = 1
   for index, column in ipairs(measured) do
+    local segments = cells[index] or {}
     if index > 1 then
       -- The same group as the rule under the header: both are the grid's own lines rather than
       -- anything the result said, and one group for the pair is what stops them drifting apart.
@@ -307,14 +375,17 @@ local function build_row(grid, cells, measured, align)
       -- paints the glyph and not the gap around it.
       line:append(' ')
       line:append(parts.Text(vertical, 'SqmeowRule'))
-      line:append(' ')
+      -- The space after the glyph is room before a value. The last column holding nothing needs
+      -- none, and leaving it would end the line in a space.
+      if not (index == #measured and segments_width(segments) == 0) then
+        line:append(' ')
+      end
       at = at + separator_width
     end
     -- Where the column sits, in display columns. Recorded as the line is built, so nothing has to
     -- be measured back out of the text afterwards.
-    spans[index] = { start = at, width = column.width }
+    spans[index] = { start = at, width = column.width, column = column.index }
 
-    local segments = cells[index] or {}
     local room = column.width - segments_width(segments)
     if room < 0 then
       -- Only the last piece can overflow: everything before it was sized to fit.
@@ -334,7 +405,9 @@ local function build_row(grid, cells, measured, align)
     for _, segment in ipairs(segments) do
       line:append(segment[2] and parts.Text(segment[1], segment[2]) or parts.Text(segment[1]))
     end
-    if not right and room > 0 then
+    -- Nothing pads the last column: the room past it holds nothing, and a highlight on a value
+    -- ending there must not be left pointing past a line cut short.
+    if not right and room > 0 and index < #measured then
       line:append((' '):rep(room))
     end
 
@@ -362,17 +435,57 @@ local function build_rule(grid, measured)
   return line
 end
 
---- A line's text with its trailing padding trimmed.
+--- How a result that is a query plan reads as lines, or nil for any other result.
 ---
---- Nothing needs the room past the last visible character, and a buffer full of lines with
---- invisible trailing spaces is a nuisance to yank from and to diff.
-local function trimmed(line)
-  return (line:content():gsub('%s+$', ''))
+--- A plan is the answer to an `EXPLAIN` the user ran. Squeezed into a grid column it is cut short
+--- after a few words, so the shapes that are plain text are drawn as text: a plan of one column,
+--- which is PostgreSQL's and MySQL's, and SQLite's `EXPLAIN QUERY PLAN`, whose rows name the row
+--- they sit under. A plan laid out as a table, such as MySQL's plain `EXPLAIN`, is a grid already.
+---
+---@param call table
+---@return string[]|nil
+local function plan_lines(call)
+  if not (call.sql and call.sql:match('^%s*[Ee][Xx][Pp][Ll][Aa][Ii][Nn]%s')) then
+    return nil
+  end
+  local names = table.concat(
+    vim.tbl_map(function(column)
+      return column.name
+    end, call.columns),
+    ','
+  )
+
+  local lines = {}
+  if names == 'id,parent,notused,detail' then
+    local depth = {}
+    for _, row in ipairs(page.rows) do
+      depth[row[1]] = (depth[row[2]] or -1) + 1
+      table.insert(lines, ('  '):rep(depth[row[1]]) .. tostring(row[4]))
+    end
+    return lines
+  end
+  if #call.columns ~= 1 then
+    return nil
+  end
+
+  -- A plan in one value, such as MySQL's `FORMAT=TREE`, spans lines the grid's rows flatten, so it
+  -- is read back whole.
+  if call.rows == 1 then
+    local row = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = 0 })
+    if row and row[1] and not row[1].is_null then
+      return vim.split(row[1].value, '\n', { plain = true })
+    end
+  end
+  for _, row in ipairs(page.rows) do
+    table.insert(lines, row[1] == vim.NIL and '' or tostring(row[1]))
+  end
+  return lines
 end
 
---- Draw the rows this window is showing.
+--- Draw the rows this window is showing, with the changes staged against them.
 local function draw()
   local call = require('sqmeow.state').call
+  local edit = require('sqmeow.ui.edit')
   local handle = M.buffer()
 
   local parts, err = nui()
@@ -397,7 +510,14 @@ local function draw()
 
   spans = {}
 
-  local measured = measure(call.columns)
+  local plan = plan_lines(call)
+  if plan then
+    vim.api.nvim_buf_set_lines(handle, 0, -1, false, plan)
+    vim.bo[handle].modifiable = false
+    return
+  end
+
+  local measured = measure(call.columns, M.spec().hidden)
   local null_text = require('sqmeow.config').get().ui.result.null_text
   local lines = {}
 
@@ -415,12 +535,26 @@ local function draw()
   table.insert(lines, build_row(grid, names, measured, false))
   table.insert(lines, build_rule(grid, measured))
 
-  for _, row in ipairs(page.rows) do
+  for position, row in ipairs(page.rows) do
+    local absolute = page.indices[position]
+    local deleted = absolute ~= nil and edit.deleted(absolute)
     local cells = {}
     for index, column in ipairs(measured) do
-      local text, is_null = cell_text(row[index], null_text)
+      local value, staged = row[column.index], false
+      if absolute then
+        local changed, has = edit.staged(absolute, column.index - 1)
+        if has then
+          value, staged = changed, true
+        end
+      end
+
+      local text, is_null = cell_text(value, null_text)
       local group = 'SqmeowText'
-      if is_null then
+      if deleted then
+        group = 'SqmeowDeleted'
+      elseif staged then
+        group = 'SqmeowChanged'
+      elseif is_null then
         group = 'SqmeowNull'
       elseif column.numeric then
         group = 'SqmeowNumber'
@@ -430,7 +564,25 @@ local function draw()
     table.insert(lines, build_row(grid, cells, measured, true))
   end
 
-  vim.api.nvim_buf_set_lines(handle, 0, -1, false, vim.tbl_map(trimmed, lines))
+  -- New rows go under whatever page is showing, so they are in sight wherever the user added them.
+  for _, values in ipairs(edit.inserts()) do
+    local cells = {}
+    for index, column in ipairs(measured) do
+      local value = values[column.index - 1]
+      cells[index] = { { value == nil and '' or cell_text(value, null_text), 'SqmeowInserted' } }
+    end
+    table.insert(lines, build_row(grid, cells, measured, true))
+  end
+
+  vim.api.nvim_buf_set_lines(
+    handle,
+    0,
+    -1,
+    false,
+    vim.tbl_map(function(line)
+      return line:content()
+    end, lines)
+  )
   for number, line in ipairs(lines) do
     line:highlight(handle, NAMESPACE, number)
   end
@@ -438,9 +590,15 @@ local function draw()
   vim.bo[handle].modifiable = false
 end
 
+--- Draw the page on screen again, after something about how it is shown changed.
+function M.redraw()
+  draw()
+  M.update_winbar(require('sqmeow.state').call)
+end
+
 --- Ask the engine for a slice of the current result and draw it.
 ---
----@param offset integer Row the page should start at.
+---@param offset integer Where in the view the page should start.
 ---@return boolean drawn
 function M.show_page(offset)
   local state = require('sqmeow.state')
@@ -450,33 +608,97 @@ function M.show_page(offset)
   end
 
   local size = page_size()
-  local total = call.rows or 0
+  local total = call.view_rows or call.rows or 0
   -- Past either end settles on the last or first page rather than emptying the view, which is what
   -- `L` at the end of a result should do.
   local last = math.max(math.ceil(total / size) - 1, 0) * size
   offset = math.max(math.min(offset, last), 0)
 
-  local rows, err = require('sqmeow.rpc').request('rows', {
+  local reply, err = require('sqmeow.rpc').request('rows', {
     call_id = call.call_id,
     offset = offset,
     limit = size,
+  })
+  if err or type(reply) ~= 'table' then
+    utils.notify(err or 'the engine sent no rows', vim.log.levels.WARN)
+    return false
+  end
+
+  -- How many rows the view holds is the engine's to say, and a count equal to the result's is no
+  -- view worth mentioning.
+  call.view_rows = reply.total ~= call.rows and reply.total or nil
+  page = { offset = offset, rows = reply.rows or {}, indices = reply.indices or {} }
+  draw()
+  M.update_winbar(call)
+  return true
+end
+
+--- Ask the engine to filter and sort the current result as its view says.
+---
+--- The rows arrive later, with `call:view`, which shows the first page of them.
+---
+---@return boolean sent
+function M.send_view()
+  local call = require('sqmeow.state').call
+  if not (call and call.call_id) then
+    return false
+  end
+
+  local spec = M.spec()
+  local _, err = require('sqmeow.rpc').request('view', {
+    call_id = call.call_id,
+    filters = spec.filters,
+    sort = spec.sort,
   })
   if err then
     utils.notify(err, vim.log.levels.WARN)
     return false
   end
-
-  page = { offset = offset, rows = rows or {} }
-  draw()
-  M.update_winbar(call)
   return true
+end
+
+--- The engine finished building a view.
+---@param payload { call_id: integer, rows: integer|nil, error: string|nil }
+function M.on_view(payload)
+  if payload.error then
+    return utils.notify(payload.error, vim.log.levels.WARN)
+  end
+  local call = require('sqmeow.state').call
+  if call and call.call_id == payload.call_id then
+    M.show_page(0)
+  end
+end
+
+--- Keep the current filters, sort and hidden columns for the result that comes next.
+function M.carry_view()
+  carried = vim.deepcopy(M.spec())
 end
 
 --- Draw a result from its beginning.
 ---
 ---@param summary sqmeow.CallSummary|nil
 function M.render(summary)
-  page = { offset = 0, rows = {} }
+  page = { offset = 0, rows = {}, indices = {} }
+
+  local id = summary and summary.call_id
+  if id ~= drawn then
+    drawn = id
+    -- Staged changes name rows of the result they were made on, which is no longer on screen.
+    local dropped = require('sqmeow.ui.edit').reset()
+    if dropped > 0 then
+      utils.notify(
+        ('%d unapplied change%s dropped: another result replaced the one they were made on'):format(
+          dropped,
+          dropped == 1 and ' was' or 's were'
+        ),
+        vim.log.levels.WARN
+      )
+    end
+    if carried and id then
+      specs[id], pending = carried, id
+    end
+    carried = nil
+  end
 
   if not (summary and summary.call_id and summary.state == 'done') then
     draw()
@@ -484,10 +706,17 @@ function M.render(summary)
     return
   end
 
+  if pending == id then
+    pending = nil
+    local spec = M.spec()
+    if (#spec.filters > 0 or #spec.sort > 0) and M.send_view() then
+      return
+    end
+  end
   M.show_page(0)
 end
 
---- The row the page on screen starts at.
+--- The row the page on screen starts at, counted in the view.
 ---@return integer
 function M.offset()
   return page.offset
@@ -497,6 +726,24 @@ end
 ---@return integer
 function M.row_count()
   return #page.rows
+end
+
+--- The columns the grid shows, zero-based and in order, or nil when none is hidden.
+---@return integer[]|nil
+function M.visible_columns()
+  local call = require('sqmeow.state').call
+  local spec = M.spec()
+  if not (call and call.columns) or vim.tbl_isempty(spec.hidden) then
+    return nil
+  end
+
+  local shown = {}
+  for index = 0, #call.columns - 1 do
+    if not spec.hidden[index] then
+      table.insert(shown, index)
+    end
+  end
+  return shown
 end
 
 -- -- where the cursor is ---------------------------------------------------------------------
@@ -527,44 +774,70 @@ function M.byte_at(line, display)
   return bytes
 end
 
---- Where the cursor is in the result, as a row and a column of the data.
+--- Which result column the cursor is in, wherever it is in the grid, header included.
 ---
---- The row is the cursor line, less the two the grid opens with, plus the page's offset. The
---- column comes from where each one was put when the grid was built: a cursor's byte position
---- means nothing on a line of CJK text, but its display width does.
----
----@return { row: integer, column: integer, name: string }|nil # Nil when the cursor is on the
---- header rather than on a row.
-function M.current_cell()
+---@return { column: integer, name: string, line: integer }|nil # `column` zero-based; `line` the
+--- buffer line.
+local function cursor_column()
   local call = require('sqmeow.state').call
   if not (win and utils.shows(win, buf) and call and call.columns and #spans > 0) then
     return nil
   end
 
   local cursor = vim.api.nvim_win_get_cursor(win)
-  local row = cursor[1] - 1 - HEADER_LINES
-  if row < 0 then
-    return nil
-  end
-
   local line = vim.api.nvim_buf_get_lines(M.buffer(), cursor[1] - 1, cursor[1], false)[1]
   if not line then
     return nil
   end
 
   local display = vim.fn.strdisplaywidth(line:sub(1, cursor[2]))
-  local found = 1
-  for index, span in ipairs(spans) do
+  local found = spans[1]
+  for _, span in ipairs(spans) do
     if display >= span.start then
-      found = index
+      found = span
     end
   end
 
   return {
-    row = page.offset + row,
-    column = found - 1,
-    name = call.columns[found] and call.columns[found].name or '',
+    column = found.column - 1,
+    name = call.columns[found.column] and call.columns[found.column].name or '',
+    line = cursor[1],
   }
+end
+
+--- Where the cursor is in the result, as a row and a column of the data.
+---
+--- The row is the result row the cursor line shows, which paging and a view both move away from
+--- the line number. The column comes from where each one was put when the grid was built: a
+--- cursor's byte position means nothing on a line of CJK text, but its display width does. On a
+--- row staged to be added, `insert` says which one and there is no `row`.
+---
+---@return { row: integer|nil, insert: integer|nil, column: integer, name: string, value: any }|nil
+--- # Nil when the cursor is on the header rather than on a row.
+function M.current_cell()
+  local found = cursor_column()
+  if not found then
+    return nil
+  end
+
+  local position = found.line - HEADER_LINES
+  if position < 1 then
+    return nil
+  end
+  if position <= #page.rows then
+    return {
+      row = page.indices[position] or (page.offset + position - 1),
+      column = found.column,
+      name = found.name,
+      value = page.rows[position][found.column + 1],
+    }
+  end
+
+  local insert = position - #page.rows
+  if require('sqmeow.ui.edit').inserts()[insert] then
+    return { insert = insert, column = found.column, name = found.name }
+  end
+  return nil
 end
 
 --- The values of one column, as the page on screen holds them.
@@ -590,7 +863,12 @@ end
 ---@param index integer One-based column.
 ---@return boolean moved
 function M.goto_column(index)
-  local span = spans[index]
+  local span
+  for _, candidate in ipairs(spans) do
+    if candidate.column == index then
+      span = candidate
+    end
+  end
   if not (span and win and utils.shows(win, buf)) then
     return false
   end
@@ -601,6 +879,238 @@ function M.goto_column(index)
   vim.api.nvim_win_set_cursor(win, { row, M.byte_at(line, span.start) })
   vim.api.nvim_set_current_win(win)
   return true
+end
+
+--- The rows a visual selection covers, leaving visual mode.
+---
+---@return { row: integer|nil, insert: integer|nil }[]
+local function selected()
+  local first, last = vim.fn.line('v'), vim.fn.line('.')
+  if first > last then
+    first, last = last, first
+  end
+  vim.cmd.normal({ vim.keycode('<Esc>'), bang = true })
+
+  local inserts = require('sqmeow.ui.edit').inserts()
+  local targets = {}
+  for position = math.max(first - HEADER_LINES, 1), last - HEADER_LINES do
+    if position <= #page.rows then
+      table.insert(targets, { row = page.indices[position] or (page.offset + position - 1) })
+    elseif inserts[position - #page.rows] then
+      table.insert(targets, { insert = position - #page.rows })
+    end
+  end
+  return targets
+end
+
+-- -- the float --------------------------------------------------------------------------------
+
+--- Whether the grid is showing in its float.
+---@return boolean
+function M.is_float()
+  return popup ~= nil and utils.shows(win, buf)
+end
+
+--- Show the grid in a float, moving it out of its split.
+---
+--- Only a bigger window on the same buffer, for looking at a wide result: every key does what it
+--- does in the split, and nothing about the grid changes but the room it has.
+---@return integer|nil win
+function M.open_float()
+  if M.is_float() then
+    vim.api.nvim_set_current_win(win)
+    return win
+  end
+
+  local parts, err = utils.nui({ 'popup' }, 'the result float')
+  if not parts then
+    utils.notify(err, vim.log.levels.ERROR)
+    return nil
+  end
+
+  local layout = require('sqmeow.ui.layout')
+  layout.remember()
+  local cursor
+  if utils.shows(win, buf) then
+    cursor = vim.api.nvim_win_get_cursor(win)
+    layout.close_window(win)
+  end
+  if popup then
+    popup:unmount()
+  end
+
+  popup = parts.Popup({
+    enter = true,
+    focusable = true,
+    relative = 'editor',
+    position = '50%',
+    size = { width = '90%', height = '80%' },
+    zindex = 40,
+    bufnr = M.buffer(),
+    border = {
+      style = require('sqmeow.config').border(),
+      -- A title, as every dialog has. nui draws a border with text itself and falls back to a single
+      -- line when 'winborder' is empty; without text it leaves the border to Neovim, which draws
+      -- none, and the float would lose the edge the other dialogs have under the same setting.
+      text = { top = ' Result ', top_align = 'center' },
+    },
+    win_options = {
+      number = false,
+      relativenumber = false,
+      signcolumn = 'no',
+      wrap = false,
+      cursorline = true,
+    },
+  })
+  popup:mount()
+  win = popup.winid
+  if cursor then
+    pcall(vim.api.nvim_win_set_cursor, win, cursor)
+  end
+  M.update_winbar(require('sqmeow.state').call)
+  return win
+end
+
+--- Move the grid between its split and its float.
+function M.toggle_float()
+  if not M.is_float() then
+    return M.open_float()
+  end
+
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  local closing = popup
+  popup, win = nil, nil
+  closing:unmount()
+
+  M.open()
+  vim.api.nvim_set_current_win(win)
+  pcall(vim.api.nvim_win_set_cursor, win, cursor)
+end
+
+--- Whether the keys that change rows may do so on this result, saying why not when they may not.
+---@return boolean
+local function editing()
+  local call = require('sqmeow.state').call
+  if not (call and call.source) then
+    utils.notify(
+      'this result cannot be edited: its rows cannot be traced back to where they are stored',
+      vim.log.levels.WARN
+    )
+    return false
+  end
+  return true
+end
+
+--- Order the rows by a column: `add` stacks it after the keys already there, and otherwise it
+--- replaces them. Each press on a column goes ascending, descending, then off.
+local function sort_by(column, add)
+  local spec = M.spec()
+  local at
+  for index, key in ipairs(spec.sort) do
+    if key.column == column then
+      at = index
+    end
+  end
+  local key = at and spec.sort[at]
+
+  if add then
+    if not key then
+      table.insert(spec.sort, { column = column, descending = false })
+    elseif not key.descending then
+      key.descending = true
+    else
+      table.remove(spec.sort, at)
+    end
+  elseif not key then
+    spec.sort = { { column = column, descending = false } }
+  elseif not key.descending then
+    spec.sort = { { column = column, descending = true } }
+  else
+    spec.sort = {}
+  end
+  M.send_view()
+end
+
+--- The conditions the filter dialog offers, in order, and the engine's name for each.
+local CONDITIONS = {
+  { 'contains', 'contains' },
+  { '=', 'eq' },
+  { '!=', 'ne' },
+  { '<', 'lt' },
+  { '<=', 'le' },
+  { '>', 'gt' },
+  { '>=', 'ge' },
+  { 'starts with', 'starts_with' },
+  { 'is null', 'is_null' },
+  { 'is not null', 'not_null' },
+}
+
+--- Ask for a filter on the current result and add it to the ones already there.
+local function filter_dialog()
+  local call = require('sqmeow.state').call
+  if not (call and call.columns and #call.columns > 0) then
+    return utils.notify('there is no result to filter', vim.log.levels.WARN)
+  end
+
+  local spec = M.spec()
+  local ANY = 'any column'
+  local labels, by_label = { ANY }, {}
+  for index, column in ipairs(call.columns) do
+    if not spec.hidden[index - 1] then
+      -- Two columns can share a name, and a dialog that could not tell them apart would filter
+      -- whichever came first.
+      local label = column.name
+      if by_label[label] then
+        label = ('%s (%d)'):format(label, index)
+      end
+      by_label[label] = index - 1
+      table.insert(labels, label)
+    end
+  end
+
+  local conditions, ops = {}, {}
+  for _, condition in ipairs(CONDITIONS) do
+    table.insert(conditions, condition[1])
+    ops[condition[1]] = condition[2]
+  end
+  local function needs_value(values)
+    return not values.condition:match('null$')
+  end
+
+  local here = cursor_column()
+  local column = ANY
+  for label, index in pairs(by_label) do
+    if here and index == here.column and (column == ANY or #label < #column) then
+      column = label
+    end
+  end
+
+  local ok, err = require('sqmeow.ui.form').open({
+    title = 'Filter',
+    fields = {
+      -- ponytail: the column is cycled through with <CR>; a menu once results this wide are common
+      { key = 'column', label = 'Column', options = labels },
+      { key = 'condition', label = 'Condition', options = conditions },
+      { key = 'value', label = 'Value', enabled = needs_value },
+    },
+    values = { column = column, condition = 'contains', value = '' },
+    validate = function(values)
+      if needs_value(values) and values.value == '' then
+        return 'a value is needed'
+      end
+    end,
+    on_submit = function(values)
+      table.insert(spec.filters, {
+        column = by_label[values.column],
+        op = ops[values.condition],
+        value = needs_value(values) and values.value or nil,
+      })
+      M.send_view()
+    end,
+  })
+  if not ok then
+    utils.notify(err or 'the filter dialog could not open', vim.log.levels.ERROR)
+  end
 end
 
 -- -- actions --------------------------------------------------------------------------------
@@ -652,10 +1162,138 @@ end
 --- Show the row under the cursor as a list of columns and values.
 function M.actions.detail()
   local cell = M.current_cell()
-  if not cell then
+  if not (cell and cell.row) then
     return
   end
   require('sqmeow.ui.detail').open(cell.row)
+end
+
+function M.actions.toggle_float()
+  M.toggle_float()
+end
+
+--- Show only the rows holding the value under the cursor in its column.
+function M.actions.filter_cell()
+  local cell = M.current_cell()
+  if not (cell and cell.row) then
+    return
+  end
+  local filter = { column = cell.column, op = 'is_null' }
+  if cell.value ~= nil and cell.value ~= vim.NIL then
+    filter = { column = cell.column, op = 'eq', value = tostring(cell.value) }
+  end
+  table.insert(M.spec().filters, filter)
+  M.send_view()
+end
+
+function M.actions.filter()
+  filter_dialog()
+end
+
+function M.actions.sort()
+  local here = cursor_column()
+  if here then
+    sort_by(here.column, false)
+  end
+end
+
+function M.actions.sort_add()
+  local here = cursor_column()
+  if here then
+    sort_by(here.column, true)
+  end
+end
+
+function M.actions.hide_column()
+  local call = require('sqmeow.state').call
+  local here = cursor_column()
+  if not (call and here) then
+    return
+  end
+  local spec = M.spec()
+  if #call.columns - vim.tbl_count(spec.hidden) <= 1 then
+    return utils.notify('the last column cannot be hidden', vim.log.levels.WARN)
+  end
+  spec.hidden[here.column] = true
+  M.redraw()
+end
+
+function M.actions.show_columns()
+  M.spec().hidden = {}
+  M.redraw()
+end
+
+--- Clear the filters, sort and hidden columns, and show every row again.
+function M.actions.reset_view()
+  local call = require('sqmeow.state').call
+  if not (call and call.call_id) then
+    return
+  end
+  specs[call.call_id] = fresh()
+  M.send_view()
+end
+
+function M.actions.edit_cell()
+  local cell = editing() and M.current_cell()
+  if cell then
+    require('sqmeow.ui.edit').edit_cell(cell)
+  end
+end
+
+function M.actions.set_null()
+  local cell = editing() and M.current_cell()
+  if not cell then
+    return
+  end
+  local column = require('sqmeow.state').call.columns[cell.column + 1]
+  if not (column and column.editable) then
+    return utils.notify(('`%s` cannot be edited'):format(cell.name), vim.log.levels.WARN)
+  end
+  require('sqmeow.ui.edit').set(cell, cell.column, vim.NIL)
+end
+
+function M.actions.add_row()
+  if not editing() then
+    return
+  end
+  require('sqmeow.ui.edit').add_row()
+  local last = vim.api.nvim_buf_line_count(M.buffer())
+  vim.api.nvim_win_set_cursor(win, { last, 0 })
+end
+
+function M.actions.delete_row()
+  local cell = editing() and M.current_cell()
+  if cell then
+    require('sqmeow.ui.edit').toggle_delete({ cell })
+  end
+end
+
+function M.actions.delete_selection()
+  local targets = selected()
+  if editing() and #targets > 0 then
+    require('sqmeow.ui.edit').toggle_delete(targets)
+  end
+end
+
+function M.actions.undo()
+  if editing() and not require('sqmeow.ui.edit').undo() then
+    utils.notify('there is nothing to undo')
+  end
+end
+
+function M.actions.discard()
+  if not editing() then
+    return
+  end
+  local dropped = require('sqmeow.ui.edit').reset()
+  M.redraw()
+  utils.notify(('discarded %d change%s'):format(dropped, dropped == 1 and '' or 's'))
+end
+
+function M.actions.review()
+  if editing() then
+    require('sqmeow.ui.edit').review()
+  end
 end
 
 function M.actions.help()
@@ -669,10 +1307,17 @@ end
 -- -- the window -----------------------------------------------------------------------------
 
 --- Show the result window, creating it if needed.
+---
+--- A grid already in its float stays there: the float is where the user put it.
 ---@return integer win
 function M.open()
-  if win and utils.shows(win, buf) then
+  if utils.shows(win, buf) then
     return win
+  end
+  if popup then
+    -- Closed some other way than through here, such as `:close`, which leaves nui a mount to undo.
+    popup:unmount()
+    popup = nil
   end
 
   local config = require('sqmeow.config').get()
@@ -695,12 +1340,17 @@ function M.open()
   if vim.api.nvim_win_is_valid(previous) then
     vim.api.nvim_set_current_win(previous)
   end
+  M.update_winbar(require('sqmeow.state').call)
   return win
 end
 
 --- Hide the result window, keeping what it holds.
 function M.close()
-  if win and utils.shows(win, buf) then
+  if popup then
+    local closing = popup
+    popup = nil
+    closing:unmount()
+  elseif win and utils.shows(win, buf) then
     require('sqmeow.ui.layout').close_window(win)
   end
   win = nil
@@ -709,7 +1359,7 @@ function M.close()
   require('sqmeow.ui.layout').restore()
 end
 
---- Whether the result window is showing.
+--- Whether the result window is showing, in its split or its float.
 ---@return boolean
 function M.is_open()
   return utils.shows(win, buf)

@@ -12,9 +12,10 @@ use std::time::Instant;
 use rmpv::Value;
 use sqmeow_adapters::Backend;
 use sqmeow_db::export::{self, Format, Rows};
+use sqmeow_db::view::{self, Filter, Op, Sort};
 use sqmeow_db::{
-    CatalogEntry, Cell, ColumnNode, Dialect, Error as DbError, KeyType, RelationKind, RelationNode,
-    ResultSet, RoutineKind, RoutineNode, SchemaNode, sql,
+    CatalogEntry, Cell, Changes, ColumnNode, Dialect, Error as DbError, KeyType, RelationKind,
+    RelationNode, ResultSet, RoutineKind, RoutineNode, SchemaNode, sql,
 };
 use sqmeow_rpc::{Handler, Nvim, Reply};
 use tokio::sync::Notify;
@@ -293,6 +294,7 @@ impl Core {
             id: call_id,
             conn_id,
             result,
+            view: Default::default(),
         };
         let mut payload = summarize(&call);
         payload.extend(elapsed(started));
@@ -355,6 +357,7 @@ impl Core {
                 id: call_id,
                 conn_id,
                 result,
+                view: Default::default(),
             };
             let mut payload = summarize(&call);
             payload.push(("elapsed_ms", Value::from(elapsed_ms)));
@@ -543,10 +546,9 @@ impl Core {
             Ok(id) => id as u64,
             Err(error) => return reply.err(error),
         };
-        let format = match args.opt_string("format").as_deref().map(Format::parse) {
-            Some(Some(format)) => format,
-            Some(None) => return reply.err("format must be `csv` or `json`"),
-            None => Format::Csv,
+        let format = match format(args) {
+            Ok(format) => format,
+            Err(error) => return reply.err(error),
         };
 
         // The selected rows, which only the editor knows, so it sends the range rather than the
@@ -561,10 +563,9 @@ impl Core {
             None => Rows::all(),
         };
         let headers = args.opt_bool("headers").unwrap_or(true);
-        let path = match args.string("path") {
-            Ok(path) => path,
-            Err(error) => return reply.err(error),
-        };
+        // Without a path the text comes back in `export:done`, for the clipboard.
+        let path = args.opt_string("path");
+        let columns = indices(args.get("columns"));
 
         if self.session.with_call(call_id, |_| ()).is_none() {
             return reply.err(format!("result {call_id} is no longer held"));
@@ -572,8 +573,43 @@ impl Core {
 
         reply.ok(Value::from(call_id));
         tokio::spawn(async move {
-            self.run_export(call_id, format, rows, headers, path).await;
+            self.run_export(call_id, format, rows, columns, headers, path)
+                .await;
         });
+    }
+
+    /// The start of an export, as the text it would write, for the export dialog to show.
+    ///
+    /// Answered from the dispatch call rather than a task: it is capped at [`PREVIEW_ROWS`] rows, so
+    /// it is a page's worth of work, and the dialog redraws it as each answer changes.
+    fn export_preview(&self, args: &Args) -> Result<Value, String> {
+        let call_id = args.integer("call_id")? as u64;
+        let format = format(args)?;
+        let start = args.opt_usize("offset").unwrap_or(0);
+        let limit = args
+            .opt_usize("limit")
+            .unwrap_or(usize::MAX)
+            .min(PREVIEW_ROWS);
+        let headers = args.opt_bool("headers").unwrap_or(true);
+        let columns = indices(args.get("columns"));
+
+        self.session
+            .with_call(call_id, |call| {
+                let view = call.view.lock().expect("view poisoned").clone();
+                let rows = Rows {
+                    start,
+                    end: start.saturating_add(limit),
+                }
+                .resolve(&call.result, view.as_deref().map(Vec::as_slice));
+                Value::from(export::write(
+                    &call.result,
+                    format,
+                    &rows,
+                    columns.as_deref(),
+                    headers,
+                ))
+            })
+            .ok_or_else(|| format!("result {call_id} is no longer held"))
     }
 
     /// Render part of a result and write it to a file.
@@ -586,21 +622,36 @@ impl Core {
         call_id: u64,
         format: Format,
         rows: Rows,
+        columns: Option<Vec<usize>>,
         headers: bool,
-        path: String,
+        path: Option<String>,
     ) {
-        let Some(text) = self.session.with_call(call_id, |call| {
-            export::write(&call.result, format, rows, headers)
+        let Some((text, count)) = self.session.with_call(call_id, |call| {
+            let view = call.view.lock().expect("view poisoned").clone();
+            let rows = rows.resolve(&call.result, view.as_deref().map(Vec::as_slice));
+            let text = export::write(&call.result, format, &rows, columns.as_deref(), headers);
+            (text, rows.len())
         }) else {
             return self.emit_export(call_id, Err("the result is no longer held".into()));
         };
 
         let bytes = text.len();
+        let Some(path) = path else {
+            return self.emit_export(
+                call_id,
+                Ok(vec![
+                    ("text", Value::from(text)),
+                    ("rows", Value::from(count as u64)),
+                    ("bytes", Value::from(bytes as u64)),
+                ]),
+            );
+        };
         match tokio::fs::write(&path, text).await {
             Ok(()) => self.emit_export(
                 call_id,
                 Ok(vec![
                     ("path", Value::from(path)),
+                    ("rows", Value::from(count as u64)),
                     ("bytes", Value::from(bytes as u64)),
                 ]),
             ),
@@ -622,6 +673,126 @@ impl Core {
         }
     }
 
+    /// Narrow and order the rows of a stored result, for the grid to page through.
+    ///
+    /// Answers straight away and builds the view on a blocking thread: sorting a hundred thousand
+    /// rows is quick, but not quick enough to hold the editor inside `rpcrequest` for. The row count
+    /// arrives as `call:view`. Empty filters, sort and scope put every row back in its first order.
+    fn spawn_view(self: Arc<Self>, args: &Args, reply: Reply) {
+        let call_id = match args.integer("call_id") {
+            Ok(id) => id as u64,
+            Err(error) => return reply.err(error),
+        };
+        let filters = match filters(args.get("filters")) {
+            Ok(filters) => filters,
+            Err(error) => return reply.err(error),
+        };
+        let sort: Vec<Sort> = items(args.get("sort"))
+            .into_iter()
+            .filter_map(|item| {
+                Some(Sort {
+                    column: usize::try_from(field(item, "column")?.as_u64()?).ok()?,
+                    descending: field(item, "descending")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                })
+            })
+            .collect();
+        let scope = indices(args.get("rows"));
+        if self.session.with_call(call_id, |_| ()).is_none() {
+            return reply.err(format!("result {call_id} is no longer held"));
+        }
+
+        reply.ok(Value::from(call_id));
+        tokio::spawn(async move {
+            let core = Arc::clone(&self);
+            let built = tokio::task::spawn_blocking(move || {
+                core.session.with_call(call_id, |call| {
+                    let view =
+                        (!filters.is_empty() || !sort.is_empty() || scope.is_some()).then(|| {
+                            Arc::new(view::select(
+                                &call.result,
+                                &filters,
+                                &sort,
+                                scope.as_deref(),
+                            ))
+                        });
+                    let rows = view
+                        .as_ref()
+                        .map_or(call.result.row_count(), |view| view.len());
+                    *call.view.lock().expect("view poisoned") = view;
+                    rows
+                })
+            })
+            .await;
+
+            let mut payload = vec![("call_id", Value::from(call_id))];
+            match built {
+                Ok(Some(rows)) => payload.push(("rows", Value::from(rows as u64))),
+                Ok(None) => payload.push(("error", Value::from("the result is no longer held"))),
+                Err(error) => payload.push(("error", Value::from(error.to_string()))),
+            }
+            if let Err(error) = self.nvim.emit("call:view", map(payload)) {
+                tracing::warn!(%error, "could not report a view");
+            }
+        });
+    }
+
+    /// Plan staged changes to a stored result into the statements that make them, for review.
+    ///
+    /// Answered from the dispatch call: planning reads only the cells being changed, and touches no
+    /// database.
+    fn plan(&self, args: &Args) -> Result<Value, String> {
+        let call_id = args.integer("call_id")? as u64;
+        let changes = changes(args.get("changes"))?;
+        let gone = || format!("result {call_id} is no longer held");
+
+        let conn_id = self
+            .session
+            .with_call(call_id, |call| call.conn_id)
+            .ok_or_else(gone)?;
+        let connection = self.session.connection(conn_id).ok_or_else(|| {
+            "the connection this result came from is not open, so it cannot be edited".to_owned()
+        })?;
+        let statements = self
+            .session
+            .with_call(call_id, |call| {
+                connection.backend.plan(&call.result, &changes)
+            })
+            .ok_or_else(gone)?
+            .map_err(|error| error.to_string())?;
+        Ok(strings(statements))
+    }
+
+    /// Run the statements a review approved, together, and report through `apply:done`.
+    fn spawn_apply(self: Arc<Self>, args: &Args, reply: Reply) {
+        let conn_id = match args.integer("conn_id") {
+            Ok(id) => id,
+            Err(error) => return reply.err(error),
+        };
+        let statements = args.opt_strings("statements").unwrap_or_default();
+        if statements.is_empty() {
+            return reply.err("there is nothing to apply");
+        }
+        let Some(connection) = self.session.connection(conn_id) else {
+            return reply.err(format!("no connection with id {conn_id}"));
+        };
+
+        reply.ok(Value::from(conn_id));
+        tokio::spawn(async move {
+            let mut payload = vec![
+                ("conn_id", Value::from(conn_id)),
+                ("statements", Value::from(statements.len() as u64)),
+            ];
+            if let Err(error) = connection.backend.apply(&statements).await {
+                payload.push(("error", Value::from(error.to_string())));
+            }
+            if let Err(error) = self.nvim.emit("apply:done", map(payload)) {
+                tracing::warn!(%error, "could not report applied changes");
+            }
+        });
+    }
+
     /// Hand the editor a slice of a result's rows.
     ///
     /// Answered from the dispatch call rather than a task. A page is bounded by what fits on a
@@ -639,16 +810,21 @@ impl Core {
 
         let rows = self.session.with_call(call_id, |call| {
             let result = &call.result;
-            let end = offset.saturating_add(limit).min(result.row_count());
-            if offset >= end {
-                // An out-of-range offset yields no rows rather than an error: a page request can
-                // race a result being replaced, and an empty page is the honest answer.
-                return Value::Array(Vec::new());
-            }
+            let view = call.view.lock().expect("view poisoned").clone();
+            let total = view.as_ref().map_or(result.row_count(), |view| view.len());
+            let end = offset.saturating_add(limit).min(total);
+            // An out-of-range offset yields no rows rather than an error: a page request can race a
+            // result being replaced, and an empty page is the honest answer.
+            let chosen: Vec<usize> = match (&view, offset < end) {
+                (_, false) => Vec::new(),
+                (Some(view), true) => view[offset..end].to_vec(),
+                (None, true) => (offset..end).collect(),
+            };
 
             let width = result.columns().len();
-            let rows: Vec<Value> = (offset..end)
-                .map(|row| {
+            let rows: Vec<Value> = chosen
+                .iter()
+                .map(|&row| {
                     Value::Array(
                         (0..width)
                             .map(|column| {
@@ -659,7 +835,18 @@ impl Core {
                 })
                 .collect();
 
-            Value::Array(rows)
+            // Which row of the result each one is, since a filtered or sorted page is not a run of
+            // consecutive rows, and editing one or showing its detail needs to know which it was.
+            map(vec![
+                (
+                    "indices",
+                    Value::Array(chosen.iter().map(|row| Value::from(*row as u64)).collect()),
+                ),
+                ("rows", Value::Array(rows)),
+                // How many rows the view holds, so the editor pages through a filter without
+                // keeping a count of its own that could fall behind.
+                ("total", Value::from(total as u64)),
+            ])
         });
 
         rows.ok_or_else(|| format!("result {call_id} is no longer held"))
@@ -928,6 +1115,104 @@ fn catalog_entries(entries: &[CatalogEntry]) -> Vec<Value> {
         .collect()
 }
 
+/// The most rows an export preview renders: enough to see what the file will look like.
+const PREVIEW_ROWS: usize = 100;
+
+/// The export format an argument names, CSV when it names none.
+fn format(args: &Args) -> Result<Format, String> {
+    match args.opt_string("format").as_deref().map(Format::parse) {
+        Some(Some(format)) => Ok(format),
+        Some(None) => Err("format must be `csv` or `json`".to_owned()),
+        None => Ok(Format::Csv),
+    }
+}
+
+/// The elements of an array argument. Lua sends an empty table as an empty map, and a missing one
+/// as nothing, and both are no elements.
+fn items(value: Option<&Value>) -> Vec<&Value> {
+    match value {
+        Some(Value::Array(items)) => items.iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// One field of a map argument.
+fn field<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value
+        .as_map()?
+        .iter()
+        .find(|(name, _)| name.as_str() == Some(key))
+        .map(|(_, value)| value)
+}
+
+/// An array of zero-based indices, or `None` when there is none or it is empty.
+fn indices(value: Option<&Value>) -> Option<Vec<usize>> {
+    let indices: Vec<usize> = items(value)
+        .into_iter()
+        .filter_map(|item| usize::try_from(item.as_u64()?).ok())
+        .collect();
+    (!indices.is_empty()).then_some(indices)
+}
+
+/// The filters a `view` call carries. A filter without a column searches every column.
+fn filters(value: Option<&Value>) -> Result<Vec<Filter>, String> {
+    items(value)
+        .into_iter()
+        .map(|item| {
+            let op = field(item, "op")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Ok(Filter {
+                column: field(item, "column")
+                    .and_then(Value::as_u64)
+                    .and_then(|column| usize::try_from(column).ok()),
+                op: Op::parse(op).ok_or_else(|| format!("`{op}` is not a filter"))?,
+                value: field(item, "value")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// The staged changes a `plan` call carries: `updates` of `{ row, cells }`, `deletes` of rows, and
+/// `inserts` of cell lists, where a cell is `{ column, value }` and a missing value is `NULL`.
+fn changes(value: Option<&Value>) -> Result<Changes, String> {
+    let Some(value) = value else {
+        return Ok(Changes::default());
+    };
+    let index = |item: &Value, key: &str| -> Result<usize, String> {
+        field(item, key)
+            .and_then(Value::as_u64)
+            .and_then(|index| usize::try_from(index).ok())
+            .ok_or_else(|| format!("a change needs a `{key}`"))
+    };
+    let cells = |list: Option<&Value>| -> Result<Vec<(usize, Option<String>)>, String> {
+        items(list)
+            .into_iter()
+            .map(|cell| {
+                let text = field(cell, "value")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                Ok((index(cell, "column")?, text))
+            })
+            .collect()
+    };
+
+    Ok(Changes {
+        updates: items(field(value, "updates"))
+            .into_iter()
+            .map(|update| Ok((index(update, "row")?, cells(field(update, "cells"))?)))
+            .collect::<Result<_, String>>()?,
+        deletes: indices(field(value, "deletes")).unwrap_or_default(),
+        inserts: items(field(value, "inserts"))
+            .into_iter()
+            .map(|insert| cells(Some(insert)))
+            .collect::<Result<_, String>>()?,
+    })
+}
+
 /// One cell, as the value it really is rather than as text.
 ///
 /// This is what "structured" means on the wire: a number reaches Lua as a number, so the editor can
@@ -979,6 +1264,13 @@ fn summarize(call: &Call) -> Vec<(&'static str, Value)> {
             if let Some(key) = column.key.name() {
                 pairs.push(("key", Value::from(key)));
             }
+            // Left out rather than false, for the same reason.
+            if result
+                .source()
+                .is_some_and(|source| source.editable(result, index))
+            {
+                pairs.push(("editable", Value::from(true)));
+            }
             map(pairs)
         })
         .collect();
@@ -988,11 +1280,23 @@ fn summarize(call: &Call) -> Vec<(&'static str, Value)> {
         ("call_id", Value::from(call.id)),
         ("conn_id", Value::from(call.conn_id)),
         ("rows", Value::from(result.row_count() as u64)),
+        // The statement that produced these rows, which is what running them again means: the
+        // editor sent a whole buffer, and only this one of its statements is on screen.
+        ("sql", Value::from(result.statement())),
         ("truncated", Value::from(result.is_truncated())),
     ];
     // Left out rather than sent as nil when nothing was written, for the reason `key` is above: a
     // MongoDB `find` that matches nothing has neither rows nor a count, and a nil here would reach
     // the winbar as a number to print.
+    if let Some(source) = result.source() {
+        pairs.push((
+            "source",
+            map(vec![
+                ("kind", Value::from(source.kind())),
+                ("name", Value::from(source.name())),
+            ]),
+        ));
+    }
     if let Some(affected) = result.affected() {
         pairs.push(("affected", Value::from(affected)));
     }
@@ -1048,6 +1352,10 @@ impl Handler for Core {
             "execute" => return self.spawn_execute(&args, reply),
             "restore" => return self.spawn_restore(&args, reply),
             "rows" => self.rows(&args),
+            "plan" => self.plan(&args),
+            "export_preview" => self.export_preview(&args),
+            "view" => return self.spawn_view(&args, reply),
+            "apply" => return self.spawn_apply(&args, reply),
             "introspect" => return self.spawn_introspect(&args, reply),
             "catalog" => return self.spawn_catalog(&args, reply),
             "export" => return self.spawn_export(&args, reply),
