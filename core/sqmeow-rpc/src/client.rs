@@ -12,9 +12,7 @@ use crate::message::Message;
 
 type Pending = Arc<Mutex<HashMap<u32, oneshot::Sender<Result<Value>>>>>;
 
-/// The outbound half of a connection: call the peer, or answer it.
-///
-/// Cloning is cheap and every clone talks to the same peer, so handlers can hold one freely.
+/// The outbound half of a connection.
 #[derive(Clone)]
 pub struct Client {
     outgoing: UnboundedSender<Message>,
@@ -57,8 +55,7 @@ impl Client {
         rx.await.map_err(|_| Error::Closed)?
     }
 
-    /// Call the peer without waiting. Use this for anything the peer need not answer, which for
-    /// the editor means every event we push at it.
+    /// Call the peer without waiting.
     pub fn notify(&self, method: impl Into<String>, params: Vec<Value>) -> Result<()> {
         self.send(Message::Notification {
             method: method.into(),

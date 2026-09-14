@@ -1,9 +1,4 @@
--- How `doc/sqmeow.txt` is built. Sourced by `MiniDoc.generate()` when it is called with no
--- arguments, which is what `just docs` does.
---
--- The file order here is the section order in the output, so it is decided deliberately rather
--- than left to whatever a directory listing returns. Only the public surface is in it: the
--- modules underneath are free to change shape and have no business in a help file.
+-- How `doc/sqmeow.txt` is built.
 
 local doc = require('mini.doc')
 
@@ -18,8 +13,7 @@ local input = {
   'lua/sqmeow/api.lua',
 }
 
--- The name each file's `M` stands for, so `M.setup()` is tagged `sqmeow.setup()` rather than
--- something no reader could type at a `:help` prompt.
+-- The name each file's `M` stands for.
 local modules = {
   ['lua/sqmeow/init.lua'] = 'sqmeow',
   ['lua/sqmeow/config.lua'] = 'sqmeow.config',
@@ -41,14 +35,6 @@ end
 local hooks = vim.deepcopy(doc.default_hooks)
 
 --- Rewrite `M.` into the module's own name, in the tag and in the signature.
----
---- mini.doc infers both from the line after the annotation, which is written as `function M.foo`,
---- so without this every tag in the help file would read `M.foo()`.
----
---- A comment above a `local` explains the module's own workings rather than anything a user can
---- reach, so that block is dropped. The exception is a block that names itself with `@tag` or
---- produces text with `@eval`, which is what the module headers above `local M = {}` and the
---- default configuration do.
 hooks.block_pre = function(block)
   local first = block.info.afterlines[1] or ''
   local explicit = block:has_descendant(function(node)
@@ -73,9 +59,6 @@ hooks.block_pre = function(block)
 end
 
 --- Put the help file's own tag and title at the very top.
----
---- The default hook runs first, because it is what strips the delimiter lines that would
---- otherwise sit above the title, and the modeline it adds at the end stays as it is.
 hooks.write_pre = function(lines)
   lines = doc.default_hooks.write_pre(lines)
 

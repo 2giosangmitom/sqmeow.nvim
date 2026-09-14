@@ -1,15 +1,8 @@
 //! One decoded cell.
-//!
-//! Every driver funnels its own types into this enum, so the renderer and the exporters never
-//! learn what a Postgres `timestamptz` or a SQLite storage class is. Adding a database adds
-//! decoding, not new cases to handle downstream.
 
 use std::borrow::Cow;
 
 /// How much of a large binary value is kept.
-///
-/// A blob column can hold megabytes. Only the head is needed to show the user what is there, and
-/// keeping whole blobs for a page of results would dwarf the rest of the result set.
 pub const BYTES_PREVIEW: usize = 64;
 
 /// A single value from a result row.
@@ -37,8 +30,6 @@ pub enum Cell {
     Uuid(String),
     Array(Vec<Cell>),
     /// A type no adapter claims to understand, kept as the driver's own text form.
-    ///
-    /// This case is what keeps one exotic column from failing a whole query.
     Unsupported {
         type_name: String,
         raw: String,
@@ -65,9 +56,6 @@ impl Cell {
     }
 
     /// The value's text, exactly as it is.
-    ///
-    /// Line breaks and tabs survive. This is what an export writes, where the file format has its
-    /// own way of carrying them and mangling them would corrupt the data.
     pub fn text<'a>(&'a self, null_text: &'a str) -> Cow<'a, str> {
         match self {
             Self::Text(text) | Self::Json(text) => Cow::Borrowed(text),
@@ -77,9 +65,6 @@ impl Cell {
     }
 
     /// The single-line form shown in a grid cell.
-    ///
-    /// Line breaks and tabs become their escape sequences rather than a symbol, because a grid row
-    /// is one line and an ASCII escape reads the same in every terminal and every font.
     pub fn display<'a>(&'a self, null_text: &'a str) -> Cow<'a, str> {
         match self {
             Self::Null => Cow::Borrowed(null_text),
@@ -92,8 +77,7 @@ impl Cell {
             | Self::Time(text)
             | Self::Uuid(text) => escape(text),
             Self::Text(text) | Self::Json(text) => escape(text),
-            // A driver that cannot give a text form still owes the user the type name, so the
-            // cell reads as "a value of a type we cannot show" rather than as an empty one.
+            // A driver that cannot give a text form still owes the user the type name.
             Self::Unsupported { type_name, raw } if raw.is_empty() => {
                 Cow::Owned(format!("<{type_name}>"))
             }

@@ -3,11 +3,6 @@
                                                                    *sqmeow.nvim*
 sqmeow.nvim, a database client for Neovim.
 
-A Lua frontend over a Rust engine. The engine connects to databases, runs queries and holds
-their results; the plugin asks it for rows a page at a time and draws everything itself: the
-drawer, the grid, windows, buffers and keymaps.
-
-
 ------------------------------------------------------------------------------
 Contents ~
   Introduction ................................................. |sqmeow.nvim|
@@ -22,70 +17,21 @@ Contents ~
                                                              *sqmeow-connecting*
 Making a connection ~
 
-`:Sqmeow add` opens a dialog: a menu of the databases the engine speaks, and then a form of
-named fields. The URL is assembled from the answers, so a password holding a `#` needs no
-escaping and nobody has to remember where the colon goes. A password is drawn as asterisks
-both while it is typed and afterwards.
-
-The same dialog is on `A` in the drawer, and `e` there opens the connection under the cursor
-for editing. A saved URL is taken apart into the same fields, so what opens is the connection
-as it stands.
-
-The dialog is built on nui.nvim, which is the plugin's one optional dependency.
-
-The first thing it asks for is a name, and it suggests nothing: the name is what the drawer
-will call this database from now on, so it is yours to choose. The URL is never shown. >lua
+`:Sqmeow add` (or `A` in the drawer) opens a dialog that builds the URL from named fields; `e`
+in the drawer edits the connection under the cursor. `Connection string` takes a whole URL,
+such as one holding `{{ env "PGPASSWORD" }}`. The dialog needs nui.nvim: >lua
   { 'sqmeow.nvim', dependencies = { 'MunifTanjim/nui.nvim' } }
 <
-The menu's last choice, `Connection string`, asks for a name and a whole URL instead, saved as
-typed, so a password template such as `{{ env "PGPASSWORD" }}` needs no escaping.
-
-The database may be left empty to reach every database on the server. MySQL and MariaDB then
-list each one where a schema would be. PostgreSQL lists the cluster's databases, and `<CR>` on
-one opens it as a connection of its own, named `connection/database` and drawn inside the
-cluster, so `u`, `a` and previews under it all run on that database.
+Leave the database empty to reach every database on the server. In PostgreSQL, `<CR>` on one
+opens it as its own connection, `connection/database`.
 
 ------------------------------------------------------------------------------
                                                                  *sqmeow-active*
 Which database a query runs on ~
 
-One connection is active, and the result window's winbar names it. `u` in the
-drawer makes the connection under the cursor active, and `:Sqmeow use [name]` does the same
-from the command line. `<CR>` only opens a row out, so reading a schema never changes where the
-next query goes.
-
-A scratchpad overrides that. It is created for one database, with `a` on that connection in the
-drawer or `:Sqmeow scratch [name]`, and kept in a folder named after it, so it runs there
-whatever else is active, and the line above it says which database that is. Two scratchpads
-side by side therefore reach two databases without anything being switched between them. One
-for Redis is a `.redis` file rather than a `.sql` one, one for MongoDB a `.json` file, and each
-opens with that filetype.
-
-`:Sqmeow bind <name>` ties any other buffer to a connection the same way, and `:Sqmeow bind
-none` unties it. A buffer tied to a database that is not open refuses to run rather than
-falling back to the active one, because running `staging.sql` against production is the mistake
-worth being loud about.
-
 ------------------------------------------------------------------------------
                                                                 *sqmeow-history*
 The query log ~
-
-Every query you submit is written to a log under `core.path`, together with the rows it
-returned, so both are still there after a restart. Only what you ran is recorded: a preview from
-the drawer, and everything the plugin asks the database for itself, stays out of it.
-
-The drawer shows the most recent under `history`, and `:Sqmeow log` opens that section.
-Choosing one shows the result that query returned, not the statement to run again. Nothing is
-run, because a log holds deletes as readily as selects and picking a line out of a list is not
-the same as asking for it to happen again. A result from this session comes from the engine's
-memory, and an older one is read back from the copy saved with the log, with the winbar saying
-how long ago it ran. A query that failed shows its error.
-
-Every run is an entry of its own, because two runs of the same select can answer differently.
-
-`:Sqmeow log clear` empties the log and deletes the saved results, and so does `d` on the
-section in the drawer. Saved results are readable by their owner only. Set
-`query.persist_history` to false to keep the log and its results to the session.
 
 ------------------------------------------------------------------------------
                                                             *sqmeow.user_config*
@@ -97,10 +43,7 @@ Type ~
 ------------------------------------------------------------------------------
                                                                 *sqmeow.setup()*
                              `sqmeow.setup`({opts})
-Configure the plugin.
-
-Optional. Every option has a default, and a partial table overrides only what it names.
-
+Configure the plugin. Optional; a partial table overrides only what it names.
 Parameters ~
 {opts} `(table|nil)` See |sqmeow-config|.
 Usage ~
@@ -112,10 +55,7 @@ Usage ~
 ------------------------------------------------------------------------------
                                                               *sqmeow.install()*
                             `sqmeow.install`({opts})
-Install the engine binary.
-
-Nothing installs it on its own, so this is the call to put in a plugin manager's build hook,
-where fetching several megabytes happens at a moment you chose: >lua
+Install the engine binary. Nothing installs it automatically; call it from a build hook: >lua
   {
     '2giosangmitom/sqmeow.nvim',
     dependencies = { 'MunifTanjim/nui.nvim' },
@@ -125,23 +65,13 @@ where fetching several megabytes happens at a moment you chose: >lua
     opts = {},
   }
 <
-With no argument it works out how to install on its own: a release build is downloaded with
-whichever tool the machine has, and cargo compiles the checkout if there is no release for this
-target or the download fails. Name a method to decide instead. `'cargo'` is how to run a commit
-that has not been released; `'curl'`, `'wget'` and `'powershell'` each name a download tool, for
-a machine where the detected one does not work: >lua
+Without a method it downloads a release, falling back to a cargo build. Methods are `'cargo'`,
+`'curl'`, `'wget'` and `'powershell'`: >lua
   require('sqmeow').install('cargo')
   require('sqmeow').install('wget')
   require('sqmeow').install({ version = '1.0.2' })
 <
-Both ways put the engine in the same place, so switching between them replaces what was there
-rather than leaving two builds behind.
-
-Waits until the install is over, because a build hook that returned early would have the plugin
-manager report success over an engine that is not there yet. Pass a `callback` to be handed the
-result instead and not wait, which is what `:Sqmeow install` does from inside a session. The
-waiting uses |vim.wait()|, so the editor still redraws and the progress line still moves.
-
+Blocks until done unless a `callback` is given.
 Parameters ~
 {opts} `(string|table|nil)` A method name, or a table of `method`, `version`, `callback` and
  `timeout` in milliseconds.
@@ -161,33 +91,20 @@ Stop the engine. It restarts on the next call that needs it.
                                                                  *sqmeow-config*
 Configuration defaults and validation.
 
-Every option has a default, so `setup()` is optional and calling it with a partial table only
-overrides what it names. Validation runs once, at `setup()`, and names the offending key,
-because a typo in a nested option is otherwise invisible until the feature it controls
-misbehaves much later.
-
-
 ------------------------------------------------------------------------------
                                                         *sqmeow.config.defaults*
                             `sqmeow.config.defaults`
 Default configuration.
-
-This table is the single source of truth. What follows is inlined from it when the help file
-is built, so the documented defaults cannot drift from the ones the code uses.
 >lua
   sqmeow.config.defaults = {
-    -- Where connections are loaded from, in order. Later sources do not shadow earlier ones; every
-    -- source contributes, and a duplicate name is reported rather than silently dropped.
-    -- Types: 'file', 'env'. Connections are never declared here: a URL routinely carries a
-    -- password, and this table tends to live in a dotfiles repository. `:Sqmeow add` saves one.
+    -- Where connections are loaded from, in order.
     sources = {
       { type = 'file' },
       { type = 'env' },
     },
 
     core = {
-      -- The directory the plugin keeps its files in: the installed engine, saved connections,
-      -- scratchpads, and the query log with the results it shows again.
+      -- The directory the plugin keeps its files in.
       path = vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow'),
       -- One of 'error', 'warn', 'info', 'debug', 'trace'.
       log_level = 'warn',
@@ -195,21 +112,16 @@ is built, so the documented defaults cannot drift from the ones the code uses.
 
     ui = {
       drawer = { width = 36 },
-      -- `column_icons` marks each column of the grid header with what it holds, or with the key it
-      -- is. Worth turning off in a terminal without a patched font, and in a very wide result where
-      -- the columns are better spent on values.
       result = {
         height = 16,
         page_size = 100,
         max_column_width = 48,
-        -- Marks each column of the grid header with what it holds, or with the key it is. Worth
-        -- turning off in a terminal without a patched font.
+        -- Marks each column of the grid header with what it holds, or with the key it is.
         column_icons = true,
         -- What a SQL `NULL` reads as. Distinct from an empty string, which is drawn as nothing.
         null_text = 'NULL',
       },
-      -- The border of every dialog. 'default' follows Neovim's own 'winborder'; any nui border
-      -- style, such as 'rounded', sets one for this plugin alone.
+      -- The border of every dialog.
       border = 'default',
       winbar = true,
       persist_session = false,
@@ -222,16 +134,13 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       timeout_ms = 0,
       -- Results the engine holds in memory, so showing a recent one again reads nothing from disk.
       history_size = 32,
-      -- Save the queries you run, and the rows they returned, under `core.path`, so the log and its
-      -- results survive a restart. False keeps both to the session.
+      -- Save the queries you run, and the rows they returned, under `core.path`.
       persist_history = true,
       -- Queries kept in the log, each with its result. The oldest go once there are twice as many.
       history_limit = 500,
     },
 
-    -- Every character the plugin draws that is not text. The defaults are Nerd Font glyphs, so a
-    -- terminal without one needs its own set here. Colours are not set here: redefine the matching
-    -- `SqmeowIcon*` highlight group instead.
+    -- Every character the plugin draws that is not text.
     icons = {
       -- The kind of thing a drawer row names.
       connection = '󰆼',
@@ -249,9 +158,7 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       -- Before how long a query took, in the result's winbar. An empty string leaves it out.
       elapsed = '󱎫',
 
-      -- Beside a connection, saying what state it is in. One glyph in four colours: the difference
-      -- is `SqmeowConnected`, `SqmeowConnecting`, `SqmeowConnectionError` and `SqmeowDisconnected`,
-      -- not the character.
+      -- Beside a connection, saying what state it is in.
       connected = '●',
       connecting = '●',
       error = '●',
@@ -278,17 +185,10 @@ is built, so the documented defaults cannot drift from the ones the code uses.
       -- What sits before a drawer row: whether its children are showing, or that it has none.
       markers = { open = '', closed = '', leaf = ' ' },
 
-      -- What the result grid is drawn with: between the columns, along the rule under their names,
-      -- where the two meet, and at the end of a value too wide for its column. Keep the three
-      -- separators one column wide, or the rule will be out of step with the header above it. The
-      -- ellipsis may be any width, since a truncated value is measured with it.
+      -- What the result grid is drawn with.
       grid = { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' },
 
-      -- What each column of the grid header is marked with, and what the drawer marks its columns
-      -- with. The first eight are classes rather than type names: three dialects spell the same
-      -- idea five ways between them, and an icon per spelling is a table nobody can read. The two
-      -- keys win over the class, because what rows are found by is the more useful thing to know.
-      -- Set one to an empty string to draw that kind of column plain.
+      -- Column type and key icons, in the grid header and the drawer.
       types = {
         text = '󰀬',
         number = '󰎠',
@@ -302,10 +202,7 @@ is built, so the documented defaults cannot drift from the ones the code uses.
         foreign_key = '󰌋',
       },
 
-      -- Glyphs for particular type names, overriding the class they would fall in. The escape hatch
-      -- for anyone who wants `varchar` to look different from `text`: the classes above are coarse
-      -- on purpose, and this is how to disagree with where a line was drawn. Keyed by the database's
-      -- own name for the type, in any spelling and with or without its parameters.
+      -- Glyphs for particular type names, overriding the class they would fall in.
       type_names = {},
     },
 
@@ -325,7 +222,6 @@ The active configuration. Replaced wholesale by `setup()`.
                                                       *sqmeow.config.validate()*
                         `sqmeow.config.validate`({opts})
 Validate a user configuration against the defaults.
-
 Parameters ~
 {opts} `(table)` Configuration as passed to `setup()`.
 Return ~
@@ -335,19 +231,17 @@ Return ~
                                                          *sqmeow.config.apply()*
                          `sqmeow.config.apply`({opts})
 Merge a user configuration over the defaults and make it current.
-
 Parameters ~
 {opts} `(table|nil)` Configuration as passed to `setup()`.
 Return ~
 `(table)` config The merged configuration.
 Return ~
-`(string[])` errors Problems found. The configuration is still merged when non-empty.
+`(string[])` errors Problems found.
 
 ------------------------------------------------------------------------------
                                                            *sqmeow.config.get()*
                              `sqmeow.config.get`()
 Read the active configuration.
-
 Return ~
 `(table)` config
 
@@ -355,11 +249,6 @@ Return ~
                                                         *sqmeow.config.border()*
                             `sqmeow.config.border`()
 The border style dialogs are drawn with.
-
-`ui.border`, unless it is 'default', which means Neovim's 'winborder', so a border chosen once
-for every floating window reaches this plugin's too. nui takes the named styles as they are,
-but not the custom form, eight characters separated by commas, which it needs as a list.
-
 Return ~
 `(string|string[])` style
 
@@ -368,15 +257,6 @@ Return ~
 ------------------------------------------------------------------------------
                                                                 *sqmeow-keymaps*
 Every mapping the plugin makes.
-
-One table, keyed by surface and then by action name. It is the only source: the mappings that
-get applied, the `?` cheatsheet, and the help file all read from here, so none of the three can
-drift from the others.
-
-The plugin takes no key outside its own windows. Mappings are buffer-local, applied when a
-surface's buffer is created. Anything worth putting on a global key is offered as a `<Plug>`
-mapping instead, for the user to bind or ignore.
-
 
 ------------------------------------------------------------------------------
 Class ~
@@ -401,12 +281,6 @@ Fields ~
                                                         *sqmeow.keymap.defaults*
                             `sqmeow.keymap.defaults`
 Built-in mappings, per surface.
-
-A list rather than a table, so the cheatsheet and the help file present them in a deliberate
-order rather than whatever order Lua happens to iterate in.
-
-What follows is generated from this table when the help file is built, so it is the mappings
-the plugin actually applies rather than a second list that can fall behind them.
 drawer
  <CR>, o   Expand or collapse the node
  p         Show the first page of this relation
@@ -461,9 +335,6 @@ Type ~
                                                             *sqmeow.keymap.plug*
                               `sqmeow.keymap.plug`
 Actions that are worth a key of the user's own choosing.
-
-Defined globally as `<Plug>` mappings and bound to nothing. Offering them this way is what lets
-the plugin be convenient without taking a key someone else is using.
 Type ~
 `(table<string, { desc: string, run: fun() }>)`
 
@@ -471,23 +342,15 @@ Type ~
                                                        *sqmeow.keymap.resolve()*
                        `sqmeow.keymap.resolve`({surface})
 The mappings for one surface, after the user's overrides.
-
-Overriding one action does not require restating the rest, because the merge is by action name
-rather than by position.
-
 Parameters ~
 {surface} `(string)` 'drawer' or 'result'.
 Return ~
-`(sqmeow.ResolvedKeymap[])` # In presentation order. An action the user disabled has no keys.
+`(sqmeow.ResolvedKeymap[])` # In presentation order.
 
 ------------------------------------------------------------------------------
                                                       *sqmeow.keymap.problems()*
                            `sqmeow.keymap.problems`()
 Overrides that name an action the surface does not have.
-
-Reported by `:checkhealth` rather than silently ignored: a mistyped action name would otherwise
-look exactly like a mapping that refuses to work.
-
 Return ~
 `(string[])`
 
@@ -495,21 +358,15 @@ Return ~
                                                          *sqmeow.keymap.apply()*
                `sqmeow.keymap.apply`({surface}, {buf}, {actions})
 Bind a surface's mappings in one buffer.
-
 Parameters ~
 {surface} `(string)`
 {buf} `(integer)`
-{actions} `(table<string, fun()>)` Action name to what it does. An action with no function is
-skipped, so a surface can leave one unimplemented without breaking the rest.
+{actions} `(table<string, fun()>)` Action name to what it does.
 
 ------------------------------------------------------------------------------
                                                        *sqmeow.keymap.summary()*
                            `sqmeow.keymap.summary`()
 Every surface's mappings, as lines, for the help file.
-
-The same lines the `?` cheatsheet shows, so the two cannot disagree and neither can disagree
-with what is bound: all three read `M.resolve`.
-
 Return ~
 `(string[])`
 
@@ -524,22 +381,13 @@ Define the `<Plug>` mappings.
                                                                     *sqmeow-api*
 The public interface.
 
-Everything a user or another plugin should call lives here. The modules underneath are free to
-change shape; this is the surface that is documented and kept stable.
-
-
 ------------------------------------------------------------------------------
                                                           *sqmeow.api.connect()*
                       `sqmeow.api.connect`({url}, {opts})
-Open a connection.
-
-Returns as soon as the engine has accepted the request. The connection is not usable until it
-reports success, which arrives as an event and is announced to the user.
-
+Open a connection. Returns once the engine accepts the request; success arrives as an event.
 Parameters ~
 {url} `(string)` A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
-{opts} `(table|nil)` Options: `name` for the label shown in the interface; `database` and
-`parent` open one database of the cluster that connection `parent` lists.
+{opts} `(table|nil)` `name` labels it; `database` and `parent` open one database of cluster `parent`.
 Return ~
 `(integer|nil)` id The connection id, or nil if the engine refused the request.
 Return ~
@@ -552,7 +400,6 @@ Usage ~
                                                     *sqmeow.api.connect_named()*
                        `sqmeow.api.connect_named`({name})
 Connect to a connection declared by a source.
-
 Parameters ~
 {name} `(string)` The name the source gave it.
 Return ~
@@ -564,10 +411,6 @@ Return ~
                                                         *sqmeow.api.available()*
                             `sqmeow.api.available`()
 Every connection the configured sources declare.
-
-Reading a source is cheap, and re-reading it means a file edited outside the editor is picked
-up without a restart.
-
 Return ~
 `(sqmeow.ConnectionSpec[])` connections
 Return ~
@@ -577,7 +420,6 @@ Return ~
                                                              *sqmeow.api.save()*
                         `sqmeow.api.save`({name}, {url})
 Save a connection to the file source.
-
 Parameters ~
 {name} `(string)`
 {url} `(string)`
@@ -587,12 +429,7 @@ Return ~
 ------------------------------------------------------------------------------
                                                              *sqmeow.api.edit()*
                       `sqmeow.api.edit`({name}, {changes})
-Change what a saved connection is called, or where it points.
-
-The saved entry and any open connection under that name are changed together, since a user who
-renames one of them meant both: they are one connection as far as anyone but this plugin is
-concerned.
-
+Change a saved connection's name or URL, and rename its open connection to match.
 Parameters ~
 {name} `(string)` The name it is saved under now.
 {changes} `(table)` `name` and `url`; either may be left out to keep what is there.
@@ -606,10 +443,6 @@ Usage ~
                                                            *sqmeow.api.rename()*
                        `sqmeow.api.rename`({id}, {name})
 Change what an open connection is called.
-
-The name is the plugin's own: the engine keeps one for its log, and everything the user sees is
-drawn from here. So this is a local change, and nothing has to be reconnected for it.
-
 Parameters ~
 {id} `(integer)`
 {name} `(string)`
@@ -620,7 +453,6 @@ Return ~
                                                        *sqmeow.api.disconnect()*
                          `sqmeow.api.disconnect`({id})
 Close a connection.
-
 Parameters ~
 {id} `(integer|nil)` Defaults to the current connection.
 
@@ -628,11 +460,6 @@ Parameters ~
                                                               *sqmeow.api.use()*
                              `sqmeow.api.use`({id})
 Make a connection the active one.
-
-The active connection is what a query runs on when the buffer it came from does not name one of
-its own. Changing it redraws everything that says which database is in play, because a switch
-nobody can see is the same as no switch at all.
-
 Parameters ~
 {id} `(integer)`
 Return ~
@@ -642,14 +469,6 @@ Return ~
                                                            *sqmeow.api.target()*
                            `sqmeow.api.target`({buf})
 Which connection a query from this buffer belongs to.
-
-A scratchpad is opened for one database and named after it, so it runs there whatever else is
-active. Anything else runs on the active connection.
-
-A buffer bound to a database that is not open is an error rather than a reason to fall back:
-running `staging.sql` against production because staging happens to be closed is the mistake
-this whole idea exists to prevent.
-
 Parameters ~
 {buf} `(integer|nil)` Defaults to the current buffer.
 Return ~
@@ -661,16 +480,9 @@ Return ~
                                                           *sqmeow.api.execute()*
                       `sqmeow.api.execute`({sql}, {opts})
 Run SQL on the current connection.
-
-Returns as soon as the engine has accepted the query, with the id that identifies it. Rows
-arrive in the result buffer later, written by the engine itself.
-
 Parameters ~
-{sql} `(string)` One or more statements. Only the last one's rows are shown.
-{opts} `(table|nil)` `line` runs only the statement at that zero-based line; `source_buf` is
-the buffer an error should be reported in; `history = false` keeps the query out of the log,
-for SQL the plugin wrote rather than the user; `conn_id` runs on that connection rather than the
-one the buffer belongs to.
+{sql} `(string)` One or more statements.
+{opts} `(table|nil)` `line` runs only the statement at that zero-based line.
 Return ~
 `(integer|nil)` call_id
 Return ~
@@ -687,11 +499,6 @@ Return ~
                                                 *sqmeow.api.execute_statement()*
                         `sqmeow.api.execute_statement`()
 Run the statement the cursor is in.
-
-The whole buffer is sent along with the cursor line, and the engine picks the statement, using
-the same splitter that would have split the buffer. Doing it that way means there is one answer
-to what counts as a statement, rather than one here and a different one there.
-
 Return ~
 `(integer|nil)` call_id
 
@@ -699,9 +506,6 @@ Return ~
                                                 *sqmeow.api.execute_selection()*
                         `sqmeow.api.execute_selection`()
 Run the most recent visual selection.
-
-Reads the `<` and `>` marks, so it works both from a `:` command on a selection and from a
-mapping that leaves visual mode first.
 Return ~
 `(integer|nil)` call_id
 
@@ -709,7 +513,6 @@ Return ~
                                                            *sqmeow.api.cancel()*
                              `sqmeow.api.cancel`()
 Stop the running query.
-
 Return ~
 `(boolean)` stopped Whether there was a query to stop.
 
@@ -738,8 +541,6 @@ Show the last page of the current result.
                           `sqmeow.api.toggle_float`()
 Show the result in a float, or put it back in its split.
 
-A bigger window on the same grid, with the same keys.
-
 ------------------------------------------------------------------------------
                                                            *sqmeow.api.review()*
                              `sqmeow.api.review`()
@@ -748,15 +549,11 @@ Show the statements the changes staged in the result plan into, to apply with `<
 ------------------------------------------------------------------------------
                                                              *sqmeow.api.view()*
                            `sqmeow.api.view`({view})
-Filter and sort the current result's rows.
-
-The engine does it over the rows it holds, so nothing is asked of the database again. Columns
-are zero-based; a filter without one searches every column.
-
+Filter and sort the current result's rows in the engine. Columns are zero-based; a filter
+without one searches every column.
 Parameters ~
 {view} `({ filters: { column: integer|nil, op: string, value: string|nil }[]|nil, sort: { column: integer, descending: boolean|nil }[]|nil })`
-`op` is one of `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `starts_with`, `is_null`,
-`not_null`. Either list left out is kept as it is.
+`op`: `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `starts_with`, `is_null`, `not_null`.
 Usage ~
 >lua
   require('sqmeow.api').view({ filters = { { column = 1, op = 'contains', value = 'al' } } })
@@ -775,9 +572,6 @@ Close the result window.
                                                            *sqmeow.api.reopen()*
                          `sqmeow.api.reopen`({call_id})
 Put a past result back in the result window.
-
-Nothing is run again: the engine still holds the rows, so this only asks it to repaint them.
-
 Parameters ~
 {call_id} `(integer)` From the query log.
 
@@ -785,10 +579,6 @@ Parameters ~
                                                           *sqmeow.api.restore()*
                          `sqmeow.api.restore`({entry})
 Show a logged result the engine no longer holds, from the copy saved beside the log.
-
-Nothing is run. The engine reads the file and reports it as `call:state`, the way it reports a
-query, so the grid, paging, the row detail and exports all work on it as they did when it ran.
-
 Parameters ~
 {entry} `(table)` From the query log, with a saved result.
 Return ~
@@ -800,26 +590,15 @@ Return ~
                                                            *sqmeow.api.export()*
                           `sqmeow.api.export`({opts})
 Write the current result to a file.
-
-Without a `path`, asks for the format, file and whether to write a header in a dialog that
-shows the query being exported.
-
 Parameters ~
-{opts} `(table|nil)` `path` skips the dialog; `clipboard = true` skips it too and copies instead;
-`format` is 'csv' or 'json'; `headers` defaults to true; `offset` and `limit` write that many rows
-from that one, zero-based, rather than all rows. Rows are written as the grid shows them:
-filtered, sorted, and without the hidden columns.
+{opts} `(table|nil)` `path` skips the dialog.
 
 ------------------------------------------------------------------------------
                                                        *sqmeow.api.scratchpad()*
                      `sqmeow.api.scratchpad`({connection})
 Create a scratchpad for a connection, asking what to call it.
-
-Asked rather than named for the user: a connection can have any number of scratchpads, and only
-the person about to write in one knows what it is for.
-
 Parameters ~
-{connection} `(string|nil)` Connection name. Defaults to the current connection.
+{connection} `(string|nil)` Connection name.
 
 ------------------------------------------------------------------------------
                                                       *sqmeow.api.open_drawer()*
@@ -835,10 +614,6 @@ Hide the schema drawer.
                                                          *sqmeow.api.open_all()*
                             `sqmeow.api.open_all`()
 Open the drawer and the result window.
-
-What `:Sqmeow` on its own does. No scratchpad is opened: scratchpads are created when someone
-asks for one, and the window beside the drawer keeps whatever it was showing. The drawer takes
-the left and the result the strip along the bottom.
 
 ------------------------------------------------------------------------------
                                                            *sqmeow.api.toggle()*

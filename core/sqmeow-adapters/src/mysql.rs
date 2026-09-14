@@ -1,8 +1,4 @@
 //! The MySQL and MariaDB adapter.
-//!
-//! MySQL distinguishes signed from unsigned in the type name, and an unsigned `BIGINT` reaches
-//! past what an `i64` holds. Those decode to an exact decimal rather than being silently wrapped
-//! into a negative number.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -37,13 +33,9 @@ pub struct MySqlAdapter {
 
 impl MySqlAdapter {
     /// Open a connection.
-    ///
-    /// One pooled connection, so a transaction, a `SET` or a temporary table is still there for
-    /// the next statement the user runs.
     pub async fn connect(url: &str) -> Result<Self> {
         // Preparing a statement is how a result learns its columns, and a cached statement keeps
-        // the columns its table had when it was first prepared, so after an `ALTER TABLE` a
-        // `select *` would leave the new column out.
+        // the columns its table had when it was first prepared.
         let options = MySqlConnectOptions::from_str(url)
             .map_err(Error::driver)?
             .statement_cache_capacity(0);
@@ -52,8 +44,7 @@ impl MySqlAdapter {
             let connection_id = connection_id.clone();
             MySqlPoolOptions::new()
                 .max_connections(1)
-                // sqlx retries a refused connection until this expires. A mistyped host should
-                // say so while the user still remembers typing it, not half a minute later.
+                // sqlx retries a refused connection until this expires.
                 .acquire_timeout(crate::CONNECT_TIMEOUT)
                 // Read on every connect, since the pool opens a new session after losing one.
                 .after_connect(move |connection, _| {
@@ -80,9 +71,6 @@ impl MySqlAdapter {
     }
 
     /// Stop the query the session is running, from a connection of its own.
-    ///
-    /// Dropping a query only stops reading its rows. The server goes on running it, and the session
-    /// cannot take the next statement until it ends, which for a long query is a long wait.
     async fn stop_running(&self) {
         let id = self.connection_id.load(Ordering::Relaxed);
         let stop = async {
@@ -108,7 +96,7 @@ impl MySqlAdapter {
         let mut columns = result_columns(prepared.columns());
         let origins = origins(prepared.columns());
         // MySQL reports the table and column a result column really came from in the column
-        // definitions it sends with every result, so the source costs nothing to read.
+        // definitions it sends with every result.
         self.keys
             .mark(&origins, &mut columns, |table| self.read_keys(table))
             .await;
@@ -117,12 +105,8 @@ impl MySqlAdapter {
     }
 
     /// Ask `information_schema` which columns of one table are keys.
-    ///
-    /// A failure answers with nothing rather than an error: an icon is worth one query, and it is
-    /// not worth failing the result the user actually asked for.
     async fn read_keys(&self, origin: String) -> HashMap<String, KeyKind> {
-        // MySQL qualifies the table with its schema when it knows one, so a cross-database join is
-        // resolved against the right database rather than against a same-named table here.
+        // MySQL qualifies the table with its schema when it knows one.
         let (schema, table) = match origin.rsplit_once('.') {
             Some((schema, table)) => (Some(schema), table),
             None => (None, origin.as_str()),
@@ -166,9 +150,6 @@ impl MySqlAdapter {
 }
 
 /// Which key an `information_schema` row says a column is.
-///
-/// The primary key wins over a foreign one, matching every other adapter: a column that is both is
-/// more usefully described as the one rows are identified by.
 fn key_kind(row: &MySqlRow) -> KeyKind {
     // Both come back as integers: MySQL has no boolean, and a comparison yields 1 or 0.
     let flag = |name| row.try_get::<i64, _>(name).unwrap_or(0) != 0;
@@ -399,9 +380,7 @@ fn decode_cell(row: &MySqlRow, index: usize) -> Cell {
             &type_name,
             |value: types::chrono::NaiveDateTime| Cell::Timestamp(value.to_string()),
         ),
-        // sqlx refuses to read a TIMESTAMP as a naive date and time, only as a zoned one. It is a
-        // zoned one: MySQL stores it as UTC and converts to the session's zone, which sqlx sets to
-        // `+00:00` on connect, so it is shown with its zone the way a Postgres `timestamptz` is.
+        // sqlx refuses to read a TIMESTAMP as a naive date and time, only as a zoned one.
         "TIMESTAMP" => scalar(
             row,
             index,
@@ -419,10 +398,6 @@ fn decode_cell(row: &MySqlRow, index: usize) -> Cell {
 }
 
 /// Bytes that read as text, shown as text.
-///
-/// MySQL marks a column binary when its collation is, and the data dictionary names things in a
-/// binary collation, so `SHOW TABLES`, `DESCRIBE` and `information_schema` answer in "binary"
-/// columns holding plain names. sqlx keeps the collation that tells the two apart to itself.
 // ponytail: a real BLOB holding printable UTF-8 shows as text too; check for collation 63 (binary)
 // instead if sqlx ever exposes it.
 fn binary(bytes: Vec<u8>) -> Cell {
@@ -458,8 +433,7 @@ fn decode_unsigned(row: &MySqlRow, index: usize, base: &str, type_name: &str) ->
         "TINYINT" => scalar(row, index, type_name, |value: u8| Cell::Int(value.into())),
         "SMALLINT" => scalar(row, index, type_name, |value: u16| Cell::Int(value.into())),
         "INT" | "MEDIUMINT" => scalar(row, index, type_name, |value: u32| Cell::Int(value.into())),
-        // An unsigned BIGINT reaches past i64. Keeping it exact matters more than keeping it an
-        // integer, so anything that does not fit becomes a decimal rather than a wrong number.
+        // An unsigned BIGINT reaches past i64.
         "BIGINT" => scalar(row, index, type_name, |value: u64| {
             i64::try_from(value).map_or_else(|_| Cell::Decimal(value.to_string()), Cell::Int)
         }),

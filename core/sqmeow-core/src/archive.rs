@@ -1,14 +1,4 @@
-//! Keeping a finished result on disk, so the query log can show it again after a restart.
-//!
-//! The plugin decides which results are worth keeping and where each one goes; this only knows
-//! how to write one and read it back. The file is msgpack, the same encoding the channel already
-//! speaks: a header map describing the result, followed by one array per row. Rows are written one
-//! at a time rather than as a single array, so saving a large result never builds a second copy of
-//! it in memory first.
-//!
-//! Cells keep their kind. A number is stored as a number and text as text, and every other kind is
-//! a small array led by its name, so a timestamp read back is a timestamp again and draws, aligns
-//! and exports exactly as it did when the query ran.
+//! Keeping a finished result on disk.
 
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -27,10 +17,6 @@ const FORMAT: &str = "sqmeow-result";
 const VERSION: u64 = 1;
 
 /// Save a result.
-///
-/// Written to a temporary file and renamed into place, so a reader never sees half of one and a
-/// crash part way through leaves no file claiming to be a result. Readable by its owner only,
-/// because the rows are whatever the database handed back, and that can be anything.
 pub fn write(path: &Path, result: &ResultSet) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -135,8 +121,7 @@ fn encode(out: &mut impl Write, value: &Value) -> io::Result<()> {
 }
 
 fn decode(input: &mut impl Read) -> Result<Value, String> {
-    // A file that ends early is the one failure worth naming: it is what an interrupted write or a
-    // full disk leaves behind.
+    // A file that ends early is the one failure worth naming.
     rmpv::decode::read_value(input).map_err(|_| "the saved result is incomplete".to_string())
 }
 
@@ -183,8 +168,7 @@ fn column(value: &Value) -> Result<Column, String> {
         .and_then(Value::as_str)
         .unwrap_or_default();
 
-    // Kept as it was saved rather than worked out again, so a result looks the same after a
-    // restart even if a later version draws the line between classes somewhere else.
+    // Kept as it was saved rather than worked out again.
     let mut column = Column::new(name, type_name);
     if let Some(class) = lookup(value, "class")
         .and_then(Value::as_str)

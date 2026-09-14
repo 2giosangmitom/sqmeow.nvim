@@ -27,8 +27,7 @@ end
 
 T['describe'] = MiniTest.new_set({
   hooks = {
-    -- `describe` reads the page size out of the configuration, so a case that changed it must not
-    -- leave that behind for the next one.
+    -- `describe` reads the page size out of the configuration.
     post_case = function()
       sqmeow.setup({})
     end,
@@ -88,10 +87,7 @@ T['describe']['flags a truncated result'] = function()
 end
 
 T['describe']['shows the page only when there is more than one'] = function()
-  -- Which page is showing is no longer something the summary carries: the engine does not know how
-  -- tall this window is, so the count is worked out here from the row total and the page size.
-  -- That a *particular* page is named is covered end to end in `test_query.lua`, where paging is
-  -- real; here only the page size decides whether there is more than one page at all.
+  -- Which page is showing is no longer something the summary carries.
   sqmeow.setup({ ui = { result = { page_size = 100 } } })
 
   eq(result.describe({ state = 'done', rows = 5, elapsed_ms = 1 }), '5 rows  ' .. took('1ms'))
@@ -149,9 +145,7 @@ T['buffer']['maps its keys buffer-locally, with descriptions'] = function()
   end
 end
 
--- The display-column arithmetic these tests used to cover is gone: nui records where it put every
--- cell, so `current_cell` asks it rather than measuring the line under the cursor. What is left to
--- test here is the paging arithmetic, which is this side's own.
+-- The display-column arithmetic these tests used to cover is gone.
 
 T['pages'] = MiniTest.new_set({
   hooks = {

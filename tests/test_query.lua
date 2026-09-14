@@ -1,6 +1,5 @@
 local MiniTest = require('mini.test')
--- The whole stack, end to end: the plugin asks, the engine queries SQLite, the engine writes the
--- grid into the buffer. This is the test that catches a break anywhere along that path.
+-- The whole stack, end to end.
 
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
@@ -17,10 +16,6 @@ local header = helpers.result_header
 local lines = helpers.result_rows
 
 --- Turn a page and wait for the engine to repaint.
---- Turn a page and answer with where the grid ended up.
----
---- Where a page starts is the window's own business now, not something the engine reports, so it is
---- read back from the grid rather than waited for on the summary.
 local function page(action)
   action()
   local current, total = result.pages(state.call)
@@ -28,10 +23,6 @@ local function page(action)
 end
 
 --- Apply the configuration this suite runs on.
----
---- Column icons are off by default here, and turned on only by the group that tests them: every
---- other case asserts on exact grid lines, and a glyph before each name would make every one of
---- those expectations harder to read without saying anything about the path under test.
 local function setup(opts)
   require('sqmeow').setup(vim.tbl_deep_extend('force', {
     ui = { result = { page_size = 4, column_icons = false } },
@@ -216,8 +207,7 @@ T['paging']['stops at the first page going back'] = function()
 end
 
 T['paging']['keeps column widths steady across pages'] = function()
-  -- The whole reason the engine measures over every row rather than over the page on screen: a
-  -- column sized from the first four rows would move when the fifth turned out to be wider.
+  -- The whole reason the engine measures over every row rather than over the page on screen.
   local first = header()
   page(api.next_page)
   eq(header(), first)
@@ -265,18 +255,14 @@ end
 
 T['column icons']['does not call an expression a key'] = function()
   run('select count(*) as total from people')
-  -- `count(*)` comes from no table at all, so whatever its type is classified as, it cannot be
-  -- anyone's primary or foreign key. This is the case that would break if a column's origin were
-  -- guessed from its name rather than read from the statement.
+  -- `count(*)` comes from no table at all.
   helpers.absent(header()[1], 'K')
   helpers.absent(header()[1], 'k')
 end
 
 T['column icons']['does not widen a column its values already fill'] = function()
   run('select avatar from people order by id')
-  -- "avatar" is six wide and `0xdeadbeef` ten, so the glyph and its space fit inside what the
-  -- values had already claimed. An icon is free wherever a column is wider than its own name, which
-  -- in a real result is most of them.
+  -- "avatar" is six wide and `0xdeadbeef` ten.
   eq(header()[1], ' y avatar')
 end
 
@@ -335,9 +321,8 @@ T['column icons']['draws every line of its own in one group'] = function()
     end, marks_on(line))
   end
 
-  -- The rule under the names and the separators between the columns are lines the grid draws
-  -- itself rather than anything the result said. One group for all of them, so a colourscheme
-  -- cannot end up painting the horizontal one differently from the vertical ones.
+  -- The rule under the names and the separators between the columns are lines the grid draws itself
+  -- rather than anything the result said.
   eq(groups(2), { 'SqmeowRule' })
   eq(vim.tbl_contains(groups(1), 'SqmeowRule'), true)
   eq(vim.tbl_contains(groups(3), 'SqmeowRule'), true)
@@ -355,8 +340,7 @@ T['column icons']['colours the separator glyph and not the gap around it'] = fun
 
   assert(separator, 'the separator should be marked')
   local line = vim.api.nvim_buf_get_lines(result.buffer(), 2, 3, false)[1]
-  -- A colourscheme that gives the group a background should paint the glyph, not the space beside
-  -- it, so the mark covers exactly the one character.
+  -- A group background paints the glyph, not the space beside it.
   eq(line:sub(separator.from + 1, separator.to), '│')
 end
 
@@ -536,8 +520,7 @@ T['exporting']['the dialog follows the format and asks before overwriting'] = fu
   vim.wait(100)
   eq(vim.fn.readfile(path), { 'old' })
 
-  -- The second save with the same answers is the confirmation. Waited on until the new contents
-  -- parse, because the file is empty for a moment while the engine writes it.
+  -- The second save with the same answers is the confirmation.
   vim.api.nvim_feedkeys(vim.keycode('<C-s>'), 'mx', false)
   local decoded
   helpers.wait_for('the file should parse', function()
@@ -632,8 +615,7 @@ T['choosing a connection'] = MiniTest.new_set({
     post_case = function()
       api.disconnect(second)
       state.current = primary
-      -- Back to a buffer that names no connection, so one case cannot decide where the next
-      -- one's query goes. Earlier cases may have wiped the one the suite started in.
+      -- Back to a buffer that names no connection.
       if not vim.api.nvim_buf_is_valid(home) then
         home = vim.api.nvim_create_buf(false, true)
       end

@@ -1,23 +1,4 @@
 --- The result grid.
----
---- Built here rather than in the engine. The engine holds the rows and hands over the slice this
---- window is showing, along with what each column holds and how wide its widest value is; laying
---- that out is this module's work, and `nui.line` and `nui.text` assemble the highlighted lines.
----
---- Laid out here rather than with `nui.table`, which draws every other structured thing in the
---- plugin. A nui table is either boxed in, with a rule after every single row, or borderless with
---- no column separators and no rule at all; the characters cannot separate those cases, because
---- one `hor` slot draws the top rule, the header rule and each row's rule alike, and one `ver`
---- slot is both the column separator and the outer edge. The grid wants a third thing: `" │ "`
---- between columns, one rule under the names, and nothing around the outside.
----
---- Columns are sized from the measurement the engine took over the *whole* result, not from the
---- page on screen. A column sized from one page would change width when the user turned to the
---- next, and the grid would appear to shift under them.
----
---- The same buffer is shown either in the split along the bottom or in a nui float, never both,
---- and every key works in either. Nothing is written as it is edited: changes are staged, and only
---- a review applies them, so a stray key costs an undo rather than a row.
 
 local M = {}
 
@@ -28,32 +9,21 @@ local win = nil
 --- The float the grid is in, when it is not in its split.
 local popup = nil
 
---- The rows this window is showing, where they start in the view, and which row of the result
---- each one is.
----
---- Held because the grid is drawn from them: paging, resizing and reopening all redraw from what is
---- here rather than asking the engine again for rows it already sent. The indices matter once a
---- view is filtered or sorted, when the tenth row on screen need not be the tenth row of the result.
+--- The rows on screen, their offset in the view, and their result indices.
 local page = { offset = 0, rows = {}, indices = {} }
 
---- How each result is shown, by call id: the `filters` and `sort` the engine applies, and the
---- columns `hidden` from the grid, which the engine never hears about. Kept per result, so a result
---- shown again from the log is shown as it was left.
+--- How each result is shown, by call id.
 local specs = {}
 
 --- The call the grid was last drawn for, which tells a new result from the same one redrawn.
 local drawn = nil
---- A view to put on the next result, and the call it is waiting for. Set before a result's query
---- runs again after an apply, so the rows come back filtered and sorted as they went.
+--- A view to put on the next result, and the call it is waiting for.
 local carried, pending = nil, nil
 
 --- How many lines the grid opens with before the first row: the column names, and the rule.
 local HEADER_LINES = 2
 
 --- Where the grid puts its highlights.
----
---- Named rather than anonymous, so a colourscheme, a test or anything else looking for the grid's
---- marks can find them.
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow')
 
 --- How many rows fit in one page.
@@ -90,10 +60,6 @@ function M.format_duration(ms)
 end
 
 --- How many pages a result has, and which one is showing.
----
---- Worked out here rather than sent by the engine: the engine does not know how tall this window
---- is or where the user has scrolled to, and two windows on one result need not agree.
----
 ---@param summary sqmeow.CallSummary|nil
 ---@return integer page
 ---@return integer pages
@@ -105,7 +71,6 @@ function M.pages(summary)
 end
 
 --- Describe a result for the winbar.
----
 ---@param summary sqmeow.CallSummary|nil
 ---@return string
 ---@param highlight boolean|nil Colour the icons with winbar markup, for drawing in a winbar.
@@ -218,12 +183,6 @@ local function nui()
 end
 
 --- What a cell reads as in the grid.
----
---- The engine sends values as the types they really are, so `NULL` arrives as `vim.NIL` and a
---- number as a number. Everything is turned into text here, because that is a presentation
---- question: what `NULL` looks like is the user's to set. The engine flattens line breaks in what
---- it sends, and a value typed into the cell editor is flattened the same way here.
----
 ---@param value any
 ---@param null_text string
 ---@return string text
@@ -240,10 +199,6 @@ local function cell_text(value, null_text)
 end
 
 --- Where each display column starts, how wide it is, and which result column it shows.
----
---- Recorded as the grid is built rather than measured afterwards: the layout is decided here, so
---- where each column starts is already known and nothing has to be counted back out of the text.
----
 ---@type { start: integer, width: integer, column: integer }[]
 local spans = {}
 
@@ -253,10 +208,6 @@ local function glyphs()
 end
 
 --- Cut text to `limit` display columns, marking it when anything was dropped.
----
---- The marker takes its own room out of the budget, so the result never exceeds the limit. A limit
---- of zero yields nothing rather than a lone marker.
----
 ---@param text string
 ---@param limit integer
 ---@param marker string
@@ -285,9 +236,7 @@ local function truncate(text, limit, marker)
   return table.concat(out) .. marker
 end
 
---- What each shown column of a result is drawn as: which it is, how wide, how aligned, and what
---- marks it.
----
+--- What each shown column of a result is drawn as.
 ---@param columns table[] As the engine described them.
 ---@param hidden table<integer, boolean> Zero-based columns left out.
 ---@return table[]
@@ -301,8 +250,7 @@ local function measure(columns, hidden)
   local measured = {}
   for index, column in ipairs(columns) do
     if not hidden[index - 1] then
-      -- The icon says what the column holds, or which key it is. Its own piece of the header, so
-      -- a colourscheme can reach it without touching the name beside it.
+      -- The icon says what the column holds, or which key it is.
       local icon, icon_group
       if config.ui.result.column_icons then
         local glyph, group = icons.get(column.key or column.class or 'unknown')
@@ -314,9 +262,7 @@ local function measure(columns, hidden)
       local name = truncate(column.name, cap, glyphs().ellipsis)
       local header = vim.api.nvim_strwidth(name)
       if icon then
-        -- The icon is chrome rather than content, so it is added on top of the cap instead of
-        -- competing with the value for it: capping the pair together would narrow the values of
-        -- every column to pay for a glyph. A column whose values are already wider pays nothing.
+        -- The icon is chrome rather than content.
         header = header + vim.api.nvim_strwidth(icon) + 1
       end
 
@@ -350,10 +296,6 @@ local function segments_width(segments)
 end
 
 --- Build one line of the grid, and record where each column landed.
----
---- A cell is a list of `{ text, group }` pieces, so the header's glyph can be coloured apart from
---- the name beside it while still being one cell as far as the layout is concerned.
----
 ---@param cells table[][] One list of pieces per column.
 ---@param measured table[]
 ---@param align boolean Whether to right-align the columns that hold numbers.
@@ -369,21 +311,16 @@ local function build_row(grid, cells, measured, align)
   for index, column in ipairs(measured) do
     local segments = cells[index] or {}
     if index > 1 then
-      -- The same group as the rule under the header: both are the grid's own lines rather than
-      -- anything the result said, and one group for the pair is what stops them drifting apart.
-      -- The spaces either side stay ungrouped, so a colourscheme that gives the group a background
-      -- paints the glyph and not the gap around it.
+      -- The same group as the rule under the header.
       line:append(' ')
       line:append(parts.Text(vertical, 'SqmeowRule'))
-      -- The space after the glyph is room before a value. The last column holding nothing needs
-      -- none, and leaving it would end the line in a space.
+      -- The space after the glyph is room before a value.
       if not (index == #measured and segments_width(segments) == 0) then
         line:append(' ')
       end
       at = at + separator_width
     end
-    -- Where the column sits, in display columns. Recorded as the line is built, so nothing has to
-    -- be measured back out of the text afterwards.
+    -- Where the column sits, in display columns.
     spans[index] = { start = at, width = column.width, column = column.index }
 
     local room = column.width - segments_width(segments)
@@ -397,16 +334,14 @@ local function build_row(grid, cells, measured, align)
     end
 
     local right = align and column.numeric
-    -- The padding carries no group, so a highlight only ever covers the value and not the empty
-    -- room beside it.
+    -- The padding carries no group.
     if right and room > 0 then
       line:append((' '):rep(room))
     end
     for _, segment in ipairs(segments) do
       line:append(segment[2] and parts.Text(segment[1], segment[2]) or parts.Text(segment[1]))
     end
-    -- Nothing pads the last column: the room past it holds nothing, and a highlight on a value
-    -- ending there must not be left pointing past a line cut short.
+    -- Nothing pads the last column.
     if not right and room > 0 and index < #measured then
       line:append((' '):rep(room))
     end
@@ -436,12 +371,6 @@ local function build_rule(grid, measured)
 end
 
 --- How a result that is a query plan reads as lines, or nil for any other result.
----
---- A plan is the answer to an `EXPLAIN` the user ran. Squeezed into a grid column it is cut short
---- after a few words, so the shapes that are plain text are drawn as text: a plan of one column,
---- which is PostgreSQL's and MySQL's, and SQLite's `EXPLAIN QUERY PLAN`, whose rows name the row
---- they sit under. A plan laid out as a table, such as MySQL's plain `EXPLAIN`, is a grid already.
----
 ---@param call table
 ---@return string[]|nil
 local function plan_lines(call)
@@ -468,8 +397,7 @@ local function plan_lines(call)
     return nil
   end
 
-  -- A plan in one value, such as MySQL's `FORMAT=TREE`, spans lines the grid's rows flatten, so it
-  -- is read back whole.
+  -- A plan in one value, such as MySQL's `FORMAT=TREE`, spans lines the grid's rows flatten.
   if call.rows == 1 then
     local row = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = 0 })
     if row and row[1] and not row[1].is_null then
@@ -493,8 +421,7 @@ local function draw()
     return utils.notify(err, vim.log.levels.ERROR)
   end
 
-  -- Read once per draw rather than once per row: a page of five hundred rows would otherwise load
-  -- nui, read the configuration and measure the separator five hundred times over.
+  -- Read once per draw rather than once per row.
   local grid = { parts = parts, marks = glyphs() }
   grid.separator_width = vim.api.nvim_strwidth(grid.marks.vertical) + 2
 
@@ -612,7 +539,6 @@ function M.redraw()
 end
 
 --- Ask the engine for a slice of the current result and draw it.
----
 ---@param offset integer Where in the view the page should start.
 ---@return boolean drawn
 function M.show_page(offset)
@@ -624,8 +550,7 @@ function M.show_page(offset)
 
   local size = page_size()
   local total = call.view_rows or call.rows or 0
-  -- Past either end settles on the last or first page rather than emptying the view, which is what
-  -- `L` at the end of a result should do.
+  -- Past either end settles on the last or first page rather than emptying the view.
   local last = math.max(math.ceil(total / size) - 1, 0) * size
   offset = math.max(math.min(offset, last), 0)
 
@@ -649,9 +574,6 @@ function M.show_page(offset)
 end
 
 --- Ask the engine to filter and sort the current result as its view says.
----
---- The rows arrive later, with `call:view`, which shows the first page of them.
----
 ---@return boolean sent
 function M.send_view()
   local call = require('sqmeow.state').call
@@ -690,7 +612,6 @@ function M.carry_view()
 end
 
 --- Draw a result from its beginning.
----
 ---@param summary sqmeow.CallSummary|nil
 function M.render(summary)
   page = { offset = 0, rows = {}, indices = {} }
@@ -737,12 +658,6 @@ function M.offset()
   return page.offset
 end
 
---- How many rows the page on screen holds.
----@return integer
-function M.row_count()
-  return #page.rows
-end
-
 --- The columns the grid shows, zero-based and in order, or nil when none is hidden.
 ---@return integer[]|nil
 function M.visible_columns()
@@ -763,15 +678,12 @@ end
 
 -- -- where the cursor is ---------------------------------------------------------------------
 
--- One UTF-8 character at a time. The grid is aligned by display width, so a byte offset means
--- nothing on a line holding CJK text or an emoji, and walking characters is the only way to turn
--- one into the other.
+-- One UTF-8 character at a time.
 local function characters(line)
   return line:gmatch('[%z\1-\127\194-\244][\128-\191]*')
 end
 
 --- The byte offset of a display column on a line.
----
 ---@param line string
 ---@param display integer
 ---@return integer
@@ -790,9 +702,7 @@ function M.byte_at(line, display)
 end
 
 --- Which result column the cursor is in, wherever it is in the grid, header included.
----
----@return { column: integer, name: string, line: integer }|nil # `column` zero-based; `line` the
---- buffer line.
+---@return { column: integer, name: string, line: integer }|nil # `column` zero-based.
 local function cursor_column()
   local call = require('sqmeow.state').call
   if not (win and utils.shows(win, buf) and call and call.columns and #spans > 0) then
@@ -821,14 +731,7 @@ local function cursor_column()
 end
 
 --- Where the cursor is in the result, as a row and a column of the data.
----
---- The row is the result row the cursor line shows, which paging and a view both move away from
---- the line number. The column comes from where each one was put when the grid was built: a
---- cursor's byte position means nothing on a line of CJK text, but its display width does. On a
---- row staged to be added, `insert` says which one and there is no `row`.
----
----@return { row: integer|nil, insert: integer|nil, column: integer, name: string, value: any }|nil
---- # Nil when the cursor is on the header rather than on a row.
+---@return { row: integer|nil, insert: integer|nil, column: integer, name: string, value: any }|nil # Nil when the cursor is on the header rather than on a row.
 function M.current_cell()
   local found = cursor_column()
   if not found then
@@ -855,26 +758,7 @@ function M.current_cell()
   return nil
 end
 
---- The values of one column, as the page on screen holds them.
----
---- Read out of what was fetched rather than asked of the engine. These are for a preview beside a
---- list, so what the user is already looking at is the right answer and it costs no round trip.
----
----@param index integer One-based column.
----@param limit integer How many rows at most.
----@return string[]
-function M.column_values(index, limit)
-  local null_text = require('sqmeow.config').get().ui.result.null_text
-  local values = {}
-
-  for at = 1, math.min(limit, #page.rows) do
-    values[at] = (cell_text(page.rows[at][index], null_text))
-  end
-  return values
-end
-
 --- Put the cursor on a column, keeping the row it is already on.
----
 ---@param index integer One-based column.
 ---@return boolean moved
 function M.goto_column(index)
@@ -897,7 +781,6 @@ function M.goto_column(index)
 end
 
 --- The rows a visual selection covers, leaving visual mode.
----
 ---@return { row: integer|nil, insert: integer|nil }[]
 local function selected()
   local first, last = vim.fn.line('v'), vim.fn.line('.')
@@ -927,9 +810,6 @@ function M.is_float()
 end
 
 --- Show the grid in a float, moving it out of its split.
----
---- Only a bigger window on the same buffer, for looking at a wide result: every key does what it
---- does in the split, and nothing about the grid changes but the room it has.
 ---@return integer|nil win
 function M.open_float()
   if win and M.is_float() then
@@ -964,9 +844,7 @@ function M.open_float()
     bufnr = M.buffer(),
     border = {
       style = require('sqmeow.config').border(),
-      -- A title, as every dialog has. nui draws a border with text itself and falls back to a single
-      -- line when 'winborder' is empty; without text it leaves the border to Neovim, which draws
-      -- none, and the float would lose the edge the other dialogs have under the same setting.
+      -- A title, as every dialog has.
       text = { top = ' Result ', top_align = 'center' },
     },
     win_options = {
@@ -1017,8 +895,7 @@ local function editing()
   return true
 end
 
---- Order the rows by a column: `add` stacks it after the keys already there, and otherwise it
---- replaces them. Each press on a column goes ascending, descending, then off.
+--- Order the rows by a column.
 local function sort_by(column, add)
   local spec = M.spec()
   local at
@@ -1325,8 +1202,6 @@ end
 -- -- the window -----------------------------------------------------------------------------
 
 --- Show the result window, creating it if needed.
----
---- A grid already in its float stays there: the float is where the user put it.
 ---@return integer win
 function M.open()
   if win and utils.shows(win, buf) then
@@ -1384,15 +1259,13 @@ function M.is_open()
 end
 
 --- Update the line above the grid.
----
 ---@param summary sqmeow.CallSummary|nil
 function M.update_winbar(summary)
   if not utils.shows(win, buf) or not require('sqmeow.config').get().ui.winbar then
     return
   end
 
-  -- The connection the result came from, not the active one. They differ the moment someone
-  -- switches, and relabelling an old grid with a database it never touched is a lie.
+  -- The connection the result came from, not the active one.
   local state = require('sqmeow.state')
   ---@type { name: string, dialect: string|nil }|nil
   local connection = summary and summary.conn_id and state.connections[summary.conn_id]

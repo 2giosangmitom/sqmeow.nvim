@@ -1,8 +1,4 @@
 --- The databases the plugin can connect to, and what a connection to each one needs.
----
---- One list, read by the connection dialog to decide which fields to ask for, by the URL builder
---- to decide how to write them out, and by the health check to recognise a scheme. Adding a
---- database to the engine means adding a row here and nothing else on this side.
 
 local M = {}
 
@@ -12,10 +8,8 @@ local M = {}
 ---@field mask boolean|nil Drawn as asterisks, and never echoed anywhere else.
 ---@field optional boolean|nil Saving does not insist on a value.
 ---@field hint string|nil Shown in place of an empty value.
----@field options string[]|nil Chosen from rather than typed: editing the field cycles to its next
---- option. Wizard mode passes over it.
----@field checkbox boolean|nil Holds 'yes' or 'no', drawn as a box editing ticks or clears. Wizard mode
---- passes over it.
+---@field options string[]|nil Chosen from rather than typed: editing the field cycles to its next option.
+---@field checkbox boolean|nil Holds 'yes' or 'no', drawn as a box editing ticks or clears.
 ---@field enabled nil|fun(values: table<string, string>): boolean Dimmed and left alone while false.
 
 ---@class sqmeow.Dialect
@@ -61,9 +55,6 @@ M.list = {
     label = 'Redis, Valkey or Dragonfly',
     scheme = 'redis',
     port = 6379,
-    -- Not the server questions: a database is a number every server has a 0 of, a user exists only
-    -- once ACLs are set up, and there are no options to pass. TLS is asked instead, because for
-    -- Redis it is a scheme of its own rather than an option.
     fields = {
       { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
       { key = 'port', label = 'Port', optional = true, hint = '6379' },
@@ -78,8 +69,7 @@ M.list = {
     label = 'MongoDB',
     scheme = 'mongodb',
     port = 27017,
-    -- The server questions with an optional user, since a local server often has no auth at all.
-    -- SRV is asked rather than left to the options because, like Redis TLS, it is a scheme of its own.
+    -- The server questions with an optional user.
     fields = {
       { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
       { key = 'port', label = 'Port', optional = true, hint = '27017' },
@@ -113,7 +103,6 @@ local aliases = {
 }
 
 --- One dialect by the name the engine uses.
----
 ---@param id string
 ---@return sqmeow.Dialect|nil
 function M.get(id)
@@ -126,10 +115,6 @@ function M.get(id)
 end
 
 --- Which dialect a URL scheme belongs to.
----
---- Answers offline, before the engine has been started, which is what lets the health check and
---- the connection dialog both work on a URL nobody has connected with yet.
----
 ---@param scheme string
 ---@return string|nil id
 function M.from_scheme(scheme)
@@ -142,9 +127,6 @@ function M.from_scheme(scheme)
 end
 
 --- Which dialect a URL is for, without taking the rest of it apart.
----
---- Enough to draw the right icon beside a saved connection nobody has opened yet.
----
 ---@param url string
 ---@return string|nil id
 function M.of_url(url)
@@ -153,11 +135,6 @@ function M.of_url(url)
 end
 
 --- The fields a dialect asks for, with the name every connection carries at the top.
----
---- The name is asked for first and is never filled in for the user. It is what the drawer will
---- call this database from now on, so it is theirs to choose, and offering something assembled out
---- of the host and the database would put a piece of the connection string on screen.
----
 ---@param id string
 ---@return sqmeow.Field[]
 function M.fields(id)

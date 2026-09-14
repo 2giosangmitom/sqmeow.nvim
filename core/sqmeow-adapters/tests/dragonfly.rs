@@ -1,8 +1,4 @@
 //! The Redis adapter against a real Dragonfly server.
-//!
-//! Needs a server. `just db-up` starts one and `just test-rust` passes its URL in. Without
-//! `SQMEOW_TEST_DRAGONFLY_URL` these tests report that they were skipped rather than failing, so
-//! `cargo test` still works on a machine with no Docker.
 
 /// The server URL, or a note explaining why the test did nothing.
 macro_rules! server {

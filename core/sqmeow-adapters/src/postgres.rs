@@ -1,8 +1,4 @@
 //! The PostgreSQL adapter.
-//!
-//! Postgres speaks a binary protocol, so a value only becomes readable if something knows its
-//! type. Decoding therefore switches on the type name the server reported, and a type nothing here
-//! recognises becomes an `Unsupported` cell naming it, rather than failing the whole query.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -27,16 +23,8 @@ use crate::stream::{self, foreign_key, prepare, result_columns};
 pub struct PostgresAdapter {
     pool: PgPool,
     /// Which of a table's columns are keys, by table OID and attribute number.
-    ///
-    /// Looked up once per column and then held for the life of the connection. A result's columns
-    /// are almost always the same columns as the last result's, so the cache means running a query
-    /// twice costs one catalog lookup rather than two. It is emptied after any statement that may
-    /// change a table. A schema changed by another client still leaves an icon out of date, which
-    /// is a smaller price than a catalog round trip before every execution.
     keys: Mutex<HashMap<(Oid, i16), KeyKind>>,
     /// What a table is called, its columns by attribute number, and its primary key, by OID.
-    ///
-    /// Held until a statement that may change a table runs, as `keys` is, and for the same reason.
     relations: Mutex<HashMap<Oid, Relation>>,
     /// Whether the URL named no database, so the drawer lists the server's databases instead.
     cluster: bool,
@@ -48,17 +36,9 @@ pub struct PostgresAdapter {
 
 impl PostgresAdapter {
     /// Open a connection, to `database` when given and otherwise to the one the URL names.
-    ///
-    /// The pool holds a single connection, because a database client is a session: a transaction,
-    /// a `SET`, a temporary table or a prepared statement must still be there for the next
-    /// statement the user runs. A larger pool would scatter those across connections.
-    ///
-    /// A URL naming no database reaches the whole cluster. It connects to `postgres`, which every
-    /// server has, rather than to the database named after the user, which most servers do not.
     pub async fn connect(url: &str, database: Option<&str>) -> Result<Self> {
         // Preparing a statement is how a result learns its columns, and a cached statement keeps
-        // the columns its table had when it was first prepared, so after an `ALTER TABLE` a
-        // `select *` would leave the new column out.
+        // the columns its table had when it was first prepared.
         let mut options = PgConnectOptions::from_str(url)
             .map_err(Error::driver)?
             .statement_cache_capacity(0);
@@ -73,8 +53,7 @@ impl PostgresAdapter {
             let backend_pid = backend_pid.clone();
             PgPoolOptions::new()
                 .max_connections(1)
-                // sqlx retries a refused connection until this expires. A mistyped host should
-                // say so while the user still remembers typing it, not half a minute later.
+                // sqlx retries a refused connection until this expires.
                 .acquire_timeout(crate::CONNECT_TIMEOUT)
                 // Read on every connect, since the pool opens a new session after losing one.
                 .after_connect(move |connection, _| {
@@ -103,8 +82,6 @@ impl PostgresAdapter {
     }
 
     /// The databases a connection to the whole cluster can open, or `None` for one database.
-    ///
-    /// Templates and databases refusing connections are left out: neither can be opened.
     pub async fn databases(&self) -> Option<Result<Vec<String>>> {
         if !self.cluster {
             return None;
@@ -122,9 +99,6 @@ impl PostgresAdapter {
     }
 
     /// Stop the query the session is running, from a connection of its own.
-    ///
-    /// Dropping a query only stops reading its rows. The server goes on running it, and the session
-    /// cannot take the next statement until it ends, which for a long query is a long wait.
     async fn stop_running(&self) {
         let pid = self.backend_pid.load(Ordering::Relaxed);
         let stop = async {
@@ -164,12 +138,6 @@ impl PostgresAdapter {
     }
 
     /// Mark the result columns that are keys in the table they came from.
-    ///
-    /// Postgres names a column's source in the row description, as a table OID and an attribute
-    /// number, and those are what the keys are looked up by. Not the table's *name*: a name is
-    /// resolved through `search_path` and means different tables in different schemas, while the
-    /// pair is exact and costs nothing to obtain. A column that is an expression has neither, and
-    /// is left unmarked — `count(*)` is nobody's primary key.
     async fn mark_keys(&self, prepared: &[PgColumn], columns: &mut [Column]) {
         let sources: Vec<Option<(Oid, i16)>> = prepared
             .iter()
@@ -195,9 +163,7 @@ impl PostgresAdapter {
         if !missing.is_empty() {
             let found = self.read_keys(&missing).await;
             if let Ok(mut known) = self.keys.lock() {
-                // Every pair that was asked about is recorded, including the ones the catalog had
-                // nothing to say about. Otherwise a column that is not a key would be looked up
-                // again on every execution of the query it appears in.
+                // Record every pair asked about, including ones the catalog knows nothing of.
                 for source in missing {
                     let kind = found.get(&source).copied().unwrap_or_default();
                     known.insert(source, kind);
@@ -216,16 +182,11 @@ impl PostgresAdapter {
     }
 
     /// Ask the catalog which of these columns are keys.
-    ///
-    /// A failure answers with nothing rather than an error: an icon is worth one query, and it is
-    /// not worth failing the result the user actually asked for.
     async fn read_keys(&self, wanted: &[(Oid, i16)]) -> HashMap<(Oid, i16), KeyKind> {
         let relations: Vec<Oid> = wanted.iter().map(|(relation, _)| *relation).collect();
         let attributes: Vec<i16> = wanted.iter().map(|(_, attribute)| *attribute).collect();
 
-        // The primary key wins over a foreign one, which is decided here rather than by the caller
-        // so every dialect answers the same question the same way. `conkey` is an array because a
-        // constraint can span columns, and a column is a key if it takes part in one at all.
+        // The primary key wins over a foreign one.
         let rows = sqlx::query(
             "select want.relation, want.attribute,
                     bool_or(c.contype = 'p') as primary_key,
@@ -272,9 +233,7 @@ struct Relation {
 }
 
 impl PostgresAdapter {
-    /// Name each result column's table column, and say where the rows are stored when every column
-    /// that is not an expression comes from one table and that table's whole primary key is among
-    /// them.
+    /// Resolve each column's table column, and the source table when its whole key is selected.
     async fn source(&self, prepared: &[PgColumn], columns: &mut [Column]) -> Option<Source> {
         let sources: Vec<Option<(Oid, i16)>> = prepared
             .iter()
@@ -340,8 +299,6 @@ impl PostgresAdapter {
 
     /// Ask the catalog what these tables are called, what their columns are, and which of those
     /// make up the primary key.
-    ///
-    /// A failure answers with nothing: the result still shows, it just cannot be edited.
     async fn read_relations(&self, wanted: &[Oid]) -> HashMap<Oid, Relation> {
         let rows = sqlx::query(
             "select c.oid as relation, n.nspname::text as schema, c.relname::text as name,
@@ -449,8 +406,7 @@ impl Adapter for PostgresAdapter {
     }
 
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
-        // The catalogue schemas are hidden: they are the same on every server and are not what
-        // anyone opened the drawer to look at.
+        // The catalogue schemas are hidden.
         let rows = sqlx::query(
             "select nspname as name, nspname = current_schema() as is_default
              from pg_namespace
@@ -507,11 +463,7 @@ impl Adapter for PostgresAdapter {
 
     async fn routines(&self, schema: &str) -> Result<Vec<RoutineNode>> {
         // `prokind` is a "char", and reading it as text here rather than as a byte keeps the
-        // decoding in SQL where the catalog's own spelling of it is obvious. Aggregates and
-        // window functions are left out: neither is something a user calls the way these are.
-        //
-        // Grouped, because overloads share a name. Three signatures of `format_date` are three
-        // rows in the catalog and one line worth showing in a tree.
+        // decoding in SQL where the catalog's own spelling of it is obvious.
         let rows = sqlx::query(
             "select p.proname as name,
                     case p.prokind when 'p' then 'procedure' else 'function' end as kind
@@ -537,8 +489,7 @@ impl Adapter for PostgresAdapter {
     }
 
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
-        // `format_type` renders the type the way the schema declares it, so `varchar(10)` and
-        // `numeric(30,3)` keep their parameters instead of collapsing to a base type name.
+        // `format_type` renders the type the way the schema declares it.
         let rows = sqlx::query(
             "select a.attname as name,
                     format_type(a.atttypid, a.atttypmod) as type_name,
@@ -648,8 +599,7 @@ fn decode_cell(row: &PgRow, index: usize) -> Cell {
         "TIME" => scalar(row, index, &type_name, |value: types::chrono::NaiveTime| {
             Cell::Time(value.to_string())
         }),
-        // No binary decoder is needed: the server already sent "1 mon 2 days 03:00:00", which
-        // is both more accurate and more familiar than anything reconstructed from its parts.
+        // No binary decoder is needed.
         "INTERVAL" => raw_text(row, index).map_or_else(|| unsupported(&type_name), Cell::Text),
         "BYTEA" => scalar(row, index, &type_name, |value: Vec<u8>| Cell::bytes(&value)),
         _ => fallback(row, index, &type_name),
@@ -683,10 +633,6 @@ where
 }
 
 /// The value exactly as the server wrote it.
-///
-/// Statements go through `raw_sql`, which uses the simple query protocol, so every value arrives
-/// in text form. That makes the server's own rendering a dependable last resort, and usually a
-/// better one than anything reconstructed from a binary layout.
 fn raw_text(row: &PgRow, index: usize) -> Option<String> {
     let raw = row.try_get_raw(index).ok()?;
     raw.as_str().ok().map(str::to_owned)

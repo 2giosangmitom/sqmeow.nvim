@@ -1,10 +1,4 @@
 //! The Redis and Valkey adapter.
-//!
-//! Redis has no tables and speaks no SQL, so it fits the adapter contract more loosely than the
-//! others. A statement is one command line, split into words the way `redis-cli` splits them. A
-//! reply is laid out as rows: a map is a row per field, an array a row per element, and anything
-//! else a single row. The drawer's relations are the keys of the current database, grouped by the
-//! type of value they hold.
 
 use std::time::Instant;
 
@@ -33,9 +27,6 @@ pub struct RedisAdapter {
 
 impl RedisAdapter {
     /// Open a connection.
-    ///
-    /// One connection rather than a pool, for the reason the SQL adapters hold one: a `SELECT` or a
-    /// `MULTI` must still be in effect for the next command the user runs.
     pub async fn connect(url: &str) -> Result<Self> {
         let info = url.into_connection_info().map_err(Error::driver)?;
         let db = info.redis_settings().db();
@@ -49,8 +40,7 @@ impl RedisAdapter {
 
         let config = AsyncConnectionConfig::new()
             .set_connection_timeout(Some(crate::CONNECT_TIMEOUT))
-            // The driver gives up on a reply after half a second unless told otherwise, which would
-            // report a slow `KEYS *` as a failure. Waiting is the user's call, and they can cancel.
+            // The driver gives up on a reply after half a second unless told otherwise.
             .set_response_timeout(None);
         let connection = client
             .get_multiplexed_async_connection_with_config(&config)
@@ -83,8 +73,7 @@ impl Adapter for RedisAdapter {
         plan(result, changes)
     }
 
-    /// One `MULTI`/`EXEC`, so no other client sees half the changes. Redis does not roll back a
-    /// command that fails inside one, so that failure is reported as having left the rest applied.
+    /// One `MULTI`/`EXEC`.
     async fn apply(&self, statements: &[String]) -> Result<()> {
         let mut pipeline = redis::pipe();
         pipeline.atomic();
@@ -129,10 +118,8 @@ impl Adapter for RedisAdapter {
             command.arg(word.as_slice());
         }
 
-        // Dropping the request leaves the connection usable: the multiplexer throws the reply away
-        // when it comes. ponytail: a blocking command such as `BLPOP` still holds the session on
-        // the server until it returns. `CLIENT UNBLOCK` from a second connection would free it on
-        // Redis and Valkey if that bites, but Dragonfly has no such command.
+        // Dropping the request leaves the connection usable. ponytail: a blocking command such as
+        // `BLPOP` still holds the server session until it returns; `CLIENT UNBLOCK` would free it.
         let reply = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(Error::Cancelled),
@@ -146,12 +133,8 @@ impl Adapter for RedisAdapter {
     }
 
     /// Only the database the connection is on.
-    ///
-    /// Listing another one's keys would mean switching the user's session under them, so browsing
-    /// another database is `SELECT` followed by a refresh.
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
-        // `CLIENT INFO` rather than the URL, so a `SELECT` the user ran is reflected. A server older
-        // than 6.2 does not have it, and the URL's database is the best answer left.
+        // `CLIENT INFO` rather than the URL.
         let info: String = self
             .query(redis::cmd("CLIENT").arg("INFO"))
             .await
@@ -165,9 +148,6 @@ impl Adapter for RedisAdapter {
     }
 
     /// The keys of the current database, each with the type of value it holds.
-    ///
-    /// The schema is not consulted: a connection has one current database, and it is the one the
-    /// drawer listed.
     async fn relations(&self, _schema: &str) -> Result<Vec<RelationNode>> {
         let mut names: Vec<Vec<u8>> = Vec::new();
         let mut cursor = 0u64;
@@ -229,9 +209,6 @@ impl Adapter for RedisAdapter {
 }
 
 /// Which key a command read, for the commands whose reply can be written back.
-///
-/// Only a reply laid out by one of these can be traced to where each row lives. A negative `LRANGE`
-/// start counts from the end, so the index of each row would depend on the list's length.
 fn source(words: &[Vec<u8>]) -> Option<Source> {
     let name = String::from_utf8_lossy(words.first()?).to_ascii_uppercase();
     let key = String::from_utf8(words.get(1)?.clone()).ok()?;
@@ -258,9 +235,6 @@ fn source(words: &[Vec<u8>]) -> Option<Source> {
 }
 
 /// Plan changes to one key into command lines that [`split_command`] reads back.
-///
-/// Updates come first, then deletes, then inserts, so an `LSET` by index runs before an `LREM` can
-/// move the elements after it.
 fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
     let Some(source @ Source::Redis { key, kind }) = result.source() else {
         return Err(edit::not_editable());
@@ -409,10 +383,6 @@ fn quote(word: &str) -> String {
 }
 
 /// Split a command line into words, the way `redis-cli` does.
-///
-/// Inside double quotes, `\n`, `\r`, `\t`, `\b`, `\a` and `\xHH` are escapes, and any other
-/// character after a backslash stands for itself. Inside single quotes only `\'` is an escape. A
-/// closing quote must end its word, so `"a"b` is reported as a mistake rather than guessed at.
 fn split_command(line: &str) -> std::result::Result<Vec<Vec<u8>>, String> {
     let chars: Vec<char> = line.chars().collect();
     let mut words = Vec::new();
@@ -494,11 +464,6 @@ fn hex_byte(digits: Option<&[char]>) -> Option<u8> {
 }
 
 /// Lay a reply out as rows.
-///
-/// A map is a row per field and an array a row per element, with an element that is an array of
-/// its own spread across columns: that is what puts `ZRANGE ... WITHSCORES` scores in a column
-/// beside their members. Anything else is one row. The whole reply is in memory by now, so
-/// `max_rows` limits what is kept rather than what is read.
 fn to_result(statement: &str, reply: Value, max_rows: usize) -> ResultSet {
     let (names, rows): (Vec<String>, Vec<Vec<Cell>>) = match strip_attribute(reply) {
         Value::Map(pairs) => (
@@ -545,9 +510,6 @@ fn to_result(statement: &str, reply: Value, max_rows: usize) -> ResultSet {
 }
 
 /// The type every value in a column shares, or nothing when they differ.
-///
-/// A reply carries no column types, so this is what gives the grid header an icon. Nulls are
-/// skipped: a missing value says nothing about what the others hold.
 fn common_type(rows: &[Vec<Cell>], index: usize) -> String {
     let mut kinds = rows
         .iter()
@@ -579,8 +541,7 @@ fn cell(value: Value) -> Cell {
         Value::Double(number) => Cell::Float(number),
         Value::Boolean(flag) => Cell::Bool(flag),
         Value::BigNumber(digits) => Cell::Decimal(String::from_utf8_lossy(&digits).into_owned()),
-        // Redis strings are bytes. Most of them are text, and the ones that are not are shown as
-        // bytes rather than mangled into replacement characters.
+        // Redis strings are bytes.
         Value::BulkString(bytes) => {
             String::from_utf8(bytes).map_or_else(|error| Cell::bytes(error.as_bytes()), Cell::Text)
         }
@@ -599,8 +560,7 @@ fn cell(value: Value) -> Cell {
         // An error inside a reply, such as one command of a transaction failing, is that command's
         // answer rather than a failure of the whole reply.
         Value::ServerError(error) => Cell::Text(error.to_string()),
-        // The enum is non-exhaustive, so a reply type newer than this adapter still shows as
-        // something rather than failing the query.
+        // The enum is non-exhaustive.
         other => Cell::Unsupported {
             type_name: "reply".to_owned(),
             raw: format!("{other:?}"),

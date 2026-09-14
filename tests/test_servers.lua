@@ -1,8 +1,5 @@
 local MiniTest = require('mini.test')
 -- The plugin against PostgreSQL, MySQL and Redis, not just SQLite.
---
--- Skipped unless the servers are up. `just db-up` starts them and `just test-lua` passes their
--- URLs in, so a machine with no Docker still runs the rest of the suite.
 
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
@@ -40,8 +37,7 @@ local lines = helpers.result_rows
 local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
-      -- ASCII icons, so an expectation on a grid line can be read. The defaults are Nerd Font
-      -- glyphs, which a test file cannot assert on without becoming unreadable itself.
+      -- ASCII icons, so an expectation on a grid line can be read.
       require('sqmeow').setup({ icons = { types = helpers.ascii_icons() } })
     end,
     post_once = function()
@@ -73,12 +69,9 @@ for _, dialect in ipairs({ 'postgres', 'mysql' }) do
     local summary = run("select 1 as id, 'alice' as name")
     eq(summary.state, 'done')
     eq(summary.rows, 1)
-    -- Both columns are expressions, so neither is anyone's key, and each is marked with what it
-    -- holds instead. The two dialects name these types nothing alike — `int4` and `text` against
-    -- `BIGINT` and `VARCHAR` — and classifying them is what makes one expectation serve both.
+    -- Both columns are expressions.
     eq(header()[1], ' n id │ t name')
-    -- The `id` column is four wide rather than two: the glyph and its space are wider than the
-    -- values, so the value is padded out to meet them.
+    -- The `id` column is four wide rather than two.
     eq(lines()[1], '    1 │ alice')
   end
 
@@ -90,8 +83,7 @@ for _, dialect in ipairs({ 'postgres', 'mysql' }) do
     end)
 
     run('select id, label from keyed')
-    -- Unlike the expression above, this `id` comes from a table and is its primary key. Getting
-    -- here means the engine resolved the column back to its table on this dialect.
+    -- Unlike the expression above, this `id` comes from a table and is its primary key.
     eq(header()[1], ' K id │ t label')
   end
 
@@ -135,8 +127,7 @@ for _, dialect in ipairs({ 'postgres', 'mysql' }) do
   end
 end
 
--- Redis speaks no SQL, so it gets cases of its own rather than a turn through the loop above.
--- Dragonfly speaks the same protocol, so the same cases run against it too.
+-- Redis speaks no SQL.
 local redis_servers = {
   redis = vim.env.SQMEOW_TEST_REDIS_URL,
   dragonfly = vim.env.SQMEOW_TEST_DRAGONFLY_URL,
@@ -145,8 +136,7 @@ local redis_servers = {
 --- One level of the drawer, as the engine reports it.
 local function introspect(path)
   local reply
-  -- Put back as soon as the level arrives rather than when the case ends, so the drawer the case
-  -- goes on to use is the real one.
+  -- Put back as soon as the level arrives rather than when the case ends.
   local original = helpers.swap(drawer, 'on_nodes', function(payload)
     reply = payload
   end)
@@ -378,8 +368,7 @@ T['mongodb']['a find that matches nothing says so'] = function()
   run('{"delete": "lua_empty", "deletes": [{"q": {}, "limit": 0}]}')
   local summary = run('{"find": "lua_empty"}')
   eq(summary.state, 'done')
-  -- Neither rows nor a count. The count is left out rather than sent as a nil the winbar would
-  -- try to print as a number.
+  -- Neither rows nor a count.
   eq(summary.affected, nil)
   helpers.contains(result.describe(summary), 'no rows')
 end

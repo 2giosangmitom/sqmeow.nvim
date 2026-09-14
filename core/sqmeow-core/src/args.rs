@@ -1,8 +1,4 @@
 //! Reading the keyword arguments Lua sends.
-//!
-//! Every method takes one table, so `rpcrequest(chan, 'execute', { conn_id = 1, sql = '...' })`
-//! arrives as a single map. Positional arguments were rejected early: adding a field to a table
-//! does not break older callers, and the wire form stays readable in a log.
 
 use rmpv::Value;
 
@@ -14,9 +10,6 @@ pub struct Args {
 
 impl Args {
     /// Read the argument table out of a method's parameters.
-    ///
-    /// An absent table is an empty one, so methods that take no arguments work whether Lua sends
-    /// `{}`, `nil`, or nothing at all.
     pub fn from_params(params: &[Value]) -> Result<Self, String> {
         match params.first() {
             None | Some(Value::Nil) => Ok(Self::default()),

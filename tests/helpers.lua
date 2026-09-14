@@ -1,15 +1,10 @@
--- What more than one test file needs. Loaded with `dofile`, since `tests/` is not on the runtime
--- path and only files named `test_*.lua` are collected as cases.
+-- What more than one test file needs.
 
 local MiniTest = require('mini.test')
 
 local M = {}
 
 --- Put a value in a table's field and answer with what was there.
----
---- By key rather than by assignment, so one field can be swapped in several cases of the same file
---- without each of them redefining it.
----
 ---@param target table
 ---@param key string
 ---@param value any
@@ -21,10 +16,6 @@ function M.swap(target, key, value)
 end
 
 --- Replace a field for the rest of the case, and put the original back when the case ends.
----
---- Only in a case body, never in a hook: `MiniTest.finally` runs when the hook that called it
---- finishes, so a stub put in place by `pre_case` is already gone when the case runs.
----
 ---@param target table
 ---@param key string
 ---@param value any
@@ -36,7 +27,6 @@ function M.stub(target, key, value)
 end
 
 --- Wait for something the engine or the interface does asynchronously.
----
 ---@param what string What was waited for, for the failure message.
 ---@param condition fun(): boolean
 ---@param timeout integer|nil Milliseconds. Defaults to 5000.
@@ -45,10 +35,6 @@ function M.wait_for(what, condition, timeout)
 end
 
 --- Open a connection and wait for the engine to settle it.
----
---- A connection that fails is dropped from the mirrored state, so "settled" means either the
---- entry reports a final state or it is gone.
----
 ---@param url string
 ---@param opts table|nil Passed to `api.connect`, such as `{ name = 'grid' }`.
 ---@param timeout integer|nil Milliseconds. Defaults to 5000.
@@ -65,7 +51,6 @@ function M.connect(url, opts, timeout)
 end
 
 --- Run SQL and wait for the engine to finish with it.
----
 ---@param sql string
 ---@param opts table|nil Passed to `api.execute`.
 ---@param timeout integer|nil Milliseconds. Defaults to 5000.
@@ -80,13 +65,13 @@ function M.run(sql, opts, timeout)
   return assert(state.call, 'the query should leave a result')
 end
 
---- Everything the result grid buffer holds: the column names, the rule, and the rows.
+--- Everything the result grid buffer holds.
 ---@return string[]
 function M.result_lines()
   return vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
 end
 
---- The column names and the rule under them, which the grid begins with.
+--- The column names and the rule under them.
 ---@return string[]
 function M.result_header()
   return vim.list_slice(M.result_lines(), 1, 2)
@@ -148,10 +133,7 @@ function M.marks_on(buf, namespace, number)
   return spans
 end
 
---- Plain characters for what a column holds, so an expectation on a grid line can be read.
----
---- The defaults are Nerd Font glyphs, which a test file cannot assert on without becoming
---- unreadable itself.
+--- Plain characters for what a column holds.
 ---@return table<string, string>
 function M.ascii_icons()
   return {
@@ -222,10 +204,7 @@ function M.writefile(path, lines)
   vim.fn.writefile(lines, path)
 end
 
---- Close whatever floats are open, so one case cannot leak a window into the next.
----
---- Closing a dialog takes its border window with it, so a handle from this list may already be
---- gone by the time the loop reaches it.
+--- Close whatever floats are open.
 function M.close_floats()
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_config(win).relative ~= '' then

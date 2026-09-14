@@ -1,7 +1,4 @@
 --- Connections from an environment variable.
----
---- Useful where the connection list itself is a secret, or is injected by a shell profile, a
---- direnv file, or a container. The value is JSON, so it can hold a whole list rather than one URL.
 
 local M = {}
 
@@ -9,7 +6,6 @@ local M = {}
 M.default_variable = 'SQMEOW_CONNECTIONS'
 
 --- Read connections from the environment.
----
 ---@param opts table|nil Source options: `var` names the variable to read.
 ---@return sqmeow.ConnectionSpec[]
 ---@return string|nil error

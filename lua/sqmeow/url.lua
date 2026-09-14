@@ -1,16 +1,8 @@
 --- Reading and hiding parts of a connection URL.
----
---- A URL is the one thing in this plugin that routinely holds a secret. Everywhere one is shown
---- it goes through here first, so there is a single place to be right about it rather than a
---- decision repeated at every call site.
 
 local M = {}
 
 --- Replace the password in a URL with a mask.
----
---- Only the password is touched. The scheme, user, host and database are what make a connection
---- recognisable, and hiding them would make the interface useless.
----
 ---@param url string
 ---@return string
 function M.redact(url)
@@ -19,9 +11,7 @@ function M.redact(url)
     return url
   end
 
-  -- The authority ends at the first path, query or fragment character. Bounding the search here
-  -- matters: a password may contain `@`, and so may a query parameter, and only the `@` inside the
-  -- authority separates the credentials from the host.
+  -- The authority ends at the first path, query or fragment character.
   local authority, tail = rest:match('^([^/%?#]*)(.*)$')
   local at = authority:find('@[^@]*$')
   if not at then
@@ -37,7 +27,6 @@ function M.redact(url)
 end
 
 --- Hide the password only when the configuration asks for it.
----
 ---@param url string
 ---@return string
 function M.display(url)
@@ -48,9 +37,6 @@ function M.display(url)
 end
 
 --- A short name for a URL, for a tab label or a list row.
----
---- Prefers the database name, because that is what a person calls the thing they connected to.
----
 ---@param url string
 ---@return string
 function M.label(url)
@@ -72,9 +58,6 @@ function M.label(url)
 end
 
 --- Split the authority into credentials and address.
----
---- The last `@` is the separator, not the first: a password is allowed to contain one.
----
 ---@param authority string
 ---@return string user
 ---@return string password
@@ -91,10 +74,6 @@ local function credentials(authority)
 end
 
 --- Split an address into host and port.
----
---- An IPv6 literal is bracketed and full of colons, so the port cannot be found by looking for the
---- first one.
----
 ---@param address string
 ---@return string host
 ---@return string port
@@ -112,13 +91,8 @@ local function host_and_port(address)
 end
 
 --- Take a URL apart into the fields the connection dialog shows.
----
---- The inverse of `build`, so a saved connection can be opened, edited and written back without
---- the user seeing the URL at all.
----
 ---@param url string
----@return table|nil fields `dialect` plus the keys that dialect asks for. Nil if the scheme is not
---- one the plugin knows.
+---@return table|nil fields `dialect` plus the keys that dialect asks for.
 function M.parse(url)
   local scheme, rest = url:match('^(%w[%w%+%-%.]*):(.*)$')
   if not scheme then
@@ -131,8 +105,7 @@ function M.parse(url)
   end
 
   if dialect == 'sqlite' then
-    -- `sqlite:path`, `sqlite://path` and `sqlite:///path` are all in the wild, and the third one
-    -- means an absolute path, so exactly two slashes come off.
+    -- `sqlite:///path` is an absolute path.
     local path = rest:gsub('^//', ''):gsub('%?.*$', '')
     return { dialect = dialect, path = path }
   end
@@ -150,8 +123,7 @@ function M.parse(url)
     database = (tail:match('^/([^%?#]*)') or ''),
     options = (tail:match('%?([^#]*)') or ''),
   }
-  -- Redis spells TLS as a scheme, so it is carried as a field for the form to show. Dropping it
-  -- would have an edited connection quietly write itself back unencrypted.
+  -- Redis spells TLS as a scheme.
   if dialect == 'redis' then
     local secure = scheme:lower() == 'rediss' or scheme:lower() == 'valkeys'
     fields.tls = secure and 'yes' or 'no'
@@ -164,10 +136,6 @@ function M.parse(url)
 end
 
 --- Write the fields back out as a URL.
----
---- The user and the password are percent encoded here rather than by the person typing them, which
---- is the whole reason the dialog collects them as separate fields.
----
 ---@param dialect string
 ---@param values table<string, string>
 ---@return string|nil url
@@ -200,8 +168,7 @@ function M.build(dialect, values)
     authority = ('%s:%s'):format(host, value('port'))
   end
 
-  -- A password with no user is written too, as `:secret@host`. That is how Redis without ACLs is
-  -- reached, and leaving it out would save a connection that cannot log in.
+  -- A password with no user is written too, as `:secret@host`.
   if value('user') ~= '' or value('password') ~= '' then
     local login = vim.uri_encode(value('user'), 'rfc2396')
     if value('password') ~= '' then

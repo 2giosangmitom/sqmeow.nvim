@@ -1,12 +1,4 @@
 --- A dialog that asks for several values at once.
----
---- What the connection dialog and the export dialog are built from. A form names every value it
---- wants, shows what is already there, keeps a password out of sight, and refuses to save
---- something that cannot work, none of which a single prompt can do.
----
---- Built on nui.nvim, which supplies the floating window and the single-line editor. The
---- dependency is loaded here and nowhere else, so a user without it gets one clear message from
---- whichever dialog they opened rather than an error at startup.
 
 local M = {}
 
@@ -22,7 +14,7 @@ local utils = require('sqmeow.utils')
 ---@field on_submit fun(values: table<string, string>)
 ---@field on_cancel nil|fun()
 ---@field on_change nil|fun(values: table<string, string>, key: string) May adjust other values.
----@field preview nil|{ title: string, lines: string[]|(fun(values: table<string, string>): string[]), filetype: nil|string|(fun(values: table<string, string>): string) } Read-only pane below. Given as functions, the lines and filetype are worked out again whenever a value changes.
+---@field preview nil|{ title: string, lines: string[]|(fun(values: table<string, string>): string[]), filetype: nil|string|(fun(values: table<string, string>): string) } Read-only pane below.
 
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow-form')
 
@@ -32,19 +24,12 @@ local function nui()
 end
 
 --- Whether the dialog can be opened at all.
----
---- Used by `:checkhealth` so the missing dependency is reported before someone runs into it.
----
 ---@return boolean
 function M.available()
   return nui() ~= nil
 end
 
 --- What a field's value looks like on screen.
----
---- A masked field shows one asterisk per character: enough to see that something is there and how
---- much of it, and nothing else.
----
 ---@param field sqmeow.Field
 ---@param value string
 ---@return string text
@@ -63,10 +48,6 @@ local function shown(field, value)
 end
 
 --- Open the dialog.
----
---- Returns nothing useful: the form owns its window until the user saves or cancels, and reports
---- through the callbacks in the spec.
----
 ---@param spec sqmeow.FormSpec
 ---@return boolean opened
 ---@return string|nil error
@@ -76,8 +57,7 @@ function M.open(spec)
     return false, err
   end
 
-  -- Where focus goes back to. Left to Neovim, closing a dialog lands in whichever window it picks,
-  -- which is rarely the one the dialog was opened from, and never a float.
+  -- Where focus goes back to.
   local origin = vim.api.nvim_get_current_win()
 
   local fields = spec.fields
@@ -86,8 +66,7 @@ function M.open(spec)
     values[field.key] = values[field.key] or ''
   end
 
-  -- The value column starts past the longest label, so every value lines up however the labels
-  -- are worded.
+  -- The value column starts past the longest label.
   local label_width = 0
   for _, field in ipairs(fields) do
     label_width = math.max(label_width, vim.fn.strdisplaywidth(field.label))
@@ -183,8 +162,7 @@ function M.open(spec)
     for index, field in ipairs(fields) do
       local line = parts.Line()
       line:append((' '):rep(gutter))
-      -- A field that does not apply to the other answers stays where it is, dimmed, so the rows do
-      -- not move under the cursor as those answers change.
+      -- A field that does not apply to the other answers stays where it is, dimmed.
       local disabled = field.enabled ~= nil and not field.enabled(values)
       local text, group = shown(field, values[field.key])
       line:append(
@@ -213,9 +191,6 @@ function M.open(spec)
   end
 
   --- Hide what is being typed, not only what was typed.
-  ---
-  --- `concealcursor` covers insert mode too, so the password never appears on screen even while
-  --- the person entering it is holding the keyboard.
   local function mask(winid)
     vim.wo[winid].conceallevel = 2
     vim.wo[winid].concealcursor = 'nvic'
@@ -274,8 +249,7 @@ function M.open(spec)
       default_value = values[field.key],
       on_submit = function(value)
         change(field.key, value)
-        -- In wizard mode one answer leads to the next, which is what makes a new connection a
-        -- single run of typing rather than a row of separate decisions.
+        -- In wizard mode one answer leads to the next.
         if spec.wizard and fields[typed(index + 1)] then
           return edit(typed(index + 1))
         end
@@ -334,9 +308,7 @@ function M.open(spec)
     focus((current() - 2) % #fields + 1)
   end)
   if preview then
-    -- The preview takes no focus, so what is too long for it is scrolled from the fields, half a
-    -- window at a time. By moving its top line rather than replaying the keys in it, which does
-    -- nothing in a window that is not the one being typed in.
+    -- The preview takes no focus.
     for key, direction in pairs({ ['<C-d>'] = 1, ['<C-u>'] = -1 }) do
       map({ key }, function()
         if not vim.api.nvim_win_is_valid(preview.winid) then
@@ -372,10 +344,6 @@ function M.open(spec)
 end
 
 --- Ask which of a list of things the user means.
----
---- A menu rather than `vim.ui.select` because this one is part of a dialog flow and should look
---- and behave like the dialog it leads to.
----
 ---@param opts { title: string, items: { label: string, icon: string|nil, highlight: string|nil, value: any }[], on_choice: fun(value: any) }
 ---@return boolean opened
 ---@return string|nil error

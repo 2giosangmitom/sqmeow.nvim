@@ -3,8 +3,6 @@
 use rmpv::Value;
 
 /// Build a msgpack map from string keys.
-///
-/// Lua receives this as a table, so payload keys read the same on both sides of the channel.
 pub fn map(pairs: Vec<(&str, Value)>) -> Value {
     Value::Map(
         pairs

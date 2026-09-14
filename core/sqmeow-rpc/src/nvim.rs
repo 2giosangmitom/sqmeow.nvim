@@ -20,13 +20,6 @@ impl Nvim {
         &self.client
     }
 
-    /// Run Lua in the editor and wait for its value.
-    pub async fn exec_lua(&self, code: &str, args: Vec<Value>) -> Result<Value> {
-        self.client
-            .request("nvim_exec_lua", vec![Value::from(code), Value::Array(args)])
-            .await
-    }
-
     /// Run Lua in the editor without waiting.
     pub fn exec_lua_notify(&self, code: &str, args: Vec<Value>) -> Result<()> {
         self.client
@@ -34,9 +27,6 @@ impl Nvim {
     }
 
     /// Push an event at the plugin.
-    ///
-    /// Always a notification. If the core waited for the editor to acknowledge each event, a
-    /// stalled UI would stall the core, and a query already in flight would stall with it.
     pub fn emit(&self, event: &str, payload: Value) -> Result<()> {
         self.exec_lua_notify(DISPATCH, vec![Value::from(event), payload])
     }

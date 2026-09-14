@@ -1,8 +1,4 @@
 //! The PostgreSQL adapter against a real server.
-//!
-//! Needs a server. `just db-up` starts one and `just test-rust` passes its URL in. Without
-//! `SQMEOW_TEST_POSTGRES_URL` these tests report that they were skipped rather than failing, so
-//! `cargo test` still works on a machine with no Docker.
 
 use sqmeow_adapters::Backend;
 use sqmeow_db::{
@@ -13,9 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
 
-// Introspection reads the catalogue, which a temporary table does not appear in. Each test
-// therefore owns a differently named real table, so the cases stay independent while running in
-// parallel.
+// Introspection reads the catalogue.
 const SCHEMA: &str = "public";
 
 async fn fixture(backend: &Backend, table: &str) {
@@ -188,8 +182,7 @@ async fn a_type_nothing_understands_is_named_rather_than_failing() {
     let backend = connect(&server!()).await;
     let result = run(&backend, "select 1 as ok, '10.0.0.1'::inet as address").await;
 
-    // The row still arrives, and the column the adapter cannot decode keeps the server's own
-    // text, so the user still sees the value rather than a placeholder.
+    // The row still arrives, and the column the adapter cannot decode keeps the server's own text.
     assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
     match result.cell(0, 1) {
         Some(Cell::Unsupported { type_name, raw }) => {
@@ -342,8 +335,7 @@ async fn lists_functions_and_procedures_apart() {
         "create function listed_fn(x int) returns int language sql as $$ select x $$",
     )
     .await;
-    // A second signature under the same name, which the catalogue holds as its own row. The tree
-    // shows one line for it either way.
+    // A second signature under the same name.
     run(
         &backend,
         "create function listed_fn(x text) returns text language sql as $$ select x $$",
@@ -437,8 +429,7 @@ async fn a_result_column_that_is_an_expression_is_not_a_key() {
     run(&backend, "drop table if exists keyed_expr cascade").await;
     run(&backend, "create table keyed_expr (id int primary key)").await;
 
-    // `count(*)` and a literal come from no table at all, and `id + 0` comes from one but is not
-    // the column: Postgres reports no source for any of the three.
+    // `count(*)`, a literal and `id + 0` are not table columns.
     let result = run(
         &backend,
         "select count(*) as total, 1 as literal, max(id) + 0 as bumped from keyed_expr",

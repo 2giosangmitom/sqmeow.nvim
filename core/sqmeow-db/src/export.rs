@@ -1,8 +1,4 @@
 //! Writing a result out as CSV or JSON.
-//!
-//! Neither format goes through the grid's rendering. A grid cell is one line with escapes and a
-//! truncation marker, which is right for reading and wrong for a file: an export must carry the
-//! value, line breaks and full length included, and let the format's own rules handle it.
 
 use crate::result::ResultSet;
 use crate::value::Cell;
@@ -23,14 +19,6 @@ impl Format {
             _ => None,
         }
     }
-
-    /// The name to use when suggesting a file name.
-    pub fn extension(self) -> &'static str {
-        match self {
-            Self::Csv => "csv",
-            Self::Json => "json",
-        }
-    }
 }
 
 /// Which rows to write. `end` is exclusive and is clamped to the result.
@@ -49,8 +37,7 @@ impl Rows {
         }
     }
 
-    /// The result rows these positions cover, counted through `view` when the rows on screen are
-    /// filtered or sorted, so an export writes what the user is looking at in the order they see it.
+    /// The result rows these positions cover, counted through `view` when given.
     pub fn resolve(self, result: &ResultSet, view: Option<&[usize]>) -> Vec<usize> {
         match view {
             Some(view) => {
@@ -65,8 +52,7 @@ impl Rows {
     }
 }
 
-/// Write rows of a result in the given format. `columns` picks and orders the columns, all of them
-/// when `None`. `headers` only affects CSV: JSON keys every value by name.
+/// Write rows of a result in the given format.
 pub fn write(
     result: &ResultSet,
     format: Format,
@@ -94,10 +80,6 @@ fn chosen(result: &ResultSet, columns: Option<&[usize]>) -> Vec<usize> {
 }
 
 /// Write a result as CSV, optionally with a header row.
-///
-/// `NULL` becomes an empty field. CSV cannot tell an empty string from a missing value, and every
-/// tool that reads CSV already assumes that, so inventing a marker would be worse. A row that is one
-/// `NULL` alone is written as `""`, as the `csv` crate does, so it is not read back as a blank line.
 pub fn csv(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>, headers: bool) -> String {
     let mut writer = csv::Writer::from_writer(Vec::new());
     let columns = chosen(result, columns);
@@ -130,9 +112,6 @@ pub fn csv(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>, header
 }
 
 /// Write a result as a JSON array of objects.
-///
-/// Numbers stay numbers and booleans stay booleans, so the output can be fed straight to a tool
-/// that expects typed JSON rather than a table of strings.
 pub fn json(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>) -> String {
     let columns = chosen(result, columns);
     let records: Vec<serde_json::Value> = rows

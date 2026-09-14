@@ -1,11 +1,4 @@
 --- Where the plugin keeps the files it writes.
----
---- Everything lives under one directory, `core.path`: the installed engine, saved connections,
---- scratchpads, and the query log with the results it shows again. Moving all of it is one option
---- rather than one per file, and removing it is removing one directory.
----
---- Read from the configuration on every call rather than remembered, so changing `core.path`
---- takes effect without anything having to be told.
 
 local M = {}
 

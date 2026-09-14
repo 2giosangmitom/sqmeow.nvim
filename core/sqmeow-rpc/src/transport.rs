@@ -13,12 +13,6 @@ pub struct Transport {
 }
 
 /// Speak msgpack-rpc over this process's stdin and stdout.
-///
-/// Neovim wires those to the channel it creates for `jobstart(cmd, { rpc = true })`, so nothing
-/// else may write to stdout for the lifetime of the process. Diagnostics go to stderr.
-///
-/// Both directions get a dedicated OS thread. `rmpv` decodes from a blocking reader, and giving
-/// each direction its own thread keeps that blocking read off the async runtime entirely.
 pub fn stdio() -> Transport {
     let (incoming_tx, incoming) = mpsc::unbounded_channel();
     let (outgoing, outgoing_rx) = mpsc::unbounded_channel();
@@ -37,8 +31,7 @@ fn spawn_reader(sink: UnboundedSender<Message>) {
             loop {
                 match rmpv::decode::read_value(&mut reader) {
                     Ok(value) => match Message::from_value(value) {
-                        // A malformed frame is dropped rather than fatal: one bad message from the
-                        // peer should not take down a session with live database connections.
+                        // A malformed frame is dropped rather than fatal.
                         Err(error) => tracing::warn!(%error, "dropping malformed frame"),
                         Ok(message) => {
                             if sink.send(message).is_err() {
@@ -72,8 +65,7 @@ fn spawn_writer(mut source: UnboundedReceiver<Message>) {
                     tracing::error!(%error, "rpc write failed");
                     break;
                 }
-                // Flush per frame. Buffering across frames would let a notification sit in the
-                // buffer while the editor waits for it.
+                // Flush per frame.
                 if let Err(error) = writer.flush() {
                     tracing::error!(%error, "rpc flush failed");
                     break;

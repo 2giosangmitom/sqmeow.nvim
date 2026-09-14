@@ -1,8 +1,4 @@
 --- The public interface.
----
---- Everything a user or another plugin should call lives here. The modules underneath are free to
---- change shape; this is the surface that is documented and kept stable.
----
 ---@tag sqmeow-api
 ---@toc_entry Public interface
 
@@ -15,14 +11,9 @@ local function engine()
   return require('sqmeow.rpc')
 end
 
---- Open a connection.
----
---- Returns as soon as the engine has accepted the request. The connection is not usable until it
---- reports success, which arrives as an event and is announced to the user.
----
+--- Open a connection. Returns once the engine accepts the request; success arrives as an event.
 ---@param url string A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
----@param opts table|nil Options: `name` for the label shown in the interface; `database` and
---- `parent` open one database of the cluster that connection `parent` lists.
+---@param opts table|nil `name` labels it; `database` and `parent` open one database of cluster `parent`.
 ---@return integer|nil id The connection id, or nil if the engine refused the request.
 ---@return string|nil error
 ---@usage >lua
@@ -35,9 +26,7 @@ function M.connect(url, opts)
   local id = state.next_connection_id()
   local name = opts.name or require('sqmeow.url').label(url)
 
-  -- Recorded and drawn before the engine is asked. Its events can arrive while the request is
-  -- still waiting on an answer, and an event for a connection not recorded yet is dropped, which
-  -- left the drawer showing nothing while it connected.
+  -- Recorded and drawn before the engine is asked.
   state.failures[name] = nil
   state.add_connection({
     id = id,
@@ -61,7 +50,6 @@ function M.connect(url, opts)
 end
 
 --- Connect to a connection declared by a source.
----
 ---@param name string The name the source gave it.
 ---@return integer|nil id
 ---@return string|nil error
@@ -77,10 +65,6 @@ function M.connect_named(name)
 end
 
 --- Every connection the configured sources declare.
----
---- Reading a source is cheap, and re-reading it means a file edited outside the editor is picked
---- up without a restart.
----
 ---@return sqmeow.ConnectionSpec[] connections
 ---@return string[] problems
 function M.available()
@@ -88,7 +72,6 @@ function M.available()
 end
 
 --- Save a connection to the file source.
----
 ---@param name string
 ---@param url string
 ---@return boolean written
@@ -100,12 +83,7 @@ function M.save(name, url)
   return written
 end
 
---- Change what a saved connection is called, or where it points.
----
---- The saved entry and any open connection under that name are changed together, since a user who
---- renames one of them meant both: they are one connection as far as anyone but this plugin is
---- concerned.
----
+--- Change a saved connection's name or URL, and rename its open connection to match.
 ---@param name string The name it is saved under now.
 ---@param changes table `name` and `url`; either may be left out to keep what is there.
 ---@return boolean written
@@ -141,10 +119,6 @@ function M.edit(name, changes)
 end
 
 --- Change what an open connection is called.
----
---- The name is the plugin's own: the engine keeps one for its log, and everything the user sees is
---- drawn from here. So this is a local change, and nothing has to be reconnected for it.
----
 ---@param id integer
 ---@param name string
 ---@return boolean renamed
@@ -162,7 +136,6 @@ function M.rename(id, name)
 end
 
 --- Close a connection.
----
 ---@param id integer|nil Defaults to the current connection.
 function M.disconnect(id)
   local state = require('sqmeow.state')
@@ -183,11 +156,6 @@ function M.disconnect(id)
 end
 
 --- Make a connection the active one.
----
---- The active connection is what a query runs on when the buffer it came from does not name one of
---- its own. Changing it redraws everything that says which database is in play, because a switch
---- nobody can see is the same as no switch at all.
----
 ---@param id integer
 ---@return sqmeow.Connection|nil connection The one now active, or nil if there is no such id.
 function M.use(id)
@@ -205,14 +173,6 @@ function M.use(id)
 end
 
 --- Which connection a query from this buffer belongs to.
----
---- A scratchpad is opened for one database and named after it, so it runs there whatever else is
---- active. Anything else runs on the active connection.
----
---- A buffer bound to a database that is not open is an error rather than a reason to fall back:
---- running `staging.sql` against production because staging happens to be closed is the mistake
---- this whole idea exists to prevent.
----
 ---@param buf integer|nil Defaults to the current buffer.
 ---@return sqmeow.Connection|nil connection
 ---@return string|nil error Why there is none.
@@ -236,15 +196,8 @@ function M.target(buf)
 end
 
 --- Run SQL on the current connection.
----
---- Returns as soon as the engine has accepted the query, with the id that identifies it. Rows
---- arrive in the result buffer later, written by the engine itself.
----
----@param sql string One or more statements. Only the last one's rows are shown.
----@param opts table|nil `line` runs only the statement at that zero-based line; `source_buf` is
---- the buffer an error should be reported in; `history = false` keeps the query out of the log,
---- for SQL the plugin wrote rather than the user; `conn_id` runs on that connection rather than the
---- one the buffer belongs to.
+---@param sql string One or more statements.
+---@param opts table|nil `line` runs only the statement at that zero-based line.
 ---@return integer|nil call_id
 ---@return string|nil error
 function M.execute(sql, opts)
@@ -270,8 +223,7 @@ function M.execute(sql, opts)
   local result = require('sqmeow.ui.result')
   result.open()
 
-  -- The rows are saved only for a query that goes in the log, and only when the log itself is
-  -- saved: a result on disk that no entry points at is a copy of someone's data for nothing.
+  -- Rows are saved only for logged queries, and only when the log is saved.
   local recorded = opts.history ~= false
   local archive = recorded
       and require('sqmeow.config').get().query.persist_history
@@ -289,8 +241,7 @@ function M.execute(sql, opts)
     return nil, err
   end
 
-  -- The SQL is the plugin's to remember: the engine has no reason to send back text the editor
-  -- already has.
+  -- The SQL is the plugin's to remember.
   state.call = {
     call_id = call_id,
     conn_id = connection.id,
@@ -311,11 +262,6 @@ function M.execute_buffer()
 end
 
 --- Run the statement the cursor is in.
----
---- The whole buffer is sent along with the cursor line, and the engine picks the statement, using
---- the same splitter that would have split the buffer. Doing it that way means there is one answer
---- to what counts as a statement, rather than one here and a different one there.
----
 ---@return integer|nil call_id
 function M.execute_statement()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
@@ -326,9 +272,6 @@ function M.execute_statement()
 end
 
 --- Run the most recent visual selection.
----
---- Reads the `<` and `>` marks, so it works both from a `:` command on a selection and from a
---- mapping that leaves visual mode first.
 ---@return integer|nil call_id
 function M.execute_selection()
   local start_pos = vim.api.nvim_buf_get_mark(0, '<')
@@ -347,7 +290,6 @@ function M.execute_selection()
 end
 
 --- Stop the running query.
----
 ---@return boolean stopped Whether there was a query to stop.
 function M.cancel()
   local state = require('sqmeow.state')
@@ -360,10 +302,6 @@ function M.cancel()
 end
 
 --- Move the result window to another page.
----
---- Nothing is asked of the engine beyond the rows themselves: how many fit on a page and where the
---- view has got to are this side's to know, so the arithmetic is here.
----
 ---@param to fun(offset: integer, size: integer, rows: integer): integer
 local function turn_page(to)
   local state = require('sqmeow.state')
@@ -407,8 +345,6 @@ function M.last_page()
 end
 
 --- Show the result in a float, or put it back in its split.
----
---- A bigger window on the same grid, with the same keys.
 function M.toggle_float()
   require('sqmeow.ui.result').toggle_float()
 end
@@ -418,14 +354,10 @@ function M.review()
   require('sqmeow.ui.edit').review()
 end
 
---- Filter and sort the current result's rows.
----
---- The engine does it over the rows it holds, so nothing is asked of the database again. Columns
---- are zero-based; a filter without one searches every column.
----
+--- Filter and sort the current result's rows in the engine. Columns are zero-based; a filter
+--- without one searches every column.
 ---@param view { filters: { column: integer|nil, op: string, value: string|nil }[]|nil, sort: { column: integer, descending: boolean|nil }[]|nil }
---- `op` is one of `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `starts_with`, `is_null`,
---- `not_null`. Either list left out is kept as it is.
+--- `op`: `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `starts_with`, `is_null`, `not_null`.
 ---@usage >lua
 ---   require('sqmeow.api').view({ filters = { { column = 1, op = 'contains', value = 'al' } } })
 --- <
@@ -448,9 +380,6 @@ function M.close()
 end
 
 --- Put a past result back in the result window.
----
---- Nothing is run again: the engine still holds the rows, so this only asks it to repaint them.
----
 ---@param call_id integer From the query log.
 function M.reopen(call_id)
   local state = require('sqmeow.state')
@@ -464,16 +393,11 @@ function M.reopen(call_id)
     end
   end
 
-  -- Nothing is asked of the engine but the rows: it still holds them, and the summary the log kept
-  -- carries everything needed to lay the columns out again.
+  -- Nothing is asked of the engine but the rows.
   result.render(state.call)
 end
 
 --- Show a logged result the engine no longer holds, from the copy saved beside the log.
----
---- Nothing is run. The engine reads the file and reports it as `call:state`, the way it reports a
---- query, so the grid, paging, the row detail and exports all work on it as they did when it ran.
----
 ---@param entry table From the query log, with a saved result.
 ---@return integer|nil call_id
 ---@return string|nil error
@@ -506,14 +430,7 @@ function M.restore(entry)
 end
 
 --- Write the current result to a file.
----
---- Without a `path`, asks for the format, file and whether to write a header in a dialog that
---- shows the query being exported.
----
----@param opts table|nil `path` skips the dialog; `clipboard = true` skips it too and copies instead;
---- `format` is 'csv' or 'json'; `headers` defaults to true; `offset` and `limit` write that many rows
---- from that one, zero-based, rather than all rows. Rows are written as the grid shows them:
---- filtered, sorted, and without the hidden columns.
+---@param opts table|nil `path` skips the dialog.
 function M.export(opts)
   opts = opts or {}
   local state = require('sqmeow.state')
@@ -543,8 +460,7 @@ function M.export(opts)
     return write(opts.format or 'csv', opts.path, opts.headers ~= false)
   end
 
-  -- Named after the table the query reads from, as far as a pattern can tell, and otherwise after
-  -- the connection. Quotes and a schema in front are dropped: `"public"."people"` is `people`.
+  -- Named after the table the query reads from, else the connection.
   local relation = (call.statement or ''):match('[Ff][Rr][Oo][Mm]%s+([%w_%.`"%[%]]+)')
   relation = relation and relation:gsub('[`"%[%]]', ''):match('([^.]+)$')
   local connection = call.connection or (state.connections[call.conn_id] or {}).name or 'result'
@@ -565,8 +481,7 @@ function M.export(opts)
   local function to_file(values)
     return values.destination ~= 'Clipboard'
   end
-  -- The file the last refused save would have replaced. Saving again with the same answers is the
-  -- confirmation, so overwriting takes one more key rather than a prompt of its own.
+  -- The file the last refused save would have replaced.
   local confirmed
 
   local ok, err = require('sqmeow.ui.form').open({
@@ -593,8 +508,7 @@ function M.export(opts)
       path = vim.fn.fnamemodify(vim.uv.cwd() or '.', ':~'),
       headers = 'yes',
     },
-    -- What will be written, in the format chosen: the rows and columns the grid shows, with or
-    -- without the header. The engine renders it, so it is exactly what the file will hold.
+    -- What will be written, in the format chosen.
     preview = {
       title = title,
       filetype = function(values)
@@ -659,11 +573,7 @@ function M.export(opts)
 end
 
 --- Create a scratchpad for a connection, asking what to call it.
----
---- Asked rather than named for the user: a connection can have any number of scratchpads, and only
---- the person about to write in one knows what it is for.
----
----@param connection string|nil Connection name. Defaults to the current connection.
+---@param connection string|nil Connection name.
 function M.scratchpad(connection)
   require('sqmeow.events').ensure()
   local state = require('sqmeow.state')
@@ -706,10 +616,6 @@ function M.close_drawer()
 end
 
 --- Open the drawer and the result window.
----
---- What `:Sqmeow` on its own does. No scratchpad is opened: scratchpads are created when someone
---- asks for one, and the window beside the drawer keeps whatever it was showing. The drawer takes
---- the left and the result the strip along the bottom.
 function M.open_all()
   require('sqmeow.events').ensure()
 

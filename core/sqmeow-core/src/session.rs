@@ -1,16 +1,11 @@
-//! Everything one editor session holds: its connections, its results, and the options the plugin
-//! configured.
-//!
-//! Results outlive the query that produced them. A user can page through an earlier result while a
-//! new query runs, and reopen one from the call log, so finished results stay until the history
-//! cap pushes them out.
+//! Everything one editor session holds.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{CatalogEntry, ResultSet};
+use sqmeow_db::ResultSet;
 use tokio_util::sync::CancellationToken;
 
 /// Engine-side settings, mirrored from the plugin's configuration.
@@ -54,55 +49,22 @@ pub struct Connection {
     pub id: i64,
     pub name: String,
     pub backend: Backend,
-    /// Every relation in every schema, once something has asked for it.
-    ///
-    /// The drawer reads one level at a time, but the relation picker searches the whole
-    /// connection, and building that list costs one query per schema. Holding it here means the
-    /// picker is instant every time after the first, and an explicit refresh is what re-reads it.
-    catalog: Mutex<Option<Arc<Vec<CatalogEntry>>>>,
 }
 
 impl Connection {
     /// Record an open connection, with nothing introspected yet.
     pub fn new(id: i64, name: String, backend: Backend) -> Self {
-        Self {
-            id,
-            name,
-            backend,
-            catalog: Mutex::new(None),
-        }
-    }
-
-    /// The catalog, if it has already been read.
-    pub fn cached_catalog(&self) -> Option<Arc<Vec<CatalogEntry>>> {
-        self.catalog.lock().expect("catalog lock").clone()
-    }
-
-    /// Remember a catalog, replacing any earlier one.
-    pub fn store_catalog(&self, entries: Vec<CatalogEntry>) -> Arc<Vec<CatalogEntry>> {
-        let entries = Arc::new(entries);
-        *self.catalog.lock().expect("catalog lock") = Some(Arc::clone(&entries));
-        entries
-    }
-
-    /// Drop the cached catalog, so the next read goes back to the server.
-    pub fn forget_catalog(&self) {
-        *self.catalog.lock().expect("catalog lock") = None;
+        Self { id, name, backend }
     }
 }
 
 /// A finished result, kept so its rows can be read and reopened.
-///
-/// Which rows the editor is looking at is not recorded. The editor asks for the rows it wants and
-/// draws them, so where it has got to is its own business, and two windows on one result do not
-/// have to agree about it.
 #[derive(Debug)]
 pub struct Call {
     pub id: u64,
     pub conn_id: i64,
     pub result: ResultSet,
-    /// The rows the editor is paging through, when it filtered or sorted them: indices into
-    /// `result`, in the order shown. `None` is every row in the order the query returned them.
+    /// The rows the editor is paging through, when it filtered or sorted them.
     pub view: Mutex<Option<Arc<Vec<usize>>>>,
 }
 
@@ -270,56 +232,6 @@ mod tests {
         }
     }
 
-    async fn connection() -> Connection {
-        let backend = Backend::connect("sqlite::memory:")
-            .await
-            .expect("an in-memory database should open");
-        Connection::new(1, "scratch".into(), backend)
-    }
-
-    fn entry(name: &str) -> CatalogEntry {
-        CatalogEntry {
-            schema: "main".into(),
-            name: name.into(),
-            kind: sqmeow_db::RelationKind::Table,
-        }
-    }
-
-    #[tokio::test]
-    async fn a_connection_starts_with_no_catalog() {
-        assert!(connection().await.cached_catalog().is_none());
-    }
-
-    #[tokio::test]
-    async fn a_catalog_is_remembered_once_it_has_been_read() {
-        let connection = connection().await;
-        connection.store_catalog(vec![entry("people")]);
-
-        let cached = connection
-            .cached_catalog()
-            .expect("the catalog should be held");
-        assert_eq!(cached.len(), 1);
-        assert_eq!(cached[0].name, "people");
-    }
-
-    #[tokio::test]
-    async fn storing_a_catalog_replaces_the_one_before_it() {
-        let connection = connection().await;
-        connection.store_catalog(vec![entry("people")]);
-        connection.store_catalog(vec![entry("people"), entry("orders")]);
-
-        assert_eq!(connection.cached_catalog().expect("held").len(), 2);
-    }
-
-    #[tokio::test]
-    async fn forgetting_a_catalog_sends_the_next_read_back_to_the_server() {
-        let connection = connection().await;
-        connection.store_catalog(vec![entry("people")]);
-        connection.forget_catalog();
-
-        assert!(connection.cached_catalog().is_none());
-    }
-
     #[test]
     fn call_ids_start_at_one_and_do_not_repeat() {
         let session = Session::default();
@@ -394,8 +306,7 @@ mod tests {
 
     #[test]
     fn a_stored_result_keeps_every_row_for_the_editor_to_ask_for() {
-        // Where the editor has got to is not recorded here any more: it asks for the rows it wants
-        // and draws them, so two windows on one result need not agree about a page.
+        // Where the editor has got to is not recorded here any more.
         let session = Session::default();
         session.store_call(call(1, 250));
 

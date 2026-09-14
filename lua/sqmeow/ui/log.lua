@@ -1,18 +1,10 @@
 --- What has been run, and what came back.
----
---- The log outlives the session. Every query the user submits is written to |sqmeow.history| with
---- the rows it returned, so choosing one shows its result again, from last week as readily as from
---- a minute ago, without running anything.
 
 local M = {}
 
 local utils = require('sqmeow.utils')
 
 --- How long ago something ran, in words.
----
---- Rounded hard, because the point is to tell this morning's query from last month's, not to time
---- anything.
----
 ---@param at integer|nil Seconds since the epoch.
 ---@return string
 function M.ago(at)
@@ -34,7 +26,6 @@ function M.ago(at)
 end
 
 --- What one entry says, without its statement.
----
 ---@param entry table
 ---@return string
 local function outcome(entry)
@@ -54,7 +45,6 @@ local function outcome(entry)
 end
 
 --- Describe one entry as a single line.
----
 ---@param entry table
 ---@return string
 function M.describe(entry)
@@ -65,7 +55,6 @@ function M.describe(entry)
 end
 
 --- The recorded queries, newest first, one row per statement.
----
 ---@param opts table|nil `connection` narrows to one name, `limit` caps the list.
 ---@return table[]
 function M.entries(opts)
@@ -73,11 +62,6 @@ function M.entries(opts)
 end
 
 --- Show what one entry returned.
----
---- From the engine's memory when it still holds the result, and from the copy saved with the log
---- otherwise. Nothing is run either way: a log holds deletes as readily as selects, and picking a
---- line out of a list is not the same as asking for it to happen again.
----
 ---@param entry table
 function M.reopen(entry)
   local history = require('sqmeow.history')
@@ -94,8 +78,7 @@ function M.reopen(entry)
     return utils.notify('the rows this query returned were not kept', vim.log.levels.WARN)
   end
 
-  -- A failure, a cancellation, or a statement that changed rows rather than returning any: what
-  -- the log recorded is the whole of what there is to show.
+  -- A failure, a cancellation, or a statement that changed rows rather than returning any.
   local state = require('sqmeow.state')
   local result = require('sqmeow.ui.result')
   local connection = entry.connection and state.connection_by_name(entry.connection)
@@ -118,9 +101,6 @@ function M.reopen(entry)
 end
 
 --- Show the log in the drawer.
----
---- The drawer is the one place the plugin lists things, so `:Sqmeow log` opens it there rather
---- than in a window of its own: one tree holding connections, scratchpads and what has been run.
 function M.open()
   local drawer = require('sqmeow.ui.drawer')
   drawer.open()

@@ -1,8 +1,4 @@
 //! Measuring and cutting text by how wide it looks, not how many bytes it is.
-//!
-//! A grid whose columns are measured in bytes or in `char`s misaligns the moment a result holds
-//! CJK text, an emoji, or a combining accent. Every measurement here goes through the Unicode
-//! width tables instead.
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -12,9 +8,6 @@ pub fn width(text: &str) -> usize {
 }
 
 /// How many columns a string occupies, giving up once past `cap`.
-///
-/// Measuring a megabyte of text to learn that it is wider than a 48 column limit is wasted work,
-/// and a result set can hold a hundred thousand such cells.
 pub fn width_capped(text: &str, cap: usize) -> usize {
     let mut total = 0usize;
     for character in text.chars() {
@@ -27,9 +20,6 @@ pub fn width_capped(text: &str, cap: usize) -> usize {
 }
 
 /// Cut a string to at most `limit` columns, marking it if anything was dropped.
-///
-/// The marker takes one column of the budget, so the result never exceeds `limit`. A `limit` of
-/// zero yields an empty string rather than a lone marker.
 pub fn truncate(text: &str, limit: usize, marker: &str) -> String {
     if width_capped(text, limit) <= limit {
         return text.to_owned();
@@ -56,8 +46,6 @@ pub fn truncate(text: &str, limit: usize, marker: &str) -> String {
 }
 
 /// Pad a string to `target` columns.
-///
-/// Padding is by display width, so a column of mixed scripts still lines up.
 pub fn pad(text: &str, target: usize, align_right: bool) -> String {
     let current = width(text);
     if current >= target {
@@ -121,8 +109,7 @@ mod tests {
 
     #[test]
     fn truncation_never_splits_a_wide_character() {
-        // Four columns of budget, one taken by the marker, leaves three: one wide character fits,
-        // the second would overflow.
+        // Four columns of budget, one taken by the marker, leaves three.
         let cut = truncate("日本語", 4, "…");
         assert_eq!(cut, "日…");
         assert_eq!(width(&cut), 3);

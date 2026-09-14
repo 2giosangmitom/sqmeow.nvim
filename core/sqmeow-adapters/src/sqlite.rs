@@ -1,8 +1,4 @@
 //! The SQLite adapter.
-//!
-//! SQLite is dynamically typed: a column declared `INTEGER` may hold text, so what a value *is*
-//! comes from the value, not from the column. Decoding here asks each value for its storage class
-//! rather than trusting the schema.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -27,25 +23,15 @@ pub struct SqliteAdapter {
 
 impl SqliteAdapter {
     /// Open a database.
-    ///
-    /// A missing file is an error unless the URL asks for one with `?mode=rwc`. Silently creating
-    /// an empty database because a path was mistyped is far more confusing than being told the
-    /// file is not there.
-    ///
-    /// The pool holds a single connection so that every statement of a multi-statement execution
-    /// shares one session. Otherwise `BEGIN`, a temporary table, or a pragma would apply to a
-    /// connection the next statement might not get.
     pub async fn connect(url: &str) -> Result<Self> {
         // Preparing a statement is how a result learns its columns, and a cached statement keeps
-        // the columns its table had when it was first prepared, so after an `ALTER TABLE` a
-        // `select *` would leave the new column out.
+        // the columns its table had when it was first prepared.
         let options = SqliteConnectOptions::from_str(url)
             .map_err(Error::driver)?
             .statement_cache_capacity(0);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
-            // sqlx retries a refused connection until this expires. A mistyped host should say so
-            // while the user still remembers typing it, not half a minute later.
+            // sqlx retries a refused connection until this expires.
             .acquire_timeout(crate::CONNECT_TIMEOUT)
             .connect_with(options)
             .await
@@ -74,14 +60,10 @@ impl SqliteAdapter {
     }
 
     /// Ask the pragmas which columns of one table are keys.
-    ///
-    /// A failure answers with nothing rather than an error: an icon is worth two pragmas, and it is
-    /// not worth failing the result the user actually asked for.
     async fn read_keys(&self, table: String) -> HashMap<String, KeyKind> {
         let mut keys = HashMap::new();
 
-        // Foreign keys first, so a column that is both has its primary key written over the top.
-        // Which is the order every other adapter resolves the two in.
+        // Foreign keys first.
         let sql = format!("pragma foreign_key_list({})", self.quote_ident(&table));
         match sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await {
             Ok(rows) => {
@@ -174,8 +156,7 @@ impl Adapter for SqliteAdapter {
     }
 
     async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
-        // The schema cannot be a bind parameter here: it qualifies the table being read, not a
-        // value in it. Quoting it is what makes that safe.
+        // The schema cannot be a bind parameter here.
         let sql = format!(
             "select name, type from {}.sqlite_master
              where type in ('table', 'view') and name not like 'sqlite_%'
@@ -203,8 +184,7 @@ impl Adapter for SqliteAdapter {
     }
 
     async fn routines(&self, _schema: &str) -> Result<Vec<RoutineNode>> {
-        // SQLite has no stored functions or procedures. An empty list rather than an error, so
-        // the drawer shows the groups as empty instead of failing the whole schema.
+        // SQLite has no stored functions or procedures.
         Ok(Vec::new())
     }
 
@@ -220,8 +200,6 @@ impl Adapter for SqliteAdapter {
             .await
             .map_err(Error::driver)?;
 
-        // A separate pragma, because SQLite has no one view joining a column to what it references.
-        // A table with no foreign keys at all answers with nothing, which is not an error.
         let sql = format!(
             "pragma {}.foreign_key_list({})",
             self.quote_ident(schema),
@@ -235,8 +213,7 @@ impl Adapter for SqliteAdapter {
             .filter_map(|row| {
                 let from = row.try_get::<String, _>("from").ok()?;
                 let table = row.try_get::<String, _>("table").ok()?;
-                // A reference that names no column points at the other table's primary key, which
-                // is what SQLite leaves out rather than spelling.
+                // A reference that names no column points at the other table's primary key.
                 let column = row
                     .try_get::<Option<String>, _>("to")
                     .ok()
@@ -253,8 +230,7 @@ impl Adapter for SqliteAdapter {
                 Some(ColumnNode {
                     foreign_key: references.get(&name).cloned(),
                     name,
-                    // A column with no declared type is legal in SQLite, and its values can be
-                    // anything, which is worth showing rather than leaving blank.
+                    // SQLite allows a column with no declared type.
                     type_name: match row.try_get::<String, _>("type").ok()? {
                         empty if empty.is_empty() => "any".to_owned(),
                         declared => declared,

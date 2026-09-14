@@ -1,15 +1,6 @@
 //! What a column holds, and whether it is a key.
-//!
-//! Both things the interface draws an icon for, and both needed in two places: the schema drawer
-//! knows them from introspection, and a result grid knows them from the statement it just ran. The
-//! vocabulary lives here so those two paths agree on it rather than each inventing their own.
 
 /// What kind of value a column holds, as a small closed set.
-///
-/// Deliberately much smaller than the list of type names a database has. Three dialects spell the
-/// same idea five ways between them — `int4`, `bigint`, `integer`, `numeric(30,3)`, `real` are all
-/// "a number" to someone reading a grid — and an icon per spelling would be a table nobody can
-/// keep correct and nobody can read. What survives is the distinction a reader acts on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TypeClass {
     Text,
@@ -28,9 +19,6 @@ pub enum TypeClass {
 
 impl TypeClass {
     /// The name both sides of the protocol use for this class.
-    ///
-    /// Also the key the plugin's icon table is written with, so a user reading their own
-    /// configuration sees the same word the engine does.
     pub fn name(self) -> &'static str {
         match self {
             Self::Text => "text",
@@ -45,9 +33,6 @@ impl TypeClass {
     }
 
     /// Resolve the name the protocol carries back to a class.
-    ///
-    /// Unknown names answer `None` rather than [`Self::Unknown`], so a caller can tell a class it
-    /// does not recognise from a column it cannot classify.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "text" => Some(Self::Text),
@@ -63,16 +48,10 @@ impl TypeClass {
     }
 
     /// Classify a type name, however the database spelled it.
-    ///
-    /// Handles both forms the codebase sees: the driver's short name for a result column
-    /// (`INT4`, `VARCHAR`), and the schema's own declaration for a drawer column
-    /// (`character varying(10)`, `timestamp with time zone`). One classifier for both, because a
-    /// column should not change icon depending on which view is looking at it.
     pub fn from_type_name(raw: &str) -> Self {
         let name = normalize_type_name(raw);
 
-        // Geometric types are checked by name before anything else, because `POINT` ends in the
-        // same three letters every integer type does and is emphatically not a number.
+        // Geometric types are checked by name before anything else.
         if matches!(
             name.as_str(),
             "POINT" | "LINE" | "LSEG" | "BOX" | "PATH" | "POLYGON" | "CIRCLE"
@@ -82,10 +61,7 @@ impl TypeClass {
 
         let has = |needle: &str| name.contains(needle);
 
-        // Ordered, and the order is load-bearing. `JSONB` holds text, `TIMESTAMP` does not hold a
-        // stamp, and `VARBINARY` is not a variable. Each arm is reached only once the arms that
-        // would wrongly claim its names have already declined it.
-        // `OBJECT`, `ARRAY`, `OBJECTID`, `BINDATA` and `LONG` are how MongoDB names its BSON types.
+        // Ordered, and the order is load-bearing.
         if has("JSON") || matches!(name.as_str(), "OBJECT" | "ARRAY") {
             Self::Json
         } else if has("UUID") || matches!(name.as_str(), "UNIQUEIDENTIFIER" | "OBJECTID") {
@@ -131,13 +107,6 @@ impl TypeClass {
 }
 
 /// Reduce a type name to the part worth matching on.
-///
-/// Public because the plugin's own per-type icon table is keyed this way: someone who writes
-/// `varchar(255)` where `VARCHAR` would do should still get their glyph.
-///
-/// Uppercased, with any parameters and any array suffix dropped: `numeric(30,3)` and `numeric` are
-/// the same class, and so are `int4` and `int4[]`. An array is classified by what it holds, which
-/// is the only thing about it an icon could usefully say.
 pub fn normalize_type_name(raw: &str) -> String {
     let mut name = raw.trim();
     if let Some((head, _)) = name.split_once('(') {
@@ -150,10 +119,6 @@ pub fn normalize_type_name(raw: &str) -> String {
 }
 
 /// Whether a column is a key, and which kind.
-///
-/// Only the two kinds a reader navigates by. A unique constraint is not here: it says a value does
-/// not repeat, which is worth knowing and is not worth a glyph in a header that has to stay
-/// readable at a glance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum KeyKind {
     #[default]
@@ -188,9 +153,6 @@ impl KeyKind {
 }
 
 /// What a foreign key points at.
-///
-/// Shown in the drawer beside the column, where there is room for it. The grid header has none, so
-/// a result column carries only [`KeyKind`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForeignKey {
     pub table: String,

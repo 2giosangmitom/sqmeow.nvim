@@ -1,5 +1,4 @@
-// Cases every Redis-protocol server must pass. Not a test target of its own: `tests/redis.rs` and
-// `tests/dragonfly.rs` each define `server!` for their own server and include this after it.
+// Cases every Redis-protocol server must pass.
 
 use sqmeow_adapters::Backend;
 use sqmeow_db::{Cell, Error, KeyType, RelationKind, ResultSet};

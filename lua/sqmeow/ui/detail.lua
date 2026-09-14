@@ -1,8 +1,4 @@
 --- One row, read down the page instead of across it, in a popup.
----
---- A grid is the wrong shape for a wide table: most of its columns are off the side of the window.
---- This lists one row as a line per column, with its name, its type and its value, the way a
---- database client's row detail does, and `q` closes it again.
 
 local M = {}
 
@@ -14,7 +10,6 @@ local popup = nil
 local TYPE_WIDTH = 16
 
 --- Lay a row out as lines, each value on one line and cut to fit.
----
 ---@param columns table[] As the engine sends them, each with `key` from the result's columns.
 ---@param width integer The width the lines have to fit in.
 ---@return NuiLine[]
@@ -59,7 +54,6 @@ function M.lines(columns, width)
 end
 
 --- Show one row of the current result.
----
 ---@param row integer Zero-based row index within the whole result.
 function M.open(row)
   local call = require('sqmeow.state').call

@@ -59,8 +59,7 @@ T['engine']['restarts'] = function()
   eq(rpc.info().pid ~= pid, true)
 end
 
--- Subscriptions outlive a case, so each one is recorded and dropped afterwards. Otherwise a
--- handler from an earlier case still fires during a later one.
+-- Subscriptions outlive a case.
 local unsubscribes = {}
 
 local function subscribe(event, callback)

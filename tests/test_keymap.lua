@@ -45,8 +45,7 @@ T['defaults']['use the same key for the same thing on every read-only surface'] 
 end
 
 T['defaults']['leave an editing buffer its own motions'] = function()
-  -- A scratchpad is a buffer someone types SQL into. `?` is a search there and `q` records a
-  -- macro, and taking either would be a nasty surprise.
+  -- A scratchpad is a buffer someone types SQL into.
   eq(find('editor', 'help'), nil)
   eq(find('editor', 'close'), nil)
 end
