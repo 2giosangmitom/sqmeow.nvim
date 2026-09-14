@@ -1,5 +1,8 @@
 # Everything CI runs, runnable locally with the same command.
 
+# Extra cargo flags; CI sets `--features bundled-duckdb`.
+cargo_flags := env_var_or_default("SQMEOW_CARGO_FLAGS", "")
+
 default: lint test docs-check
 
 # Compile the engine in release mode, which is what the plugin prefers to load.
@@ -14,7 +17,7 @@ lint: lint-rust lint-lua
 
 lint-rust:
     cargo fmt --all --check
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --all-targets {{cargo_flags}} -- -D warnings
 
 lint-lua:
     stylua --check .
@@ -55,7 +58,7 @@ test-rust:
     if [ -n "$(docker compose ps --status running --quiet cassandra 2>/dev/null)" ]; then
         export SQMEOW_TEST_CASSANDRA_URL="cassandra://127.0.0.1:59043/"
     fi
-    cargo test --all-features
+    cargo test {{cargo_flags}}
 
 # Start the PostgreSQL, MySQL, Redis, Dragonfly, MongoDB, ScyllaDB and Cassandra servers the integration tests use.
 db-up:

@@ -11,6 +11,9 @@ repository.workspace = true
 name = "sqmeow-core"
 path = "src/main.rs"
 
+[features]
+bundled-duckdb = ["sqmeow-adapters/bundled-duckdb"]
+
 [dependencies]
 sqmeow-rpc.workspace = true
 sqmeow-db.workspace = true
