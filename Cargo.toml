@@ -59,6 +59,8 @@ scylla = { version = "1.8", features = ["chrono-04", "bigdecimal-04", "num-bigin
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
 csv = "1.4"
+# Reads a query's FROM aliases, and parses the filters typed for results held in memory.
+sqlparser = { version = "0.63", default-features = false, features = ["std"] }
 # The version sqlx's SQLite driver links, for `sqlite3_interrupt`, which sqlx does not expose.
 libsqlite3-sys = "0.37"
 percent-encoding = "2"

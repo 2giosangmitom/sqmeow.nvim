@@ -93,7 +93,8 @@ impl SqliteAdapter {
             .await;
         // SQLite traces a compound `SELECT`'s columns to its first part, though rows come from every part.
         let plain = sqmeow_db::sql::plain(Dialect::Sqlite, statement);
-        let source = match self.keys.source(&origins, plain) {
+        let sides = sqmeow_db::sql::Sides::read(Dialect::Sqlite, statement);
+        let source = match self.keys.source(&origins, plain, sides) {
             Some(source) if !self.compound(statement).await => Some(source),
             _ => None,
         };

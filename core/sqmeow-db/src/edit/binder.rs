@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use crate::sql::{Side, Sides};
+
 use super::{Source, Table};
 
 /// A table as the catalog names it.
@@ -28,6 +30,9 @@ impl TableName {
     }
 }
 
+/// A table, and the alias it is read through when the query reads it more than once.
+type Read = (TableName, Option<String>);
+
 /// Collects where each result column came from and keeps the tables whose rows can be found again.
 ///
 /// Every SQL adapter feeds it the same way, so which tables are editable is decided in one place.
@@ -36,6 +41,8 @@ pub struct TableBinder {
     bound: Vec<(usize, TableName, String)>,
     /// Find a table with no whole key in the result by every column it shows.
     every_column: bool,
+    /// Which read of a table each column came through, for a table the query reads twice.
+    sides: Sides,
 }
 
 impl TableBinder {
@@ -46,6 +53,12 @@ impl TableBinder {
         self
     }
 
+    /// Tell apart the reads of a table the query reads more than once.
+    pub fn sides(mut self, sides: Sides) -> Self {
+        self.sides = sides;
+        self
+    }
+
     /// Record that result column `column` shows `table`'s column `name`.
     pub fn bind(&mut self, column: usize, table: TableName, name: impl Into<String>) {
         self.bound.push((column, table, name.into()));
@@ -53,21 +66,36 @@ impl TableBinder {
 
     /// The tables with a whole key in the result, or `None` when no table has one. `keys` lists a
     /// table's primary key, then its unique keys, and the first one found in full is used.
-    pub fn build(mut self, keys: impl Fn(&TableName) -> Vec<Vec<String>>) -> Option<Source> {
-        self.bound.sort_by_key(|(column, ..)| *column);
-        let every_column = self.every_column;
+    pub fn build(self, keys: impl Fn(&TableName) -> Vec<Vec<String>>) -> Option<Source> {
+        let Self {
+            mut bound,
+            every_column,
+            sides,
+        } = self;
+        bound.sort_by_key(|(column, ..)| *column);
 
-        let mut grouped: Vec<(TableName, Vec<(usize, String)>)> = Vec::new();
-        for (column, table, name) in self.bound {
-            match grouped.iter_mut().find(|(known, _)| *known == table) {
+        // Each read of a table is grouped apart, and a table with a read that cannot be told is dropped.
+        let mut unknown: Vec<TableName> = Vec::new();
+        let mut grouped: Vec<(Read, Vec<(usize, String)>)> = Vec::new();
+        for (column, table, name) in bound {
+            let read = match sides.side(&table, column, &name) {
+                Side::Only => (table, None),
+                Side::Alias(alias) => (table, Some(alias)),
+                Side::Unknown => {
+                    unknown.push(table);
+                    continue;
+                }
+            };
+            match grouped.iter_mut().find(|(known, _)| *known == read) {
                 Some((_, columns)) => columns.push((column, name)),
-                None => grouped.push((table, vec![(column, name)])),
+                None => grouped.push((read, vec![(column, name)])),
             }
         }
+        grouped.retain(|((table, _), _)| !unknown.contains(table));
 
         let tables: Vec<Table> = grouped
             .into_iter()
-            .filter_map(|(table, columns)| {
+            .filter_map(|((table, _), columns)| {
                 // A table column shown twice is a self-join, whose sides cannot be told apart.
                 let mut seen = HashSet::new();
                 if !columns.iter().all(|(_, name)| seen.insert(name)) {
@@ -156,6 +184,24 @@ mod tests {
         binder.bind(1, TableName::parse("loose"), "v");
         binder.bind(0, TableName::parse("loose"), "w");
         assert_eq!(tables(binder.build(keys))[0].key, vec![0, 1]);
+    }
+
+    #[test]
+    fn each_read_of_a_self_joined_table_is_bound_apart() {
+        let sides = Sides::read(
+            crate::Dialect::Postgres,
+            "select c.id, p.id, p.name from people c join people p on p.id = c.boss",
+        );
+        let mut binder = TableBinder::default().sides(sides);
+        binder.bind(0, TableName::parse("people"), "id");
+        binder.bind(1, TableName::parse("people"), "id");
+        binder.bind(2, TableName::parse("people"), "name");
+
+        let tables = tables(binder.build(keys));
+        assert_eq!(tables.len(), 2);
+        assert_eq!(tables[0].key, vec![0]);
+        assert_eq!(tables[1].key, vec![1]);
+        assert_eq!(tables[1].column(2), Some("name"));
     }
 
     #[test]

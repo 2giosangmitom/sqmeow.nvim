@@ -147,7 +147,8 @@ impl PostgresAdapter {
         let mut columns = result_columns(prepared.columns());
         self.mark_keys(prepared.columns(), &mut columns).await;
         let plain = sqmeow_db::sql::plain(Dialect::Postgres, statement);
-        let source = self.source(prepared.columns(), plain).await;
+        let sides = sqmeow_db::sql::Sides::read(Dialect::Postgres, statement);
+        let source = self.source(prepared.columns(), plain, sides).await;
         (columns, source)
     }
 
@@ -313,7 +314,12 @@ struct Relation {
 
 impl PostgresAdapter {
     /// Bind each result column to its table column, keeping the tables whose whole key is selected.
-    async fn source(&self, prepared: &[PgColumn], plain: bool) -> Option<Source> {
+    async fn source(
+        &self,
+        prepared: &[PgColumn],
+        plain: bool,
+        sides: sqmeow_db::sql::Sides,
+    ) -> Option<Source> {
         let sources: Vec<Option<(Oid, i16)>> = prepared
             .iter()
             .map(|column| column.relation_id().zip(column.relation_attribute_no()))
@@ -339,7 +345,7 @@ impl PostgresAdapter {
         }
 
         let known = self.relations.lock().ok()?;
-        let mut binder = TableBinder::default().every_column(plain);
+        let mut binder = TableBinder::default().every_column(plain).sides(sides);
         for (index, source) in sources.iter().enumerate() {
             if let Some((oid, attribute)) = source
                 && let Some(relation) = known.get(oid)

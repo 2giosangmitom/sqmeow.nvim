@@ -114,9 +114,11 @@ impl MySqlAdapter {
         self.keys
             .mark(&origins, &mut columns, |table| self.read_keys(table))
             .await;
-        let source = self
-            .keys
-            .source(&origins, sqmeow_db::sql::plain(Dialect::MySql, statement));
+        let source = self.keys.source(
+            &origins,
+            sqmeow_db::sql::plain(Dialect::MySql, statement),
+            sqmeow_db::sql::Sides::read(Dialect::MySql, statement),
+        );
         (columns, source)
     }
 

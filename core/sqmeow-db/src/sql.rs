@@ -1,5 +1,9 @@
 //! Splitting a buffer of SQL into statements.
 
+mod sides;
+
+pub use sides::{Side, Sides};
+
 use crate::adapter::Dialect;
 
 /// One statement, with enough position information to point an error back at the buffer.

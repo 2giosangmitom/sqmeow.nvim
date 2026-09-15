@@ -937,6 +937,37 @@ async fn a_query_run_again_after_its_table_changed_shows_the_change() {
 }
 
 #[tokio::test]
+async fn each_side_of_a_self_join_is_written_through_its_own_key() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists my_nodes").await;
+    run(
+        &backend,
+        "create table my_nodes (id int primary key, name text, parent int)",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into my_nodes values (1, 'root', null), (2, 'child', 1)",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select c.id, c.name, p.id as parent_id, p.name as parent
+         from my_nodes c join my_nodes p on p.id = c.parent",
+    )
+    .await;
+    let changes = Changes {
+        updates: vec![(0, vec![(1, "leaf".into()), (3, "top".into())])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.expect("the plan should apply");
+    let names = run(&backend, "select name from my_nodes order by id").await;
+    assert_eq!(names.column_cells(0), &[text("top"), text("leaf")]);
+}
+
+#[tokio::test]
 async fn a_join_is_edited_through_each_table_key() {
     let backend = connect(&server!()).await;
     run(&backend, "drop table if exists my_members, my_teams").await;
@@ -991,7 +1022,7 @@ async fn a_join_is_edited_through_each_table_key() {
     assert_eq!(after.cell(0, 1), Some(&text("blue")));
 
     for sql in [
-        "select a.id, a.name, b.id, b.name from my_members a join my_members b on b.id = a.id",
+        "select a.*, b.* from my_members a join my_members b on b.id = a.id",
         "select id, name from my_members union all select id, name from my_teams",
         "select team, count(*) from my_members group by team",
     ] {

@@ -520,11 +520,57 @@ async fn rows_that_cannot_be_found_again_have_no_source() {
 
     for sql in [
         "select count(*) from people",
-        "select p.id, q.id from people p join people q on p.id = q.id",
+        "select * from people p join people q on p.id = q.id",
         "select name, count(*) from people group by name",
     ] {
         assert!(run(&backend, sql).await.source().is_none(), "{sql}");
     }
+}
+
+#[tokio::test]
+async fn each_side_of_a_self_join_is_written_through_its_own_key() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table nodes (id integer primary key, name text, parent integer)",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into nodes values (1, 'root', null), (2, 'child', 1)",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select c.id, c.name, p.id as parent_id, p.name as parent
+         from nodes c join nodes p on p.id = c.parent",
+    )
+    .await;
+    let changes = Changes {
+        updates: vec![(0, vec![(1, "leaf".into()), (3, "top".into())])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.expect("the plan should apply");
+    let names = run(&backend, "select name from nodes order by id").await;
+    assert_eq!(names.column_cells(0), &[text("top"), text("leaf")]);
+
+    // Without the parent's key, the parent's side is found by the columns it shows.
+    let keyless = run(
+        &backend,
+        "select c.id, p.name from nodes c join nodes p on p.id = c.parent",
+    )
+    .await;
+    let changes = Changes {
+        updates: vec![(0, vec![(1, "root".into())])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&keyless, &changes).unwrap();
+    assert_eq!(
+        plan,
+        vec![r#"UPDATE "nodes" SET "name" = 'root' WHERE "name" = 'top'"#.to_owned()]
+    );
 }
 
 #[tokio::test]
@@ -851,7 +897,8 @@ async fn grouped_or_combined_rows_are_read_only() {
         "select id, name from people union all select id, name from people",
         "select id, name from people where id = 1 union select id, name from people",
         "select name, count(*) from people group by name",
-        "select a.id, a.name, b.id, b.name from people a join people b on b.id = a.id",
+        // A wildcard hides which side of a self-join each column is.
+        "select a.*, b.* from people a join people b on b.id = a.id",
     ] {
         assert!(run(&backend, sql).await.source().is_none(), "{sql}");
     }

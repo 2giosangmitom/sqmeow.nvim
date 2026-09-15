@@ -10,6 +10,7 @@ use sqlx::{
     AssertSqlSafe, ColumnIndex, Database, Decode, Either, Executor, Pool, Row, SqlSafeStr, Type,
     TypeInfo,
 };
+use sqmeow_db::sql::Sides;
 use sqmeow_db::{
     Cell, Column, Error, ForeignKey, KeyKind, Result, ResultSet, Source, TableBinder, TableName,
 };
@@ -385,10 +386,11 @@ impl TableKeys {
     }
 
     /// Where a result's rows are stored, from the tables read so far. `plain` is whether each row is a
-    /// table row, so a table without a key in the result can be found by every column.
-    pub(crate) fn source(&self, origins: &[Origin], plain: bool) -> Option<Source> {
+    /// table row, so a table without a key in the result can be found by every column, and `sides`
+    /// tells apart the reads of a table the query reads twice.
+    pub(crate) fn source(&self, origins: &[Origin], plain: bool, sides: Sides) -> Option<Source> {
         let known = self.0.lock().ok()?;
-        let mut binder = TableBinder::default().every_column(plain);
+        let mut binder = TableBinder::default().every_column(plain).sides(sides);
         for (column, origin) in origins.iter().enumerate() {
             if let Some((table, name)) = origin {
                 binder.bind(column, table.clone(), name.clone());
