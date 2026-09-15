@@ -20,7 +20,7 @@ sqmeow-db.workspace = true
 sqmeow-adapters.workspace = true
 
 rmpv.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "sync", "time", "net", "io-util"] }
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

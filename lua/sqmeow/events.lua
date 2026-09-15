@@ -26,6 +26,10 @@ function M.on_connection(payload)
   end
   state.failures[connection.name] = payload.state == 'error' and payload.error or nil
 
+  if payload.state == 'connected' then
+    require('sqmeow.session').connected(connection)
+  end
+
   -- A database opened from a cluster is drawn already open.
   if payload.state == 'connected' and connection.parent then
     vim.schedule(function()

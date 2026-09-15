@@ -134,13 +134,16 @@ local redis_servers = {
 }
 
 --- One level of the drawer, as the engine reports it.
-local function introspect(path)
+local function introspect(path, pattern)
   local reply
   -- Put back as soon as the level arrives rather than when the case ends.
   local original = helpers.swap(drawer, 'on_nodes', function(payload)
     reply = payload
   end)
-  rpc.request('introspect', { conn_id = state.current_connection().id, path = path })
+  rpc.request(
+    'introspect',
+    { conn_id = state.current_connection().id, path = path, pattern = pattern }
+  )
   helpers.wait_for('the drawer level should arrive', function()
     return reply ~= nil
   end, TIMEOUT)
@@ -195,6 +198,17 @@ for _, server in ipairs({ 'redis', 'dragonfly' }) do
     local key = named(introspect({ db, 'hashes' }), 'test:lua:hash')
     eq(key.kind, 'key')
     eq(key.expandable, false)
+  end
+
+  T[server]['lists only the keys matching a pattern'] = function()
+    run('SET test:lua:match:a 1')
+    run('SET test:lua:unmatched 1')
+
+    local db = introspect({})[1].name
+    eq(named(introspect({ db }, 'test:lua:match:*'), 'strings').count, 1)
+    local keys = introspect({ db, 'strings' }, 'test:lua:match:*')
+    eq(named(keys, 'test:lua:match:a').kind, 'key')
+    eq(named(keys, 'test:lua:unmatched'), nil)
   end
 
   T[server]['previews a key with the read for its type'] = function()
@@ -294,6 +308,24 @@ T['mongodb'] = MiniTest.new_set({
     end,
   },
 })
+
+T['mongodb']['filters and sorts a find in the server'] = function()
+  run('{"delete": "lua_filtered", "deletes": [{"q": {}, "limit": 0}]}')
+  run(
+    '{"insert": "lua_filtered", "documents": [{"_id": 1, "n": 1}, {"_id": 2, "n": 5}, {"_id": 3, "n": 9}]}'
+  )
+  run('{"find": "lua_filtered", "filter": {"n": {"$gt": 0}}}')
+  result.open()
+
+  local before = state.call.call_id
+  eq(result.filter('{"n": {"$gte": 5}}', '{"n": -1}'), true)
+  helpers.wait_for('the filtered find should arrive', function()
+    return state.call.call_id ~= before and state.call.state ~= 'executing'
+  end, TIMEOUT)
+  eq(state.call.state, 'done')
+  eq(state.call.rows, 2)
+  helpers.contains(lines()[1], '9')
+end
 
 T['mongodb']['connects and reports its dialect'] = function()
   eq(state.current_connection().dialect, 'mongodb')

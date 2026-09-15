@@ -6,7 +6,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::edit::Changes;
 use crate::error::Result;
-use crate::node::{ColumnNode, IndexNode, RelationNode, RoutineNode, SchemaNode};
+use crate::node::{
+    ColumnNode, Details, IndexNode, RelationNode, RoleNode, RoutineNode, SchemaNode,
+};
 use crate::result::ResultSet;
 
 /// Which SQL dialect a connection speaks.
@@ -61,6 +63,10 @@ impl Dialect {
             "mysql" | "mariadb" => Some(Self::MySql),
             // The trailing `s` is TLS, which is the driver's business and not a different dialect.
             "redis" | "rediss" | "valkey" | "valkeys" => Some(Self::Redis),
+            // Every node of a cluster, or the Sentinels that know where its master is.
+            "redis+cluster" | "rediss+cluster" | "redis+sentinel" | "rediss+sentinel" => {
+                Some(Self::Redis)
+            }
             // `+srv` finds the hosts through DNS, which is the driver's business too.
             "mongodb" | "mongodb+srv" => Some(Self::MongoDb),
             "scylla" | "cassandra" => Some(Self::Scylla),
@@ -132,6 +138,20 @@ pub trait Adapter: Send + Sync {
         async { Ok(Vec::new()) }
     }
 
+    /// The roles or users the server knows.
+    fn roles(&self) -> impl Future<Output = Result<Vec<RoleNode>>> + Send {
+        async { Ok(Vec::new()) }
+    }
+
+    /// Comments, foreign keys, checks, triggers and the definition of one relation.
+    fn details(
+        &self,
+        _schema: &str,
+        _relation: &str,
+    ) -> impl Future<Output = Result<Details>> + Send {
+        async { Ok(Details::default()) }
+    }
+
     /// Close the connection pool.
     fn close(&self) -> impl Future<Output = ()> + Send;
 }
@@ -164,7 +184,14 @@ mod tests {
             Dialect::from_url("mariadb://localhost/x"),
             Some(Dialect::MySql)
         );
-        for url in ["redis://h/0", "rediss://h/0", "valkey://h", "valkeys://h"] {
+        for url in [
+            "redis://h/0",
+            "rediss://h/0",
+            "valkey://h",
+            "valkeys://h",
+            "redis+cluster://a:7000,b:7001",
+            "redis+sentinel://s:26379/mymaster/0",
+        ] {
             assert_eq!(Dialect::from_url(url), Some(Dialect::Redis), "{url}");
         }
         for url in ["mongodb://h/app", "mongodb+srv://cluster.example.net/app"] {

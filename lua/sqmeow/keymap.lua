@@ -24,7 +24,8 @@ M.defaults = {
   drawer = {
     { action = 'toggle', lhs = { '<CR>', 'o' }, desc = 'Expand or collapse the node' },
     { action = 'preview', lhs = 'p', desc = 'Show the first page of this relation' },
-    { action = 'structure', lhs = 'K', desc = 'Show the columns and indexes of this table' },
+    { action = 'structure', lhs = 'K', desc = 'Show the structure of this table or key' },
+    { action = 'filter_keys', lhs = 'f', desc = 'Show only the Redis keys matching a pattern' },
     { action = 'refresh', lhs = 'r', desc = 'Reload this subtree' },
     { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified name' },
     { action = 'yank_select', lhs = 's', desc = 'Yank a SELECT for this relation' },

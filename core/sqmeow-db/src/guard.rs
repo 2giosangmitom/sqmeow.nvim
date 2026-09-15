@@ -90,32 +90,47 @@ const MONGO_READS: &[&str] = &[
 pub fn danger(dialect: Dialect, statement: &str) -> Option<String> {
     match dialect {
         Dialect::Redis => {
-            let word = first_word(statement);
-            matches!(word.as_str(), "flushall" | "flushdb")
-                .then(|| format!("{} empties the database", word.to_uppercase()))
+            let words: Vec<&str> = statement.split_whitespace().collect();
+            let word = words.first()?.to_ascii_lowercase();
+            match word.as_str() {
+                "flushall" | "flushdb" => {
+                    Some(format!("{} empties the database", word.to_uppercase()))
+                }
+                "del" | "unlink" if words.len() > 2 => Some(format!(
+                    "{} removes {} keys",
+                    word.to_uppercase(),
+                    words.len() - 1
+                )),
+                _ => None,
+            }
         }
-        Dialect::MongoDb => {
-            let keys = mongo_keys(statement)?;
-            let command = keys
-                .into_iter()
-                .find(|key| key == "drop" || key == "dropDatabase")?;
-            Some(format!("{command} removes everything it names"))
-        }
+        Dialect::MongoDb => mongo_danger(statement),
         _ => {
             let words = words(dialect, statement);
-            let (first, _) = words.first()?;
-            match first.as_str() {
+            // The verb a CTE leads up to, or the first one.
+            let verb = words.iter().position(|(word, depth)| {
+                *depth == 0
+                    && matches!(
+                        word.as_str(),
+                        "select"
+                            | "insert"
+                            | "update"
+                            | "delete"
+                            | "drop"
+                            | "truncate"
+                            | "merge"
+                            | "alter"
+                            | "create"
+                            | "replace"
+                    )
+            })?;
+            let first = words[verb].0.as_str();
+            match first {
                 "drop" | "truncate" => Some(format!("{} cannot be undone", first.to_uppercase())),
-                "delete" | "update"
-                    if !words
-                        .iter()
-                        .any(|(word, depth)| *depth == 0 && word == "where") =>
-                {
-                    Some(format!(
-                        "{} without WHERE changes every row",
-                        first.to_uppercase()
-                    ))
-                }
+                "delete" | "update" if !narrows(&words[verb..]) => Some(format!(
+                    "{} without WHERE changes every row",
+                    first.to_uppercase()
+                )),
                 _ => None,
             }
         }
@@ -161,6 +176,57 @@ pub fn writes(dialect: Dialect, statement: &str) -> bool {
     }
 }
 
+/// Whether a top-level `WHERE` narrows the rows, rather than being missing or always true.
+fn narrows(words: &[(String, usize)]) -> bool {
+    let Some(at) = words
+        .iter()
+        .position(|(word, depth)| *depth == 0 && word == "where")
+    else {
+        return false;
+    };
+    !words[at + 1..]
+        .iter()
+        .take_while(|(word, _)| !matches!(word.as_str(), "order" | "limit" | "returning"))
+        .all(|(word, _)| word == "true" || word.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// What a MongoDB command destroys: a drop, or a delete or multiple update with an empty filter.
+fn mongo_danger(statement: &str) -> Option<String> {
+    use serde_json::Value;
+
+    let command = serde_json::from_str::<serde_json::Map<String, Value>>(statement).ok()?;
+    if let Some(key) = command
+        .keys()
+        .find(|key| matches!(key.as_str(), "drop" | "dropDatabase" | "dropIndexes"))
+    {
+        return Some(format!("{key} removes everything it names"));
+    }
+    let unfiltered = |list: &str, every: fn(&Value) -> bool| {
+        command
+            .get(list)
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.get("q")
+                        .and_then(Value::as_object)
+                        .is_none_or(serde_json::Map::is_empty)
+                        && every(item)
+                })
+            })
+    };
+    if unfiltered("deletes", |item| {
+        item.get("limit").and_then(Value::as_i64) != Some(1)
+    }) {
+        return Some("a delete with an empty filter removes every document".to_owned());
+    }
+    if unfiltered("updates", |item| {
+        item.get("multi").and_then(Value::as_bool) == Some(true)
+    }) {
+        return Some("an update with an empty filter changes every document".to_owned());
+    }
+    None
+}
+
 /// The top-level keys of a MongoDB command.
 fn mongo_keys(statement: &str) -> Option<Vec<String>> {
     serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(statement)
@@ -170,7 +236,7 @@ fn mongo_keys(statement: &str) -> Option<Vec<String>> {
 
 /// The words of a statement outside quotes and comments, in lower case, each with how deep in
 /// parentheses it sits.
-fn words(dialect: Dialect, statement: &str) -> Vec<(String, usize)> {
+pub(crate) fn words(dialect: Dialect, statement: &str) -> Vec<(String, usize)> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut depth = 0usize;
@@ -241,6 +307,51 @@ mod tests {
         assert!(danger(Dialect::Redis, "FLUSHALL").is_some());
         assert!(danger(Dialect::MongoDb, r#"{"drop": "users"}"#).is_some());
         assert!(danger(Dialect::MongoDb, r#"{"find": "drop"}"#).is_none());
+    }
+
+    #[test]
+    fn a_hidden_or_always_true_whole_table_change_is_dangerous() {
+        let pg = Dialect::Postgres;
+        assert!(danger(pg, "with old as (select 1) delete from t").is_some());
+        assert!(danger(pg, "delete from t where 1 = 1").is_some());
+        assert!(danger(pg, "update t set a = 1 where true returning *").is_some());
+        assert!(
+            danger(
+                pg,
+                "with x as (delete from t where id = 1 returning *) select * from x"
+            )
+            .is_none()
+        );
+        assert!(danger(pg, "insert into t select * from u").is_none());
+        assert!(danger(pg, "alter table t drop column a").is_none());
+
+        assert!(danger(Dialect::Redis, "DEL a b").is_some());
+        assert!(danger(Dialect::Redis, "DEL a").is_none());
+
+        let mongo = Dialect::MongoDb;
+        assert!(
+            danger(
+                mongo,
+                r#"{"delete": "u", "deletes": [{"q": {}, "limit": 0}]}"#
+            )
+            .is_some()
+        );
+        assert!(danger(mongo, r#"{"delete": "u", "deletes": [{"q": {"_id": 1}}]}"#).is_none());
+        assert!(
+            danger(
+                mongo,
+                r#"{"delete": "u", "deletes": [{"q": {}, "limit": 1}]}"#
+            )
+            .is_none()
+        );
+        assert!(
+            danger(
+                mongo,
+                r#"{"update": "u", "updates": [{"q": {}, "u": {"$set": {"a": 1}}, "multi": true}]}"#
+            )
+            .is_some()
+        );
+        assert!(danger(mongo, r#"{"dropIndexes": "u", "index": "*"}"#).is_some());
     }
 
     #[test]

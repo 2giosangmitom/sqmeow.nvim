@@ -57,6 +57,17 @@ function M.setup(opts)
     end,
   })
 
+  local session = vim.api.nvim_create_augroup('sqmeow.session', { clear = true })
+  if require('sqmeow.config').get().ui.persist_session then
+    vim.api.nvim_create_autocmd('VimLeavePre', {
+      group = session,
+      desc = 'Save the open sqmeow connections',
+      callback = function()
+        require('sqmeow.session').save()
+      end,
+    })
+  end
+
   -- A running engine holds the old settings, so tell it about the new ones.
   require('sqmeow.rpc').configure()
 end

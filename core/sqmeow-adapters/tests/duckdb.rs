@@ -247,14 +247,12 @@ async fn a_result_that_is_not_one_row_per_table_row_is_read_only() {
     run(&backend, "create table loose (id integer, name varchar)").await;
     run(&backend, "create view named as select * from people").await;
     for sql in [
-        "select name from people",
         "select distinct id, name from people",
         "select id, count(*) from people group by id",
         "with people as (select 1 as id) select id from people",
         "select id from people union all select id from people",
         "select a.id from people a join people b on a.id = b.id",
         "select id, id from people",
-        "select * from loose",
         "select * from named",
         "select 1 as id",
     ] {
@@ -368,7 +366,9 @@ async fn a_filtered_result_stays_editable() {
     .await;
 
     let origin = "select id, name from filtered order by id";
-    let wrapped = sqmeow_db::sql::filtered(origin, "name = 'bob'", "").unwrap();
+    let wrapped =
+        sqmeow_db::sql::filtered(sqmeow_db::Dialect::DuckDb, origin, "name = 'bob'", "", &[])
+            .unwrap();
     let result = backend
         .execute_wrapped(&wrapped, origin, NO_CAP, CancellationToken::new())
         .await
@@ -435,4 +435,123 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
     );
     let columns = backend.columns("main", "tagged").await.unwrap();
     assert_eq!(columns[2].default.as_deref(), Some("42"));
+}
+
+#[tokio::test]
+async fn a_read_only_file_is_refused_writes_by_duckdb() {
+    let path = std::env::temp_dir().join(format!("sqmeow-ro-{}.duckdb", std::process::id()));
+    let url = format!("duckdb:{}", path.display());
+    {
+        let backend = Backend::connect(&url).await.unwrap();
+        run(&backend, "create table t (id integer)").await;
+        backend.close().await;
+    }
+    let backend = Backend::connect_to(&url, None, true).await.unwrap();
+    run(&backend, "select * from t").await;
+    let error = backend
+        .execute("insert into t values (1)", NO_CAP, CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("read-only"), "{error}");
+    drop(backend);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn a_table_without_a_key_is_edited_by_every_column() {
+    let backend = database().await;
+    run(&backend, "create table loose (label varchar, n integer)").await;
+    run(&backend, "insert into loose values ('a', 1), ('b', null)").await;
+
+    let result = run(&backend, "select label, n from loose order by label").await;
+    let changes = Changes {
+        updates: vec![(1, vec![(0, "bee".into())])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.expect("the plan should apply");
+    let after = run(&backend, "select label from loose order by n nulls last").await;
+    assert_eq!(
+        after.column_cells(0),
+        &[Cell::Text("a".into()), Cell::Text("bee".into())]
+    );
+}
+
+#[tokio::test]
+async fn the_drawer_is_not_held_up_by_a_long_query() {
+    let backend = std::sync::Arc::new(database().await);
+    run(&backend, "create table t (id integer)").await;
+    let running = std::sync::Arc::clone(&backend);
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    let query = tokio::spawn(async move {
+        running
+            .execute("select count(*) from range(100000000000) a", NO_CAP, stop)
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let started = std::time::Instant::now();
+    assert!(
+        backend
+            .relations("main")
+            .await
+            .unwrap()
+            .iter()
+            .any(|relation| relation.name == "t")
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    cancel.cancel();
+    let _ = query.await;
+}
+
+#[tokio::test]
+async fn a_table_describes_its_comments_keys_checks_and_definition() {
+    let backend = database().await;
+    run(&backend, "create table det_parent (id integer primary key)").await;
+    run(
+        &backend,
+        "create table det_child (id integer primary key,
+             parent_id integer references det_parent (id), n integer check (n > 0))",
+    )
+    .await;
+    run(&backend, "comment on table det_child is 'children'").await;
+    run(&backend, "comment on column det_child.n is 'how many'").await;
+
+    let details = backend.details("main", "det_child").await.unwrap();
+    assert_eq!(
+        details.properties,
+        vec![("comment".into(), "children".into())]
+    );
+    assert_eq!(
+        details.column_comments,
+        vec![("n".into(), "how many".into())]
+    );
+    assert_eq!(details.foreign_keys[0].target, "det_parent");
+    assert_eq!(
+        details.foreign_keys[0].columns,
+        vec!["parent_id".to_owned()]
+    );
+    assert_eq!(details.checks.len(), 1, "{details:?}");
+    assert!(
+        details
+            .definition
+            .as_deref()
+            .is_some_and(|sql| sql.contains("CREATE TABLE det_child")),
+        "{details:?}"
+    );
+}
+
+#[tokio::test]
+async fn sequences_are_listed() {
+    let backend = database().await;
+    run(&backend, "create sequence listed_seq").await;
+    let relations = backend.relations("main").await.unwrap();
+    assert_eq!(
+        relations
+            .iter()
+            .find(|relation| relation.name == "listed_seq")
+            .map(|relation| relation.kind),
+        Some(RelationKind::Sequence)
+    );
 }

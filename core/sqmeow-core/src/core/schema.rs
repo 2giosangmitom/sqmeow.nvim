@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use rmpv::Value;
 use sqmeow_db::{
-    ColumnNode, Dialect, Error as DbError, IndexNode, KeyType, RelationKind, RelationNode,
-    RoutineKind, RoutineNode, SchemaNode,
+    ColumnNode, Details, Dialect, Error as DbError, IndexNode, KeyType, RelationKind, RelationNode,
+    RoleNode, RoutineKind, RoutineNode, SchemaNode,
 };
 
 use sqmeow_adapters::Backend;
@@ -23,9 +23,13 @@ impl Core {
         if path.len() > 3 {
             return Err("a schema path is at most [schema, group, relation]".to_owned());
         }
+        // A glob the drawer lists a Redis database's keys by.
+        let pattern = args
+            .opt_string("pattern")
+            .filter(|pattern| !pattern.is_empty());
         let connection = self.connection(conn_id)?;
 
-        let work = self.read_level(connection, path);
+        let work = self.read_level(connection, path, pattern);
         Ok((Value::Boolean(true), Box::pin(work)))
     }
 
@@ -45,7 +49,8 @@ impl Core {
                     named => named.to_owned(),
                 };
                 let columns = backend.columns(&named, &relation).await?;
-                Ok::<_, DbError>((columns, backend.indexes(&named, &relation).await?))
+                let indexes = backend.indexes(&named, &relation).await?;
+                Ok::<_, DbError>((columns, indexes, backend.details(&named, &relation).await?))
             };
             let mut payload = vec![
                 ("conn_id", Value::from(conn_id)),
@@ -53,9 +58,10 @@ impl Core {
                 ("relation", Value::from(relation.as_str())),
             ];
             match read.await {
-                Ok((columns, indexes)) => {
+                Ok((columns, indexes, details)) => {
                     payload.push(("columns", Value::Array(column_nodes(columns))));
                     payload.push(("indexes", Value::Array(index_nodes(indexes))));
+                    payload.extend(details_payload(details));
                 }
                 Err(error) => payload.push(("error", Value::from(error.to_string()))),
             }
@@ -65,15 +71,18 @@ impl Core {
     }
 
     /// Read one level of the schema tree.
-    async fn read_level(self: Arc<Self>, connection: Arc<Connection>, path: Vec<String>) {
+    async fn read_level(
+        self: Arc<Self>,
+        connection: Arc<Connection>,
+        path: Vec<String>,
+        pattern: Option<String>,
+    ) {
+        let pattern = pattern.as_deref();
         let nodes = match path.as_slice() {
-            // A cluster's databases are each opened as a connection of their own.
-            [] => match connection.backend.databases().await {
-                Some(databases) => databases.map(database_nodes),
-                None => connection.backend.schemas().await.map(schema_nodes),
-            },
-            [schema] => group_nodes(&connection, schema).await,
-            [schema, group] => members(&connection, schema, group).await,
+            [] => top_nodes(&connection).await,
+            [group] if group == ROLES => connection.backend.roles().await.map(role_nodes),
+            [schema] => group_nodes(&connection, schema, pattern).await,
+            [schema, group] => members(&connection, schema, group, pattern).await,
             // The group a relation sits under says nothing about its columns, so it is skipped.
             [schema, _group, relation] => connection
                 .backend
@@ -96,6 +105,55 @@ impl Core {
         }
         self.emit("schema:nodes", map(payload));
     }
+}
+
+/// The key the Roles heading is drawn under, which no schema is called.
+const ROLES: &str = "@roles";
+
+/// A connection's schemas, or a cluster's databases, and the Roles heading where the server has one.
+async fn top_nodes(connection: &Connection) -> Result<Vec<Value>, DbError> {
+    // A cluster's databases are each opened as a connection of their own.
+    let mut nodes = match connection.backend.databases().await {
+        Some(databases) => database_nodes(databases?),
+        None => schema_nodes(connection.backend.schemas().await?),
+    };
+    // Left out where the roles cannot be read, as by a user without the right to.
+    if matches!(
+        connection.backend.dialect(),
+        Dialect::Postgres | Dialect::MySql
+    ) && let Ok(roles) = connection.backend.roles().await
+    {
+        nodes.push(group_node(ROLES, "Roles", "roles", roles.len()));
+    }
+    Ok(nodes)
+}
+
+/// A schema's relations, or the keys of a Redis database that match `pattern`.
+async fn relations_of(
+    connection: &Connection,
+    schema: &str,
+    pattern: Option<&str>,
+) -> Result<Vec<RelationNode>, DbError> {
+    match pattern {
+        Some(pattern) if connection.backend.dialect() == Dialect::Redis => {
+            connection.backend.keys(pattern).await
+        }
+        _ => connection.backend.relations(schema).await,
+    }
+}
+
+fn role_nodes(roles: Vec<RoleNode>) -> Vec<Value> {
+    roles
+        .into_iter()
+        .map(|role| {
+            map(vec![
+                ("name", Value::from(role.name)),
+                ("kind", Value::from("role")),
+                ("expandable", Value::from(false)),
+                ("attributes", strings(role.attributes)),
+            ])
+        })
+        .collect()
 }
 
 /// The schema unqualified names resolve to.
@@ -138,12 +196,18 @@ fn database_nodes(databases: Vec<String>) -> Vec<Value> {
 }
 
 /// The groups a schema is drawn as, each with how many things it holds.
-async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>, DbError> {
-    let relations = connection.backend.relations(schema).await?;
+async fn group_nodes(
+    connection: &Connection,
+    schema: &str,
+    pattern: Option<&str>,
+) -> Result<Vec<Value>, DbError> {
+    let relations = relations_of(connection, schema, pattern).await?;
     let dialect = connection.backend.dialect();
 
     // Redis holds keys and nothing else, and what a key holds decides how it is read back.
     if dialect == Dialect::Redis {
+        // The drawer lists no more keys than the cap, so a count at it may be short.
+        let capped = relations.len() >= sqmeow_adapters::redis::MAX_KEYS;
         return Ok(KeyType::ALL
             .into_iter()
             .map(|wanted| {
@@ -152,13 +216,21 @@ async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>
                     .iter()
                     .filter(|r| r.kind == RelationKind::Key(wanted))
                     .count();
-                group_node(key, name, "keys", count)
+                let mut node = group_node(key, name, "keys", count);
+                if capped && let Value::Map(pairs) = &mut node {
+                    pairs.push((Value::from("capped"), Value::from(true)));
+                }
+                node
             })
             .collect());
     }
 
     let tables = relations.iter().filter(|r| is_table(r.kind)).count();
-    let views = relations.len() - tables;
+    let sequences = relations
+        .iter()
+        .filter(|r| r.kind == RelationKind::Sequence)
+        .count();
+    let views = relations.len() - tables - sequences;
 
     // MongoDB calls its tables collections, and has no stored routines to group.
     if dialect == Dialect::MongoDb {
@@ -180,6 +252,12 @@ async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>
         group_node("views", "Views", "views", views),
         group_node("functions", "Functions", "functions", functions),
     ];
+    if sequences > 0 {
+        groups.insert(
+            2,
+            group_node("sequences", "Sequences", "sequences", sequences),
+        );
+    }
     // CQL has user-defined functions and aggregates, but no procedures.
     if dialect != Dialect::Scylla {
         groups.push(group_node(
@@ -194,7 +272,10 @@ async fn group_nodes(connection: &Connection, schema: &str) -> Result<Vec<Value>
 
 /// Whether a relation belongs under Tables rather than under Views.
 fn is_table(kind: RelationKind) -> bool {
-    !matches!(kind, RelationKind::View | RelationKind::MaterializedView)
+    !matches!(
+        kind,
+        RelationKind::View | RelationKind::MaterializedView | RelationKind::Sequence
+    )
 }
 
 /// What one group holds.
@@ -202,15 +283,22 @@ async fn members(
     connection: &Connection,
     schema: &str,
     group: &str,
+    pattern: Option<&str>,
 ) -> Result<Vec<Value>, DbError> {
     match group {
-        "tables" | "views" => {
-            let want_tables = group == "tables";
+        "tables" | "views" | "sequences" => {
             let relations = connection.backend.relations(schema).await?;
             Ok(relation_nodes(
                 relations
                     .into_iter()
-                    .filter(|relation| is_table(relation.kind) == want_tables)
+                    .filter(|relation| match group {
+                        "tables" => is_table(relation.kind),
+                        "views" => matches!(
+                            relation.kind,
+                            RelationKind::View | RelationKind::MaterializedView
+                        ),
+                        _ => relation.kind == RelationKind::Sequence,
+                    })
                     .collect(),
             ))
         }
@@ -236,7 +324,7 @@ async fn members(
             else {
                 return Err(DbError::driver(format!("no `{other}` group in a schema")));
             };
-            let relations = connection.backend.relations(schema).await?;
+            let relations = relations_of(connection, schema, pattern).await?;
             Ok(relation_nodes(
                 relations
                     .into_iter()
@@ -281,7 +369,10 @@ fn relation_nodes(relations: Vec<RelationNode>) -> Vec<Value> {
                 // A Redis key has no columns to open onto.
                 (
                     "expandable",
-                    Value::from(!matches!(relation.kind, RelationKind::Key(_))),
+                    Value::from(!matches!(
+                        relation.kind,
+                        RelationKind::Key(_) | RelationKind::Sequence
+                    )),
                 ),
             ])
         })
@@ -315,6 +406,42 @@ fn column_nodes(columns: Vec<ColumnNode>) -> Vec<Value> {
             map(pairs)
         })
         .collect()
+}
+
+/// Name and value pairs, each as a two-element array.
+fn pairs(pairs: Vec<(String, String)>) -> Value {
+    Value::Array(
+        pairs
+            .into_iter()
+            .map(|(name, value)| strings([name, value]))
+            .collect(),
+    )
+}
+
+fn details_payload(details: Details) -> Vec<(&'static str, Value)> {
+    let foreign_keys = details
+        .foreign_keys
+        .into_iter()
+        .map(|key| {
+            map(vec![
+                ("name", Value::from(key.name)),
+                ("columns", strings(key.columns)),
+                ("target", Value::from(key.target)),
+                ("referenced", strings(key.referenced)),
+            ])
+        })
+        .collect();
+    let mut payload = vec![
+        ("properties", pairs(details.properties)),
+        ("comments", pairs(details.column_comments)),
+        ("foreign_keys", Value::Array(foreign_keys)),
+        ("checks", pairs(details.checks)),
+        ("triggers", pairs(details.triggers)),
+    ];
+    if let Some(definition) = details.definition {
+        payload.push(("definition", Value::from(definition)));
+    }
+    payload
 }
 
 fn index_nodes(indexes: Vec<IndexNode>) -> Vec<Value> {

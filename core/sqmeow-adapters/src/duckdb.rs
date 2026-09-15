@@ -17,6 +17,9 @@ use crate::stream::check_affected;
 /// One DuckDB database, driven from blocking threads since the driver is synchronous.
 pub struct DuckDbAdapter {
     connection: Arc<Mutex<Connection>>,
+    /// A connection of its own to the same database for the drawer, which a long query does not
+    /// hold up.
+    meta: Arc<Mutex<Connection>>,
     interrupt: Arc<InterruptHandle>,
 }
 
@@ -28,9 +31,13 @@ impl std::fmt::Debug for DuckDbAdapter {
 
 impl DuckDbAdapter {
     /// Open a database file, or an in-memory one for `duckdb::memory:`.
-    pub async fn connect(url: &str) -> Result<Self> {
+    pub async fn connect(url: &str, read_only: bool) -> Result<Self> {
         let path = database_path(url);
         let connection = tokio::task::spawn_blocking(move || match path {
+            // An in-memory database starts empty, so only a file is opened read-only.
+            Some(path) if read_only => duckdb::Config::default()
+                .access_mode(duckdb::AccessMode::ReadOnly)
+                .and_then(|config| Connection::open_with_flags(path, config)),
             Some(path) => Connection::open(path),
             None => Connection::open_in_memory(),
         })
@@ -38,9 +45,11 @@ impl DuckDbAdapter {
         .map_err(Error::driver)?
         .map_err(Error::driver)?;
 
+        let meta = connection.try_clone().map_err(Error::driver)?;
         Ok(Self {
             interrupt: connection.interrupt_handle(),
             connection: Arc::new(Mutex::new(connection)),
+            meta: Arc::new(Mutex::new(meta)),
         })
     }
 
@@ -50,7 +59,23 @@ impl DuckDbAdapter {
         T: Send + 'static,
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
     {
-        let connection = Arc::clone(&self.connection);
+        Self::on(Arc::clone(&self.connection), work).await
+    }
+
+    /// Run `work` against the drawer's connection on a blocking thread.
+    async fn run_meta<T, F>(&self, work: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+    {
+        Self::on(Arc::clone(&self.meta), work).await
+    }
+
+    async fn on<T, F>(connection: Arc<Mutex<Connection>>, work: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+    {
         tokio::task::spawn_blocking(move || {
             let connection = connection.lock().map_err(Error::driver)?;
             work(&connection)
@@ -146,7 +171,7 @@ impl Adapter for DuckDbAdapter {
     }
 
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
-        self.run(|connection| {
+        self.run_meta(|connection| {
             rows(
                 connection,
                 "select schema_name, schema_name = current_schema() from duckdb_schemas()
@@ -167,17 +192,21 @@ impl Adapter for DuckDbAdapter {
 
     async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
         let schema = schema.to_owned();
-        self.run(move |connection| {
+        self.run_meta(move |connection| {
             rows(
                 connection,
                 "select table_name, table_type from information_schema.tables
                  where table_catalog = current_database() and table_schema = ?
-                 order by table_name",
-                [schema],
+                 union all
+                 select sequence_name, 'SEQUENCE' from duckdb_sequences()
+                 where database_name = current_database() and schema_name = ?
+                 order by 1",
+                [schema.as_str(), schema.as_str()],
                 |row| {
                     let kind = match row.get::<_, String>(1)?.as_str() {
                         "BASE TABLE" => RelationKind::Table,
                         "VIEW" => RelationKind::View,
+                        "SEQUENCE" => RelationKind::Sequence,
                         _ => RelationKind::Other,
                     };
                     Ok(RelationNode {
@@ -193,7 +222,7 @@ impl Adapter for DuckDbAdapter {
     /// DuckDB's macros, which are the closest thing it has to stored functions.
     async fn routines(&self, schema: &str) -> Result<Vec<RoutineNode>> {
         let schema = schema.to_owned();
-        self.run(move |connection| {
+        self.run_meta(move |connection| {
             rows(
                 connection,
                 "select distinct function_name from duckdb_functions()
@@ -208,7 +237,7 @@ impl Adapter for DuckDbAdapter {
 
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         let params = [schema.to_owned(), relation.to_owned()];
-        self.run(move |connection| {
+        self.run_meta(move |connection| {
             rows(
                 connection,
                 "select c.column_name, c.data_type, c.is_nullable,
@@ -244,7 +273,7 @@ impl Adapter for DuckDbAdapter {
 
     async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
         let params = [schema, relation, schema, relation].map(str::to_owned);
-        self.run(move |connection| {
+        self.run_meta(move |connection| {
             rows(
                 connection,
                 "select * from (
@@ -268,6 +297,85 @@ impl Adapter for DuckDbAdapter {
                     })
                 },
             )
+        })
+        .await
+    }
+
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+        let (schema, relation) = (schema.to_owned(), relation.to_owned());
+        self.run_meta(move |connection| {
+            let named = [schema.as_str(), relation.as_str()];
+            let (comment, definition) = rows(
+                connection,
+                "select comment, sql from duckdb_tables()
+                 where database_name = current_database() and schema_name = ? and table_name = ?
+                 union all
+                 select comment, sql from duckdb_views()
+                 where database_name = current_database() and schema_name = ? and view_name = ?",
+                [
+                    schema.as_str(),
+                    relation.as_str(),
+                    schema.as_str(),
+                    relation.as_str(),
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )?
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+            let column_comments = rows(
+                connection,
+                "select column_name, comment from duckdb_columns()
+                 where database_name = current_database() and schema_name = ? and table_name = ?
+                   and comment is not null
+                 order by column_index",
+                named,
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            let foreign_keys = rows(
+                connection,
+                "select constraint_name, to_json(constraint_column_names)::varchar,
+                        referenced_table, to_json(referenced_column_names)::varchar
+                 from duckdb_constraints()
+                 where database_name = current_database() and schema_name = ? and table_name = ?
+                   and constraint_type = 'FOREIGN KEY'
+                 order by constraint_name",
+                named,
+                |row| {
+                    Ok(sqmeow_db::ForeignKeyNode {
+                        name: row.get(0)?,
+                        columns: list_names(&row.get::<_, String>(1)?),
+                        target: row.get(2)?,
+                        referenced: list_names(&row.get::<_, String>(3)?),
+                    })
+                },
+            )?;
+            let checks = rows(
+                connection,
+                "select constraint_name, expression from duckdb_constraints()
+                 where database_name = current_database() and schema_name = ? and table_name = ?
+                   and constraint_type = 'CHECK'
+                 order by constraint_name",
+                named,
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok(sqmeow_db::Details {
+                properties: comment
+                    .map(|comment| ("comment".to_owned(), comment))
+                    .into_iter()
+                    .collect(),
+                column_comments,
+                foreign_keys,
+                checks,
+                // DuckDB has no triggers.
+                triggers: Vec::new(),
+                definition,
+            })
         })
         .await
     }
@@ -356,7 +464,8 @@ struct Described {
 impl Described {
     /// Mark the key columns and bind the result to its tables.
     fn bind(self, columns: &mut [Column]) -> Option<Source> {
-        let mut binder = TableBinder::default();
+        // Grouped, distinct and combined queries are never described.
+        let mut binder = TableBinder::default().every_column(true);
         for (index, (column, origin)) in columns.iter_mut().zip(&self.origins).enumerate() {
             let Some((table, name)) = origin else {
                 continue;
@@ -553,6 +662,8 @@ fn table_catalog(connection: &Connection, schema: &str, table: &str) -> Option<C
          left join duckdb_constraints() p
            on p.table_oid = c.table_oid and p.constraint_type = 'PRIMARY KEY'
          where c.database_name = current_database()
+           -- A view cannot be written to.
+           and exists (select 1 from duckdb_tables() t where t.table_oid = c.table_oid)
            and lower(c.schema_name) = lower(coalesce(nullif(?, ''), current_schema()))
            and lower(c.table_name) = lower(?)
          order by c.column_index",

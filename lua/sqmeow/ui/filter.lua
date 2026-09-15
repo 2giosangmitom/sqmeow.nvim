@@ -6,8 +6,29 @@ local utils = require('sqmeow.utils')
 
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow.filter')
 
---- The label drawn before each line, padded to one width.
-local LABELS = { 'WHERE    ', 'ORDER BY ' }
+--- The label drawn before each line, padded to one width, by what the bar takes.
+local LABELS = {
+  sql = { 'WHERE    ', 'ORDER BY ' },
+  mongodb = { 'FILTER   ', 'SORT     ' },
+}
+
+--- The query operators completion offers for MongoDB.
+local OPERATORS = {
+  '$and',
+  '$or',
+  '$nor',
+  '$not',
+  '$eq',
+  '$ne',
+  '$gt',
+  '$gte',
+  '$lt',
+  '$lte',
+  '$in',
+  '$nin',
+  '$exists',
+  '$regex',
+}
 
 --- Words completion offers after the column names.
 local KEYWORDS = {
@@ -35,6 +56,9 @@ local bar = nil
 local grid = nil
 --- Filters applied before, newest first, by connection id, each `{ where, order_by }`.
 local recent = {}
+--- The labels and completion words of the bar that is open, which follow its database.
+local labels, words = LABELS.sql, nil
+
 --- What the bar opened with, and which recent filter it shows instead, 0 for none.
 local opened, recalled = { '', '' }, 0
 
@@ -42,7 +66,7 @@ local opened, recalled = { '', '' }, 0
 local function show(bufnr, where, order_by)
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { where, order_by })
   vim.api.nvim_buf_clear_namespace(bufnr, NAMESPACE, 0, -1)
-  for number, label in ipairs(LABELS) do
+  for number, label in ipairs(labels) do
     vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, number - 1, 0, {
       virt_text = { { label, 'SqmeowHeader' } },
       virt_text_pos = 'inline',
@@ -133,26 +157,29 @@ end
 function M.complete(findstart, base)
   if findstart == 1 then
     local before = vim.api.nvim_get_current_line():sub(1, vim.fn.col('.') - 1)
-    return #before - #before:match('[%w_]*$')
+    return #before - #before:match('[%w_$]*$')
   end
 
   local result = require('sqmeow.ui.result')
   local call = require('sqmeow.state').call
   local prefix = base:lower()
   local items = {}
-  for _, column in ipairs(call and call.columns or {}) do
-    if vim.startswith(column.name:lower(), prefix) then
-      local bare = column.name:match('^[%l_][%l%d_]*$') ~= nil
+  local names = call and result.filter_names(call) or {}
+  for index, column in ipairs(call and call.columns or {}) do
+    local name = names[index]
+    if vim.startswith(name:lower(), prefix) then
+      -- A JSON key is always quoted.
+      local bare = words == nil and name:match('^[%l_][%l%d_]*$') ~= nil
       table.insert(items, {
-        word = bare and column.name or result.quote(column.name),
-        abbr = column.name,
+        word = bare and name or result.quote(name),
+        abbr = name,
         menu = column.type_name,
         kind = 'c',
       })
     end
   end
   if prefix ~= '' then
-    for _, keyword in ipairs(KEYWORDS) do
+    for _, keyword in ipairs(words or KEYWORDS) do
       if vim.startswith(keyword:lower(), prefix) then
         table.insert(items, { word = keyword, kind = 'k' })
       end
@@ -184,10 +211,12 @@ function M.open(line)
   end
   if not result.queried(call) then
     return utils.notify(
-      'filtering with WHERE and ORDER BY needs an open SQL connection',
+      'filtering in the query needs an open SQL or MongoDB connection',
       vim.log.levels.WARN
     )
   end
+  local mongodb = result.dialect(call) == 'mongodb'
+  labels, words = mongodb and LABELS.mongodb or LABELS.sql, mongodb and OPERATORS or nil
   if bar then
     vim.api.nvim_set_current_win(bar.winid)
     return vim.api.nvim_win_set_cursor(bar.winid, { line, 0 })
@@ -236,9 +265,10 @@ function M.open(line)
   local spec = result.spec()
   opened, recalled = { spec.where or '', spec.order_by or '' }, 0
   show(bar.bufnr, opened[1], opened[2])
-  -- Highlighted as SQL without being a SQL buffer a language server would attach to.
-  if not pcall(vim.treesitter.start, bar.bufnr, 'sql') then
-    vim.bo[bar.bufnr].syntax = 'sql'
+  -- Highlighted as its language without being a buffer a language server would attach to.
+  local language = mongodb and 'json' or 'sql'
+  if not pcall(vim.treesitter.start, bar.bufnr, language) then
+    vim.bo[bar.bufnr].syntax = language
   end
   vim.bo[bar.bufnr].omnifunc = "v:lua.require'sqmeow.ui.filter'.complete"
 

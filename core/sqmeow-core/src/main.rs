@@ -5,6 +5,7 @@ mod args;
 mod core;
 mod session;
 mod template;
+mod tunnel;
 mod value;
 
 use std::sync::Arc;

@@ -92,7 +92,7 @@ T['from a url']['saves the url as typed and connects'] = function()
   -- A template for the password is kept whole, which the form of separate fields cannot do.
   local url = 'postgres://app:{{ env "PGPASSWORD" }}@db.internal/shop'
   connection.from_url({ name = 'shop', url = url })
-  eq(rows(), { 'Name shop', 'URL ' .. url, 'Read only [ ]' })
+  eq(rows(), { 'Name shop', 'URL ' .. url, 'SSH user@bastion', 'Read only [ ]' })
   press('<C-s>')
   vim.wait(50)
 
@@ -100,6 +100,21 @@ T['from a url']['saves the url as typed and connects'] = function()
   eq(#saved, 1)
   eq({ saved[1].name, saved[1].url }, { 'shop', url })
   eq(connected, { url = url, name = 'shop' })
+end
+
+T['from a url']['saves the SSH host a connection goes through'] = function()
+  local connected
+  helpers.stub(require('sqmeow.api'), 'connect', function(_, opts)
+    connected = opts.ssh
+  end)
+
+  connection.from_url({ name = 'far', url = 'postgres://app@db.internal/shop', ssh = 'me@bastion' })
+  eq(rows()[3], 'SSH me@bastion')
+  press('<C-s>')
+  vim.wait(50)
+
+  eq(file.load({ path = scratch })[1].ssh, 'me@bastion')
+  eq(connected, 'me@bastion')
 end
 
 T['from a url']['refuses a url for a database the plugin does not speak'] = function()
@@ -128,6 +143,7 @@ T['edit']['fills the form in from the saved url'] = function()
     'User app',
     'Password *******',
     'Options sslmode=require',
+    'SSH user@bastion',
     'Read only [ ]',
   })
 end
@@ -137,10 +153,16 @@ T['edit']['asks a SQLite connection for a file and nothing else'] = function()
   eq(rows(), { 'Name local', 'File app.db', 'Read only [x]' })
 end
 
-T['edit']['refuses a url holding a template'] = function()
-  -- Taking one apart and writing it back would percent encode the braces.
-  eq(connection.edit({ name = 'prod', url = 'postgres://app:{{ env "PGPASS" }}@host/db' }), false)
-  eq(rows(), {})
+T['edit']['keeps a template whole through the form'] = function()
+  local url = 'postgres://{{ env "PGUSER" }}:{{ exec "pass show db" }}@db.internal/shop'
+  file.add({ name = 'prod', url = url }, { path = scratch })
+
+  eq(connection.edit({ name = 'prod', url = url }), true)
+  eq(rows()[5], 'User {{ env "PGUSER" }}')
+  press('<C-s>')
+  vim.wait(50)
+
+  eq(file.load({ path = scratch })[1].url, url)
 end
 
 T['edit']['refuses a url for a database the plugin does not have'] = function()

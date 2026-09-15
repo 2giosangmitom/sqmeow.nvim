@@ -10,8 +10,8 @@ pub mod sqlite;
 mod stream;
 
 use sqmeow_db::{
-    Adapter, Changes, ColumnNode, Dialect, Error, IndexNode, RelationNode, Result, ResultSet,
-    RoutineKind, RoutineNode, SchemaNode,
+    Adapter, Changes, ColumnNode, Details, Dialect, Error, IndexNode, RelationNode, Result,
+    ResultSet, RoleNode, RoutineKind, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -99,21 +99,24 @@ pub enum Backend {
 impl Backend {
     /// Open a connection, choosing the adapter from the URL's scheme.
     pub async fn connect(url: &str) -> Result<Self> {
-        Self::connect_to(url, None).await
+        Self::connect_to(url, None, false).await
     }
 
-    /// Open a connection to one database of the server the URL points at.
-    pub async fn connect_to(url: &str, database: Option<&str>) -> Result<Self> {
+    /// Open a connection to one database of the server the URL points at, which refuses writes
+    /// when `read_only` and the database can be told to.
+    pub async fn connect_to(url: &str, database: Option<&str>, read_only: bool) -> Result<Self> {
+        // More than one crypto backend is linked in, so rustls cannot pick one by itself.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let dialect =
             Dialect::from_url(url).ok_or_else(|| Error::UnsupportedUrl(url.to_owned()))?;
 
         match dialect {
-            Dialect::Sqlite => Ok(Self::Sqlite(SqliteAdapter::connect(url).await?)),
-            Dialect::DuckDb => Ok(Self::DuckDb(DuckDbAdapter::connect(url).await?)),
+            Dialect::Sqlite => Ok(Self::Sqlite(SqliteAdapter::connect(url, read_only).await?)),
+            Dialect::DuckDb => Ok(Self::DuckDb(DuckDbAdapter::connect(url, read_only).await?)),
             Dialect::Postgres => Ok(Self::Postgres(
-                PostgresAdapter::connect(url, database).await?,
+                PostgresAdapter::connect(url, database, read_only).await?,
             )),
-            Dialect::MySql => Ok(Self::MySql(MySqlAdapter::connect(url).await?)),
+            Dialect::MySql => Ok(Self::MySql(MySqlAdapter::connect(url, read_only).await?)),
             Dialect::Redis => Ok(Self::Redis(RedisAdapter::connect(url).await?)),
             Dialect::MongoDb => Ok(Self::MongoDb(MongoAdapter::connect(url, database).await?)),
             Dialect::Scylla => Ok(Self::Scylla(ScyllaAdapter::connect(url).await?)),
@@ -198,6 +201,24 @@ impl Backend {
     /// The columns of one relation.
     pub async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         dispatch!(self, adapter => adapter.columns(schema, relation).await)
+    }
+
+    /// The roles or users the server knows.
+    pub async fn roles(&self) -> Result<Vec<RoleNode>> {
+        dispatch!(self, adapter => adapter.roles().await)
+    }
+
+    /// The keys of a Redis database matching a glob.
+    pub async fn keys(&self, pattern: &str) -> Result<Vec<RelationNode>> {
+        match self {
+            Self::Redis(adapter) => adapter.keys(pattern).await,
+            _ => Err(Error::driver("only Redis lists keys by a pattern")),
+        }
+    }
+
+    /// Comments, foreign keys, checks, triggers and the definition of one relation.
+    pub async fn details(&self, schema: &str, relation: &str) -> Result<Details> {
+        dispatch!(self, adapter => adapter.details(schema, relation).await)
     }
 
     /// The indexes and unique constraints on one table.

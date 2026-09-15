@@ -126,10 +126,56 @@ T['querying']['counts rows a statement changed'] = function()
   eq(summary.affected, 2)
 end
 
+T['querying']['cancels a query that runs past the timeout'] = function()
+  setup({ query = { timeout_ms = 50 } })
+  MiniTest.finally(setup)
+  local summary =
+    run([[with recursive n(x) as (select 1 union all select x + 1 from n where x < 100000000)
+    select count(*) from n]])
+  eq(summary.state, 'error')
+  helpers.contains(summary.error, 'timeout')
+end
+
 T['querying']['runs several statements and shows the last'] = function()
   local summary = assert(run('select 1 as first; select 2 as second'))
   eq(summary.rows, 1)
   eq(header()[1], ' second')
+end
+
+T['querying']['saves the result of every statement, and restores them together'] = function()
+  local summary = run('select 1 as first; select 2 as second')
+  eq(#summary.results, 2)
+  local earlier = summary.results[1].archive
+  helpers.wait_for('both results should be saved', function()
+    return vim.uv.fs_stat(earlier) ~= nil and vim.uv.fs_stat(summary.archive) ~= nil
+  end, TIMEOUT)
+  local entry = require('sqmeow.history').entries({ limit = 1 })[1]
+  eq(entry.results, { earlier })
+
+  local before = state.call.call_id
+  api.restore(entry)
+  helpers.wait_for('the run should be restored', function()
+    return state.call.call_id ~= before and state.call.state == 'done'
+  end, TIMEOUT)
+  eq(#state.call.results, 2)
+  eq(header()[1], ' second')
+end
+
+T['querying']['reads a result the engine let go of back from where it was saved'] = function()
+  setup({ query = { history_size = 1 } })
+  MiniTest.finally(setup)
+  local first = vim.deepcopy(run("select 'kept on disk' as note"))
+  helpers.wait_for('the result should be saved', function()
+    return vim.uv.fs_stat(first.archive) ~= nil
+  end, TIMEOUT)
+  run('select 2 as other')
+
+  state.call = first
+  result.render(first)
+  helpers.wait_for('the result should come back from disk', function()
+    return state.call.call_id ~= first.call_id and state.call.state == 'done'
+  end, TIMEOUT)
+  eq(lines()[1], ' kept on disk')
 end
 
 T['querying']['does not split on a semicolon inside a string'] = function()

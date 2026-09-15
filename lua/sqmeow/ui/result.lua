@@ -52,6 +52,11 @@ function M.spec()
   return specs[id]
 end
 
+--- Forget everything kept by call id, for an engine that numbers its calls from one again.
+function M.forget()
+  specs, drawn, carried, pending, resume = {}, nil, nil, nil, nil
+end
+
 --- Round a duration for display, keeping it short without lying about the magnitude.
 ---@param ms integer
 ---@return string
@@ -417,6 +422,13 @@ local function plan_lines(call)
     end
     return lines
   end
+  -- DuckDB puts its whole plan in the second column of one row.
+  if names == 'explain_key,explain_value' then
+    local row = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = 0 })
+    if row and row[2] and not row[2].is_null then
+      return vim.split(row[2].value, '\n', { plain = true })
+    end
+  end
   if #call.columns ~= 1 then
     return nil
   end
@@ -584,6 +596,23 @@ function M.show_page(offset)
     limit = size,
   })
   if err or type(reply) ~= 'table' then
+    -- A result the engine evicted is read back from where it was saved.
+    if
+      err
+      and err:find('no longer held', 1, true)
+      and call.archive
+      and vim.uv.fs_stat(call.archive)
+    then
+      local connection = state.connections[call.conn_id]
+      require('sqmeow.api').restore({
+        result = call.archive,
+        statement = call.statement,
+        connection = connection and connection.name or call.connection,
+        dialect = connection and connection.dialect or call.dialect,
+        at = call.ran_at,
+      })
+      return false
+    end
     utils.notify(err or 'the engine sent no rows', vim.log.levels.WARN)
     return false
   end
@@ -638,7 +667,33 @@ function M.queried(call)
   local connection = call and call.conn_id and require('sqmeow.state').connections[call.conn_id]
   return connection ~= nil
     and connection.dialect ~= nil
-    and not vim.tbl_contains({ 'redis', 'mongodb', 'scylla' }, connection.dialect)
+    and not vim.tbl_contains({ 'redis', 'scylla' }, connection.dialect)
+end
+
+--- The names a filter knows the result's columns by, each repeated name numbered as the engine
+--- numbers it in the query it filters.
+---@param call sqmeow.CallSummary
+---@return string[]
+function M.filter_names(call)
+  local taken, names = {}, {}
+  for index, column in ipairs(call.columns or {}) do
+    local candidate, count = column.name, 1
+    while taken[candidate:lower()] do
+      count = count + 1
+      candidate = ('%s_%d'):format(column.name, count)
+    end
+    taken[candidate:lower()] = true
+    names[index] = candidate
+  end
+  return names
+end
+
+--- What the connection a result came from speaks.
+---@param call sqmeow.CallSummary|nil
+---@return string|nil
+function M.dialect(call)
+  local connection = call and call.conn_id and require('sqmeow.state').connections[call.conn_id]
+  return connection and connection.dialect or (call and call.dialect)
 end
 
 --- An identifier quoted for the current result's database.
@@ -650,21 +705,10 @@ function M.quote(name)
   if connection and connection.dialect == 'mysql' then
     return '`' .. (name:gsub('`', '``')) .. '`'
   end
-  return '"' .. (name:gsub('"', '""')) .. '"'
-end
-
---- Whether staged changes keep the result from being replaced, saying so when they do.
----@return boolean
-local function blocked()
-  local staged = require('sqmeow.ui.edit').count()
-  if staged == 0 then
-    return false
+  if connection and connection.dialect == 'mongodb' then
+    return vim.json.encode(name)
   end
-  utils.notify(
-    ('apply or discard the %d staged change%s first'):format(staged, staged == 1 and '' or 's'),
-    vim.log.levels.WARN
-  )
-  return true
+  return '"' .. (name:gsub('"', '""')) .. '"'
 end
 
 --- Run the current result's query again, changing the parts of its view `view` names.
@@ -676,11 +720,6 @@ function M.rerun(view, keep)
   if not (call and call.call_id and call.conn_id) then
     return false
   end
-  -- A new result would drop them.
-  if blocked() then
-    return false
-  end
-
   local spec = vim.tbl_extend('force', vim.deepcopy(M.spec()), view or {})
   -- A filtered result's own SQL is the wrapper, not the query as written.
   spec.base = spec.base or call.sql
@@ -700,6 +739,9 @@ function M.rerun(view, keep)
     history = false,
     where = spec.where,
     order_by = spec.order_by,
+    columns = vim.tbl_map(function(column)
+      return column.name
+    end, call.columns or {}),
     inserted = keep,
   })
   if not started then
@@ -715,7 +757,7 @@ end
 function M.filter(where, order_by)
   if not M.queried(require('sqmeow.state').call) then
     utils.notify(
-      'filtering with WHERE and ORDER BY needs an open SQL connection',
+      'filtering in the query needs an open SQL or MongoDB connection',
       vim.log.levels.WARN
     )
     return false
@@ -1057,15 +1099,23 @@ local function sort_by(column, add)
     M.send_view()
     return
   end
+  -- MongoDB sorts by a document, and SQL by a list.
+  local mongodb = M.dialect(call) == 'mongodb'
+  local names = M.filter_names(call)
   local keys = {}
   for _, entry in ipairs(sort) do
-    local described = (call.columns or {})[entry.column + 1]
-    table.insert(
-      keys,
-      M.quote(described and described.name or '') .. (entry.descending and ' DESC' or '')
-    )
+    local name = M.quote(names[entry.column + 1] or '')
+    if mongodb then
+      table.insert(keys, ('%s: %d'):format(name, entry.descending and -1 or 1))
+    else
+      table.insert(keys, name .. (entry.descending and ' DESC' or ''))
+    end
   end
-  M.rerun({ sort = sort, order_by = table.concat(keys, ', ') })
+  local order_by = table.concat(keys, ', ')
+  if mongodb and order_by ~= '' then
+    order_by = '{' .. order_by .. '}'
+  end
+  M.rerun({ sort = sort, order_by = order_by })
 end
 
 -- -- actions --------------------------------------------------------------------------------
@@ -1127,12 +1177,42 @@ function M.actions.toggle_float()
   M.toggle_float()
 end
 
---- Show the columns and indexes of the table the column under the cursor comes from.
+--- The relation a query reads from, as written: `FROM` for SQL, the collection of a MongoDB
+--- command, the key of a Redis one.
+---@param call sqmeow.CallSummary
+---@return string|nil schema
+---@return string|nil relation
+function M.read_from(call)
+  local sql = call.sql or call.statement or ''
+  local dialect = M.dialect(call)
+  if dialect == 'mongodb' then
+    return '', sql:match('"find"%s*:%s*"([^"]+)"') or sql:match('"aggregate"%s*:%s*"([^"]+)"')
+  end
+  if dialect == 'redis' then
+    return '', sql:match('^%s*%S+%s+"([^"]+)"') or sql:match('^%s*%S+%s+(%S+)')
+  end
+  local name = sql:match('[Ff][Rr][Oo][Mm]%s+([%w_%.`"%[%]]+)')
+  if not name then
+    return nil, nil
+  end
+  local parts = vim.split((name:gsub('[`"%[%]]', '')), '.', { plain = true })
+  return #parts > 1 and parts[#parts - 1] or '', parts[#parts]
+end
+
+--- Show the structure of the table the column under the cursor comes from.
 function M.actions.structure()
   local call = require('sqmeow.state').call
-  local tables = call and call.source and call.source.tables
-  if not (call and tables and #tables > 0) then
-    return utils.notify('this result cannot be traced back to a table', vim.log.levels.WARN)
+  if not call then
+    return
+  end
+  local tables = call.source and call.source.tables
+  -- A result that cannot be traced back to a table shows the one its query reads from.
+  if not (tables and #tables > 0) then
+    local schema, relation = M.read_from(call)
+    if not (relation and call.conn_id) then
+      return utils.notify('this result names no table to show', vim.log.levels.WARN)
+    end
+    return require('sqmeow.ui.structure').open(call.conn_id, schema or '', relation)
   end
   local here = cursor_column()
   local chosen = tables[1]
@@ -1154,7 +1234,9 @@ local function switch(step)
   if not (call and results and #results > 1) then
     return utils.notify('this query returned one result')
   end
-  if blocked() then
+  if require('sqmeow.ui.edit').settle(function()
+    switch(step)
+  end) then
     return
   end
   local at = 1
@@ -1199,7 +1281,8 @@ function M.actions.filter_cell()
       return utils.notify(err or 'the value could not be matched', vim.log.levels.WARN)
     end
     local where = M.spec().where
-    M.rerun({ where = where == '' and condition or ('(%s) AND %s'):format(where, condition) })
+    local both = M.dialect(call) == 'mongodb' and '{"$and": [%s, %s]}' or '(%s) AND %s'
+    M.rerun({ where = where == '' and condition or both:format(where, condition) })
     return
   end
 
@@ -1310,8 +1393,7 @@ function M.actions.duplicate_row()
   local edit = require('sqmeow.ui.edit')
   local values = {}
   for index, column in ipairs(call.columns) do
-    -- A binary value's text is not the value.
-    if column.editable and column.key ~= 'primary_key' and column.class ~= 'binary' then
+    if column.editable and column.key ~= 'primary_key' then
       local staged, has = edit.staged(cell.row, index - 1)
       if has then
         values[index - 1] = staged

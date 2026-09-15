@@ -49,6 +49,42 @@ services:
     ports:
       - "56380:6379"
 
+  # Three primaries and three replicas in one container, announcing 127.0.0.1 so the client can follow
+  # a redirect to the published port.
+  redis-cluster:
+    image: grokzen/redis-cluster:7.0.10
+    environment:
+      IP: 127.0.0.1
+      # Below 55535, since each node's cluster bus listens 10000 ports higher.
+      INITIAL_PORT: "47000"
+    ports:
+      - "47000-47005:47000-47005"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 47000 cluster info | grep -q cluster_state:ok"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  # A master and a Sentinel watching it, in one container, so the Sentinel names an address the
+  # host can reach.
+  redis-sentinel:
+    image: redis:8-alpine
+    command:
+      - sh
+      - -c
+      - >-
+        redis-server --port 56390 --daemonize yes &&
+        printf 'port 56391\nsentinel monitor sqmeow 127.0.0.1 56390 1\n' > /tmp/sentinel.conf &&
+        exec redis-sentinel /tmp/sentinel.conf
+    ports:
+      - "56390:56390"
+      - "56391:56391"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 56391 sentinel get-master-addr-by-name sqmeow | grep -q 56390"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   mongodb:
     image: mongo:8
     ports:

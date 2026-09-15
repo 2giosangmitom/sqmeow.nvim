@@ -7,6 +7,17 @@ local utils = require('sqmeow.utils')
 --- The box every connection dialog ends with.
 local READ_ONLY = { key = 'read_only', label = 'Read only', checkbox = true }
 
+--- The SSH host a server is reached through, which a database in a file has no use for.
+local SSH = { key = 'ssh', label = 'SSH', optional = true, hint = 'user@bastion' }
+
+--- The tunnel the answers name, or nil for none.
+---@param answers table<string, string>
+---@return string|nil
+local function tunnel(answers)
+  local ssh = vim.trim(answers.ssh or '')
+  return ssh ~= '' and ssh or nil
+end
+
 --- What is wrong with the answers, if anything.
 ---@param dialect string
 ---@param existing string|nil The name being edited.
@@ -40,7 +51,10 @@ local function form(dialect, values, existing)
   local spec = assert(require('sqmeow.dialects').get(dialect), 'the menu offers known dialects')
   local opened, err = require('sqmeow.ui.form').open({
     title = existing and ('Edit %s'):format(existing) or ('New %s connection'):format(spec.label),
-    fields = vim.list_extend(require('sqmeow.dialects').fields(dialect), { READ_ONLY }),
+    fields = vim.list_extend(
+      require('sqmeow.dialects').fields(dialect),
+      spec.port and { SSH, READ_ONLY } or { READ_ONLY }
+    ),
     values = vim.tbl_extend('keep', values, { read_only = 'no' }),
     -- A new connection is a run of questions with no answers yet.
     wizard = existing == nil,
@@ -53,12 +67,16 @@ local function form(dialect, values, existing)
 
       local api = require('sqmeow.api')
       if existing then
-        api.edit(existing, { name = name, url = url, read_only = read_only })
+        api.edit(
+          existing,
+          { name = name, url = url, read_only = read_only, ssh = tunnel(answers) or '' }
+        )
         return
       end
 
-      if api.save(name, url, { read_only = read_only }) then
-        api.connect(url, { name = name, read_only = read_only })
+      local ssh = tunnel(answers)
+      if api.save(name, url, { read_only = read_only, ssh = ssh }) then
+        api.connect(url, { name = name, read_only = read_only, ssh = ssh })
       end
     end,
   })
@@ -76,6 +94,7 @@ function M.from_url(values)
     fields = {
       { key = 'name', label = 'Name' },
       { key = 'url', label = 'URL', hint = 'postgres://user@localhost/app' },
+      SSH,
       READ_ONLY,
     },
     values = vim.tbl_extend('keep', values or {}, { read_only = 'no' }),
@@ -97,8 +116,9 @@ function M.from_url(values)
       local name, url = vim.trim(answers.name), vim.trim(answers.url)
       local read_only = answers.read_only == 'yes'
       local api = require('sqmeow.api')
-      if api.save(name, url, { read_only = read_only }) then
-        api.connect(url, { name = name, read_only = read_only })
+      local ssh = tunnel(answers)
+      if api.save(name, url, { read_only = read_only, ssh = ssh }) then
+        api.connect(url, { name = name, read_only = read_only, ssh = ssh })
       end
     end,
   })
@@ -143,11 +163,6 @@ end
 ---@param spec sqmeow.ConnectionSpec
 ---@return boolean opened
 function M.edit(spec)
-  -- A template is expanded by the engine at connect time.
-  if spec.url:find('{{', 1, true) then
-    return false
-  end
-
   local values = require('sqmeow.url').parse(spec.url)
   if not values then
     return false
@@ -155,6 +170,7 @@ function M.edit(spec)
 
   values.name = spec.name
   values.read_only = spec.read_only and 'yes' or 'no'
+  values.ssh = spec.ssh
   form(values.dialect, values, spec.name)
   return true
 end

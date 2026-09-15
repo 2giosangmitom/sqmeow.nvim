@@ -3,6 +3,7 @@
 //! ```text
 //! postgres://app:{{ env "PGPASSWORD" }}@localhost/dev
 //! postgres://app:{{ exec "pass show db/prod" }}@db.internal/app
+//! postgres://app:{{ file "~/.secrets/db" }}@db.internal/app
 //! ```
 //!
 //! The expanded URL is never logged or sent back to the editor.
@@ -39,8 +40,9 @@ async fn evaluate(directive: &str) -> Result<String, String> {
         "env" => std::env::var(&argument)
             .map_err(|_| format!("the environment variable `{argument}` is not set")),
         "exec" => run(&argument).await,
+        "file" => read(&argument),
         other => Err(format!(
-            "unknown directive `{other}`; expected `env` or `exec`"
+            "unknown directive `{other}`; expected `env`, `exec` or `file`"
         )),
     }
 }
@@ -64,6 +66,18 @@ fn split(directive: &str) -> Result<(&str, String), String> {
         .ok_or_else(|| format!("the argument to `{name}` is missing its closing quote"))?;
 
     Ok((name, body.to_owned()))
+}
+
+/// Take a file's contents as the value, `~/` standing for the home directory.
+fn read(path: &str) -> Result<String, String> {
+    let expanded = match (path.strip_prefix("~/"), std::env::var("HOME")) {
+        (Some(rest), Ok(home)) => format!("{home}/{rest}"),
+        _ => path.to_owned(),
+    };
+    std::fs::read_to_string(&expanded)
+        // A file an editor saved ends in a newline that is not part of the secret.
+        .map(|text| text.trim_end().to_owned())
+        .map_err(|error| format!("`{path}` could not be read: {error}"))
 }
 
 /// Run a command and take its output as the value.
@@ -179,6 +193,24 @@ mod tests {
         let error = expand("{{ read \"file\" }}").await.unwrap_err();
         assert!(error.contains("env"), "{error}");
         assert!(error.contains("exec"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_file_supplies_its_contents() {
+        let path = std::env::temp_dir().join(format!("sqmeow-secret-{}", std::process::id()));
+        std::fs::write(&path, "hunter2\n").unwrap();
+        assert_eq!(
+            expand(&format!("{{{{ file \"{}\" }}}}", path.display()))
+                .await
+                .unwrap(),
+            "hunter2"
+        );
+        std::fs::remove_file(&path).unwrap();
+
+        let error = expand("{{ file \"/nonexistent/secret\" }}")
+            .await
+            .unwrap_err();
+        assert!(error.contains("/nonexistent/secret"), "{error}");
     }
 
     #[tokio::test]

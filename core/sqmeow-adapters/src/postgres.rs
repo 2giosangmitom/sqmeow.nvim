@@ -24,6 +24,8 @@ use crate::stream::{self, SqlxAdapter, foreign_key, prepare, result_columns};
 #[derive(Debug)]
 pub struct PostgresAdapter {
     pool: PgPool,
+    /// A session of its own for the drawer, which a long query on `pool` does not hold up.
+    meta: PgPool,
     /// Which of a table's columns are keys, by table OID and attribute number.
     keys: Mutex<HashMap<(Oid, i16), KeyKind>>,
     /// What a table is called, its columns by attribute number, and its primary key, by OID.
@@ -38,7 +40,7 @@ pub struct PostgresAdapter {
 
 impl PostgresAdapter {
     /// Open a connection, to `database` when given and otherwise to the one the URL names.
-    pub async fn connect(url: &str, database: Option<&str>) -> Result<Self> {
+    pub async fn connect(url: &str, database: Option<&str>, read_only: bool) -> Result<Self> {
         // Preparing a statement is how a result learns its columns, and a cached statement keeps
         // the columns its table had when it was first prepared.
         let mut options = PgConnectOptions::from_str(url)
@@ -49,6 +51,9 @@ impl PostgresAdapter {
             options = options.database(database);
         } else if cluster {
             options = options.database("postgres");
+        }
+        if read_only {
+            options = options.options([("default_transaction_read_only", "on")]);
         }
         let backend_pid = Arc::new(AtomicI32::new(0));
         let pool = crate::connect_retrying(|| {
@@ -73,8 +78,14 @@ impl PostgresAdapter {
         .await
         .map_err(Error::driver)?;
 
+        let meta = PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(crate::CONNECT_TIMEOUT)
+            .connect_lazy_with(options.clone());
+
         Ok(Self {
             pool,
+            meta,
             keys: Mutex::default(),
             relations: Mutex::default(),
             cluster,
@@ -94,7 +105,7 @@ impl PostgresAdapter {
                  where datallowconn and not datistemplate
                  order by datname",
             )
-            .fetch_all(&self.pool)
+            .fetch_all(&self.meta)
             .await
             .map_err(Error::driver),
         )
@@ -130,12 +141,13 @@ impl PostgresAdapter {
 
     /// What a statement's result looks like, with the columns that are keys marked.
     async fn columns(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
-        let Some(prepared) = prepare(&self.pool, statement).await else {
+        let Some(prepared) = prepare(&self.meta, statement).await else {
             return (Vec::new(), None);
         };
         let mut columns = result_columns(prepared.columns());
         self.mark_keys(prepared.columns(), &mut columns).await;
-        let source = self.source(prepared.columns()).await;
+        let plain = sqmeow_db::sql::plain(Dialect::Postgres, statement);
+        let source = self.source(prepared.columns(), plain).await;
         (columns, source)
     }
 
@@ -223,6 +235,70 @@ impl PostgresAdapter {
     }
 }
 
+impl PostgresAdapter {
+    /// A table's `CREATE TABLE`, built from the catalog, with the indexes no constraint made.
+    async fn table_definition(&self, oid: Oid, schema: &str, relation: &str) -> Result<String> {
+        let columns = sqlx::query_as::<_, (String, String, bool, Option<String>)>(
+            "select a.attname::text, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+                    pg_get_expr(d.adbin, d.adrelid)
+             from pg_catalog.pg_attribute a
+             left join pg_catalog.pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+             where a.attrelid = $1 and a.attnum > 0 and not a.attisdropped
+             order by a.attnum",
+        )
+        .bind(oid)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+        let constraints = sqlx::query_as::<_, (String, String)>(
+            "select conname::text, pg_get_constraintdef(oid) from pg_catalog.pg_constraint
+             where conrelid = $1 and contype in ('p', 'u', 'f', 'c', 'x')
+             order by contype, conname",
+        )
+        .bind(oid)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+        let indexes = sqlx::query_scalar::<_, String>(
+            "select pg_get_indexdef(i.indexrelid) from pg_catalog.pg_index i
+             where i.indrelid = $1
+               and not exists (select 1 from pg_catalog.pg_constraint k where k.conindid = i.indexrelid)
+             order by i.indexrelid",
+        )
+        .bind(oid)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+
+        let mut lines: Vec<String> = columns
+            .into_iter()
+            .map(|(name, type_name, not_null, default)| {
+                let mut line = format!("  {} {type_name}", self.quote_ident(&name));
+                if not_null {
+                    line.push_str(" NOT NULL");
+                }
+                if let Some(default) = default {
+                    line.push_str(&format!(" DEFAULT {default}"));
+                }
+                line
+            })
+            .collect();
+        lines.extend(constraints.into_iter().map(|(name, definition)| {
+            format!("  CONSTRAINT {} {definition}", self.quote_ident(&name))
+        }));
+        let mut sql = format!(
+            "CREATE TABLE {}.{} (\n{}\n);",
+            self.quote_ident(schema),
+            self.quote_ident(relation),
+            lines.join(",\n")
+        );
+        for index in indexes {
+            sql.push_str(&format!("\n{index};"));
+        }
+        Ok(sql)
+    }
+}
+
 /// A table a result column came from, as the catalog describes it.
 #[derive(Debug)]
 struct Relation {
@@ -237,7 +313,7 @@ struct Relation {
 
 impl PostgresAdapter {
     /// Bind each result column to its table column, keeping the tables whose whole key is selected.
-    async fn source(&self, prepared: &[PgColumn]) -> Option<Source> {
+    async fn source(&self, prepared: &[PgColumn], plain: bool) -> Option<Source> {
         let sources: Vec<Option<(Oid, i16)>> = prepared
             .iter()
             .map(|column| column.relation_id().zip(column.relation_attribute_no()))
@@ -263,7 +339,7 @@ impl PostgresAdapter {
         }
 
         let known = self.relations.lock().ok()?;
-        let mut binder = TableBinder::default();
+        let mut binder = TableBinder::default().every_column(plain);
         for (index, source) in sources.iter().enumerate() {
             if let Some((oid, attribute)) = source
                 && let Some(relation) = known.get(oid)
@@ -441,7 +517,7 @@ impl Adapter for PostgresAdapter {
              where nspname not like 'pg\\_%' and nspname <> 'information_schema'
              order by nspname",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
 
@@ -464,11 +540,11 @@ impl Adapter for PostgresAdapter {
             "select c.relname as name, c.relkind as kind
              from pg_class c
              join pg_namespace n on n.oid = c.relnamespace
-             where n.nspname = $1 and c.relkind in ('r', 'p', 'v', 'm', 'f')
+             where n.nspname = $1 and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S')
              order by c.relname",
         )
         .bind(schema)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
 
@@ -482,6 +558,7 @@ impl Adapter for PostgresAdapter {
                     b'r' | b'p' => RelationKind::Table,
                     b'v' => RelationKind::View,
                     b'm' => RelationKind::MaterializedView,
+                    b'S' => RelationKind::Sequence,
                     _ => RelationKind::Other,
                 };
                 Some(RelationNode { name, kind })
@@ -502,7 +579,7 @@ impl Adapter for PostgresAdapter {
              order by p.proname",
         )
         .bind(schema)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
 
@@ -537,10 +614,11 @@ impl Adapter for PostgresAdapter {
              -- position is not known until the row is in hand. The first match wins: a column
              -- constrained twice is still one line in a tree.
              left join lateral (
-                 select fc.relname as table_name, fa.attname as column_name
+                 select fn.nspname || '.' || fc.relname as table_name, fa.attname as column_name
                  from pg_constraint k
                  cross join unnest(k.conkey, k.confkey) as pair(local, remote)
                  join pg_class fc on fc.oid = k.confrelid
+                 join pg_namespace fn on fn.oid = fc.relnamespace
                  join pg_attribute fa on fa.attrelid = k.confrelid and fa.attnum = pair.remote
                  where k.conrelid = c.oid and k.contype = 'f' and pair.local = a.attnum
                  limit 1
@@ -587,7 +665,7 @@ impl Adapter for PostgresAdapter {
         )
         .bind(schema)
         .bind(relation)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
 
@@ -602,7 +680,147 @@ impl Adapter for PostgresAdapter {
             .collect())
     }
 
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+        let Some((oid, kind)) = sqlx::query_as::<_, (Oid, i8)>(
+            "select c.oid, c.relkind from pg_catalog.pg_class c
+             join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+             where n.nspname = $1 and c.relname = $2",
+        )
+        .bind(schema)
+        .bind(relation)
+        .fetch_optional(&self.meta)
+        .await
+        .map_err(Error::driver)?
+        else {
+            return Ok(sqmeow_db::Details::default());
+        };
+
+        let comment =
+            sqlx::query_scalar::<_, Option<String>>("select obj_description($1, 'pg_class')")
+                .bind(oid)
+                .fetch_one(&self.meta)
+                .await
+                .map_err(Error::driver)?;
+        let column_comments = sqlx::query_as::<_, (String, String)>(
+            "select a.attname::text, col_description(a.attrelid, a.attnum)
+             from pg_catalog.pg_attribute a
+             where a.attrelid = $1 and a.attnum > 0 and not a.attisdropped
+               and col_description(a.attrelid, a.attnum) is not null
+             order by a.attnum",
+        )
+        .bind(oid)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+        let foreign_keys = sqlx::query_as::<_, (String, Vec<String>, String, Vec<String>)>(
+            "select k.conname::text,
+                    array(select a.attname::text
+                          from unnest(k.conkey) with ordinality as u(n, i)
+                          join pg_catalog.pg_attribute a on a.attrelid = k.conrelid and a.attnum = u.n
+                          order by u.i),
+                    k.confrelid::regclass::text,
+                    array(select a.attname::text
+                          from unnest(k.confkey) with ordinality as u(n, i)
+                          join pg_catalog.pg_attribute a on a.attrelid = k.confrelid and a.attnum = u.n
+                          order by u.i)
+             from pg_catalog.pg_constraint k
+             where k.conrelid = $1 and k.contype = 'f'
+             order by k.conname",
+        )
+        .bind(oid)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?
+        .into_iter()
+        .map(|(name, columns, target, referenced)| sqmeow_db::ForeignKeyNode {
+            name,
+            columns,
+            target,
+            referenced,
+        })
+        .collect();
+        let checks = sqlx::query_as::<_, (String, String)>(
+            "select conname::text, pg_get_constraintdef(oid) from pg_catalog.pg_constraint
+             where conrelid = $1 and contype = 'c' order by conname",
+        )
+        .bind(oid)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+        let triggers = sqlx::query_as::<_, (String, String)>(
+            "select tgname::text, pg_get_triggerdef(oid, true) from pg_catalog.pg_trigger
+             where tgrelid = $1 and not tgisinternal order by tgname",
+        )
+        .bind(oid)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+
+        let definition = match kind as u8 {
+            b'v' | b'm' => {
+                let body = sqlx::query_scalar::<_, String>("select pg_get_viewdef($1, true)")
+                    .bind(oid)
+                    .fetch_one(&self.meta)
+                    .await
+                    .map_err(Error::driver)?;
+                let what = if kind as u8 == b'm' {
+                    "MATERIALIZED VIEW"
+                } else {
+                    "VIEW"
+                };
+                format!(
+                    "CREATE {what} {}.{} AS\n{}",
+                    self.quote_ident(schema),
+                    self.quote_ident(relation),
+                    body.trim_end()
+                )
+            }
+            _ => self.table_definition(oid, schema, relation).await?,
+        };
+
+        Ok(sqmeow_db::Details {
+            properties: comment
+                .map(|comment| ("comment".to_owned(), comment))
+                .into_iter()
+                .collect(),
+            column_comments,
+            foreign_keys,
+            checks,
+            triggers,
+            definition: Some(definition),
+        })
+    }
+
+    async fn roles(&self) -> Result<Vec<sqmeow_db::RoleNode>> {
+        let rows = sqlx::query_as::<_, (String, bool, bool, bool, bool)>(
+            "select rolname::text, rolsuper, rolcanlogin, rolcreatedb, rolcreaterole
+             from pg_catalog.pg_roles where rolname !~ '^pg_' order by rolname",
+        )
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(name, superuser, login, create_db, create_role)| sqmeow_db::RoleNode {
+                    name,
+                    attributes: [
+                        (superuser, "superuser"),
+                        (login, "login"),
+                        (create_db, "create db"),
+                        (create_role, "create role"),
+                    ]
+                    .into_iter()
+                    .filter(|(held, _)| *held)
+                    .map(|(_, attribute)| attribute.to_owned())
+                    .collect(),
+                },
+            )
+            .collect())
+    }
+
     async fn close(&self) {
+        self.meta.close().await;
         self.pool.close().await;
     }
 }

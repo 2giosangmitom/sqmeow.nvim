@@ -27,8 +27,10 @@ impl Core {
         // One database of a cluster the URL reaches as a whole, opened from the drawer.
         let database = args.opt_string("database");
         let read_only = args.opt_bool("read_only").unwrap_or(false);
+        // `user@host[:port]` to reach the database through an SSH tunnel.
+        let ssh = args.opt_string("ssh").filter(|via| !via.trim().is_empty());
 
-        let work = self.open(id, name, url, database, read_only);
+        let work = self.open(id, name, url, database, read_only, ssh);
         Ok((Value::from(id), Box::pin(work)))
     }
 
@@ -39,6 +41,7 @@ impl Core {
         url: String,
         database: Option<String>,
         read_only: bool,
+        ssh: Option<String>,
     ) {
         self.emit_connection(id, "connecting", vec![("name", Value::from(name.as_str()))]);
 
@@ -54,7 +57,21 @@ impl Core {
             }
         };
 
-        match Backend::connect_to(&url, database.as_deref()).await {
+        let (url, tunnel) = match ssh {
+            Some(via) => match crate::tunnel::open("ssh", &url, via.trim()).await {
+                Ok((url, tunnel)) => (url, Some(tunnel)),
+                Err(error) => {
+                    return self.emit_connection(
+                        id,
+                        "error",
+                        vec![("name", Value::from(name)), ("error", Value::from(error))],
+                    );
+                }
+            },
+            None => (url, None),
+        };
+
+        match Backend::connect_to(&url, database.as_deref(), read_only).await {
             Ok(backend) => {
                 let mut payload = vec![
                     ("name", Value::from(name.as_str())),
@@ -69,6 +86,7 @@ impl Core {
                     name,
                     backend,
                     read_only,
+                    _tunnel: tunnel,
                 });
                 self.emit_connection(id, "connected", payload);
             }

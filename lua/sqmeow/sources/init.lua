@@ -6,11 +6,13 @@ local M = {}
 ---@field name string
 ---@field url string
 ---@field read_only boolean|nil Runs only statements that read.
+---@field ssh string|nil The `user@host` an SSH tunnel to the database goes through.
 ---@field source string|nil Which source it came from.
 
 --- The sources that ship with the plugin.
 ---@type table<string, { load: fun(opts: table|nil): sqmeow.ConnectionSpec[], string|nil }>
 M.builtin = {
+  command = require('sqmeow.sources.command'),
   env = require('sqmeow.sources.env'),
   file = require('sqmeow.sources.file'),
 }
@@ -61,6 +63,7 @@ function M.load()
             name = entry.name,
             url = entry.url,
             read_only = entry.read_only == true or nil,
+            ssh = type(entry.ssh) == 'string' and entry.ssh ~= '' and entry.ssh or nil,
             source = spec.type,
           })
         end
@@ -98,10 +101,12 @@ end
 ---@return boolean written
 ---@return string|nil error
 function M.save(connection)
-  return require('sqmeow.sources.file').add(
-    { name = connection.name, url = connection.url },
-    writable()
-  )
+  return require('sqmeow.sources.file').add({
+    name = connection.name,
+    url = connection.url,
+    read_only = connection.read_only,
+    ssh = connection.ssh,
+  }, writable())
 end
 
 --- Change a saved connection, by the name it is saved under.

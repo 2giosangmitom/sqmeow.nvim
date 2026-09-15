@@ -1,7 +1,10 @@
 //! The SQLite adapter.
 
 use std::collections::HashMap;
+use std::ptr;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{AssertSqlSafe, Pool, Row, Sqlite, SqlitePool, Statement as _, TypeInfo, ValueRef};
@@ -19,35 +22,66 @@ use crate::stream::{
 #[derive(Debug)]
 pub struct SqliteAdapter {
     pool: SqlitePool,
+    /// A session of its own for the drawer, which a long query on `pool` does not hold up. The same
+    /// pool for an in-memory database, which a second session would not see.
+    meta: SqlitePool,
     /// Which columns of a table are keys, read from the pragmas a whole table at a time.
     keys: TableKeys,
+    /// The pool's one connection, for a cancel to interrupt a statement still being stepped through.
+    handle: Arc<AtomicPtr<libsqlite3_sys::sqlite3>>,
 }
 
 impl SqliteAdapter {
-    /// Open a database.
-    pub async fn connect(url: &str) -> Result<Self> {
+    /// Open a database, refusing writes when `read_only`.
+    pub async fn connect(url: &str, read_only: bool) -> Result<Self> {
         // Preparing a statement is how a result learns its columns, and a cached statement keeps
         // the columns its table had when it was first prepared.
-        let options = SqliteConnectOptions::from_str(url)
+        let mut options = SqliteConnectOptions::from_str(url)
             .map_err(Error::driver)?
             .statement_cache_capacity(0);
+        if read_only {
+            options = options.pragma("query_only", "ON");
+        }
+        let in_memory = url.contains(":memory:") || url.contains("mode=memory");
+        let meta_options = options.clone();
+        let handle = Arc::new(AtomicPtr::new(ptr::null_mut()));
+        let raw = Arc::clone(&handle);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             // sqlx retries a refused connection until this expires.
             .acquire_timeout(crate::CONNECT_TIMEOUT)
+            .after_connect(move |connection, _| {
+                let raw = Arc::clone(&raw);
+                Box::pin(async move {
+                    let mut locked = connection.lock_handle().await?;
+                    raw.store(locked.as_raw_handle().as_ptr(), Ordering::Relaxed);
+                    Ok(())
+                })
+            })
             .connect_with(options)
             .await
             .map_err(Error::driver)?;
 
+        let meta = if in_memory {
+            pool.clone()
+        } else {
+            SqlitePoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(crate::CONNECT_TIMEOUT)
+                .connect_lazy_with(meta_options)
+        };
+
         Ok(Self {
             pool,
+            meta,
             keys: TableKeys::default(),
+            handle,
         })
     }
 
     /// What a statement's result looks like, with the columns that are keys marked.
     async fn columns(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
-        let Some(prepared) = prepare(&self.pool, statement).await else {
+        let Some(prepared) = prepare(&self.meta, statement).await else {
             return (Vec::new(), None);
         };
         let mut columns = result_columns(prepared.columns());
@@ -58,7 +92,8 @@ impl SqliteAdapter {
             .mark(&origins, &mut columns, |table| self.read_keys(table))
             .await;
         // SQLite traces a compound `SELECT`'s columns to its first part, though rows come from every part.
-        let source = match self.keys.source(&origins) {
+        let plain = sqmeow_db::sql::plain(Dialect::Sqlite, statement);
+        let source = match self.keys.source(&origins, plain) {
             Some(source) if !self.compound(statement).await => Some(source),
             _ => None,
         };
@@ -121,6 +156,7 @@ impl SqliteAdapter {
         Keys {
             kinds: keys,
             unique: self.unique_keys(&table).await,
+            generated: Vec::new(),
         }
     }
 
@@ -192,7 +228,7 @@ impl Adapter for SqliteAdapter {
     /// SQLite calls them databases: `main`, `temp`, and anything attached.
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
         let rows = sqlx::query("pragma database_list")
-            .fetch_all(&self.pool)
+            .fetch_all(&self.meta)
             .await
             .map_err(Error::driver)?;
 
@@ -216,7 +252,7 @@ impl Adapter for SqliteAdapter {
         );
 
         let rows = sqlx::query(AssertSqlSafe(sql))
-            .fetch_all(&self.pool)
+            .fetch_all(&self.meta)
             .await
             .map_err(Error::driver)?;
 
@@ -304,7 +340,7 @@ impl Adapter for SqliteAdapter {
             self.quote_ident(relation)
         );
         let rows = sqlx::query(AssertSqlSafe(sql))
-            .fetch_all(&self.pool)
+            .fetch_all(&self.meta)
             .await
             .map_err(Error::driver)?;
 
@@ -317,7 +353,7 @@ impl Adapter for SqliteAdapter {
                 self.quote_ident(&name)
             );
             let columns = sqlx::query(AssertSqlSafe(sql))
-                .fetch_all(&self.pool)
+                .fetch_all(&self.meta)
                 .await
                 .map_err(Error::driver)?
                 .iter()
@@ -342,7 +378,69 @@ impl Adapter for SqliteAdapter {
         Ok(indexes)
     }
 
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+        let master = format!("{}.sqlite_master", self.quote_ident(schema));
+        let definition = sqlx::query_scalar::<_, Option<String>>(AssertSqlSafe(format!(
+            "select sql from {master} where name = ? and type in ('table', 'view')"
+        )))
+        .bind(relation)
+        .fetch_optional(&self.meta)
+        .await
+        .map_err(Error::driver)?
+        .flatten();
+
+        let triggers = sqlx::query_as::<_, (String, Option<String>)>(AssertSqlSafe(format!(
+            "select name, sql from {master} where type = 'trigger' and tbl_name = ? order by name"
+        )))
+        .bind(relation)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?
+        .into_iter()
+        .map(|(name, sql)| (name, sql.as_deref().map(trigger_event).unwrap_or_default()))
+        .collect();
+
+        let sql = format!(
+            "pragma {}.foreign_key_list({})",
+            self.quote_ident(schema),
+            self.quote_ident(relation)
+        );
+        let rows = sqlx::query(AssertSqlSafe(sql))
+            .fetch_all(&self.meta)
+            .await
+            .map_err(Error::driver)?;
+        let mut foreign_keys: Vec<(i64, sqmeow_db::ForeignKeyNode)> = Vec::new();
+        for row in &rows {
+            let id: i64 = row.try_get("id").map_err(Error::driver)?;
+            if !matches!(foreign_keys.last(), Some((known, _)) if *known == id) {
+                foreign_keys.push((
+                    id,
+                    sqmeow_db::ForeignKeyNode {
+                        name: String::new(),
+                        columns: Vec::new(),
+                        target: row.try_get("table").map_err(Error::driver)?,
+                        referenced: Vec::new(),
+                    },
+                ));
+            }
+            let (_, key) = foreign_keys.last_mut().expect("pushed above");
+            key.columns
+                .push(row.try_get("from").map_err(Error::driver)?);
+            key.referenced
+                .extend(row.try_get::<Option<String>, _>("to").ok().flatten());
+        }
+
+        Ok(sqmeow_db::Details {
+            foreign_keys: foreign_keys.into_iter().map(|(_, key)| key).collect(),
+            triggers,
+            definition,
+            ..sqmeow_db::Details::default()
+        })
+    }
+
     async fn close(&self) {
+        self.handle.store(ptr::null_mut(), Ordering::Relaxed);
+        self.meta.close().await;
         self.pool.close().await;
     }
 }
@@ -364,6 +462,16 @@ impl SqlxAdapter for SqliteAdapter {
 
     fn affected(outcome: &<Sqlite as sqlx::Database>::QueryResult) -> u64 {
         outcome.rows_affected()
+    }
+
+    /// Dropping the stream leaves a statement that returns nothing yet, such as an aggregate, running.
+    async fn stop_running(&self) {
+        let handle = self.handle.load(Ordering::Relaxed);
+        if !handle.is_null() {
+            // SAFETY: the pool's one connection owns the handle until `close` clears it, and
+            // `sqlite3_interrupt` may be called from any thread.
+            unsafe { libsqlite3_sys::sqlite3_interrupt(handle) };
+        }
     }
 
     fn forget(&self) {
@@ -400,4 +508,23 @@ fn decode_cell(row: &SqliteRow, index: usize) -> Cell {
         ),
         _ => text_or_bytes(row, index, &type_name),
     }
+}
+
+/// What fires a trigger, read from its `CREATE TRIGGER`, such as `AFTER UPDATE`.
+fn trigger_event(sql: &str) -> String {
+    let lower = sql.to_ascii_lowercase();
+    ["before", "after", "instead of"]
+        .iter()
+        .find_map(|timing| {
+            let at = lower.find(&format!(" {timing} "))? + 1;
+            let end = lower[at..].find(" on ")?;
+            Some(
+                sql[at..at + end]
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_uppercase(),
+            )
+        })
+        .unwrap_or_default()
 }

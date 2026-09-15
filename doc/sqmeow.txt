@@ -97,7 +97,8 @@ Configuration defaults and validation.
 Default configuration.
 >lua
   sqmeow.config.defaults = {
-    -- Where connections are loaded from, in order.
+    -- Where connections are loaded from, in order: `file`, `env`, or `command`, which runs `command`
+    -- and reads the JSON array of connections it prints.
     sources = {
       { type = 'file' },
       { type = 'env' },
@@ -124,15 +125,18 @@ Default configuration.
       -- The border of every dialog.
       border = 'default',
       winbar = true,
+      -- Reopen the saved connections, the current one, and the drawer nodes that were open when
+      -- Neovim last quit, the first time the drawer opens.
       persist_session = false,
     },
 
     query = {
-      -- Rows held per result. Reached, the result is marked truncated rather than failed.
+      -- Rows held per result. Reached, the result is marked truncated rather than failed. 0 holds every
+      -- row.
       max_rows = 100000,
       -- Milliseconds before a query is cancelled. 0 disables the timeout.
       timeout_ms = 0,
-      -- Results the engine holds in memory, so showing a recent one again reads nothing from disk.
+      -- Runs whose results the engine holds in memory. An older one is read back from disk when shown.
       history_size = 32,
       -- Save the queries you run, and the rows they returned, under `core.path`.
       persist_history = true,
@@ -168,12 +172,16 @@ Default configuration.
       ['function'] = '󰊕',
       procedure = '󰡱',
       key = '',
+      sequence = '󰎠',
+      role = '󰀄',
 
       -- The headings a schema is drawn as, each above the things it holds.
       tables = '󰓫',
       views = '󰈈',
       functions = '󰊕',
       procedures = '󰡱',
+      sequences = '󰎠',
+      roles = '󰀄',
       -- A Redis database's groups, one per type of value, all drawn with the same glyph.
       keys = '',
 
@@ -288,7 +296,8 @@ Built-in mappings, per surface.
 drawer
  <CR>, o   Expand or collapse the node
  p         Show the first page of this relation
- K         Show the columns and indexes of this table
+ K         Show the structure of this table or key
+ f         Show only the Redis keys matching a pattern
  r         Reload this subtree
  y         Yank the qualified name
  s         Yank a SELECT for this relation
@@ -440,17 +449,20 @@ Save a connection to the file source.
 Parameters ~
 {name} `(string)`
 {url} `(string)`
-{opts} `(table|nil)` `read_only` saves it as a connection that runs only statements that read.
+{opts} `(table|nil)` `read_only` saves it as a connection that runs only statements that read,
+ and `ssh` as one reached through an SSH tunnel to that `user@host`.
 Return ~
 `(boolean)` written
 
 ------------------------------------------------------------------------------
                                                              *sqmeow.api.edit()*
                       `sqmeow.api.edit`({name}, {changes})
-Change a saved connection's name, URL or read-only flag, and rename its open connection to match.
+Change a saved connection's name, URL, read-only flag or SSH tunnel, and rename its open
+connection to match.
 Parameters ~
 {name} `(string)` The name it is saved under now.
-{changes} `(table)` `name`, `url` and `read_only`; any may be left out to keep what is there.
+{changes} `(table)` `name`, `url`, `read_only` and `ssh`, `''` for no tunnel; any may be left out
+ to keep what is there.
 Return ~
 `(boolean)` written
 Usage ~

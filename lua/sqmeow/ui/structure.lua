@@ -1,4 +1,4 @@
---- A table's columns and indexes, in a popup.
+--- A relation's columns, indexes, keys, checks, triggers and definition, in a popup.
 
 local M = {}
 
@@ -37,20 +37,36 @@ local function aligned(rows)
   end, rows)
 end
 
---- The lines a table's structure reads as.
+--- The lines a relation's structure reads as.
 ---@param payload table As `structure:done` sends it.
 ---@return NuiLine[]
 function M.lines(payload)
   local Line = require('nui.line')
   local lines = {}
-  local function heading(text)
+  local function section(title, rows)
+    if #rows == 0 then
+      return
+    end
+    if #lines > 0 then
+      table.insert(lines, Line())
+    end
     local line = Line()
-    line:append(text, 'SqmeowHeader')
+    line:append(title, 'SqmeowHeader')
     table.insert(lines, line)
+    vim.list_extend(lines, aligned(rows))
   end
 
-  heading('Columns')
   local rows = {}
+  for _, property in ipairs(payload.properties or {}) do
+    table.insert(rows, { { property[1], 'SqmeowDetailName' }, { property[2] } })
+  end
+  section('About', rows)
+
+  local comments = {}
+  for _, comment in ipairs(payload.comments or {}) do
+    comments[comment[1]] = comment[2]
+  end
+  rows = {}
   for _, column in ipairs(payload.columns or {}) do
     local notes = {}
     if column.primary_key then
@@ -65,22 +81,45 @@ function M.lines(payload)
       { column.nullable and 'null' or 'not null' },
       { column.default and ('default ' .. column.default) or '' },
       { table.concat(notes, ', ') },
+      { comments[column.name] and ('-- ' .. comments[column.name]) or '', 'Comment' },
     })
   end
-  vim.list_extend(lines, aligned(rows))
+  section('Columns', rows)
 
-  if #(payload.indexes or {}) > 0 then
-    table.insert(lines, Line())
-    heading('Indexes')
+  rows = {}
+  for _, index in ipairs(payload.indexes or {}) do
+    table.insert(rows, {
+      { index.name, 'SqmeowDetailName' },
+      { '(' .. table.concat(index.columns, ', ') .. ')' },
+      { index.primary and 'primary key' or index.unique and 'unique' or '' },
+    })
+  end
+  section('Indexes', rows)
+
+  rows = {}
+  for _, key in ipairs(payload.foreign_keys or {}) do
+    table.insert(rows, {
+      { key.name ~= '' and key.name or '(unnamed)', 'SqmeowDetailName' },
+      { '(' .. table.concat(key.columns, ', ') .. ')' },
+      { ('→ %s (%s)'):format(key.target, table.concat(key.referenced, ', ')) },
+    })
+  end
+  section('Foreign keys', rows)
+
+  for _, group in ipairs({ { 'Checks', payload.checks }, { 'Triggers', payload.triggers } }) do
     rows = {}
-    for _, index in ipairs(payload.indexes) do
-      table.insert(rows, {
-        { index.name, 'SqmeowDetailName' },
-        { '(' .. table.concat(index.columns, ', ') .. ')' },
-        { index.primary and 'primary key' or index.unique and 'unique' or '' },
-      })
+    for _, entry in ipairs(group[2] or {}) do
+      table.insert(rows, { { entry[1], 'SqmeowDetailName' }, { entry[2] } })
     end
-    vim.list_extend(lines, aligned(rows))
+    section(group[1], rows)
+  end
+
+  if payload.definition then
+    rows = {}
+    for _, text in ipairs(vim.split(payload.definition, '\n', { plain = true })) do
+      table.insert(rows, { { text } })
+    end
+    section('Definition', rows)
   end
   return lines
 end

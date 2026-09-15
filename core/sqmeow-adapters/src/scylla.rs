@@ -1,5 +1,6 @@
 //! The ScyllaDB adapter, which speaks to Apache Cassandra as well.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use futures_util::StreamExt;
@@ -38,6 +39,10 @@ struct Target {
     hosts: Vec<String>,
     credentials: Option<(String, String)>,
     keyspace: Option<String>,
+    /// Whether to speak TLS.
+    tls: bool,
+    /// A CA certificate file to trust besides the machine's roots.
+    ca: Option<String>,
 }
 
 impl ScyllaAdapter {
@@ -52,6 +57,9 @@ impl ScyllaAdapter {
         }
         if let Some(keyspace) = target.keyspace {
             builder = builder.use_keyspace(keyspace, true);
+        }
+        if target.tls {
+            builder = builder.tls_context(Some(tls_config(target.ca.as_deref())?));
         }
 
         let session = tokio::time::timeout(crate::CONNECT_TIMEOUT, builder.build())
@@ -201,15 +209,36 @@ impl Adapter for ScyllaAdapter {
             )
             .await?;
         rows.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(rows
+
+        // The primary key is no index CQL lists, but it is how a row is found.
+        let mut key = self
+            .rows::<(String, String, i32)>(
+                "select column_name, kind, position from system_schema.columns
+                 where keyspace_name = ? and table_name = ?",
+                (schema, relation),
+            )
+            .await?;
+        key.retain(|(_, kind, _)| kind == "partition_key" || kind == "clustering");
+        key.sort_by_key(|(_, kind, position)| (kind != "partition_key", *position));
+        let primary = (!key.is_empty()).then(|| sqmeow_db::IndexNode {
+            name: "PRIMARY KEY".to_owned(),
+            columns: key.into_iter().map(|(name, ..)| name).collect(),
+            unique: true,
+            primary: true,
+        });
+
+        Ok(primary
             .into_iter()
-            .map(|(name, options)| sqmeow_db::IndexNode {
-                name,
-                // What the index is on, such as `v` or `keys(m)`.
-                columns: options.get("target").cloned().into_iter().collect(),
-                unique: false,
-                primary: false,
-            })
+            .chain(
+                rows.into_iter()
+                    .map(|(name, options)| sqmeow_db::IndexNode {
+                        name,
+                        // What the index is on, such as `v` or `keys(m)`.
+                        columns: options.get("target").cloned().into_iter().collect(),
+                        unique: false,
+                        primary: false,
+                    }),
+            )
             .collect())
     }
 
@@ -329,21 +358,84 @@ impl Adapter for ScyllaAdapter {
             .collect())
     }
 
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+        let comment = self
+            .rows::<(Option<String>,)>(
+                "select comment from system_schema.tables where keyspace_name = ? and table_name = ?",
+                (schema, relation),
+            )
+            .await?
+            .into_iter()
+            .find_map(|(comment,)| comment.filter(|comment| !comment.is_empty()));
+        // The server answers DESCRIBE from ScyllaDB 5 and Cassandra 4 on.
+        let describe = format!(
+            "DESCRIBE TABLE {}.{}",
+            self.quote_ident(schema),
+            self.quote_ident(relation)
+        );
+        let definition = match self.session.query_unpaged(describe, ()).await {
+            Ok(reply) => reply.into_rows_result().ok().and_then(|rows| {
+                rows.rows::<(String, String, String, String)>()
+                    .ok()?
+                    .filter_map(std::result::Result::ok)
+                    .map(|(.., statement)| statement)
+                    .next()
+            }),
+            Err(error) => {
+                tracing::debug!(%error, "could not describe a table");
+                None
+            }
+        };
+        Ok(sqmeow_db::Details {
+            properties: comment
+                .map(|comment| ("comment".to_owned(), comment))
+                .into_iter()
+                .collect(),
+            definition,
+            ..sqmeow_db::Details::default()
+        })
+    }
+
     async fn close(&self) {}
 }
 
-/// Read the hosts, login and keyspace from `scylla://user:password@host1,host2:9042/keyspace`.
+/// A TLS configuration trusting the machine's roots and the certificates in the `ca` file.
+fn tls_config(ca: Option<&str>) -> Result<Arc<rustls::ClientConfig>> {
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in rustls_native_certs::load_native_certs().certs {
+        // A root the machine holds that rustls cannot read is one fewer to trust, not a failure.
+        let _ = roots.add(certificate);
+    }
+    if let Some(path) = ca {
+        use rustls::pki_types::CertificateDer;
+        use rustls::pki_types::pem::PemObject;
+
+        let certificates = CertificateDer::pem_file_iter(path)
+            .map_err(|error| Error::driver(format!("`{path}` could not be read: {error}")))?;
+        for certificate in certificates {
+            let certificate = certificate.map_err(|error| {
+                Error::driver(format!("`{path}` holds no certificate: {error}"))
+            })?;
+            roots.add(certificate).map_err(Error::driver)?;
+        }
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(Error::driver)?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(Arc::new(config))
+}
+
+/// Read the hosts, login, keyspace and TLS options from
+/// `scylla://user:password@host1,host2:9042/keyspace?ssl=true&sslrootcert=ca.pem`.
 fn parse_url(url: &str) -> Result<Target> {
     let rest = url
         .split_once("://")
         .map(|(_, rest)| rest)
         .ok_or_else(|| Error::UnsupportedUrl(url.to_owned()))?;
     let (rest, options) = rest.split_once('?').unwrap_or((rest, ""));
-    if !options.is_empty() {
-        return Err(Error::driver(format!(
-            "a ScyllaDB url takes no options, but was given `{options}`"
-        )));
-    }
     let (authority, keyspace) = rest.split_once('/').unwrap_or((rest, ""));
     let (login, hosts) = match authority.rsplit_once('@') {
         Some((login, hosts)) => (Some(login), hosts),
@@ -356,6 +448,23 @@ fn parse_url(url: &str) -> Result<Target> {
             .map(|text| text.into_owned())
             .map_err(Error::driver)
     };
+    let mut tls = false;
+    let mut ca = None;
+    for option in options.split('&').filter(|option| !option.is_empty()) {
+        let (key, value) = option.split_once('=').unwrap_or((option, ""));
+        match key {
+            "ssl" | "tls" => tls = matches!(value, "true" | "1" | "yes"),
+            "sslrootcert" => {
+                tls = true;
+                ca = Some(decode(value)?);
+            }
+            other => {
+                return Err(Error::driver(format!(
+                    "a ScyllaDB url takes `ssl` and `sslrootcert`, not `{other}`"
+                )));
+            }
+        }
+    }
     let credentials = login
         .map(|login| {
             let (user, password) = login.split_once(':').unwrap_or((login, ""));
@@ -382,6 +491,8 @@ fn parse_url(url: &str) -> Result<Target> {
         hosts,
         credentials,
         keyspace,
+        tls,
+        ca,
     })
 }
 
@@ -497,6 +608,8 @@ mod tests {
                 hosts: vec!["a:9042".into(), "b:9043".into(), "[::1]:9042".into()],
                 credentials: Some(("u@x".into(), "p:s".into())),
                 keyspace: Some("shop".into()),
+                tls: false,
+                ca: None,
             }
         );
         assert_eq!(
@@ -505,8 +618,30 @@ mod tests {
                 hosts: vec!["localhost:9042".into()],
                 credentials: None,
                 keyspace: None,
+                tls: false,
+                ca: None,
             }
         );
-        assert!(parse_url("scylla://h/ks?ssl=true").is_err());
+    }
+
+    #[test]
+    fn a_url_turns_tls_on_and_names_a_ca_file() {
+        let target = parse_url("scylla://h/ks?ssl=true").unwrap();
+        assert!(target.tls);
+        assert_eq!(target.ca, None);
+
+        let target = parse_url("scylla://h/ks?sslrootcert=%2Fetc%2Fca.pem").unwrap();
+        assert!(target.tls);
+        assert_eq!(target.ca.as_deref(), Some("/etc/ca.pem"));
+
+        let error = parse_url("scylla://h/ks?compression=lz4").unwrap_err();
+        assert!(error.to_string().contains("compression"), "{error}");
+    }
+
+    #[test]
+    fn a_tls_configuration_trusts_the_machine_and_refuses_a_missing_ca_file() {
+        assert!(tls_config(None).is_ok());
+        let error = tls_config(Some("/nonexistent/ca.pem")).unwrap_err();
+        assert!(error.to_string().contains("/nonexistent/ca.pem"), "{error}");
     }
 }

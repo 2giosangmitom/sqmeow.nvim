@@ -13,6 +13,7 @@ local M = {}
 ---@field database string|nil For one database of a cluster, which one.
 ---@field current_database string|nil For MongoDB, the database commands run on.
 ---@field read_only boolean|nil Runs only statements that read.
+---@field ssh string|nil The `user@host` an SSH tunnel to the database goes through.
 
 ---@class sqmeow.CallSummary
 ---@field call_id integer|nil Absent for an entry from the log that has no rows to read.

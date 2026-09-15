@@ -133,6 +133,8 @@ function M.start()
   ---@cast handshake sqmeow.EngineInfo
 
   info = handshake
+  -- A new engine numbers its calls from one again, so nothing kept by call id still holds.
+  require('sqmeow.ui.result').forget()
   M.configure()
   return channel
 end
@@ -148,6 +150,7 @@ function M.configure()
   local ok, applied = pcall(vim.rpcrequest, channel, 'configure', {
     max_rows = config.query.max_rows,
     history_size = config.query.history_size,
+    timeout_ms = config.query.timeout_ms,
   })
 
   if not ok then

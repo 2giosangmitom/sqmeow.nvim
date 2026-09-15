@@ -262,4 +262,28 @@ T['combining']['finds one connection by name'] = function()
   eq(sources.find('nope'), nil)
 end
 
+T['a command source reads what the command prints, in the background'] = function()
+  local command = require('sqmeow.sources.command')
+  command.reload()
+  local source =
+    { type = 'command', command = { 'printf', '[{"name": "vault", "url": "sqlite::memory:"}]' } }
+
+  local first = command.load(source)
+  eq(first, {})
+  local found
+  vim.wait(5000, function()
+    found = command.load(source)
+    return #found > 0
+  end, 20)
+  eq(found[1].name, 'vault')
+
+  local failing = { type = 'command', command = 'echo nope >&2; exit 3' }
+  local _, err
+  vim.wait(5000, function()
+    _, err = command.load(failing)
+    return err ~= nil
+  end, 20)
+  eq(err:find('nope', 1, true) ~= nil, true)
+end
+
 return T

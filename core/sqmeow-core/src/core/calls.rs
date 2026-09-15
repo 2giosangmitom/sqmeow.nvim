@@ -1,8 +1,9 @@
 //! Running statements, and reading the results they keep.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use rmpv::Value;
 use sqmeow_db::{Cell, Dialect, Error as DbError, ResultSet, edit, guard, sql, view};
@@ -13,6 +14,15 @@ use crate::archive;
 use crate::args::Args;
 use crate::session::{Call, CallId, ConnId, Connection};
 use crate::value::{map, optional, strings};
+
+/// Stops a timer when the call it times ends first.
+struct Abort(tokio::task::JoinHandle<()>);
+
+impl Drop for Abort {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 impl Core {
     /// The error for a result the history no longer holds.
@@ -48,19 +58,24 @@ impl Core {
 
         let condition = args.opt_string("where").unwrap_or_default();
         let order = args.opt_string("order_by").unwrap_or_default();
+        // The names the rows have, which a filter tells apart where two are the same.
+        let columns = args.opt_strings("columns").unwrap_or_default();
         let wrapped = if condition.trim().is_empty() && order.trim().is_empty() {
             None
         } else {
-            if matches!(dialect, Dialect::Redis | Dialect::MongoDb | Dialect::Scylla) {
-                return Err("filtering with WHERE and ORDER BY needs a SQL database".to_owned());
+            if matches!(dialect, Dialect::Redis | Dialect::Scylla) {
+                return Err("filtering in the query needs a SQL or MongoDB database".to_owned());
             }
             let [statement] = statements.as_slice() else {
                 return Err("only one statement can be filtered".to_owned());
             };
-            Some(
-                sql::filtered(&statement.sql, &condition, &order)
-                    .ok_or("only a query that returns rows can be filtered")?,
-            )
+            Some(if dialect == Dialect::MongoDb {
+                sqmeow_adapters::mongodb::filtered(&statement.sql, &condition, &order)
+                    .map_err(|error| error.to_string())?
+            } else {
+                sql::filtered(dialect, &statement.sql, &condition, &order, &columns)
+                    .ok_or("only a query that returns rows can be filtered")?
+            })
         };
 
         // After applying edits, rows the inserts returned are shown even where the query leaves them out.
@@ -97,6 +112,18 @@ impl Core {
         let options = self.session.options();
         let running = self.session.begin_call(call_id);
         let started = Instant::now();
+        // A timeout trips the token a cancel trips, and says so.
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let _timer = (options.timeout_ms > 0).then(|| {
+            let token = running.token();
+            let timed_out = Arc::clone(&timed_out);
+            let limit = Duration::from_millis(options.timeout_ms);
+            Abort(tokio::spawn(async move {
+                tokio::time::sleep(limit).await;
+                timed_out.store(true, Ordering::Relaxed);
+                token.cancel();
+            }))
+        });
 
         // The line range lets the editor show which statement is running.
         let span = statements.first().zip(statements.last());
@@ -118,8 +145,11 @@ impl Core {
         );
 
         let mut last: Option<ResultSet> = None;
-        // The rows of earlier statements, each kept as a result of its own.
+        // Each earlier statement's result, kept as a call of its own, how the editor sees it, and
+        // where the ones with rows are saved.
+        let mut kept: Vec<Call> = Vec::new();
         let mut earlier: Vec<Value> = Vec::new();
+        let mut saves: Vec<(usize, PathBuf)> = Vec::new();
         for statement in &statements {
             let run = wrapped.as_deref().unwrap_or(&statement.sql);
             let outcome = connection
@@ -128,23 +158,36 @@ impl Core {
                 .await;
             match outcome {
                 Ok(result) => {
-                    if let Some(previous) = last.replace(result)
-                        && !previous.columns().is_empty()
-                    {
-                        earlier.push(self.keep(conn_id, previous));
+                    if let Some(previous) = last.replace(result) {
+                        let (call, mut summary) = self.keep(conn_id, previous);
+                        if let Some(path) = archive
+                            .as_deref()
+                            .filter(|_| !call.result.columns().is_empty())
+                        {
+                            let path = sibling(path, kept.len());
+                            summary.push(("archive", Value::from(path.display().to_string())));
+                            saves.push((kept.len(), path));
+                        }
+                        kept.push(call);
+                        earlier.push(map(summary));
                     }
+                }
+                Err(DbError::Cancelled) if timed_out.load(Ordering::Relaxed) => {
+                    let mut payload = elapsed(started);
+                    payload.push((
+                        "error",
+                        Value::from(format!(
+                            "the query ran past the {} ms timeout, so it was cancelled",
+                            options.timeout_ms
+                        )),
+                    ));
+                    return self.emit_call(call_id, conn_id, "error", payload);
                 }
                 Err(DbError::Cancelled) => {
                     return self.emit_call(call_id, conn_id, "cancelled", elapsed(started));
                 }
                 Err(error) => {
-                    let mut error = error.to_string();
-                    // MySQL refuses a subquery whose columns share a name.
-                    if wrapped.is_some() && error.contains("Duplicate column name") {
-                        error.push_str(
-                            "\nname each column differently with AS to filter this result",
-                        );
-                    }
+                    let error = error.to_string();
                     let mut payload = elapsed(started);
                     if !earlier.is_empty() {
                         earlier.push(map(vec![
@@ -156,6 +199,7 @@ impl Core {
                         payload.push(("results", Value::Array(earlier)));
                     }
                     payload.push(("error", Value::from(error)));
+                    self.session.store_run(kept);
                     return self.emit_call(call_id, conn_id, "error", payload);
                 }
             }
@@ -188,38 +232,60 @@ impl Core {
             payload.push(("results", Value::Array(earlier)));
         }
 
-        let call = self.session.store_call(call);
+        let mut stored = self
+            .session
+            .store_run(kept.into_iter().chain(std::iter::once(call)).collect());
+        let call = stored.pop().expect("the run's last call was stored");
         drop(running);
         self.emit_call(call_id, conn_id, "done", payload);
 
+        for (index, path) in saves {
+            save(path, Arc::clone(&stored[index]));
+        }
         if let Some(path) = archive {
             save(path, call);
         }
     }
 
-    /// Store an earlier statement's rows as a result of their own, and describe it.
-    fn keep(&self, conn_id: ConnId, result: ResultSet) -> Value {
+    /// An earlier statement's result as a call of its own, and how the editor sees it.
+    fn keep(&self, conn_id: ConnId, result: ResultSet) -> (Call, Vec<(&'static str, Value)>) {
         let elapsed_ms = result.elapsed().as_millis() as u64;
         let call = Call::new(self.session.next_call_id(), conn_id, result);
         let mut summary = summarize(&call);
         summary.push(("state", Value::from("done")));
         summary.push(("elapsed_ms", Value::from(elapsed_ms)));
-        self.session.store_call(call);
-        map(summary)
+        (call, summary)
     }
 
     /// Read a result saved by an earlier `execute` back into the session.
     pub(super) fn restore(self: Arc<Self>, args: &Args) -> Started {
         let path = PathBuf::from(args.string("path")?);
+        // The results of the run's earlier statements, saved beside its own.
+        let others: Vec<PathBuf> = args
+            .opt_strings("others")
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
         // The connection it ran on, when that is open.
         let conn_id = ConnId(args.opt_integer("conn_id").unwrap_or(0));
         let call_id = self.session.next_call_id();
 
         let work = async move {
-            let read = tokio::task::spawn_blocking(move || archive::read(&path)).await;
-            let result = match read {
-                Ok(Ok(result)) => result,
-                Ok(Err(error)) => {
+            let read = tokio::task::spawn_blocking(move || {
+                let others: Vec<(PathBuf, Result<ResultSet, String>)> = others
+                    .into_iter()
+                    .map(|other| {
+                        let read = archive::read(&other);
+                        (other, read)
+                    })
+                    .collect();
+                (archive::read(&path), others)
+            })
+            .await;
+            let (result, others) = match read {
+                Ok((Ok(result), others)) => (result, others),
+                Ok((Err(error), _)) => {
                     let payload = vec![("error", Value::from(error))];
                     return self.emit_call(call_id, conn_id, "error", payload);
                 }
@@ -230,12 +296,31 @@ impl Core {
                 }
             };
 
+            let mut kept = Vec::new();
+            let mut earlier = Vec::new();
+            // An earlier result whose file has gone is left out.
+            for (other, read) in others {
+                if let Ok(result) = read {
+                    let (call, mut summary) = self.keep(conn_id, result);
+                    summary.push(("archive", Value::from(other.display().to_string())));
+                    kept.push(call);
+                    earlier.push(map(summary));
+                }
+            }
+
             let elapsed_ms = result.elapsed().as_millis() as u64;
             let call = Call::new(call_id, conn_id, result);
             let mut payload = summarize(&call);
             payload.push(("elapsed_ms", Value::from(elapsed_ms)));
+            if !earlier.is_empty() {
+                let mut current = payload.clone();
+                current.push(("state", Value::from("done")));
+                earlier.push(map(current));
+                payload.push(("results", Value::Array(earlier)));
+            }
 
-            self.session.store_call(call);
+            self.session
+                .store_run(kept.into_iter().chain(std::iter::once(call)).collect());
             self.emit_call(call_id, conn_id, "done", payload);
         };
         Ok((Value::from(call_id), Box::pin(work)))
@@ -290,9 +375,14 @@ impl Core {
         self.session
             .with_call(call_id, |call| {
                 let result = &call.result;
-                let name = &result.columns().get(column).ok_or("no such column")?.name;
+                let meta = result.columns().get(column).ok_or("no such column")?;
                 let cell = result.cell(row, column).ok_or("no such row")?;
-                sqmeow_db::edit::condition(dialect, name, cell).map_err(|error| error.to_string())
+                let condition = if dialect == Dialect::MongoDb {
+                    sqmeow_adapters::mongodb::condition(&meta.name, &meta.type_name, cell)
+                } else {
+                    sqmeow_db::edit::condition(dialect, &meta.name, cell)
+                };
+                condition.map_err(|error| error.to_string())
             })
             .ok_or_else(gone)?
             .map(Value::from)
@@ -434,6 +524,17 @@ fn save(path: PathBuf, call: Arc<Call>) {
             tracing::warn!(%error, path = %path.display(), "could not save a result");
         }
     });
+}
+
+/// Where a run's `index`th earlier result is saved, beside the run's own.
+fn sibling(path: &Path, index: usize) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+    let extension = path.extension().map_or_else(String::new, |extension| {
+        format!(".{}", extension.to_string_lossy())
+    });
+    path.with_file_name(format!("{stem}-{index}{extension}"))
 }
 
 fn elapsed(started: Instant) -> Vec<(&'static str, Value)> {

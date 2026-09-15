@@ -34,9 +34,18 @@ impl TableName {
 #[derive(Debug, Default)]
 pub struct TableBinder {
     bound: Vec<(usize, TableName, String)>,
+    /// Find a table with no whole key in the result by every column it shows.
+    every_column: bool,
 }
 
 impl TableBinder {
+    /// Find a table with no whole key in the result by every column the result shows of it, which
+    /// suits only a query whose rows are table rows.
+    pub fn every_column(mut self, every_column: bool) -> Self {
+        self.every_column = every_column;
+        self
+    }
+
     /// Record that result column `column` shows `table`'s column `name`.
     pub fn bind(&mut self, column: usize, table: TableName, name: impl Into<String>) {
         self.bound.push((column, table, name.into()));
@@ -46,6 +55,7 @@ impl TableBinder {
     /// table's primary key, then its unique keys, and the first one found in full is used.
     pub fn build(mut self, keys: impl Fn(&TableName) -> Vec<Vec<String>>) -> Option<Source> {
         self.bound.sort_by_key(|(column, ..)| *column);
+        let every_column = self.every_column;
 
         let mut grouped: Vec<(TableName, Vec<(usize, String)>)> = Vec::new();
         for (column, table, name) in self.bound {
@@ -63,20 +73,22 @@ impl TableBinder {
                 if !columns.iter().all(|(_, name)| seen.insert(name)) {
                     return None;
                 }
-                let mut key =
-                    keys(&table)
-                        .iter()
-                        .filter(|key| !key.is_empty())
-                        .find_map(|key| {
-                            key.iter()
-                                .map(|wanted| {
-                                    columns
-                                        .iter()
-                                        .find(|(_, name)| name == wanted)
-                                        .map(|(at, _)| *at)
-                                })
-                                .collect::<Option<Vec<usize>>>()
-                        })?;
+                let mut key = keys(&table)
+                    .iter()
+                    .filter(|key| !key.is_empty())
+                    .find_map(|key| {
+                        key.iter()
+                            .map(|wanted| {
+                                columns
+                                    .iter()
+                                    .find(|(_, name)| name == wanted)
+                                    .map(|(at, _)| *at)
+                            })
+                            .collect::<Option<Vec<usize>>>()
+                    })
+                    .or_else(|| {
+                        every_column.then(|| columns.iter().map(|(at, _)| *at).collect())
+                    })?;
                 key.sort_unstable();
                 Some(Table {
                     schema: table.schema,
@@ -136,6 +148,14 @@ mod tests {
         binder.bind(0, TableName::parse("badges"), "slug");
         binder.bind(1, TableName::parse("badges"), "label");
         assert_eq!(tables(binder.build(keys))[0].key, vec![0]);
+    }
+
+    #[test]
+    fn a_table_without_a_key_is_found_by_every_column_when_asked() {
+        let mut binder = TableBinder::default().every_column(true);
+        binder.bind(1, TableName::parse("loose"), "v");
+        binder.bind(0, TableName::parse("loose"), "w");
+        assert_eq!(tables(binder.build(keys))[0].key, vec![0, 1]);
     }
 
     #[test]

@@ -152,6 +152,17 @@ T['= and s narrow and order in the database, and R runs the query as written'] =
   eq(rows()[1]:match('^%s*(%d)'), '2')
 end
 
+T['a filter tells apart columns of one name'] = function()
+  run('select p.id, q.id from people p join people q on q.id = p.id order by p.id')
+  eq(result.filter_names(state.call), { 'id', 'id_2' })
+  local arrived = next_result('the filtered result should arrive', function()
+    return true
+  end)
+  eq(result.filter('id_2 > 1', ''), true)
+  arrived()
+  eq(state.call.state, 'done')
+end
+
 T['a condition the database refuses shows its error, and the bar opens with it'] = function()
   focus_result()
   local arrived = next_result('the error should arrive', function()
@@ -166,16 +177,26 @@ T['a condition the database refuses shows its error, and the bar opens with it']
   require('sqmeow.ui.filter').close()
 end
 
-T['staged changes keep the result from being filtered'] = function()
+T['staged changes are asked about before a new result replaces them'] = function()
   result.open()
   edit.set({ row = 0 }, 1, 'x')
-  local messages = {}
-  helpers.stub(vim, 'notify', function(message)
-    table.insert(messages, message)
+  local asked, answer = nil, 'Cancel'
+  helpers.stub(vim.ui, 'select', function(_, opts, on_choice)
+    asked = opts.prompt
+    on_choice(answer)
   end)
 
   eq(result.filter('age > 1', ''), false)
-  helpers.contains(messages[1], 'staged change')
+  helpers.contains(asked, '1 staged change would be lost')
+  eq(edit.count(), 1)
+
+  answer = 'Discard them'
+  local before = state.call.call_id
+  api.execute('select id from people', { conn_id = state.call.conn_id, confirmed = true })
+  wait('the query should run once the changes are discarded', function()
+    return state.call.call_id ~= before and state.call.state == 'done'
+  end)
+  eq(edit.count(), 0)
 end
 
 T['editing applies through a review'] = function()
@@ -399,15 +420,38 @@ end
 T[']r and [r move between the results of several statements'] = function()
   focus_result()
   run('select 1 as first; update people set age = age where id = 0; select 2 as second')
-  eq(#state.call.results, 2)
-  helpers.contains(vim.wo[result.window()].winbar, 'result 2/2')
+  eq(#state.call.results, 3)
+  helpers.contains(vim.wo[result.window()].winbar, 'result 3/3')
   helpers.contains(helpers.result_header()[1], 'second')
 
   result.actions.next_result()
   helpers.contains(helpers.result_header()[1], 'first')
-  helpers.contains(vim.wo[result.window()].winbar, 'result 1/2')
+  helpers.contains(vim.wo[result.window()].winbar, 'result 1/3')
+  -- The update between them is a result of its own, which says how many rows it changed.
+  result.actions.next_result()
+  helpers.contains(vim.wo[result.window()].winbar, '0 rows affected')
+  result.actions.prev_result()
   result.actions.prev_result()
   helpers.contains(helpers.result_header()[1], 'second')
+end
+
+T['gK on a result with no table to trace shows the one its query reads from'] = function()
+  run('select count(*) as n from people')
+  eq(select(2, result.read_from(state.call)), 'people')
+  local win = focus_result()
+  vim.api.nvim_win_set_cursor(win, { 3, 0 })
+  result.actions.structure()
+  local popup
+  wait('the structure should open', function()
+    popup = helpers.find_win(function(_, buf)
+      return vim.bo[buf].filetype == 'sqmeow-structure'
+    end)
+    return popup ~= nil
+  end)
+  local text =
+    table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(popup), 0, -1, false), '\n')
+  helpers.contains(text, 'CREATE TABLE people')
+  require('sqmeow.ui.structure').close()
 end
 
 T['gK shows the structure of the table the column is from'] = function()
@@ -426,6 +470,17 @@ T['gK shows the structure of the table the column is from'] = function()
   helpers.contains(table.concat(text, '\n'), 'age')
   helpers.contains(table.concat(text, '\n'), 'primary key')
   require('sqmeow.ui.structure').close()
+end
+
+T['a DuckDB EXPLAIN shows its plan as lines'] = function()
+  local id = helpers.connect('duckdb::memory:', { name = 'plans' })
+  MiniTest.finally(function()
+    api.disconnect(id)
+  end)
+  run('explain select 42', { conn_id = id })
+  local text = table.concat(helpers.result_lines(), '\n')
+  helpers.absent(text, 'explain_value')
+  helpers.contains(text, 'PROJECTION')
 end
 
 T['a DELETE without WHERE asks first, and runs only when told to'] = function()

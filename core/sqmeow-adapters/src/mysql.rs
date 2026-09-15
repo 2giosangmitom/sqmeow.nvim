@@ -24,6 +24,8 @@ use crate::stream::{
 #[derive(Debug)]
 pub struct MySqlAdapter {
     pool: MySqlPool,
+    /// A session of its own for the drawer, which a long query on `pool` does not hold up.
+    meta: MySqlPool,
     /// Which columns of a table are keys, read from `information_schema` a whole table at a time.
     keys: TableKeys,
     /// How the pool connects, for the second connection that stops a cancelled query.
@@ -34,7 +36,7 @@ pub struct MySqlAdapter {
 
 impl MySqlAdapter {
     /// Open a connection.
-    pub async fn connect(url: &str) -> Result<Self> {
+    pub async fn connect(url: &str, read_only: bool) -> Result<Self> {
         // Preparing a statement is how a result learns its columns, and a cached statement keeps
         // the columns its table had when it was first prepared.
         let options = MySqlConnectOptions::from_str(url)
@@ -55,6 +57,11 @@ impl MySqlAdapter {
                             .fetch_one(&mut *connection)
                             .await?;
                         connection_id.store(id, Ordering::Relaxed);
+                        if read_only {
+                            sqlx::query("set session transaction read only")
+                                .execute(&mut *connection)
+                                .await?;
+                        }
                         Ok(())
                     })
                 })
@@ -63,8 +70,14 @@ impl MySqlAdapter {
         .await
         .map_err(Error::driver)?;
 
+        let meta = MySqlPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(crate::CONNECT_TIMEOUT)
+            .connect_lazy_with(options.clone());
+
         Ok(Self {
             pool,
+            meta,
             keys: TableKeys::default(),
             options,
             connection_id,
@@ -91,7 +104,7 @@ impl MySqlAdapter {
 
     /// What a statement's result looks like, with the columns that are keys marked.
     async fn columns(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
-        let Some(prepared) = prepare(&self.pool, statement).await else {
+        let Some(prepared) = prepare(&self.meta, statement).await else {
             return (Vec::new(), None);
         };
         let mut columns = result_columns(prepared.columns());
@@ -101,7 +114,9 @@ impl MySqlAdapter {
         self.keys
             .mark(&origins, &mut columns, |table| self.read_keys(table))
             .await;
-        let source = self.keys.source(&origins);
+        let source = self
+            .keys
+            .source(&origins, sqmeow_db::sql::plain(Dialect::MySql, statement));
         (columns, source)
     }
 
@@ -118,7 +133,8 @@ impl MySqlAdapter {
                           and k.table_name = c.table_name
                           and k.column_name = c.column_name
                           and k.referenced_table_name is not null
-                    ) as foreign_key
+                    ) as foreign_key,
+                    c.extra like '%auto_increment%' as is_generated
              from information_schema.columns c
              -- An unqualified table is one in the connection's own database, which is the server's
              -- to name rather than something this side has to go and ask for.
@@ -146,6 +162,11 @@ impl MySqlAdapter {
                 })
                 .collect(),
             unique: self.unique_keys(schema, table).await,
+            generated: rows
+                .iter()
+                .filter(|row| row.try_get::<i64, _>("is_generated").unwrap_or(0) != 0)
+                .filter_map(|row| row.try_get::<String, _>("column_name").ok())
+                .collect(),
         }
     }
 
@@ -269,7 +290,7 @@ impl Adapter for MySqlAdapter {
                    ('information_schema', 'performance_schema', 'mysql', 'sys')
              order by schema_name",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
 
@@ -297,7 +318,7 @@ impl Adapter for MySqlAdapter {
              order by table_name",
         )
         .bind(schema)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
 
@@ -323,7 +344,7 @@ impl Adapter for MySqlAdapter {
              order by routine_name",
         )
         .bind(schema)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
 
@@ -344,7 +365,7 @@ impl Adapter for MySqlAdapter {
                     c.column_type as type_name,
                     c.is_nullable as nullable,
                     c.column_key as key_kind,
-                    k.referenced_table_name as references_table,
+                    concat(k.referenced_table_schema, '.', k.referenced_table_name) as references_table,
                     k.referenced_column_name as references_column,
                     c.column_default as default_value
              from information_schema.columns c
@@ -400,7 +421,7 @@ impl Adapter for MySqlAdapter {
         )
         .bind(schema)
         .bind(relation)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
 
@@ -425,7 +446,126 @@ impl Adapter for MySqlAdapter {
         Ok(indexes)
     }
 
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+        let comment = sqlx::query_scalar::<_, String>(
+            "select table_comment from information_schema.tables
+             where table_schema = ? and table_name = ?",
+        )
+        .bind(schema)
+        .bind(relation)
+        .fetch_optional(&self.meta)
+        .await
+        .map_err(Error::driver)?
+        .filter(|comment| !comment.is_empty());
+        let column_comments = sqlx::query_as::<_, (String, String)>(
+            "select column_name, column_comment from information_schema.columns
+             where table_schema = ? and table_name = ? and column_comment <> ''
+             order by ordinal_position",
+        )
+        .bind(schema)
+        .bind(relation)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+
+        let parts = sqlx::query_as::<_, (String, String, String, String, String)>(
+            "select constraint_name, column_name, referenced_table_schema, referenced_table_name,
+                    referenced_column_name
+             from information_schema.key_column_usage
+             where table_schema = ? and table_name = ? and referenced_table_name is not null
+             order by constraint_name, ordinal_position",
+        )
+        .bind(schema)
+        .bind(relation)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+        let mut foreign_keys: Vec<sqmeow_db::ForeignKeyNode> = Vec::new();
+        for (name, column, target_schema, target, referenced) in parts {
+            if foreign_keys.last().is_none_or(|key| key.name != name) {
+                foreign_keys.push(sqmeow_db::ForeignKeyNode {
+                    name,
+                    columns: Vec::new(),
+                    target: format!("{target_schema}.{target}"),
+                    referenced: Vec::new(),
+                });
+            }
+            let key = foreign_keys.last_mut().expect("pushed above");
+            key.columns.push(column);
+            key.referenced.push(referenced);
+        }
+
+        let checks = sqlx::query_as::<_, (String, String)>(
+            "select cc.constraint_name, cc.check_clause
+             from information_schema.check_constraints cc
+             join information_schema.table_constraints tc
+               on tc.constraint_schema = cc.constraint_schema
+              and tc.constraint_name = cc.constraint_name
+             where tc.table_schema = ? and tc.table_name = ? and tc.constraint_type = 'CHECK'
+             order by cc.constraint_name",
+        )
+        .bind(schema)
+        .bind(relation)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+        let triggers = sqlx::query_as::<_, (String, String)>(
+            "select trigger_name, concat(action_timing, ' ', event_manipulation)
+             from information_schema.triggers
+             where event_object_schema = ? and event_object_table = ?
+             order by trigger_name",
+        )
+        .bind(schema)
+        .bind(relation)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+
+        let sql = format!(
+            "show create table {}.{}",
+            self.quote_ident(schema),
+            self.quote_ident(relation)
+        );
+        let definition = sqlx::query(AssertSqlSafe(sql))
+            .fetch_optional(&self.meta)
+            .await
+            .map_err(Error::driver)?
+            .and_then(|row| row.try_get::<String, _>(1).ok());
+
+        Ok(sqmeow_db::Details {
+            properties: comment
+                .map(|comment| ("comment".to_owned(), comment))
+                .into_iter()
+                .collect(),
+            column_comments,
+            foreign_keys,
+            checks,
+            triggers,
+            definition,
+        })
+    }
+
+    async fn roles(&self) -> Result<Vec<sqmeow_db::RoleNode>> {
+        let rows = sqlx::query_as::<_, (String, String, String)>(
+            "select user, host, account_locked from mysql.user order by user, host",
+        )
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+        Ok(rows
+            .into_iter()
+            .map(|(user, host, locked)| sqmeow_db::RoleNode {
+                name: format!("{user}@{host}"),
+                attributes: (locked == "Y")
+                    .then(|| "locked".to_owned())
+                    .into_iter()
+                    .collect(),
+            })
+            .collect())
+    }
+
     async fn close(&self) {
+        self.meta.close().await;
         self.pool.close().await;
     }
 }

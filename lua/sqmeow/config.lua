@@ -7,7 +7,8 @@ local M = {}
 --- Default configuration.
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 M.defaults = {
-  -- Where connections are loaded from, in order.
+  -- Where connections are loaded from, in order: `file`, `env`, or `command`, which runs `command`
+  -- and reads the JSON array of connections it prints.
   sources = {
     { type = 'file' },
     { type = 'env' },
@@ -34,15 +35,18 @@ M.defaults = {
     -- The border of every dialog.
     border = 'default',
     winbar = true,
+    -- Reopen the saved connections, the current one, and the drawer nodes that were open when
+    -- Neovim last quit, the first time the drawer opens.
     persist_session = false,
   },
 
   query = {
-    -- Rows held per result. Reached, the result is marked truncated rather than failed.
+    -- Rows held per result. Reached, the result is marked truncated rather than failed. 0 holds every
+    -- row.
     max_rows = 100000,
     -- Milliseconds before a query is cancelled. 0 disables the timeout.
     timeout_ms = 0,
-    -- Results the engine holds in memory, so showing a recent one again reads nothing from disk.
+    -- Runs whose results the engine holds in memory. An older one is read back from disk when shown.
     history_size = 32,
     -- Save the queries you run, and the rows they returned, under `core.path`.
     persist_history = true,
@@ -78,12 +82,16 @@ M.defaults = {
     ['function'] = '󰊕',
     procedure = '󰡱',
     key = '',
+    sequence = '󰎠',
+    role = '󰀄',
 
     -- The headings a schema is drawn as, each above the things it holds.
     tables = '󰓫',
     views = '󰈈',
     functions = '󰊕',
     procedures = '󰡱',
+    sequences = '󰎠',
+    roles = '󰀄',
     -- A Redis database's groups, one per type of value, all drawn with the same glyph.
     keys = '',
 

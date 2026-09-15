@@ -253,3 +253,72 @@ async fn the_drawer_follows_a_database_the_user_selected() {
     let schemas = backend.schemas().await.expect("schemas should load");
     assert_eq!(schemas[0].name, "db1");
 }
+
+#[tokio::test]
+async fn a_key_describes_its_type_ttl_and_length() {
+    let backend = connect(&server!()).await;
+    run(&backend, "DEL test:described").await;
+    run(&backend, "HSET test:described a 1 b 2").await;
+    run(&backend, "EXPIRE test:described 600").await;
+
+    let properties = backend
+        .details("db0", "test:described")
+        .await
+        .unwrap()
+        .properties;
+    let get = |name: &str| {
+        properties
+            .iter()
+            .find(|(known, _)| known == name)
+            .map(|(_, value)| value.as_str())
+    };
+    assert_eq!(get("type"), Some("hash"));
+    assert_eq!(get("length"), Some("2"));
+    assert!(get("ttl").is_some_and(|ttl| ttl.ends_with(" s")), "{properties:?}");
+}
+
+#[tokio::test]
+async fn keys_are_listed_by_a_pattern() {
+    let backend = connect(&server!()).await;
+    run(&backend, "SET test:pattern:one 1").await;
+    run(&backend, "SET test:pattern:two 2").await;
+    run(&backend, "SET test:unpatterned 3").await;
+
+    let keys = backend.keys("test:pattern:*").await.unwrap();
+    let mut names: Vec<&str> = keys.iter().map(|key| key.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, vec!["test:pattern:one", "test:pattern:two"]);
+}
+
+#[tokio::test]
+async fn a_stream_entry_is_deleted_and_added_and_a_listed_key_renamed() {
+    let backend = connect(&server!()).await;
+    run(&backend, "DEL test:stream test:renamed test:to-rename").await;
+    run(&backend, "XADD test:stream 1-1 name al").await;
+
+    let entries = run(&backend, "XRANGE test:stream - +").await;
+    let changes = sqmeow_db::Changes {
+        deletes: vec![0],
+        inserts: vec![vec![(1, "name bo".into())]],
+        ..sqmeow_db::Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&entries, &changes).unwrap())
+        .await
+        .expect("the plan should apply");
+    let after = run(&backend, "XLEN test:stream").await;
+    assert_eq!(after.cell(0, 0), Some(&Cell::Int(1)));
+
+    run(&backend, "SET test:to-rename x").await;
+    let keys = run(&backend, "KEYS test:to-rename").await;
+    let changes = sqmeow_db::Changes {
+        updates: vec![(0, vec![(0, "test:renamed".into())])],
+        ..sqmeow_db::Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&keys, &changes).unwrap())
+        .await
+        .expect("the rename should apply");
+    let renamed = run(&backend, "GET test:renamed").await;
+    assert_eq!(renamed.cell(0, 0), Some(&Cell::Text("x".into())));
+}

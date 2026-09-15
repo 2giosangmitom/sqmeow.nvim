@@ -46,6 +46,8 @@ impl From<CallId> for Value {
 pub struct Options {
     pub max_rows: usize,
     pub history_size: usize,
+    /// Milliseconds a call may run before it is cancelled, or 0 for no limit.
+    pub timeout_ms: u64,
 }
 
 impl Default for Options {
@@ -53,6 +55,7 @@ impl Default for Options {
         Self {
             max_rows: 100_000,
             history_size: 32,
+            timeout_ms: 0,
         }
     }
 }
@@ -61,10 +64,14 @@ impl Options {
     /// Apply the subset of settings the plugin sent, leaving the rest alone.
     pub fn update(&mut self, other: OptionsPatch) {
         if let Some(value) = other.max_rows {
-            self.max_rows = value;
+            // Zero is no cap.
+            self.max_rows = if value == 0 { usize::MAX } else { value };
         }
         if let Some(value) = other.history_size {
             self.history_size = value.max(1);
+        }
+        if let Some(value) = other.timeout_ms {
+            self.timeout_ms = value;
         }
     }
 }
@@ -74,6 +81,7 @@ impl Options {
 pub struct OptionsPatch {
     pub max_rows: Option<usize>,
     pub history_size: Option<usize>,
+    pub timeout_ms: Option<u64>,
 }
 
 /// One open connection.
@@ -84,6 +92,8 @@ pub struct Connection {
     pub backend: Backend,
     /// Runs only statements that read, and takes no edits.
     pub read_only: bool,
+    /// The SSH tunnel the connection goes through, held so it closes with the connection.
+    pub _tunnel: Option<crate::tunnel::Tunnel>,
 }
 
 /// A finished result, kept so its rows can be read and reopened.
@@ -128,8 +138,8 @@ pub struct Session {
 struct History {
     /// Shared, so a result can be saved to disk without holding the lock for as long as that takes.
     calls: HashMap<CallId, Arc<Call>>,
-    /// Call ids oldest first, which is the order they are evicted in.
-    order: VecDeque<CallId>,
+    /// The calls of each run, oldest run first, which is the order they are evicted in.
+    order: VecDeque<Vec<CallId>>,
 }
 
 /// A call registered as running, which stops being cancellable when dropped.
@@ -246,21 +256,33 @@ impl Session {
         }
     }
 
-    /// Store a finished result, evicting the oldest once the history is full.
+    /// Store a finished result, evicting the oldest runs once the history is full.
+    #[cfg(test)]
     pub fn store_call(&self, call: Call) -> Arc<Call> {
+        self.store_run(vec![call])
+            .pop()
+            .expect("the call was stored")
+    }
+
+    /// Store the results of one run, which count as one against the history and go together.
+    pub fn store_run(&self, calls: Vec<Call>) -> Vec<Arc<Call>> {
         let limit = self.options().history_size.max(1);
         let mut history = self.calls.lock().expect("calls poisoned");
 
-        let call = Arc::new(call);
-        history.order.push_back(call.id);
-        history.calls.insert(call.id, Arc::clone(&call));
+        let calls: Vec<Arc<Call>> = calls.into_iter().map(Arc::new).collect();
+        history
+            .order
+            .push_back(calls.iter().map(|call| call.id).collect());
+        for call in &calls {
+            history.calls.insert(call.id, Arc::clone(call));
+        }
 
         while history.order.len() > limit {
-            if let Some(evicted) = history.order.pop_front() {
+            for evicted in history.order.pop_front().unwrap_or_default() {
                 history.calls.remove(&evicted);
             }
         }
-        call
+        calls
     }
 
     /// Keep the rows applied inserts returned, for the connection's next run of its query.
@@ -396,5 +418,31 @@ mod tests {
         assert!(session.connection(ConnId(1)).is_none());
         assert!(session.describe_connections().is_empty());
         assert!(session.remove_connection(ConnId(1)).is_none());
+    }
+
+    #[test]
+    fn a_run_is_evicted_whole() {
+        let session = Session::default();
+        session.configure(OptionsPatch {
+            history_size: Some(1),
+            ..OptionsPatch::default()
+        });
+        session.store_run(vec![call(1, 1), call(2, 1)]);
+        assert!(session.with_call(CallId(1), |_| ()).is_some());
+
+        session.store_call(call(3, 1));
+        assert!(session.with_call(CallId(1), |_| ()).is_none());
+        assert!(session.with_call(CallId(2), |_| ()).is_none());
+        assert!(session.with_call(CallId(3), |_| ()).is_some());
+    }
+
+    #[test]
+    fn a_row_cap_of_zero_keeps_every_row() {
+        let session = Session::default();
+        let options = session.configure(OptionsPatch {
+            max_rows: Some(0),
+            ..OptionsPatch::default()
+        });
+        assert_eq!(options.max_rows, usize::MAX);
     }
 }

@@ -238,15 +238,21 @@ where
     Ok(returned)
 }
 
-/// Refuse a planned `UPDATE` or `DELETE` that found no row.
+/// Refuse a planned `UPDATE` or `DELETE` that did not change exactly one row.
 pub(crate) fn check_affected(statement: &str, affected: u64) -> Result<()> {
     // The planner spells these in capitals; a statement it did not write is not checked.
-    if (statement.starts_with("UPDATE ") || statement.starts_with("DELETE ")) && affected == 0 {
-        return Err(Error::driver(format!(
-            "no row had that key any more, so nothing was changed\nin: {statement}"
-        )));
+    if !(statement.starts_with("UPDATE ") || statement.starts_with("DELETE ")) {
+        return Ok(());
     }
-    Ok(())
+    match affected {
+        1 => Ok(()),
+        0 => Err(Error::driver(format!(
+            "no row had that key any more, so nothing was changed\nin: {statement}"
+        ))),
+        many => Err(Error::driver(format!(
+            "{many} rows matched where one was meant, so nothing was changed\nin: {statement}"
+        ))),
+    }
 }
 
 /// Whether a statement may have changed a table an adapter holds a picture of.
@@ -315,6 +321,8 @@ pub(crate) struct Keys {
     pub(crate) kinds: HashMap<String, KeyKind>,
     /// The columns of each unique key other than the primary one.
     pub(crate) unique: Vec<Vec<String>>,
+    /// The columns the database fills in.
+    pub(crate) generated: Vec<String>,
 }
 
 /// Which columns of each table are keys, by table name.
@@ -368,13 +376,19 @@ impl TableKeys {
             {
                 column.key = *kind;
             }
+            column.generated = origin.as_ref().is_some_and(|(table, name)| {
+                known
+                    .get(table)
+                    .is_some_and(|keys| keys.generated.contains(name))
+            });
         }
     }
 
-    /// Where a result's rows are stored, from the tables read so far.
-    pub(crate) fn source(&self, origins: &[Origin]) -> Option<Source> {
+    /// Where a result's rows are stored, from the tables read so far. `plain` is whether each row is a
+    /// table row, so a table without a key in the result can be found by every column.
+    pub(crate) fn source(&self, origins: &[Origin], plain: bool) -> Option<Source> {
         let known = self.0.lock().ok()?;
-        let mut binder = TableBinder::default();
+        let mut binder = TableBinder::default().every_column(plain);
         for (column, origin) in origins.iter().enumerate() {
             if let Some((table, name)) = origin {
                 binder.bind(column, table.clone(), name.clone());

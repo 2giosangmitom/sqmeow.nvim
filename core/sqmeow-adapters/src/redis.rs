@@ -1,10 +1,16 @@
 //! The Redis and Valkey adapter.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use redis::aio::MultiplexedConnection;
+use percent_encoding::percent_decode_str;
+use redis::aio::{ConnectionLike, MultiplexedConnection};
+use redis::cluster::ClusterClient;
+use redis::cluster_async::ClusterConnection;
+use redis::cluster_routing::{RoutingInfo, SingleNodeRoutingInfo};
+use redis::sentinel::{SentinelClientBuilder, SentinelServerType};
 use redis::{
-    AsyncConnectionConfig, Client, Cmd, FromRedisValue, IntoConnectionInfo, ProtocolVersion, Value,
+    AsyncConnectionConfig, Client, Cmd, ConnectionAddr, FromRedisValue, IntoConnectionInfo,
+    Pipeline, ProtocolVersion, RedisFuture, TlsMode, Value,
 };
 use sqmeow_db::edit::{self, Value as Edit, check_column, check_row};
 use sqmeow_db::{
@@ -14,19 +20,138 @@ use sqmeow_db::{
 use tokio_util::sync::CancellationToken;
 
 /// The most keys the drawer lists from one database.
-const MAX_KEYS: usize = 10_000;
+pub const MAX_KEYS: usize = 10_000;
 
-/// One connection to a Redis or Valkey server.
-#[derive(Debug)]
+/// One server, the master a Sentinel names, or a whole cluster.
+#[derive(Clone)]
+enum Link {
+    Server(MultiplexedConnection),
+    Cluster(ClusterConnection),
+}
+
+impl ConnectionLike for Link {
+    fn req_packed_command<'a>(&'a mut self, command: &'a Cmd) -> RedisFuture<'a, Value> {
+        match self {
+            Self::Server(connection) => connection.req_packed_command(command),
+            Self::Cluster(connection) => connection.req_packed_command(command),
+        }
+    }
+
+    fn req_packed_commands<'a>(
+        &'a mut self,
+        pipeline: &'a Pipeline,
+        offset: usize,
+        count: usize,
+    ) -> RedisFuture<'a, Vec<Value>> {
+        match self {
+            Self::Server(connection) => connection.req_packed_commands(pipeline, offset, count),
+            Self::Cluster(connection) => connection.req_packed_commands(pipeline, offset, count),
+        }
+    }
+
+    fn get_db(&self) -> i64 {
+        match self {
+            Self::Server(connection) => connection.get_db(),
+            Self::Cluster(connection) => connection.get_db(),
+        }
+    }
+}
+
+/// One connection to a Redis or Valkey server, cluster, or Sentinel-watched master.
 pub struct RedisAdapter {
-    connection: MultiplexedConnection,
+    link: Link,
     /// The database the URL chose, for a server too old to say which one is current.
     db: i64,
 }
 
+impl std::fmt::Debug for RedisAdapter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisAdapter")
+            .field("db", &self.db)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The login, addresses and path a cluster or Sentinel URL names, as
+/// `scheme://user:password@host:port,host:port/path`.
+#[derive(Debug, PartialEq)]
+struct Hosts {
+    user: Option<String>,
+    password: Option<String>,
+    addresses: Vec<(String, u16)>,
+    path: Vec<String>,
+}
+
+/// Read a URL naming several hosts, each on `default` when it names no port.
+fn hosts(url: &str, default: u16) -> Result<Hosts> {
+    let rest = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .ok_or_else(|| Error::UnsupportedUrl(url.to_owned()))?;
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let (login, addresses) = match authority.rsplit_once('@') {
+        Some((login, addresses)) => (Some(login), addresses),
+        None => (None, authority),
+    };
+    let decode = |text: &str| -> Result<Option<String>> {
+        let text = percent_decode_str(text)
+            .decode_utf8()
+            .map_err(Error::driver)?;
+        Ok((!text.is_empty()).then(|| text.into_owned()))
+    };
+    let (user, password) = match login.map(|login| login.split_once(':').unwrap_or((login, ""))) {
+        Some((user, password)) => (decode(user)?, decode(password)?),
+        None => (None, None),
+    };
+    let addresses = addresses
+        .split(',')
+        .filter(|address| !address.is_empty())
+        .map(|address| {
+            let (host, port) = match address.rsplit_once(':') {
+                Some((host, port)) if !port.contains(']') => (host, Some(port)),
+                _ => (address, None),
+            };
+            let port = match port {
+                Some(port) => port
+                    .parse()
+                    .map_err(|_| Error::driver(format!("`{port}` is not a port")))?,
+                None => default,
+            };
+            Ok((host.trim_matches(['[', ']']).to_owned(), port))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if addresses.is_empty() {
+        return Err(Error::driver("the URL names no host"));
+    }
+    Ok(Hosts {
+        user,
+        password,
+        addresses,
+        path: path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    })
+}
+
 impl RedisAdapter {
-    /// Open a connection.
+    /// Open a connection: `redis+cluster://` reaches a cluster through any of its nodes, and
+    /// `redis+sentinel://sentinels/master/db` the master the Sentinels name.
     pub async fn connect(url: &str) -> Result<Self> {
+        let scheme = url
+            .split_once("://")
+            .map_or("", |(scheme, _)| scheme)
+            .to_ascii_lowercase();
+        // `rediss` is TLS, and `redis` is not, though it too ends in an `s`.
+        if let Some(base) = scheme.strip_suffix("+cluster") {
+            return Self::cluster(url, base == "rediss").await;
+        }
+        if let Some(base) = scheme.strip_suffix("+sentinel") {
+            return Self::sentinel(url, base == "rediss").await;
+        }
+
         let info = url.into_connection_info().map_err(Error::driver)?;
         let db = info.redis_settings().db();
         // RESP3, so a hash arrives as a map of fields and a score as a number, rather than as one
@@ -46,15 +171,224 @@ impl RedisAdapter {
             .await
             .map_err(Error::driver)?;
 
-        Ok(Self { connection, db })
+        Ok(Self {
+            link: Link::Server(connection),
+            db,
+        })
+    }
+
+    async fn cluster(url: &str, tls: bool) -> Result<Self> {
+        let parsed = hosts(url, 6379)?;
+        let scheme = if tls { "rediss" } else { "redis" };
+        let nodes: Vec<String> = parsed
+            .addresses
+            .iter()
+            .map(|(host, port)| format!("{scheme}://{host}:{port}"))
+            .collect();
+        let mut builder = ClusterClient::builder(nodes)
+            .use_protocol(ProtocolVersion::RESP3)
+            .connection_timeout(crate::CONNECT_TIMEOUT)
+            // A reply takes as long as its command does.
+            .response_timeout(Duration::from_secs(365 * 24 * 60 * 60));
+        if let Some(user) = &parsed.user {
+            builder = builder.username(user);
+        }
+        if let Some(password) = &parsed.password {
+            builder = builder.password(password);
+        }
+        let connection = builder
+            .build()
+            .map_err(Error::driver)?
+            .get_async_connection()
+            .await
+            .map_err(Error::driver)?;
+        // A cluster has only database zero.
+        Ok(Self {
+            link: Link::Cluster(connection),
+            db: 0,
+        })
+    }
+
+    async fn sentinel(url: &str, tls: bool) -> Result<Self> {
+        let parsed = hosts(url, 26379)?;
+        let [service, rest @ ..] = parsed.path.as_slice() else {
+            return Err(Error::driver(
+                "a Sentinel URL names its master after the hosts, as in redis+sentinel://host:26379/mymaster/0",
+            ));
+        };
+        let db = rest
+            .first()
+            .map(|db| {
+                db.parse::<i64>()
+                    .map_err(|_| Error::driver(format!("`{db}` is not a database number")))
+            })
+            .transpose()?
+            .unwrap_or(0);
+
+        let sentinels = parsed.addresses.iter().map(|(host, port)| {
+            if tls {
+                ConnectionAddr::TcpTls {
+                    host: host.clone(),
+                    port: *port,
+                    insecure: false,
+                    tls_params: None,
+                }
+            } else {
+                ConnectionAddr::Tcp(host.clone(), *port)
+            }
+        });
+        let mut builder =
+            SentinelClientBuilder::new(sentinels, service, SentinelServerType::Master)
+                .map_err(Error::driver)?
+                .set_client_to_redis_db(db)
+                .set_client_to_redis_protocol(ProtocolVersion::RESP3);
+        if tls {
+            builder = builder.set_client_to_redis_tls_mode(TlsMode::Secure);
+        }
+        // The login is the master's, which a Sentinel without a password of its own would refuse.
+        if let Some(user) = &parsed.user {
+            builder = builder.set_client_to_redis_username(user);
+        }
+        if let Some(password) = &parsed.password {
+            builder = builder.set_client_to_redis_password(password);
+        }
+        let config = AsyncConnectionConfig::new()
+            .set_connection_timeout(Some(crate::CONNECT_TIMEOUT))
+            .set_response_timeout(None);
+        let connection = builder
+            .build()
+            .map_err(Error::driver)?
+            .get_async_connection_with_config(&config)
+            .await
+            .map_err(Error::driver)?;
+        Ok(Self {
+            link: Link::Server(connection),
+            db,
+        })
     }
 
     async fn query<T: FromRedisValue>(&self, command: &Cmd) -> Result<T> {
-        // A multiplexed connection is a handle onto one socket, so a clone is the same session.
+        // A connection is a handle onto shared sockets, so a clone is the same session.
         command
-            .query_async(&mut self.connection.clone())
+            .query_async(&mut self.link.clone())
             .await
             .map_err(Error::driver)
+    }
+
+    /// The keys matching a glob, from one server or every primary of a cluster, each with the type
+    /// of value it holds.
+    pub async fn keys(&self, pattern: &str) -> Result<Vec<RelationNode>> {
+        let mut names = Vec::new();
+        match &self.link {
+            Link::Server(_) => names = self.scan(None, pattern).await?,
+            Link::Cluster(_) => {
+                for (host, port) in self.primaries().await? {
+                    let node =
+                        RoutingInfo::SingleNode(SingleNodeRoutingInfo::ByAddress { host, port });
+                    names.extend(self.scan(Some(&node), pattern).await?);
+                    if names.len() >= MAX_KEYS {
+                        break;
+                    }
+                }
+            }
+        }
+        names.truncate(MAX_KEYS);
+        // A scan may return a key twice while the server is resizing its table.
+        names.sort_unstable();
+        names.dedup();
+
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let types: Vec<String> = match &self.link {
+            // Every `TYPE` in one round trip, rather than one per key.
+            Link::Server(_) => {
+                let mut pipeline = redis::pipe();
+                for name in &names {
+                    pipeline.cmd("TYPE").arg(name.as_slice());
+                }
+                pipeline
+                    .query_async(&mut self.link.clone())
+                    .await
+                    .map_err(Error::driver)?
+            }
+            // A cluster's keys sit on different nodes, so each `TYPE` goes to its own.
+            Link::Cluster(_) => {
+                let asked = names.iter().map(|name| async move {
+                    self.query::<String>(redis::cmd("TYPE").arg(name.as_slice()))
+                        .await
+                });
+                futures_util::future::join_all(asked)
+                    .await
+                    .into_iter()
+                    .collect::<Result<_>>()?
+            }
+        };
+
+        Ok(names
+            .into_iter()
+            .zip(types)
+            .filter_map(|(name, kind)| {
+                // A key that expired since the scan answers `none`, and a type nothing reads back
+                // yet, such as a Bloom filter's `MBbloom--`, has no group to go under.
+                let kind = KeyType::from_redis(&kind)?;
+                Some(RelationNode {
+                    name: String::from_utf8_lossy(&name).into_owned(),
+                    kind: RelationKind::Key(kind),
+                })
+            })
+            .collect())
+    }
+
+    /// The keys matching a glob on one server, or one cluster node, up to the cap.
+    async fn scan(&self, node: Option<&RoutingInfo>, pattern: &str) -> Result<Vec<Vec<u8>>> {
+        let mut names: Vec<Vec<u8>> = Vec::new();
+        let mut cursor = 0u64;
+        loop {
+            let mut command = redis::cmd("SCAN");
+            command
+                .cursor_arg(cursor)
+                .arg("MATCH")
+                .arg(pattern)
+                .arg("COUNT")
+                .arg(1000);
+            let (next, batch): (u64, Vec<Vec<u8>>) = match (&self.link, node) {
+                (Link::Cluster(connection), Some(routing)) => {
+                    let reply = connection
+                        .clone()
+                        .route_command(command, routing.clone())
+                        .await
+                        .map_err(Error::driver)?;
+                    FromRedisValue::from_redis_value(reply).map_err(Error::driver)?
+                }
+                _ => self.query(&command).await?,
+            };
+            names.extend(batch);
+            cursor = next;
+            if cursor == 0 || names.len() >= MAX_KEYS {
+                return Ok(names);
+            }
+        }
+    }
+
+    /// The address of each primary in the cluster, read from `CLUSTER NODES`.
+    async fn primaries(&self) -> Result<Vec<(String, u16)>> {
+        let nodes: String = self.query(redis::cmd("CLUSTER").arg("NODES")).await?;
+        Ok(nodes
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let address = fields.nth(1)?;
+                let flags = fields.next()?;
+                flags
+                    .split(',')
+                    .any(|flag| flag == "master")
+                    .then_some(())?;
+                let (host, port) = address.split('@').next()?.rsplit_once(':')?;
+                Some((host.trim_matches(['[', ']']).to_owned(), port.parse().ok()?))
+            })
+            .collect())
     }
 }
 
@@ -85,7 +419,7 @@ impl Adapter for RedisAdapter {
         }
 
         let reply: Value = pipeline
-            .query_async(&mut self.connection.clone())
+            .query_async(&mut self.link.clone())
             .await
             .map_err(Error::driver)?;
         if let Value::Array(replies) = &reply
@@ -145,52 +479,10 @@ impl Adapter for RedisAdapter {
         }])
     }
 
-    /// The keys of the current database, each with the type of value it holds.
+    /// The keys of the current database, or of every primary of a cluster, each with the type of
+    /// value it holds.
     async fn relations(&self, _schema: &str) -> Result<Vec<RelationNode>> {
-        let mut names: Vec<Vec<u8>> = Vec::new();
-        let mut cursor = 0u64;
-        loop {
-            let (next, batch): (u64, Vec<Vec<u8>>) = self
-                .query(redis::cmd("SCAN").cursor_arg(cursor).arg("COUNT").arg(1000))
-                .await?;
-            names.extend(batch);
-            cursor = next;
-            if cursor == 0 || names.len() >= MAX_KEYS {
-                break;
-            }
-        }
-        names.truncate(MAX_KEYS);
-        // A scan may return a key twice while the server is resizing its table.
-        names.sort_unstable();
-        names.dedup();
-
-        if names.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Every `TYPE` in one round trip, rather than one per key.
-        let mut pipeline = redis::pipe();
-        for name in &names {
-            pipeline.cmd("TYPE").arg(name.as_slice());
-        }
-        let types: Vec<String> = pipeline
-            .query_async(&mut self.connection.clone())
-            .await
-            .map_err(Error::driver)?;
-
-        Ok(names
-            .into_iter()
-            .zip(types)
-            .filter_map(|(name, kind)| {
-                // A key that expired since the scan answers `none`, and a type nothing reads back
-                // yet, such as a Bloom filter's `MBbloom--`, has no group to go under.
-                let kind = KeyType::from_redis(&kind)?;
-                Some(RelationNode {
-                    name: String::from_utf8_lossy(&name).into_owned(),
-                    kind: RelationKind::Key(kind),
-                })
-            })
-            .collect())
+        self.keys("*").await
     }
 
     async fn routines(&self, _schema: &str) -> Result<Vec<RoutineNode>> {
@@ -200,6 +492,56 @@ impl Adapter for RedisAdapter {
     /// A key has no columns. The drawer draws keys as leaves, so this is never asked for.
     async fn columns(&self, _schema: &str, _relation: &str) -> Result<Vec<ColumnNode>> {
         Ok(Vec::new())
+    }
+
+    /// A key's type, TTL, length, encoding and memory.
+    async fn details(&self, _schema: &str, key: &str) -> Result<sqmeow_db::Details> {
+        let kind: String = self.query(redis::cmd("TYPE").arg(key)).await?;
+        if kind == "none" {
+            return Err(Error::driver(format!("there is no key `{key}`")));
+        }
+        let ttl: i64 = self.query(redis::cmd("TTL").arg(key)).await?;
+        let mut properties = vec![
+            ("type".to_owned(), kind.clone()),
+            (
+                "ttl".to_owned(),
+                if ttl < 0 {
+                    "none".to_owned()
+                } else {
+                    format!("{ttl} s")
+                },
+            ),
+        ];
+        let length = match kind.as_str() {
+            "string" => Some("STRLEN"),
+            "hash" => Some("HLEN"),
+            "list" => Some("LLEN"),
+            "set" => Some("SCARD"),
+            "zset" => Some("ZCARD"),
+            "stream" => Some("XLEN"),
+            _ => None,
+        };
+        if let Some(command) = length {
+            let length: i64 = self.query(redis::cmd(command).arg(key)).await?;
+            properties.push(("length".to_owned(), length.to_string()));
+        }
+        // Not every server speaking the protocol answers these.
+        if let Ok(encoding) = self
+            .query::<String>(redis::cmd("OBJECT").arg("ENCODING").arg(key))
+            .await
+        {
+            properties.push(("encoding".to_owned(), encoding));
+        }
+        if let Ok(bytes) = self
+            .query::<i64>(redis::cmd("MEMORY").arg("USAGE").arg(key))
+            .await
+        {
+            properties.push(("memory".to_owned(), format!("{bytes} bytes")));
+        }
+        Ok(sqmeow_db::Details {
+            properties,
+            ..sqmeow_db::Details::default()
+        })
     }
 
     /// Nothing to do: the socket closes once the last handle onto it is dropped.
@@ -215,10 +557,13 @@ fn source(words: &[Vec<u8>]) -> Option<Source> {
 
     let kind = match (name.as_str(), words.len()) {
         ("GET", 2) => RedisKind::String,
+        ("JSON.GET", 2) => RedisKind::Json,
         ("HGETALL", 2) => RedisKind::Hash,
         ("SMEMBERS", 2) => RedisKind::Set,
+        // Counted from the end, an index stays right only while the whole range is.
         ("LRANGE", 4) => RedisKind::List {
-            start: number(2).filter(|start| *start >= 0)?,
+            start: number(2)
+                .filter(|start| *start >= 0 || number(3).is_some_and(|stop| stop < 0))?,
         },
         ("ZRANGE", 5)
             if words[4].eq_ignore_ascii_case(b"WITHSCORES")
@@ -227,6 +572,9 @@ fn source(words: &[Vec<u8>]) -> Option<Source> {
         {
             RedisKind::SortedSet
         }
+        ("XRANGE", 4) => RedisKind::Stream,
+        ("XRANGE", 6) if words[4].eq_ignore_ascii_case(b"COUNT") => RedisKind::Stream,
+        ("KEYS", 2) => RedisKind::Keys,
         _ => return None,
     };
     Some(Source::Redis { key, kind })
@@ -242,13 +590,11 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
 
     let original = |row: usize, column: usize| -> Result<String> {
         check_row(result, row)?;
-        match result.cell(row, column) {
-            Some(Cell::Bytes { .. }) => Err(Error::driver(
-                "a binary value cannot be written back from its text",
-            )),
-            Some(cell) => Ok(quote(&cell.text(""))),
-            None => Ok(quote("")),
-        }
+        Ok(match result.cell(row, column) {
+            Some(Cell::Bytes { head, .. }) => quote_bytes(head),
+            Some(cell) => quote(&cell.text("")),
+            None => quote(""),
+        })
     };
     let given = |cells: &[(usize, Edit)], column: usize| -> Result<Option<String>> {
         cells
@@ -260,6 +606,21 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             })
             .transpose()
     };
+    // What removes a row: from the key, or the key itself.
+    let removal = |row: usize| -> Result<String> {
+        Ok(match kind {
+            RedisKind::String | RedisKind::Json => {
+                check_row(result, row)?;
+                format!("DEL {key}")
+            }
+            RedisKind::Hash => format!("HDEL {key} {}", original(row, 0)?),
+            RedisKind::Set => format!("SREM {key} {}", original(row, 0)?),
+            RedisKind::List { .. } => format!("LREM {key} 1 {}", original(row, 0)?),
+            RedisKind::SortedSet => format!("ZREM {key} {}", original(row, 0)?),
+            RedisKind::Stream => format!("XDEL {key} {}", original(row, 0)?),
+            RedisKind::Keys => format!("DEL {}", original(row, 0)?),
+        })
+    };
 
     let mut commands = Vec::new();
     for (row, cells) in changes.live_updates() {
@@ -267,10 +628,20 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             check_column(source, result, *column)?;
         }
         let row = *row;
+        // Redis holds no NULL, so a value set to one goes the way a deleted row does.
+        if cells.iter().any(|(_, value)| *value == Edit::Null) {
+            commands.push(removal(row)?);
+            continue;
+        }
         match kind {
             RedisKind::String => {
                 if let Some(value) = given(cells, 0)? {
                     commands.push(format!("SET {key} {value}"));
+                }
+            }
+            RedisKind::Json => {
+                if let Some(value) = given(cells, 0)? {
+                    commands.push(format!("JSON.SET {key} $ {value}"));
                 }
             }
             RedisKind::Hash => {
@@ -313,20 +684,21 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
                     _ => commands.push(format!("ZADD {key} {score} {member}")),
                 }
             }
+            RedisKind::Stream => {
+                return Err(Error::driver(
+                    "a stream entry cannot change: delete it and add another",
+                ));
+            }
+            RedisKind::Keys => {
+                if let Some(renamed) = given(cells, 0)? {
+                    commands.push(format!("RENAME {} {renamed}", original(row, 0)?));
+                }
+            }
         }
     }
 
     for &row in &changes.deletes {
-        commands.push(match kind {
-            RedisKind::String => {
-                check_row(result, row)?;
-                format!("DEL {key}")
-            }
-            RedisKind::Hash => format!("HDEL {key} {}", original(row, 0)?),
-            RedisKind::Set => format!("SREM {key} {}", original(row, 0)?),
-            RedisKind::List { .. } => format!("LREM {key} 1 {}", original(row, 0)?),
-            RedisKind::SortedSet => format!("ZREM {key} {}", original(row, 0)?),
-        });
+        commands.push(removal(row)?);
     }
 
     for cells in &changes.inserts {
@@ -334,9 +706,14 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             given(cells, column)?.ok_or_else(|| Error::driver(format!("a new row needs a {what}")))
         };
         commands.push(match kind {
-            RedisKind::String => {
+            RedisKind::String | RedisKind::Json => {
                 return Err(Error::driver(
-                    "a string key holds one value: edit it rather than adding a row",
+                    "the key holds one value: edit it rather than adding a row",
+                ));
+            }
+            RedisKind::Keys => {
+                return Err(Error::driver(
+                    "a key is added by writing to it, not to a list of keys",
                 ));
             }
             RedisKind::Hash => format!("HSET {key} {} {}", need(0, "field")?, need(1, "value")?),
@@ -345,9 +722,38 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             RedisKind::SortedSet => {
                 format!("ZADD {key} {} {}", need(1, "score")?, need(0, "member")?)
             }
+            // The fields are typed as they are written after `XADD`: `name alice age 3`.
+            RedisKind::Stream => {
+                let fields = cells
+                    .iter()
+                    .find_map(|(at, value)| (*at == 1).then(|| value.text()).flatten())
+                    .filter(|fields| !fields.trim().is_empty())
+                    .ok_or_else(|| {
+                        Error::driver("a new entry needs its fields, as `name alice`")
+                    })?;
+                format!("XADD {key} * {fields}")
+            }
         });
     }
     Ok(commands)
+}
+
+/// Bytes as a quoted word, anything that is not printable text escaped as `\xhh`.
+fn quote_bytes(bytes: &[u8]) -> String {
+    let mut quoted = String::with_capacity(bytes.len() + 2);
+    quoted.push('"');
+    for &byte in bytes {
+        match byte {
+            b'"' | b'\\' => {
+                quoted.push('\\');
+                quoted.push(byte as char);
+            }
+            0x20..=0x7e => quoted.push(byte as char),
+            other => quoted.push_str(&format!("\\x{other:02x}")),
+        }
+    }
+    quoted.push('"');
+    quoted
 }
 
 /// The `db=` field of a `CLIENT INFO` line.
@@ -564,6 +970,26 @@ fn cell(value: Value) -> Cell {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_cluster_or_sentinel_url_names_its_hosts_login_and_path() {
+        assert_eq!(
+            hosts("redis+sentinel://u:p%40ss@s1,[::1]:26380/mymaster/2", 26379).unwrap(),
+            Hosts {
+                user: Some("u".into()),
+                password: Some("p@ss".into()),
+                addresses: vec![("s1".into(), 26379), ("::1".into(), 26380)],
+                path: vec!["mymaster".into(), "2".into()],
+            }
+        );
+        assert_eq!(
+            hosts("redis+cluster://a:7000,b:7001", 6379)
+                .unwrap()
+                .addresses,
+            vec![("a".into(), 7000), ("b".into(), 7001)]
+        );
+        assert!(hosts("redis+cluster:///", 6379).is_err());
+    }
+
     use sqmeow_db::TypeClass;
 
     use super::*;
@@ -636,10 +1062,58 @@ mod tests {
         };
         assert_eq!(kind("get k"), Some(RedisKind::String));
         assert_eq!(kind("LRANGE k 5 10"), Some(RedisKind::List { start: 5 }));
-        assert_eq!(kind("LRANGE k -5 -1"), None);
+        assert_eq!(kind("LRANGE k -5 -1"), Some(RedisKind::List { start: -5 }));
         assert_eq!(kind("ZRANGE k 0 -1 WITHSCORES"), Some(RedisKind::SortedSet));
         assert_eq!(kind("ZRANGE k 0 -1"), None);
-        assert_eq!(kind("KEYS *"), None);
+        assert_eq!(kind("KEYS *"), Some(RedisKind::Keys));
+    }
+
+    #[test]
+    fn more_commands_can_be_written_back() {
+        let kind = |line: &str| match source(&split_command(line).unwrap()) {
+            Some(Source::Redis { kind, .. }) => Some(kind),
+            _ => None,
+        };
+        assert_eq!(kind("LRANGE k -3 -1"), Some(RedisKind::List { start: -3 }));
+        assert_eq!(kind("LRANGE k -3 5"), None);
+        assert_eq!(kind("JSON.GET k"), Some(RedisKind::Json));
+        assert_eq!(kind("XRANGE k - + COUNT 10"), Some(RedisKind::Stream));
+        assert_eq!(kind("KEYS user:*"), Some(RedisKind::Keys));
+    }
+
+    #[test]
+    fn a_null_removes_a_field_and_a_key_list_renames_and_deletes() {
+        let result = hash();
+        let changes = Changes {
+            updates: vec![(0, vec![(1, sqmeow_db::edit::Value::Null)])],
+            ..Changes::default()
+        };
+        assert_eq!(
+            plan(&result, &changes).unwrap(),
+            vec![r#"HDEL "user" "name""#]
+        );
+
+        let reply = Value::Array(vec![text("a"), text("b")]);
+        let mut keys = to_result("KEYS *", reply, usize::MAX);
+        keys.set_source(source(&split_command("KEYS *").unwrap()));
+        let changes = Changes {
+            updates: vec![(0, vec![(0, "c".into())])],
+            deletes: vec![1],
+            ..Changes::default()
+        };
+        assert_eq!(
+            plan(&keys, &changes).unwrap(),
+            vec![r#"RENAME "a" "c""#, r#"DEL "b""#]
+        );
+    }
+
+    #[test]
+    fn a_binary_value_is_written_back_byte_for_byte() {
+        assert_eq!(quote_bytes(&[0x61, 0x00, 0xff, b'"']), r#""a\x00\xff\"""#);
+        assert_eq!(
+            split_command(&format!("SET k {}", quote_bytes(&[0x00, 0xff]))).unwrap()[2],
+            vec![0x00, 0xff]
+        );
     }
 
     #[test]
@@ -691,10 +1165,10 @@ mod tests {
     }
 
     #[test]
-    fn redis_refuses_null_and_a_result_without_a_source() {
+    fn redis_refuses_a_null_new_row_and_a_result_without_a_source() {
         let result = hash();
         let changes = Changes {
-            updates: vec![(0, vec![(1, sqmeow_db::edit::Value::Null)])],
+            inserts: vec![vec![(0, "f".into()), (1, sqmeow_db::edit::Value::Null)]],
             ..Changes::default()
         };
         assert!(plan(&result, &changes).is_err());

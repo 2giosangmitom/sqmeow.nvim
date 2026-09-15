@@ -255,4 +255,28 @@ T['build']['writes a scylla keyspace where a database would be'] = function()
   eq(url.parse('cassandra://u:p@h:9042/shop').dialect, 'scylla')
 end
 
+T['parse']['keeps a template whole in the field it sits in'] = function()
+  local fields =
+    assert(url.parse('postgres://app:{{ exec "pass show a/b:c@d" }}@db.internal:5432/shop'))
+  eq(fields.user, 'app')
+  eq(fields.password, '{{ exec "pass show a/b:c@d" }}')
+  eq(fields.host, 'db.internal')
+  eq(fields.database, 'shop')
+end
+
+T['build']['writes a template out as it is, and the text around it encoded'] = function()
+  eq(
+    url.build(
+      'postgres',
+      { host = 'h', user = 'a b', password = 'x{{ env "P W" }}y', database = 'd' }
+    ),
+    'postgres://a%20b:x{{ env "P W" }}y@h/d'
+  )
+end
+
+T['parse']['leaves a url naming several hosts to be edited whole'] = function()
+  eq(url.parse('redis+cluster://a:7000,b:7001'), nil)
+  eq(require('sqmeow.dialects').of_url('redis+sentinel://s:26379/mymaster/0'), 'redis')
+end
+
 return T

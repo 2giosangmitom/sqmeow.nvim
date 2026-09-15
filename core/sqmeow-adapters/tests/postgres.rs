@@ -67,7 +67,7 @@ async fn a_url_naming_no_database_lists_the_cluster() {
     );
 
     // One database of it, opened the way the drawer opens it, is a single database again.
-    let one = Backend::connect_to(cluster, Some(database))
+    let one = Backend::connect_to(cluster, Some(database), false)
         .await
         .expect("the database should open");
     assert!(one.databases().await.is_none());
@@ -486,7 +486,7 @@ async fn a_drawer_column_names_what_it_references() {
     assert_eq!(
         columns[1].foreign_key,
         Some(ForeignKey {
-            table: "fk_parent".into(),
+            table: "public.fk_parent".into(),
             column: "id".into(),
         })
     );
@@ -1061,7 +1061,14 @@ async fn a_filtered_result_stays_editable() {
     .await;
 
     let origin = "select id, name from pg_filtered order by id";
-    let wrapped = sqmeow_db::sql::filtered(origin, "name = 'bob'", "").unwrap();
+    let wrapped = sqmeow_db::sql::filtered(
+        sqmeow_db::Dialect::Postgres,
+        origin,
+        "name = 'bob'",
+        "",
+        &[],
+    )
+    .unwrap();
     let result = backend
         .execute_wrapped(&wrapped, origin, NO_CAP, CancellationToken::new())
         .await
@@ -1131,4 +1138,158 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
     let columns = backend.columns(SCHEMA, "tagged_unique").await.unwrap();
     assert_eq!(columns[2].default.as_deref(), Some("42"));
     run(&backend, "drop table tagged_unique").await;
+}
+
+#[tokio::test]
+async fn a_read_only_connection_is_refused_writes_by_the_server() {
+    let backend = Backend::connect_to(&server!(), None, true).await.unwrap();
+    run(&backend, "select 1").await;
+    let error = backend
+        .execute(
+            "create table read_only_probe (id int)",
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("read-only"), "{error}");
+}
+
+#[tokio::test]
+async fn a_table_without_a_key_is_edited_by_every_column() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists keyless_rows").await;
+    run(
+        &backend,
+        "create table keyless_rows (label text, n int, doc json)",
+    )
+    .await;
+    run(
+        &backend,
+        r#"insert into keyless_rows values ('a', 1, '{}'), ('a', 1, '{}'), ('b', null, '{"x": 1}')"#,
+    )
+    .await;
+
+    // `json` has no equality, so the row is found by the other columns.
+    let result = run(
+        &backend,
+        "select label, n, doc from keyless_rows order by label",
+    )
+    .await;
+    let changes = Changes {
+        updates: vec![(2, vec![(0, "bee".into())])],
+        ..Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&result, &changes).unwrap())
+        .await
+        .expect("the plan should apply");
+
+    let twins = Changes {
+        deletes: vec![0],
+        ..Changes::default()
+    };
+    let error = backend
+        .apply(&backend.plan(&result, &twins).unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("2 rows matched"), "{error}");
+    run(&backend, "drop table keyless_rows").await;
+}
+
+#[tokio::test]
+async fn the_drawer_is_not_held_up_by_a_long_query() {
+    let backend = std::sync::Arc::new(connect(&server!()).await);
+    let running = std::sync::Arc::clone(&backend);
+    let query = tokio::spawn(async move {
+        running
+            .execute("select pg_sleep(3)", NO_CAP, CancellationToken::new())
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let started = std::time::Instant::now();
+    backend.schemas().await.unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    query.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
+    let backend = connect(&server!()).await;
+    run(
+        &backend,
+        "drop table if exists det_child, det_parent cascade",
+    )
+    .await;
+    run(&backend, "create table det_parent (id int primary key)").await;
+    run(
+        &backend,
+        "create table det_child (id int primary key, parent_id int references det_parent,
+             n int default 1 check (n > 0))",
+    )
+    .await;
+    run(&backend, "comment on table det_child is 'children'").await;
+    run(&backend, "comment on column det_child.n is 'how many'").await;
+    run(&backend, "create index det_child_n on det_child (n)").await;
+    run(
+        &backend,
+        "create or replace function det_touch() returns trigger language plpgsql
+         as $$ begin return new; end $$",
+    )
+    .await;
+    run(
+        &backend,
+        "create trigger det_touch before insert on det_child for each row execute function det_touch()",
+    )
+    .await;
+
+    let details = backend.details(SCHEMA, "det_child").await.unwrap();
+    assert_eq!(
+        details.properties,
+        vec![("comment".into(), "children".into())]
+    );
+    assert_eq!(
+        details.column_comments,
+        vec![("n".into(), "how many".into())]
+    );
+    assert_eq!(details.foreign_keys[0].target, "det_parent");
+    assert_eq!(
+        details.foreign_keys[0].columns,
+        vec!["parent_id".to_owned()]
+    );
+    assert_eq!(details.foreign_keys[0].referenced, vec!["id".to_owned()]);
+    assert!(details.checks[0].1.contains("n > 0"), "{details:?}");
+    assert_eq!(details.triggers[0].0, "det_touch");
+    let definition = details.definition.unwrap();
+    assert!(
+        definition.contains(r#"CREATE TABLE "public"."det_child""#),
+        "{definition}"
+    );
+    assert!(
+        definition.contains("CREATE INDEX det_child_n"),
+        "{definition}"
+    );
+    run(&backend, "drop table det_child, det_parent").await;
+}
+
+#[tokio::test]
+async fn sequences_are_listed_and_roles_are_read() {
+    let backend = connect(&server!()).await;
+    run(&backend, "create sequence if not exists listed_seq").await;
+    let relations = backend.relations(SCHEMA).await.unwrap();
+    assert_eq!(
+        relations
+            .iter()
+            .find(|relation| relation.name == "listed_seq")
+            .map(|relation| relation.kind),
+        Some(RelationKind::Sequence)
+    );
+
+    let roles = backend.roles().await.unwrap();
+    let user = roles
+        .iter()
+        .find(|role| role.name == "sqmeow")
+        .expect("the test user is a role");
+    assert!(user.attributes.contains(&"login".to_owned()), "{user:?}");
 }

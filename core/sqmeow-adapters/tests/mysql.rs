@@ -467,7 +467,7 @@ async fn a_drawer_column_names_what_it_references() {
     assert_eq!(
         columns[1].foreign_key,
         Some(ForeignKey {
-            table: "fk_parent".into(),
+            table: "sqmeow.fk_parent".into(),
             column: "id".into(),
         })
     );
@@ -1015,7 +1015,9 @@ async fn a_filtered_result_stays_editable() {
     .await;
 
     let origin = "select id, name from my_filtered order by id";
-    let wrapped = sqmeow_db::sql::filtered(origin, "name = 'bob'", "").unwrap();
+    let wrapped =
+        sqmeow_db::sql::filtered(sqmeow_db::Dialect::MySql, origin, "name = 'bob'", "", &[])
+            .unwrap();
     let result = backend
         .execute_wrapped(&wrapped, origin, NO_CAP, CancellationToken::new())
         .await
@@ -1035,15 +1037,26 @@ async fn a_filtered_result_stays_editable() {
 
     // A derived table cannot hold two columns of one name.
     let joined = "select a.id, b.id from my_filtered a join my_filtered b on b.id = a.id";
-    let wrapped = sqmeow_db::sql::filtered(joined, "", "1").unwrap();
-    let error = backend
+    // Both sides are `id`, which a subquery cannot hold, so the filter names them apart.
+    let names: Vec<String> = run(&backend, joined)
+        .await
+        .columns()
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let wrapped = sqmeow_db::sql::filtered(
+        sqmeow_db::Dialect::MySql,
+        joined,
+        "id_2 is not null",
+        "",
+        &names,
+    )
+    .unwrap();
+    let filtered = backend
         .execute_wrapped(&wrapped, joined, NO_CAP, CancellationToken::new())
         .await
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("Duplicate column name"),
-        "{error}"
-    );
+        .expect("the renamed columns should filter");
+    assert_eq!(filtered.row_count(), 2);
 }
 
 #[tokio::test]
@@ -1093,4 +1106,155 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
     let columns = backend.columns(SCHEMA, "tagged_unique").await.unwrap();
     assert_eq!(columns[2].default.as_deref(), Some("42"));
     run(&backend, "drop table tagged_unique").await;
+}
+
+#[tokio::test]
+async fn a_read_only_connection_is_refused_writes_by_the_server() {
+    let backend = Backend::connect_to(&server!(), None, true).await.unwrap();
+    run(&backend, "select 1").await;
+    let error = backend
+        .execute(
+            "create table read_only_probe (id int)",
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("READ ONLY"), "{error}");
+}
+
+#[tokio::test]
+async fn a_new_row_with_an_auto_increment_key_is_read_back() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists auto_rows").await;
+    run(
+        &backend,
+        "create table auto_rows (id int auto_increment primary key, name varchar(10))",
+    )
+    .await;
+    run(&backend, "insert into auto_rows (name) values ('first')").await;
+
+    let result = run(&backend, "select id, name from auto_rows").await;
+    assert!(result.columns()[0].generated);
+    let changes = Changes {
+        inserts: vec![vec![(1, "second".into())]],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    let returned = backend.apply(&plan).await.expect("the plan should apply");
+
+    assert_eq!(returned.len(), 1);
+    assert_eq!(returned[0].cell(0, 0), Some(&Cell::Int(2)));
+    assert_eq!(returned[0].cell(0, 1), Some(&text("second")));
+    run(&backend, "drop table auto_rows").await;
+}
+
+#[tokio::test]
+async fn a_table_without_a_key_is_edited_by_every_column() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists keyless_rows").await;
+    run(
+        &backend,
+        "create table keyless_rows (label varchar(10), n int)",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into keyless_rows values ('a', 1), ('a', 1), ('b', null)",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select label, n from keyless_rows order by label, n",
+    )
+    .await;
+    let changes = Changes {
+        updates: vec![(2, vec![(0, "bee".into())])],
+        ..Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&result, &changes).unwrap())
+        .await
+        .expect("the plan should apply");
+
+    let twins = Changes {
+        deletes: vec![0],
+        ..Changes::default()
+    };
+    let error = backend
+        .apply(&backend.plan(&result, &twins).unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("2 rows matched"), "{error}");
+    run(&backend, "drop table keyless_rows").await;
+}
+
+#[tokio::test]
+async fn the_drawer_is_not_held_up_by_a_long_query() {
+    let backend = std::sync::Arc::new(connect(&server!()).await);
+    let running = std::sync::Arc::clone(&backend);
+    let query = tokio::spawn(async move {
+        running
+            .execute("select sleep(3)", NO_CAP, CancellationToken::new())
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let started = std::time::Instant::now();
+    backend.schemas().await.unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    query.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists det_child, det_parent").await;
+    run(&backend, "create table det_parent (id int primary key)").await;
+    run(
+        &backend,
+        "create table det_child (id int primary key, parent_id int,
+             n int check (n > 0) comment 'how many',
+             constraint det_fk foreign key (parent_id) references det_parent (id)) comment 'children'",
+    )
+    .await;
+    run(
+        &backend,
+        "create trigger det_touch before insert on det_child for each row set new.n = new.n",
+    )
+    .await;
+
+    let details = backend.details(SCHEMA, "det_child").await.unwrap();
+    assert_eq!(
+        details.properties,
+        vec![("comment".into(), "children".into())]
+    );
+    assert_eq!(
+        details.column_comments,
+        vec![("n".into(), "how many".into())]
+    );
+    assert_eq!(details.foreign_keys[0].name, "det_fk");
+    assert_eq!(details.foreign_keys[0].target, "sqmeow.det_parent");
+    assert_eq!(details.checks.len(), 1, "{details:?}");
+    assert_eq!(
+        details.triggers,
+        vec![("det_touch".to_owned(), "BEFORE INSERT".to_owned())]
+    );
+    let definition = details.definition.unwrap();
+    assert!(
+        definition.contains("CREATE TABLE `det_child`"),
+        "{definition}"
+    );
+    run(&backend, "drop table det_child, det_parent").await;
+}
+
+#[tokio::test]
+async fn the_users_are_read() {
+    let backend = connect(&server!()).await;
+    let roles = backend.roles().await.unwrap();
+    assert!(
+        roles.iter().any(|role| role.name.starts_with("root@")),
+        "{roles:?}"
+    );
 }

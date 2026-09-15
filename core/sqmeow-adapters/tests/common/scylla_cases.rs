@@ -234,11 +234,26 @@ async fn lists_a_tables_secondary_indexes() {
 
     assert_eq!(
         backend.indexes("sqmeow", "indexed").await.unwrap(),
-        vec![sqmeow_db::IndexNode {
-            name: "indexed_v".into(),
-            columns: vec!["v".into()],
-            unique: false,
-            primary: false,
-        }]
+        vec![
+            sqmeow_db::IndexNode {
+                name: "PRIMARY KEY".into(),
+                columns: vec!["pk".into()],
+                unique: true,
+                primary: true,
+            },
+            sqmeow_db::IndexNode {
+                name: "indexed_v".into(),
+                columns: vec!["v".into()],
+                unique: false,
+                primary: false,
+            },
+        ]
     );
+    let definition = backend
+        .details("sqmeow", "indexed")
+        .await
+        .unwrap()
+        .definition
+        .unwrap_or_default();
+    assert!(definition.contains("CREATE TABLE sqmeow.indexed"), "{definition}");
 }

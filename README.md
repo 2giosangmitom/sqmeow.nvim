@@ -77,8 +77,17 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 ### Dialect Notes
 
 - **SQL**: `<CR>` runs the statement under the cursor; `<leader>E` runs the whole buffer.
-- **Redis**: One command per line, such as `GET key`. The drawer lists keys by type.
+- **Redis**: One command per line, such as `GET key`. The drawer lists keys by type. Reach a cluster
+  with `redis+cluster://host:7000,host:7001`, or the master Sentinels watch with
+  `redis+sentinel://host:26379,host:26380/mymaster/0`.
 - **MongoDB**: Database commands as Extended JSON, such as `{"find": "users"}`. `use db_name` switches database.
+- **ScyllaDB**: `?ssl=true` speaks TLS, and `?sslrootcert=/path/ca.pem` trusts a CA of your own.
+
+### SSH Tunnels
+
+Fill **SSH** in the connection dialog, or add `"ssh": "user@bastion"` (or `user@bastion:2222`) to a
+saved connection, to reach its database through a tunnel. It runs your own `ssh`, so keys, the agent
+and `~/.ssh/config` all apply, and the URL's host is resolved from the bastion.
 
 ### Environment Connections
 
@@ -134,7 +143,8 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 | `<CR>`, `o` | Expand or collapse the node             |
 | `u`         | Run queries against this connection     |
 | `p`         | Preview the relation's first page       |
-| `K`         | Show the table's columns and indexes    |
+| `K`         | Show the table's or key's structure     |
+| `f`         | Show only the Redis keys matching a glob |
 | `r`         | Reload the subtree                      |
 | `y` / `s`   | Yank the qualified name / a `SELECT`    |
 | `a`         | Create a scratchpad                     |
@@ -230,7 +240,7 @@ require('sqmeow').setup({
     result = { height = 16, page_size = 100, max_column_width = 48, column_icons = true, null_text = 'NULL' },
     border = 'default', -- 'default' follows 'winborder'; or a nui style such as 'rounded'
     winbar = true,
-    persist_session = false,
+    persist_session = false, -- reopen last session's connections and drawer nodes
   },
   query = {
     max_rows = 100000,

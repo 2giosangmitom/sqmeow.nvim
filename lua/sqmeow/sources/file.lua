@@ -53,7 +53,12 @@ function M.save(connections, opts)
 
   -- Only the fields that describe a connection are written back.
   local plain = vim.tbl_map(function(connection)
-    return { name = connection.name, url = connection.url, read_only = connection.read_only or nil }
+    return {
+      name = connection.name,
+      url = connection.url,
+      read_only = connection.read_only or nil,
+      ssh = connection.ssh,
+    }
   end, connections)
 
   local ok, err = pcall(vim.fn.writefile, vim.split(vim.json.encode(plain), '\n'), path)
@@ -96,6 +101,7 @@ function M.update(name, connection, opts)
     name = connection.name,
     url = connection.url,
     read_only = connection.read_only,
+    ssh = connection.ssh,
   }
   return M.save(connections, opts)
 end

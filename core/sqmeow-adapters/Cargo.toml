@@ -17,9 +17,12 @@ sqmeow-db.workspace = true
 
 duckdb.workspace = true
 futures-util.workspace = true
+libsqlite3-sys.workspace = true
 mongodb.workspace = true
 percent-encoding.workspace = true
 redis.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
 scylla.workspace = true
 serde_json.workspace = true
 sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }

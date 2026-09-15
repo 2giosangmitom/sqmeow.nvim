@@ -16,9 +16,6 @@ local history = {}
 --- The float being typed in, or the review, whichever is open.
 local popup = nil
 
---- The deepest the undo history goes, past which the oldest change can no longer be undone.
-local HISTORY_LIMIT = 200
-
 local function close()
   local closing = popup
   popup = nil
@@ -29,9 +26,6 @@ end
 
 local function remember(undo)
   table.insert(history, undo)
-  if #history > HISTORY_LIMIT then
-    table.remove(history, 1)
-  end
 end
 
 local function redraw()
@@ -46,6 +40,28 @@ function M.count()
     total = total + vim.tbl_count(cells)
   end
   return total + vim.tbl_count(deletes)
+end
+
+--- Ask what to do with staged changes before something would drop them.
+---@param continue fun() Runs once they are discarded.
+---@return boolean asked False when nothing is staged, so the caller goes ahead now.
+function M.settle(continue)
+  local staged = M.count()
+  if staged == 0 then
+    return false
+  end
+  vim.ui.select({ 'Discard them', 'Review them', 'Cancel' }, {
+    prompt = ('%d staged change%s would be lost'):format(staged, staged == 1 and '' or 's'),
+  }, function(choice)
+    if choice == 'Discard them' then
+      M.reset()
+      require('sqmeow.ui.result').redraw()
+      continue()
+    elseif choice == 'Review them' then
+      M.review()
+    end
+  end)
+  return true
 end
 
 --- Forget every staged change.

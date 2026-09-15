@@ -26,7 +26,7 @@ pub fn sql_plan(dialect: Dialect, result: &ResultSet, changes: &Changes) -> Resu
         statements.push(planner.delete(row)?);
     }
     for cells in &changes.inserts {
-        statements.push(planner.insert(cells)?);
+        statements.extend(planner.insert(cells)?);
     }
     for (row, cells) in changes.live_updates() {
         statements.extend(planner.update(*row, cells)?);
@@ -54,8 +54,8 @@ impl Planner<'_> {
         ))
     }
 
-    /// Insert into the one table the result shows.
-    fn insert(&self, cells: &[(usize, Value)]) -> Result<String> {
+    /// Insert into the one table the result shows, and for MySQL read the row back.
+    fn insert(&self, cells: &[(usize, Value)]) -> Result<Vec<String>> {
         let [table] = self.tables else {
             return Err(Error::driver(
                 "a row cannot be added to a result that shows more than one table",
@@ -68,10 +68,13 @@ impl Planner<'_> {
             _ => "",
         };
         if cells.is_empty() {
-            return Ok(match self.dialect {
+            let insert = match self.dialect {
                 Dialect::MySql => format!("INSERT INTO {name} () VALUES ()"),
                 _ => format!("INSERT INTO {name} DEFAULT VALUES{returning}"),
-            });
+            };
+            return Ok(std::iter::once(insert)
+                .chain(self.read_back(table, cells)?)
+                .collect());
         }
         let columns = cells
             .iter()
@@ -81,11 +84,40 @@ impl Planner<'_> {
             .iter()
             .map(|(index, value)| self.value(*index, value))
             .collect();
-        Ok(format!(
+        let insert = format!(
             "INSERT INTO {name} ({}) VALUES ({}){returning}",
             columns.join(", "),
             values.join(", ")
-        ))
+        );
+        Ok(std::iter::once(insert)
+            .chain(self.read_back(table, cells)?)
+            .collect())
+    }
+
+    /// The `SELECT` that reads a new MySQL row back, since MySQL has no `RETURNING`: by the key it was
+    /// given, or by `LAST_INSERT_ID()` for an auto-increment key it was not.
+    fn read_back(&self, table: &Table, cells: &[(usize, Value)]) -> Result<Option<String>> {
+        if self.dialect != Dialect::MySql {
+            return Ok(None);
+        }
+        let mut parts = Vec::new();
+        for &index in &table.key {
+            let name = self.column(table, index)?;
+            match cells.iter().find(|(at, _)| *at == index) {
+                Some((_, value @ Value::Text(_))) => {
+                    parts.push(format!("{name} = {}", self.value(index, value)));
+                }
+                None if table.key.len() == 1 && self.result.columns()[index].generated => {
+                    parts.push(format!("{name} = LAST_INSERT_ID()"));
+                }
+                _ => return Ok(None),
+            }
+        }
+        Ok(Some(format!(
+            "SELECT * FROM {} WHERE {}",
+            self.table(table),
+            parts.join(" AND ")
+        )))
     }
 
     /// One `UPDATE` for each table the changed cells belong to.
@@ -156,22 +188,33 @@ impl Planner<'_> {
                 table.qualified()
             )));
         }
-        // A unique key may hold NULL, which more than one row can.
-        if cells.iter().any(|cell| cell.is_null()) {
-            return Err(Error::driver(format!(
-                "row {row} has NULL in the key of `{}`, so it cannot be found again",
-                table.qualified()
-            )));
-        }
         let parts = table
             .key
             .iter()
             .zip(cells)
+            // A JSON, array or unread value has no dependable equality; applying checks that
+            // exactly one row matched what is left.
+            .filter(|(_, cell)| {
+                !matches!(
+                    cell,
+                    Cell::Json(_) | Cell::Array(_) | Cell::Unsupported { .. }
+                )
+            })
             .map(|(&index, cell)| {
                 let name = self.column(table, index)?;
-                Ok(format!("{name} = {}", cell_literal(self.dialect, cell)?))
+                Ok(if cell.is_null() {
+                    format!("{name} IS NULL")
+                } else {
+                    format!("{name} = {}", cell_literal(self.dialect, cell)?)
+                })
             })
             .collect::<Result<Vec<_>>>()?;
+        if parts.is_empty() {
+            return Err(Error::driver(format!(
+                "row {row} holds nothing its `{}` row can be found again by",
+                table.qualified()
+            )));
+        }
         Ok(parts.join(" AND "))
     }
 
@@ -187,6 +230,11 @@ impl Planner<'_> {
 
 /// A value the user typed, as a SQL literal for a column of `type_name`.
 pub fn value_literal(dialect: Dialect, type_name: &str, value: Option<&str>) -> String {
+    if TypeClass::from_type_name(type_name) == TypeClass::Binary
+        && let Some(bytes) = value.and_then(hex_bytes)
+    {
+        return bytes_literal(dialect, &bytes);
+    }
     match value {
         None => "NULL".to_owned(),
         // CQL does not read a quoted string as a number, a boolean, a uuid or a blob.
@@ -211,6 +259,35 @@ fn is_bare_literal(type_name: &str, text: &str) -> bool {
             .strip_prefix("0x")
             .is_some_and(|hex| hex.chars().all(|c| c.is_ascii_hexdigit())),
         _ => false,
+    }
+}
+
+/// The bytes a `0x` or `\\x` hex text spells.
+fn hex_bytes(text: &str) -> Option<Vec<u8>> {
+    let digits = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("\\x"))?;
+    if digits.len() % 2 != 0 {
+        return None;
+    }
+    (0..digits.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(digits.get(at..at + 2)?, 16).ok())
+        .collect()
+}
+
+/// Bytes as a binary literal.
+fn bytes_literal(dialect: Dialect, bytes: &[u8]) -> String {
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    match dialect {
+        Dialect::Postgres => format!("'\\x{hex}'"),
+        Dialect::Scylla => format!("0x{hex}"),
+        // DuckDB reads `X'ab'` as text, and `\\x` escapes one byte at a time.
+        Dialect::DuckDb => {
+            let escaped: String = bytes.iter().map(|byte| format!("\\x{byte:02x}")).collect();
+            format!("'{escaped}'")
+        }
+        _ => format!("X'{hex}'"),
     }
 }
 
@@ -250,25 +327,7 @@ fn cell_literal(dialect: Dialect, cell: &Cell) -> Result<String> {
             Dialect::Sqlite => u8::from(*value).to_string(),
             _ => if *value { "TRUE" } else { "FALSE" }.to_owned(),
         },
-        Cell::Bytes { head, len } => {
-            if *len > head.len() {
-                return Err(Error::driver(format!(
-                    "a binary key of {len} bytes is longer than the engine keeps, so its row cannot be found again"
-                )));
-            }
-            let hex: String = head.iter().map(|byte| format!("{byte:02x}")).collect();
-            match dialect {
-                Dialect::Postgres => format!("'\\x{hex}'"),
-                Dialect::Scylla => format!("0x{hex}"),
-                // DuckDB reads `X'ab'` as text, and `\x` escapes one byte at a time.
-                Dialect::DuckDb => {
-                    let escaped: String =
-                        head.iter().map(|byte| format!("\\x{byte:02x}")).collect();
-                    format!("'{escaped}'")
-                }
-                _ => format!("X'{hex}'"),
-            }
-        }
+        Cell::Bytes { head, .. } => bytes_literal(dialect, head),
         Cell::Uuid(text) if dialect == Dialect::Scylla => text.clone(),
         other => quote_text(dialect, &other.text("")),
     })
@@ -375,7 +434,39 @@ mod tests {
     }
 
     #[test]
-    fn a_row_with_null_in_its_key_is_refused() {
+    fn a_new_mysql_row_is_read_back_by_its_key() {
+        let mut id = Column::new("id", "INT");
+        id.generated = true;
+        let mut result = ResultSet::new(
+            "select id, name from t",
+            vec![id, Column::new("name", "TEXT")],
+        );
+        result.set_source(Some(Source::Tables(vec![table(
+            None,
+            "t",
+            &[0],
+            &[(0, "id"), (1, "name")],
+        )])));
+        let changes = Changes {
+            inserts: vec![
+                vec![(1, "a".into())],
+                vec![(0, "9".into()), (1, "b".into())],
+            ],
+            ..Changes::default()
+        };
+        assert_eq!(
+            sql_plan(Dialect::MySql, &result, &changes).unwrap(),
+            vec![
+                "INSERT INTO `t` (`name`) VALUES ('a')",
+                "SELECT * FROM `t` WHERE `id` = LAST_INSERT_ID()",
+                "INSERT INTO `t` (`id`, `name`) VALUES ('9', 'b')",
+                "SELECT * FROM `t` WHERE `id` = '9'",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_row_with_null_in_its_key_is_found_by_is_null() {
         let mut result = people();
         result.push_row(vec![Cell::Int(2), Cell::Null, Cell::Null]);
         result.set_source(Some(Source::Tables(vec![table(
@@ -388,8 +479,10 @@ mod tests {
             deletes: vec![1],
             ..Changes::default()
         };
-        let error = sql_plan(Dialect::Sqlite, &result, &changes).unwrap_err();
-        assert!(error.to_string().contains("NULL in the key"), "{error}");
+        assert_eq!(
+            sql_plan(Dialect::Sqlite, &result, &changes).unwrap(),
+            vec![r#"DELETE FROM "people" WHERE "id" = 2 AND "name" IS NULL"#]
+        );
     }
 
     #[test]
@@ -516,7 +609,27 @@ mod tests {
             cell_literal(Dialect::DuckDb, &Cell::bytes(&[0xab, 0x63])).unwrap(),
             r"'\xab\x63'"
         );
-        assert!(cell_literal(Dialect::Sqlite, &Cell::bytes(&[0; 200])).is_err());
+        assert!(
+            cell_literal(Dialect::Sqlite, &Cell::bytes(&[0; 200]))
+                .unwrap()
+                .ends_with("00'")
+        );
+        assert_eq!(
+            value_literal(Dialect::MySql, "BLOB", Some("0xDEad")),
+            "X'dead'"
+        );
+        assert_eq!(
+            value_literal(Dialect::Postgres, "BYTEA", Some(r"\xab")),
+            r"'\xab'"
+        );
+        assert_eq!(
+            value_literal(Dialect::Sqlite, "BLOB", Some("0xabc")),
+            "'0xabc'"
+        );
+        assert_eq!(
+            value_literal(Dialect::Sqlite, "TEXT", Some("0xab")),
+            "'0xab'"
+        );
     }
 
     #[test]

@@ -2,8 +2,8 @@
 
 use std::borrow::Cow;
 
-/// How much of a large binary value is kept.
-pub const BYTES_PREVIEW: usize = 64;
+/// How much of a binary value a grid cell shows.
+pub const BYTES_SHOWN: usize = 64;
 
 /// A single value from a result row.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,11 +16,11 @@ pub enum Cell {
     /// Exact numerics, kept as text because they do not fit a float without losing digits.
     Decimal(String),
     Text(String),
-    /// A binary value, possibly only the head of one.
+    /// A binary value.
     Bytes {
-        /// The first [`BYTES_PREVIEW`] bytes, or all of them if the value is shorter.
+        /// Every byte of it.
         head: Vec<u8>,
-        /// The true length, which may exceed what `head` holds.
+        /// How many bytes it holds.
         len: usize,
     },
     Json(String),
@@ -47,10 +47,10 @@ impl Cell {
         matches!(self, Self::Int(_) | Self::Float(_) | Self::Decimal(_))
     }
 
-    /// Build a binary cell, keeping only the head of a large value.
+    /// Build a binary cell.
     pub fn bytes(data: &[u8]) -> Self {
         Self::Bytes {
-            head: data.iter().take(BYTES_PREVIEW).copied().collect(),
+            head: data.to_vec(),
             len: data.len(),
         }
     }
@@ -60,6 +60,7 @@ impl Cell {
         match self {
             Self::Text(text) | Self::Json(text) => Cow::Borrowed(text),
             Self::Unsupported { raw, .. } if !raw.is_empty() => Cow::Borrowed(raw),
+            Self::Bytes { head, len } => Cow::Owned(format_bytes(head, *len)),
             other => other.display(null_text),
         }
     }
@@ -82,7 +83,9 @@ impl Cell {
                 Cow::Owned(format!("<{type_name}>"))
             }
             Self::Unsupported { raw, .. } => escape(raw),
-            Self::Bytes { head, len } => Cow::Owned(format_bytes(head, *len)),
+            Self::Bytes { head, len } => {
+                Cow::Owned(format_bytes(&head[..head.len().min(BYTES_SHOWN)], *len))
+            }
             Self::Array(items) => Cow::Owned(format_array(items, null_text)),
         }
     }
@@ -208,19 +211,14 @@ mod tests {
 
     #[test]
     fn long_blobs_report_their_true_length() {
-        let cell = Cell::bytes(&[0u8; BYTES_PREVIEW * 2]);
+        let cell = Cell::bytes(&[0u8; BYTES_SHOWN * 2]);
         let shown = shown(&cell);
         assert!(
-            shown.ends_with(&format!("… ({} bytes)", BYTES_PREVIEW * 2)),
+            shown.ends_with(&format!("… ({} bytes)", BYTES_SHOWN * 2)),
             "{shown}"
         );
-        match cell {
-            Cell::Bytes { head, len } => {
-                assert_eq!(head.len(), BYTES_PREVIEW);
-                assert_eq!(len, BYTES_PREVIEW * 2);
-            }
-            other => panic!("expected bytes, got {other:?}"),
-        }
+        // The whole value is kept, and its text is all of it.
+        assert_eq!(cell.text("").len(), 2 + BYTES_SHOWN * 4);
     }
 
     #[test]

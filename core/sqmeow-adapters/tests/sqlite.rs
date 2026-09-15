@@ -519,10 +519,9 @@ async fn rows_that_cannot_be_found_again_have_no_source() {
     run(&backend, "create table loose (v text)").await;
 
     for sql in [
-        "select * from loose",
         "select count(*) from people",
-        "select name from people",
         "select p.id, q.id from people p join people q on p.id = q.id",
+        "select name, count(*) from people group by name",
     ] {
         assert!(run(&backend, sql).await.source().is_none(), "{sql}");
     }
@@ -862,7 +861,14 @@ async fn grouped_or_combined_rows_are_read_only() {
 async fn a_filtered_result_stays_editable() {
     let backend = seeded().await;
     let origin = "select id, name from people order by id";
-    let wrapped = sqmeow_db::sql::filtered(origin, "name like 'b%'", "id desc").unwrap();
+    let wrapped = sqmeow_db::sql::filtered(
+        sqmeow_db::Dialect::Sqlite,
+        origin,
+        "name like 'b%'",
+        "id desc",
+        &[],
+    )
+    .unwrap();
     let result = backend
         .execute_wrapped(&wrapped, origin, NO_CAP, CancellationToken::new())
         .await
@@ -976,4 +982,187 @@ async fn an_insert_returns_its_row() {
     assert_eq!(returned[0].cell(0, 1), Some(&text("none")));
     let after = run(&backend, "select label from defaulted order by id").await;
     assert_eq!(after.column_cells(0), &[text("x"), text("none")]);
+}
+
+#[tokio::test]
+async fn a_read_only_connection_is_refused_writes_by_sqlite() {
+    let backend = Backend::connect_to("sqlite::memory:", None, true)
+        .await
+        .expect("the database should open");
+    run(&backend, "select 1").await;
+    let error = backend
+        .execute(
+            "create table t (id integer)",
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("readonly"), "{error}");
+}
+
+#[tokio::test]
+async fn cancelling_an_aggregate_interrupts_it() {
+    let backend = database().await;
+    let cancel = CancellationToken::new();
+    let stopper = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        stopper.cancel();
+    });
+
+    let error = backend
+        .execute(
+            "with recursive n(x) as (select 1 union all select x + 1 from n where x < 500000000)
+             select count(*) from n",
+            NO_CAP,
+            cancel,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Cancelled), "{error}");
+
+    // The connection is free again at once, rather than after the aggregate would have finished.
+    let started = std::time::Instant::now();
+    run(&backend, "select 1").await;
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn a_table_without_a_key_is_edited_by_every_column_one_row_at_a_time() {
+    let backend = database().await;
+    run(&backend, "create table loose (label text, n integer)").await;
+    run(
+        &backend,
+        "insert into loose values ('a', 1), ('b', null), ('twin', 2), ('twin', 2)",
+    )
+    .await;
+
+    let result = run(&backend, "select label, n from loose order by rowid").await;
+    match result.source() {
+        Some(Source::Tables(tables)) => assert_eq!(tables[0].key, vec![0, 1]),
+        other => panic!("expected a table source, got {other:?}"),
+    }
+
+    // A NULL is matched with IS NULL.
+    let changes = Changes {
+        updates: vec![(1, vec![(0, "bee".into())])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.expect("the plan should apply");
+
+    // Two identical rows cannot be told apart, so nothing is changed.
+    let changes = Changes {
+        deletes: vec![2],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    let error = backend.apply(&plan).await.unwrap_err();
+    assert!(error.to_string().contains("2 rows matched"), "{error}");
+
+    let after = run(&backend, "select label from loose order by rowid").await;
+    assert_eq!(
+        after.column_cells(0),
+        &[text("a"), text("bee"), text("twin"), text("twin")]
+    );
+}
+
+#[tokio::test]
+async fn a_long_binary_key_is_found_again_and_hex_is_written_as_bytes() {
+    let backend = database().await;
+    run(&backend, "create table blobs (k blob primary key, v blob)").await;
+    let long = "ab".repeat(100);
+    run(
+        &backend,
+        &format!("insert into blobs values (x'{long}', x'00')"),
+    )
+    .await;
+
+    let result = run(&backend, "select k, v from blobs").await;
+    let changes = Changes {
+        updates: vec![(0, vec![(1, "0xCAFE".into())])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.expect("the plan should apply");
+
+    let after = run(&backend, "select v from blobs").await;
+    assert_eq!(after.cell(0, 0), Some(&Cell::bytes(&[0xca, 0xfe])));
+}
+
+#[tokio::test]
+async fn the_drawer_of_a_file_is_not_held_up_by_a_long_query() {
+    let path = std::env::temp_dir().join(format!("sqmeow-meta-{}.db", std::process::id()));
+    let backend = std::sync::Arc::new(
+        Backend::connect(&format!("sqlite://{}?mode=rwc", path.display()))
+            .await
+            .unwrap(),
+    );
+    run(
+        &backend,
+        "create table if not exists t (id integer primary key)",
+    )
+    .await;
+    let running = std::sync::Arc::clone(&backend);
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    let query = tokio::spawn(async move {
+        running
+            .execute(
+                "with recursive n(x) as (select 1 union all select x + 1 from n where x < 500000000)
+                 select count(*) from n",
+                NO_CAP,
+                stop,
+            )
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let started = std::time::Instant::now();
+    assert_eq!(backend.relations("main").await.unwrap().len(), 1);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    cancel.cancel();
+    let _ = query.await;
+    backend.close().await;
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn a_table_describes_its_keys_triggers_and_definition() {
+    let backend = database().await;
+    run(&backend, "create table det_parent (id integer primary key)").await;
+    run(
+        &backend,
+        "create table det_child (id integer primary key,
+             parent_id integer references det_parent (id), n integer check (n > 0))",
+    )
+    .await;
+    run(
+        &backend,
+        "create trigger det_audit after insert on det_child begin select 1; end",
+    )
+    .await;
+
+    let details = backend.details("main", "det_child").await.unwrap();
+    assert!(
+        details
+            .definition
+            .as_deref()
+            .is_some_and(|sql| sql.contains("check (n > 0)")),
+        "{details:?}"
+    );
+    assert_eq!(
+        details.triggers,
+        vec![("det_audit".to_owned(), "AFTER INSERT".to_owned())]
+    );
+    assert_eq!(
+        details.foreign_keys,
+        vec![sqmeow_db::ForeignKeyNode {
+            name: String::new(),
+            columns: vec!["parent_id".into()],
+            target: "det_parent".into(),
+            referenced: vec!["id".into()],
+        }]
+    );
 }

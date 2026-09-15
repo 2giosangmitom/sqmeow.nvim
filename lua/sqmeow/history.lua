@@ -38,11 +38,26 @@ local function owned(path)
   return vim.fs.normalize(path):sub(1, #directory) == directory
 end
 
---- Delete the result an entry kept, if it kept one.
+--- Where the run's earlier statements' results were saved, or nil when none was.
+---@param summary table
+---@return string[]|nil
+local function archives(summary)
+  local paths = {}
+  for _, entry in ipairs(summary.results or {}) do
+    if entry.archive and entry.call_id ~= summary.call_id then
+      table.insert(paths, entry.archive)
+    end
+  end
+  return #paths > 0 and paths or nil
+end
+
+--- Delete the results an entry kept, if it kept any.
 ---@param entry table
 local function forget(entry)
-  if owned(entry.result) then
-    pcall(vim.fn.delete, entry.result)
+  for _, path in ipairs(vim.list_extend({ entry.result }, entry.results or {})) do
+    if owned(path) then
+      pcall(vim.fn.delete, path)
+    end
   end
 end
 
@@ -174,6 +189,8 @@ function M.append(summary)
     affected = summary.affected,
     elapsed_ms = summary.elapsed_ms,
     result = kept and summary.archive or nil,
+    -- The saved results of the run's earlier statements.
+    results = kept and archives(summary) or nil,
   }
 
   table.insert(loaded(), entry)

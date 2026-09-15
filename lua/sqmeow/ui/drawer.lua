@@ -10,6 +10,8 @@ local win = nil
 -- Which nodes the user has opened, and what each one's children turned out to be.
 local expanded = {}
 local cache = {}
+--- The glob each Redis connection lists its keys by, by connection id.
+local patterns = {}
 
 -- The nui tree the drawer was last drawn with, kept so the cursor can be turned into a node.
 local tree = nil
@@ -49,6 +51,33 @@ function M.is_expanded(conn_id, path)
   return expanded[node_key(conn_id, path)] == true
 end
 
+--- The open nodes of top-level connections, by connection name.
+---@return { connection: string, path: string[] }[]
+function M.expanded_paths()
+  local state = require('sqmeow.state')
+  local paths = {}
+  for key, open in pairs(expanded) do
+    local conn_id, path = key_parts(key)
+    local connection = open == true and conn_id and state.connections[conn_id]
+    if connection and not connection.parent then
+      table.insert(paths, { connection = connection.name, path = path })
+    end
+  end
+  table.sort(paths, function(left, right)
+    return left.connection .. '\0' .. table.concat(left.path, '\0')
+      < right.connection .. '\0' .. table.concat(right.path, '\0')
+  end)
+  return paths
+end
+
+--- Open a node and load what it holds.
+---@param conn_id integer
+---@param path string[]
+function M.expand(conn_id, path)
+  expanded[node_key(conn_id, path)] = true
+  M.load(conn_id, path)
+end
+
 --- Ask the engine for one level of the tree.
 ---@param conn_id integer
 ---@param path string[]
@@ -61,7 +90,10 @@ function M.load(conn_id, path)
 
   -- What is already drawn is kept while the reply is on its way.
   cache[key] = { loading = true, nodes = entry and entry.nodes }
-  local _, err = require('sqmeow.rpc').request('introspect', { conn_id = conn_id, path = path })
+  local _, err = require('sqmeow.rpc').request(
+    'introspect',
+    { conn_id = conn_id, path = path, pattern = patterns[conn_id] }
+  )
   if err then
     cache[key] = { error = err }
     M.render()
@@ -99,12 +131,22 @@ local implied = {
   ['function'] = true,
   procedure = true,
   key = true,
+  sequence = true,
+  role = true,
 }
 
-local function annotate(node)
-  -- A group heading carries how many things it holds.
+---@param pattern string|nil The glob a Redis connection lists its keys by.
+local function annotate(node, pattern)
+  -- A group heading carries how many things it holds, marked when the list stopped at its cap.
   if node.count then
-    return ('(%d)'):format(node.count)
+    local count = ('(%d%s)'):format(node.count, node.capped and '+' or '')
+    if pattern and node.kind == 'keys' then
+      return ('%s matching %s'):format(count, pattern)
+    end
+    return count
+  end
+  if node.kind == 'role' then
+    return table.concat(node.attributes or {}, ', ')
   end
 
   if node.kind ~= 'column' then
@@ -235,7 +277,7 @@ local function schema_nodes(conn_id, path)
       name = node.name,
       kind = node.kind,
       icon_kind = node.kind == 'column' and icons.column_kind(node) or nil,
-      note = annotate(node),
+      note = annotate(node, patterns[conn_id]),
       -- Only a group heading has one.
       count = node.count,
       expandable = expandable,
@@ -479,6 +521,7 @@ local function toggle_database(node)
     parent = parent.id,
     database = node.name,
     read_only = parent.read_only,
+    ssh = parent.ssh,
   })
   -- Marked open, the way a connection someone expanded is, so a refresh reloads what it holds.
   if id then
@@ -514,7 +557,7 @@ local function is_relation(kind)
 end
 
 --- The statement that shows what a relation holds.
----@param limit integer The most rows it may read.
+---@param limit integer|nil The most rows it may read, or nil for every row.
 local function preview_statement(node, limit)
   local sql = require('sqmeow.sql')
   local dialect = dialect_of(node.conn_id)
@@ -612,6 +655,8 @@ function M.actions.refresh()
   end
   -- Scratchpads are read from the directory on every draw, so redrawing is the whole refresh.
   if not node.conn_id then
+    -- A command source runs again, and redraws once it has.
+    require('sqmeow.sources.command').reload()
     return M.render()
   end
   -- A database of a cluster is refreshed as the connection it was opened as.
@@ -637,6 +682,24 @@ function M.actions.refresh()
   M.render()
 end
 
+--- Show only the keys of a Redis connection that match a glob, or every key again.
+function M.actions.filter_keys()
+  local node = M.current_node()
+  local conn_id = node and node.conn_id
+  if not (conn_id and dialect_of(conn_id) == 'redis') then
+    return utils.notify('only a Redis connection lists its keys by a pattern', vim.log.levels.WARN)
+  end
+  vim.ui.input({ prompt = 'Keys matching: ', default = patterns[conn_id] or '*' }, function(pattern)
+    if pattern == nil then
+      return
+    end
+    pattern = vim.trim(pattern)
+    patterns[conn_id] = (pattern ~= '' and pattern ~= '*') and pattern or nil
+    reload(conn_id, {})
+    M.render()
+  end)
+end
+
 --- Run a `SELECT` over the relation under the cursor.
 function M.actions.preview()
   local node = M.current_node()
@@ -645,10 +708,11 @@ function M.actions.preview()
   end
 
   -- Nil for a Redis key of a type nothing reads back.
+  local max_rows = require('sqmeow.config').get().query.max_rows
   local statement = preview_statement(
     node,
     -- The whole relation, up to the row cap.
-    require('sqmeow.config').get().query.max_rows + 1
+    max_rows > 0 and max_rows + 1 or nil
   )
   if not statement then
     return
@@ -663,10 +727,10 @@ function M.actions.preview()
   )
 end
 
---- Show the columns and indexes of the relation under the cursor.
+--- Show the structure of the relation or key under the cursor.
 function M.actions.structure()
   local node = M.current_node()
-  if not node or not is_relation(node.kind) or node.kind == 'key' then
+  if not node or not is_relation(node.kind) then
     return
   end
   require('sqmeow.ui.structure').open(node.conn_id, node.path[1], node.path[#node.path])

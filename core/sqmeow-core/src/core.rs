@@ -64,12 +64,14 @@ impl Core {
         let options = self.session.configure(OptionsPatch {
             max_rows: args.opt_usize("max_rows"),
             history_size: args.opt_usize("history_size"),
+            timeout_ms: args.opt_usize("timeout_ms").map(|ms| ms as u64),
         });
 
         // Echo what was applied, since values are clamped rather than rejected.
         Ok(map(vec![
             ("max_rows", Value::from(options.max_rows as u64)),
             ("history_size", Value::from(options.history_size as u64)),
+            ("timeout_ms", Value::from(options.timeout_ms)),
         ]))
     }
 

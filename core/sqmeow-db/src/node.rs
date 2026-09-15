@@ -8,6 +8,7 @@ pub enum RelationKind {
     Table,
     View,
     MaterializedView,
+    Sequence,
     /// Something the server reports that does not fit above, such as a foreign table.
     Other,
     /// A Redis key, by the type of value it holds.
@@ -21,6 +22,7 @@ impl RelationKind {
             Self::Table => "table",
             Self::View => "view",
             Self::MaterializedView => "materialized view",
+            Self::Sequence => "sequence",
             Self::Other => "relation",
             Self::Key(_) => "key",
         }
@@ -132,6 +134,38 @@ pub struct ColumnNode {
     pub foreign_key: Option<ForeignKey>,
     /// The default as the schema writes it.
     pub default: Option<String>,
+}
+
+/// A role or user a server knows, with what it is allowed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleNode {
+    pub name: String,
+    pub attributes: Vec<String>,
+}
+
+/// A foreign key: `columns` hold values of `referenced` in `target`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignKeyNode {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub target: String,
+    pub referenced: Vec<String>,
+}
+
+/// What the structure view shows of a relation besides its columns and indexes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Details {
+    /// Facts about it, such as its comment or a Redis key's TTL.
+    pub properties: Vec<(String, String)>,
+    /// Comments on its columns, by column name.
+    pub column_comments: Vec<(String, String)>,
+    pub foreign_keys: Vec<ForeignKeyNode>,
+    /// Check constraints, each a name and its expression.
+    pub checks: Vec<(String, String)>,
+    /// Triggers, each a name and what fires it.
+    pub triggers: Vec<(String, String)>,
+    /// The statement that creates it, or a MongoDB collection's validator.
+    pub definition: Option<String>,
 }
 
 /// An index or a unique constraint on a table.

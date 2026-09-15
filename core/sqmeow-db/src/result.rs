@@ -21,6 +21,8 @@ pub struct Column {
     pub class: TypeClass,
     /// Whether it is a key in the table it came from.
     pub key: KeyKind,
+    /// Whether the database fills it in, such as an auto-increment key.
+    pub generated: bool,
 }
 
 impl Column {
@@ -32,6 +34,7 @@ impl Column {
             class: TypeClass::from_type_name(&type_name),
             type_name,
             key: KeyKind::None,
+            generated: false,
         }
     }
 

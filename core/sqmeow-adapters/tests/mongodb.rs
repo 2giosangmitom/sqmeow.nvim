@@ -204,7 +204,7 @@ async fn a_url_without_a_database_lists_every_database() {
     let root = format!("{root}/");
 
     // A database is only listed once it holds something.
-    let one = Backend::connect_to(&root, Some("sqmeow_listed"))
+    let one = Backend::connect_to(&root, Some("sqmeow_listed"), false)
         .await
         .expect("one database of the server should open");
     empty(&one, "listed").await;
@@ -700,4 +700,157 @@ async fn lists_a_collections_indexes() {
             ("mixed", vec!["n -1", "tag"], false, false),
         ]
     );
+}
+
+#[tokio::test]
+async fn cancelling_a_command_stops_it_on_the_server() {
+    let backend = std::sync::Arc::new(connect(&server!()).await);
+    run(&backend, r#"{"drop": "slow_docs"}"#).await;
+    run(
+        &backend,
+        r#"{"insert": "slow_docs", "documents": [{"_id": 1}]}"#,
+    )
+    .await;
+
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    let running = std::sync::Arc::clone(&backend);
+    let query = tokio::spawn(async move {
+        running
+            .execute(
+                r#"{"find": "slow_docs", "filter": {"$where": "sleep(10000) || true"}, "comment": "sqmeow-slow-probe"}"#,
+                NO_CAP,
+                stop,
+            )
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    cancel.cancel();
+    assert!(matches!(query.await.unwrap(), Err(Error::Cancelled)));
+
+    // Its comment was the user's own, which a cancel finds it by all the same.
+    let mut running_on_server = true;
+    for _ in 0..20 {
+        let ops = run(
+            &backend,
+            r#"{"currentOp": true, "command.comment": "sqmeow-slow-probe", "$db": "admin"}"#,
+        )
+        .await;
+        let inprog = ops
+            .columns()
+            .iter()
+            .position(|column| column.name == "inprog")
+            .and_then(|at| ops.cell(0, at).cloned());
+        if matches!(inprog, Some(Cell::Json(ref text)) if text == "[]") {
+            running_on_server = false;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(
+        !running_on_server,
+        "the find is still running on the server"
+    );
+}
+
+#[tokio::test]
+async fn a_collection_describes_its_validator_and_its_fields_follow_it() {
+    let backend = connect(&server!()).await;
+    run(&backend, r#"{"drop": "validated_docs"}"#).await;
+    run(
+        &backend,
+        r#"{"create": "validated_docs", "validator": {"$jsonSchema": {"bsonType": "object",
+            "required": ["email"],
+            "properties": {"email": {"bsonType": "string"}, "age": {"bsonType": "int"}}}}}"#,
+    )
+    .await;
+    run(
+        &backend,
+        r#"{"insert": "validated_docs", "documents": [{"_id": 1, "email": "a@b"}]}"#,
+    )
+    .await;
+
+    let columns = backend.columns("sqmeow", "validated_docs").await.unwrap();
+    let column = |name: &str| columns.iter().find(|c| c.name == name).unwrap();
+    // `age` is in no document, but the validator names it.
+    assert_eq!(column("age").type_name, "int");
+    assert!(column("age").nullable);
+    assert!(!column("email").nullable);
+
+    let details = backend.details("sqmeow", "validated_docs").await.unwrap();
+    assert_eq!(details.properties, vec![("documents".into(), "1".into())]);
+    assert!(details.definition.unwrap().contains("$jsonSchema"));
+}
+
+/// The `n` a `count` answers.
+async fn count_of(backend: &Backend, collection: &str) -> Option<Cell> {
+    let result = run(backend, &format!(r#"{{"count": "{collection}"}}"#)).await;
+    let at = result
+        .columns()
+        .iter()
+        .position(|column| column.name == "n")?;
+    result.cell(0, at).cloned()
+}
+
+const DUPLICATE_INSERTS: [&str; 2] = [
+    r#"{"insert": "COLLECTION", "documents": [{"_id": 1}]}"#,
+    r#"{"insert": "COLLECTION", "documents": [{"_id": 1}]}"#,
+];
+
+#[tokio::test]
+async fn an_aggregate_that_only_filters_is_editable() {
+    let backend = connect(&server!()).await;
+    run(&backend, r#"{"drop": "aggregated_docs"}"#).await;
+    run(
+        &backend,
+        r#"{"insert": "aggregated_docs", "documents": [{"_id": 1, "n": 1}, {"_id": 2, "n": 5}]}"#,
+    )
+    .await;
+
+    let filtered = run(
+        &backend,
+        r#"{"aggregate": "aggregated_docs", "pipeline": [{"$match": {"n": {"$gt": 2}}}, {"$sort": {"n": 1}}], "cursor": {}}"#,
+    )
+    .await;
+    assert!(filtered.source().is_some());
+    let grouped = run(
+        &backend,
+        r#"{"aggregate": "aggregated_docs", "pipeline": [{"$group": {"_id": "$n"}}], "cursor": {}}"#,
+    )
+    .await;
+    assert!(grouped.source().is_none());
+}
+
+#[tokio::test]
+async fn a_standalone_server_applies_commands_in_turn() {
+    let backend = connect(&server!()).await;
+    run(&backend, r#"{"drop": "in_turn_docs"}"#).await;
+    run(&backend, r#"{"create": "in_turn_docs"}"#).await;
+
+    let commands: Vec<String> = DUPLICATE_INSERTS
+        .iter()
+        .map(|command| command.replace("COLLECTION", "in_turn_docs"))
+        .collect();
+    let error = backend.apply(&commands).await.unwrap_err();
+    assert!(error.to_string().contains("1 of 2"), "{error}");
+    assert_eq!(count_of(&backend, "in_turn_docs").await, Some(Cell::Int(1)));
+}
+
+#[tokio::test]
+async fn a_replica_set_applies_every_command_or_none() {
+    let Ok(url) = std::env::var("SQMEOW_TEST_MONGODB_RS_URL") else {
+        eprintln!("skipped: set SQMEOW_TEST_MONGODB_RS_URL to a replica set");
+        return;
+    };
+    let backend = connect(&url).await;
+    run(&backend, r#"{"drop": "atomic_docs"}"#).await;
+    run(&backend, r#"{"create": "atomic_docs"}"#).await;
+
+    let commands: Vec<String> = DUPLICATE_INSERTS
+        .iter()
+        .map(|command| command.replace("COLLECTION", "atomic_docs"))
+        .collect();
+    let error = backend.apply(&commands).await.unwrap_err();
+    assert!(error.to_string().contains("nothing was applied"), "{error}");
+    assert_eq!(count_of(&backend, "atomic_docs").await, Some(Cell::Int(0)));
 }

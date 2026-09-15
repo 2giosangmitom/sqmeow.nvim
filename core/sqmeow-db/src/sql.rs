@@ -53,9 +53,30 @@ pub fn first_word(statement: &str) -> String {
         .to_lowercase()
 }
 
+/// Whether each row of a query can be a table row: no grouping, `DISTINCT` or set operation at
+/// its top level.
+pub fn plain(dialect: Dialect, statement: &str) -> bool {
+    !crate::guard::words(dialect, statement)
+        .iter()
+        .any(|(word, depth)| {
+            *depth == 0
+                && matches!(
+                    word.as_str(),
+                    "group" | "having" | "distinct" | "union" | "intersect" | "except"
+                )
+        })
+}
+
 /// A query run as a subquery narrowed by `condition` and ordered by `order`, or `None` for a
-/// statement that returns no rows.
-pub fn filtered(statement: &str, condition: &str, order: &str) -> Option<String> {
+/// statement that returns no rows. `columns` are the names its rows have, which are told apart where
+/// two are the same.
+pub fn filtered(
+    dialect: Dialect,
+    statement: &str,
+    condition: &str,
+    order: &str,
+    columns: &[String],
+) -> Option<String> {
     let statement = statement.trim().trim_end_matches(';').trim_end();
     if !matches!(
         first_word(statement).as_str(),
@@ -63,8 +84,28 @@ pub fn filtered(statement: &str, condition: &str, order: &str) -> Option<String>
     ) {
         return None;
     }
+    let words = crate::guard::words(dialect, statement);
+    let top = |wanted: &str| {
+        words
+            .iter()
+            .any(|(word, depth)| *depth == 0 && word == wanted)
+    };
+    // MySQL forgets the order of a derived table without a LIMIT.
+    let inner =
+        if dialect == Dialect::MySql && order.trim().is_empty() && top("order") && !top("limit") {
+            format!("{statement}\nLIMIT 18446744073709551615")
+        } else {
+            statement.to_owned()
+        };
+
     // Each clause on its own line, so a trailing `--` comment cannot swallow the next one.
-    let mut sql = format!("SELECT * FROM (\n{statement}\n) AS sqmeow_view");
+    let mut sql = match distinct_names(dialect, columns) {
+        // A subquery cannot hold two columns of one name, so a CTE names them apart.
+        Some(names) => {
+            format!("WITH sqmeow_view ({names}) AS (\n{inner}\n)\nSELECT * FROM sqmeow_view")
+        }
+        None => format!("SELECT * FROM (\n{inner}\n) AS sqmeow_view"),
+    };
     if !condition.trim().is_empty() {
         sql.push_str("\nWHERE ");
         sql.push_str(condition.trim());
@@ -74,6 +115,32 @@ pub fn filtered(statement: &str, condition: &str, order: &str) -> Option<String>
         sql.push_str(order.trim());
     }
     Some(sql)
+}
+
+/// The column names quoted for a CTE, a repeated one numbered, or `None` when none repeats.
+fn distinct_names(dialect: Dialect, columns: &[String]) -> Option<String> {
+    let mut taken: Vec<String> = Vec::new();
+    let mut repeated = false;
+    for name in columns {
+        let mut candidate = name.clone();
+        let mut count = 1;
+        while taken
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(&candidate))
+        {
+            count += 1;
+            candidate = format!("{name}_{count}");
+            repeated = true;
+        }
+        taken.push(candidate);
+    }
+    repeated.then(|| {
+        taken
+            .iter()
+            .map(|name| dialect.quote_ident(name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -540,23 +607,84 @@ mod tests {
     #[test]
     fn a_filter_wraps_the_query_so_its_own_clauses_hold() {
         assert_eq!(
-            filtered("select * from t order by a limit 5;", "b > 1", "a desc").as_deref(),
+            filtered(
+                Dialect::Postgres,
+                "select * from t order by a limit 5;",
+                "b > 1",
+                "a desc",
+                &[]
+            )
+            .as_deref(),
             Some(
                 "SELECT * FROM (\nselect * from t order by a limit 5\n) AS sqmeow_view\nWHERE b > 1\nORDER BY a desc"
             )
         );
         assert_eq!(
-            filtered("  with x as (select 1) select * from x -- note", "", " ").as_deref(),
+            filtered(
+                Dialect::Postgres,
+                "  with x as (select 1) select * from x -- note",
+                "",
+                " ",
+                &[]
+            )
+            .as_deref(),
             Some("SELECT * FROM (\nwith x as (select 1) select * from x -- note\n) AS sqmeow_view")
         );
     }
 
     #[test]
     fn only_a_query_that_returns_rows_is_filtered() {
-        assert!(filtered("/* rows */ VALUES (1)", "x = 1", "").is_some());
+        assert!(filtered(Dialect::Sqlite, "/* rows */ VALUES (1)", "x = 1", "", &[]).is_some());
         for statement in ["delete from t", "explain select 1", "pragma table_info(t)"] {
-            assert_eq!(filtered(statement, "x = 1", ""), None, "{statement}");
+            assert_eq!(
+                filtered(Dialect::Sqlite, statement, "x = 1", "", &[]),
+                None,
+                "{statement}"
+            );
         }
+    }
+
+    #[test]
+    fn a_filter_keeps_mysql_order_and_names_repeated_columns_apart() {
+        assert_eq!(
+            filtered(
+                Dialect::MySql,
+                "select a from t order by a",
+                "a > 1",
+                "",
+                &[]
+            )
+            .as_deref(),
+            Some(
+                "SELECT * FROM (\nselect a from t order by a\nLIMIT 18446744073709551615\n) AS sqmeow_view\nWHERE a > 1"
+            )
+        );
+        // Its own LIMIT, or an order the bar gives, needs no help.
+        assert!(
+            !filtered(
+                Dialect::MySql,
+                "select a from t order by a limit 3",
+                "",
+                "a",
+                &[]
+            )
+            .unwrap()
+            .contains("18446744073709551615")
+        );
+        let names = ["id".to_owned(), "ID".to_owned(), "name".to_owned()];
+        assert_eq!(
+            filtered(
+                Dialect::Postgres,
+                "select a.id, b.id, a.name from a join b",
+                "id_2 > 1",
+                "",
+                &names
+            )
+            .as_deref(),
+            Some(
+                "WITH sqmeow_view (\"id\", \"ID_2\", \"name\") AS (\nselect a.id, b.id, a.name from a join b\n)\nSELECT * FROM sqmeow_view\nWHERE id_2 > 1"
+            )
+        );
     }
 
     #[test]
@@ -862,5 +990,21 @@ mod tests {
         assert!(statements[0].sql.ends_with("APPLY BATCH"));
         assert!(statements[1].sql.ends_with("$$ return x; $$"));
         assert!(statements[2].sql.ends_with("select * from t"));
+    }
+
+    #[test]
+    fn a_grouped_distinct_or_combined_query_is_not_plain() {
+        let pg = Dialect::Postgres;
+        assert!(plain(
+            pg,
+            "select * from t where a in (select a from u group by a)"
+        ));
+        assert!(plain(
+            pg,
+            "with x as (select distinct a from t) select * from x"
+        ));
+        assert!(!plain(pg, "select a, count(*) from t group by a"));
+        assert!(!plain(pg, "select distinct a from t"));
+        assert!(!plain(pg, "select a from t union all select a from u"));
     }
 }

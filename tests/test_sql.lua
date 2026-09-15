@@ -31,6 +31,13 @@ T['read_key']['reads each type with its own command'] = function()
   eq(sql.read_key('json', 'profile', 100), 'JSON.GET "profile"')
 end
 
+T['read_key']['reads everything without a limit'] = function()
+  eq(sql.select_from('postgres', { 'public', 'users' }), 'select * from "public"."users"')
+  eq(sql.select_from('mongodb', { 'shop', 'orders' }), '{"find": "orders", "$db": "shop"}')
+  eq(sql.read_key('lists', 'queue'), 'LRANGE "queue" 0 -1')
+  eq(sql.read_key('streams', 'events'), 'XRANGE "events" - +')
+end
+
 T['read_key']['escapes a key so it stays one word'] = function()
   eq(sql.read_key('strings', 'a "b"\\\nc', 1), [[GET "a \"b\"\\\nc"]])
 end

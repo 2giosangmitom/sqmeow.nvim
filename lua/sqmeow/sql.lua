@@ -33,24 +33,25 @@ end
 --- A `SELECT` over a relation.
 ---@param dialect string|nil
 ---@param parts string[]
----@param limit integer
+---@param limit integer|nil Nil reads every row.
 ---@return string
 function M.select_from(dialect, parts, limit)
   if dialect == 'mongodb' then
     -- Written by hand rather than encoded from a table.
-    return ('{"find": %s, "limit": %d, "$db": %s}'):format(
+    return ('{"find": %s,%s "$db": %s}'):format(
       vim.json.encode(parts[#parts]),
-      limit,
+      limit and (' "limit": %d,'):format(limit) or '',
       vim.json.encode(parts[1])
     )
   end
-  return ('select * from %s limit %d'):format(M.qualify(dialect, parts), limit)
+  local sql = ('select * from %s'):format(M.qualify(dialect, parts))
+  return limit and ('%s limit %d'):format(sql, limit) or sql
 end
 
 --- The command that reads a Redis key back, by the drawer group it is listed under.
 ---@param group string A drawer group key, such as `hashes`.
 ---@param key string
----@param limit integer
+---@param limit integer|nil Nil reads every element.
 ---@return string|nil command Nil for a group that is not a Redis type.
 function M.read_key(group, key, limit)
   local escaped = key:gsub('[\\"]', '\\%0'):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
@@ -59,10 +60,10 @@ function M.read_key(group, key, limit)
   local commands = {
     strings = ('GET %s'):format(quoted),
     hashes = ('HGETALL %s'):format(quoted),
-    lists = ('LRANGE %s 0 %d'):format(quoted, limit - 1),
+    lists = ('LRANGE %s 0 %d'):format(quoted, limit and limit - 1 or -1),
     sets = ('SMEMBERS %s'):format(quoted),
-    sorted_sets = ('ZRANGE %s 0 %d WITHSCORES'):format(quoted, limit - 1),
-    streams = ('XRANGE %s - + COUNT %d'):format(quoted, limit),
+    sorted_sets = ('ZRANGE %s 0 %d WITHSCORES'):format(quoted, limit and limit - 1 or -1),
+    streams = ('XRANGE %s - +%s'):format(quoted, limit and (' COUNT %d'):format(limit) or ''),
     json = ('JSON.GET %s'):format(quoted),
   }
   return commands[group]

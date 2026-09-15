@@ -73,6 +73,12 @@ pub enum RedisKind {
     List { start: i64 },
     /// `ZRANGE ... WITHSCORES`: a row per member, member then score.
     SortedSet,
+    /// `JSON.GET key`: one row, the document.
+    Json,
+    /// `XRANGE key start end`: a row per entry, its id then its fields.
+    Stream,
+    /// `KEYS pattern`: a row per key name.
+    Keys,
 }
 
 impl Source {
@@ -88,6 +94,9 @@ impl Source {
                 RedisKind::Set => "set",
                 RedisKind::List { .. } => "list",
                 RedisKind::SortedSet => "sorted set",
+                RedisKind::Json => "json",
+                RedisKind::Stream => "stream",
+                RedisKind::Keys => "keys",
             },
         }
     }
@@ -115,6 +124,8 @@ impl Source {
             Self::Collection { .. } => meta.name != "_id",
             Self::Redis { kind, .. } => match kind {
                 RedisKind::Hash | RedisKind::SortedSet => column < 2,
+                // An entry's id is the server's to give; its fields are what is written.
+                RedisKind::Stream => column == 1,
                 _ => column == 0,
             },
         }
@@ -209,11 +220,17 @@ pub fn append_inserted(result: &mut ResultSet, dialect: Dialect, inserted: &[Res
         return 0;
     };
     let table = table.clone();
-    let into = format!("INSERT INTO {} ", table.quoted(dialect));
+    let name = table.quoted(dialect);
+    // MySQL reads a new row back with a `SELECT` rather than `RETURNING`.
+    let into = format!("INSERT INTO {name} ");
+    let read = format!("SELECT * FROM {name} WHERE ");
     let width = result.columns().len();
 
     let mut added = 0;
-    for returned in inserted.iter().filter(|r| r.statement().starts_with(&into)) {
+    for returned in inserted
+        .iter()
+        .filter(|r| r.statement().starts_with(&into) || r.statement().starts_with(&read))
+    {
         for row in 0..returned.row_count() {
             let value = |name: &str| {
                 returned

@@ -1,6 +1,7 @@
 //! The MongoDB adapter.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{PoisonError, RwLock};
 use std::time::Instant;
 
@@ -20,6 +21,9 @@ use tokio_util::sync::CancellationToken;
 
 /// How many documents a collection's fields are read from.
 const SAMPLE_SIZE: i32 = 100;
+
+/// Numbers the commands this process runs, so a cancelled one can be found on the server.
+static TAGS: AtomicU64 = AtomicU64::new(0);
 
 /// Commands that answer with a cursor to drain rather than with one document.
 const CURSOR_COMMANDS: [&str; 4] = ["find", "aggregate", "listCollections", "listIndexes"];
@@ -95,6 +99,64 @@ impl MongoAdapter {
         )
     }
 
+    /// Commands one after another, stopping at the first that fails.
+    async fn apply_in_turn(&self, commands: &[(String, Document)]) -> Result<Vec<ResultSet>> {
+        for (done, (db, command)) in commands.iter().enumerate() {
+            let failed = |error: String| {
+                Error::driver(format!(
+                    "{done} of {} commands were applied before one failed: {error}",
+                    commands.len()
+                ))
+            };
+            let reply = self
+                .client
+                .database(db)
+                .run_command(command.clone())
+                .await
+                .map_err(|error| failed(error.to_string()))?;
+            written(&reply).map_err(failed)?;
+        }
+        Ok(Vec::new())
+    }
+
+    /// Stop the operations a cancelled command left running on the server.
+    async fn kill(&self, tag: &str) {
+        let admin = self.client.database("admin");
+        let stop = async {
+            let reply = admin
+                .run_command(doc! { "currentOp": true, "command.comment": tag })
+                .await?;
+            for operation in reply.get_array("inprog").cloned().unwrap_or_default() {
+                if let Some(id) = operation.as_document().and_then(|op| op.get("opid")) {
+                    admin
+                        .run_command(doc! { "killOp": 1, "op": id.clone() })
+                        .await?;
+                }
+            }
+            Ok::<_, mongodb::error::Error>(())
+        };
+        match tokio::time::timeout(crate::STOP_TIMEOUT, stop).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::debug!(%error, "could not stop a cancelled command"),
+            Err(_) => tracing::debug!("stopping a cancelled command took too long"),
+        }
+    }
+
+    /// The validator a collection was created with, if it has one.
+    async fn validator(&self, schema: &str, relation: &str) -> Result<Option<Document>> {
+        let mut cursor = self
+            .client
+            .database(schema)
+            .list_collections()
+            .filter(doc! { "name": relation })
+            .await
+            .map_err(Error::driver)?;
+        match cursor.next().await {
+            Some(specification) => Ok(specification.map_err(Error::driver)?.options.validator),
+            None => Ok(None),
+        }
+    }
+
     /// The database commands run on, which `use` changes.
     pub fn database(&self) -> String {
         self.db
@@ -118,35 +180,43 @@ impl Adapter for MongoAdapter {
         plan(result, changes)
     }
 
-    /// One command after another, stopping at the first that fails.
+    /// The commands in one transaction where the deployment has transactions, and one after another
+    /// where it has not, stopping at the first that fails.
     async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
-        for (done, statement) in statements.iter().enumerate() {
-            let Statement::Command { db, command } = parse(statement)? else {
-                return Err(Error::driver("only commands can be applied"));
-            };
-            let database = self.client.database(&db.unwrap_or_else(|| self.database()));
-            let failed = |error: String| {
-                Error::driver(format!(
-                    "{done} of {} commands were applied before one failed: {error}",
-                    statements.len()
-                ))
-            };
+        let commands = statements
+            .iter()
+            .map(|statement| match parse(statement)? {
+                Statement::Command { db, command } => {
+                    Ok((db.unwrap_or_else(|| self.database()), command))
+                }
+                Statement::Use(_) => Err(Error::driver("only commands can be applied")),
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-            let reply = database
-                .run_command(command)
-                .await
-                .map_err(|error| failed(error.to_string()))?;
-            // A write the server refused still answers `ok`, with the reason in `writeErrors`.
-            if let Ok(errors) = reply.get_array("writeErrors")
-                && let Some(first) = errors.first()
-            {
-                return Err(failed(first.clone().into_relaxed_extjson().to_string()));
-            }
-            // Nothing matched the `_id`, so the document went away since the result was read.
-            if reply.get("n").and_then(count) == Some(0) {
-                return Err(failed("no document had that _id any more".to_owned()));
+        let mut session = self.client.start_session().await.map_err(Error::driver)?;
+        session.start_transaction().await.map_err(Error::driver)?;
+        for (index, (db, command)) in commands.iter().enumerate() {
+            let reply = self
+                .client
+                .database(db)
+                .run_command(command.clone())
+                .session(&mut session)
+                .await;
+            let outcome = match reply {
+                // A standalone server has no transactions, and says so to the first command.
+                Err(error) if index == 0 && no_transactions(&error) => {
+                    let _ = session.abort_transaction().await;
+                    return self.apply_in_turn(&commands).await;
+                }
+                Err(error) => Err(error.to_string()),
+                Ok(reply) => written(&reply),
+            };
+            if let Err(error) = outcome {
+                let _ = session.abort_transaction().await;
+                return Err(Error::driver(format!("nothing was applied: {error}")));
             }
         }
+        session.commit_transaction().await.map_err(Error::driver)?;
         Ok(Vec::new())
     }
 
@@ -165,12 +235,28 @@ impl Adapter for MongoAdapter {
                 *self.db.write().unwrap_or_else(PoisonError::into_inner) = name;
                 result
             }
-            Statement::Command { db, command } => {
+            Statement::Command { db, mut command } => {
                 let database = self.client.database(&db.unwrap_or_else(|| self.database()));
-                // Dropping the query drops its cursor, which tells the server to stop.
+                // Tagged, so a cancel can find the operation, which may still be running on the
+                // server after the cursor here is dropped.
+                let tag = format!(
+                    "sqmeow-{}-{}",
+                    std::process::id(),
+                    TAGS.fetch_add(1, Ordering::Relaxed)
+                );
+                let tag = match command.get_str("comment") {
+                    Ok(comment) => comment.to_owned(),
+                    Err(_) => {
+                        command.insert("comment", tag.as_str());
+                        tag
+                    }
+                };
                 tokio::select! {
                     biased;
-                    () = cancel.cancelled() => return Err(Error::Cancelled),
+                    () = cancel.cancelled() => {
+                        self.kill(&tag).await;
+                        return Err(Error::Cancelled);
+                    }
                     result = run(&database, statement, command, max_rows) => result?,
                 }
             }
@@ -233,7 +319,69 @@ impl Adapter for MongoAdapter {
         while let Some(document) = cursor.next().await {
             documents.push(document.map_err(Error::driver)?);
         }
-        Ok(field_nodes(&documents))
+        let mut columns = field_nodes(&documents);
+
+        // A validator's schema says what the sample may not: every field and which are required.
+        let json_schema = self
+            .validator(schema, relation)
+            .await?
+            .and_then(|validator| validator.get_document("$jsonSchema").ok().cloned());
+        if let Some(json_schema) = json_schema {
+            let required: Vec<String> = json_schema
+                .get_array("required")
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(|name| name.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Ok(properties) = json_schema.get_document("properties") {
+                for (name, property) in properties {
+                    let type_name = match property.as_document().and_then(|p| p.get("bsonType")) {
+                        Some(Bson::String(kind)) => kind.clone(),
+                        Some(other) => other.clone().into_relaxed_extjson().to_string(),
+                        None => "any".to_owned(),
+                    };
+                    let nullable = !required.contains(name);
+                    match columns.iter_mut().find(|column| &column.name == name) {
+                        Some(column) => {
+                            column.type_name = type_name;
+                            column.nullable = nullable;
+                        }
+                        None => columns.push(ColumnNode {
+                            name: name.clone(),
+                            type_name,
+                            nullable,
+                            primary_key: name == "_id",
+                            foreign_key: None,
+                            default: None,
+                        }),
+                    }
+                }
+            }
+        }
+        Ok(columns)
+    }
+
+    /// How many documents a collection holds, and the validator it was created with.
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+        let reply = self
+            .client
+            .database(schema)
+            .run_command(doc! { "count": relation })
+            .await
+            .map_err(Error::driver)?;
+        let documents = reply.get("n").and_then(count).unwrap_or(0);
+        let definition = self.validator(schema, relation).await?.map(|validator| {
+            serde_json::to_string_pretty(&Bson::Document(validator).into_relaxed_extjson())
+                .unwrap_or_default()
+        });
+        Ok(sqmeow_db::Details {
+            properties: vec![("documents".to_owned(), documents.to_string())],
+            definition,
+            ..sqmeow_db::Details::default()
+        })
     }
 
     async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
@@ -274,6 +422,96 @@ impl Adapter for MongoAdapter {
     async fn close(&self) {
         self.client.clone().shutdown().immediate(true).await;
     }
+}
+
+/// A `find` or `aggregate` narrowed by `condition` and ordered by `order`, each a JSON document.
+pub fn filtered(statement: &str, condition: &str, order: &str) -> Result<String> {
+    let document = |text: &str, what: &str| -> Result<Option<Document>> {
+        if text.trim().is_empty() {
+            return Ok(None);
+        }
+        let json: serde_json::Value = serde_json::from_str(text)
+            .map_err(|error| Error::driver(format!("the {what} is not JSON: {error}")))?;
+        match Bson::try_from(json).map_err(Error::driver)? {
+            Bson::Document(document) => Ok(Some(document)),
+            _ => Err(Error::driver(format!(
+                r#"the {what} must be a document, such as {{"age": {{"$gt": 30}}}}"#
+            ))),
+        }
+    };
+    let condition = document(condition, "filter")?;
+    let order = document(order, "sort")?;
+    let Statement::Command { db, mut command } = parse(statement)? else {
+        return Err(Error::driver("only a command can be filtered"));
+    };
+
+    match command_name(&command) {
+        "find" => {
+            if let Some(condition) = condition {
+                let filter = match command.remove("filter") {
+                    Some(Bson::Document(existing)) if !existing.is_empty() => {
+                        doc! { "$and": [existing, condition] }
+                    }
+                    _ => condition,
+                };
+                command.insert("filter", filter);
+            }
+            if let Some(order) = order {
+                command.insert("sort", order);
+            }
+        }
+        "aggregate" => {
+            let pipeline = command
+                .get_array_mut("pipeline")
+                .map_err(|_| Error::driver("an aggregate needs a pipeline"))?;
+            if let Some(condition) = condition {
+                pipeline.push(Bson::Document(doc! { "$match": condition }));
+            }
+            if let Some(order) = order {
+                pipeline.push(Bson::Document(doc! { "$sort": order }));
+            }
+        }
+        _ => return Err(Error::driver("only a find or an aggregate can be filtered")),
+    }
+    if let Some(db) = db {
+        command.insert("$db", db);
+    }
+    Ok(Bson::Document(command).into_relaxed_extjson().to_string())
+}
+
+/// The filter a document meets when field `name` holds `cell`, as the result read it.
+pub fn condition(name: &str, type_name: &str, cell: &Cell) -> Result<String> {
+    let value = match cell {
+        Cell::Null => Bson::Null,
+        Cell::Json(text) => serde_json::from_str::<serde_json::Value>(text)
+            .ok()
+            .and_then(|json| Bson::try_from(json).ok())
+            .unwrap_or_else(|| Bson::String(text.clone())),
+        other => id_bson(other, type_name)?,
+    };
+    let mut filter = Document::new();
+    filter.insert(name, value);
+    Ok(Bson::Document(filter).into_relaxed_extjson().to_string())
+}
+
+/// Whether an error says the deployment has no transactions, as a standalone server does.
+fn no_transactions(error: &mongodb::error::Error) -> bool {
+    matches!(*error.kind, mongodb::error::ErrorKind::Command(ref command) if command.code == 20)
+}
+
+/// Why a write's reply means it did not happen: the server refused it, or nothing had the `_id`.
+fn written(reply: &Document) -> std::result::Result<(), String> {
+    // A write the server refused still answers `ok`, with the reason in `writeErrors`.
+    if let Ok(errors) = reply.get_array("writeErrors")
+        && let Some(first) = errors.first()
+    {
+        return Err(first.clone().into_relaxed_extjson().to_string());
+    }
+    // Nothing matched the `_id`, so the document went away since the result was read.
+    if reply.get("n").and_then(count) == Some(0) {
+        return Err("no document had that _id any more".to_owned());
+    }
+    Ok(())
 }
 
 /// Read a statement: `use <database>`, or a command document.
@@ -343,6 +581,19 @@ async fn run(
         return Ok(result);
     }
 
+    // An aggregate that only filters, sorts and pages answers with documents as they are stored.
+    let stored = name == "find"
+        || (name == "aggregate"
+            && command.get_array("pipeline").is_ok_and(|stages| {
+                stages.iter().all(|stage| {
+                    stage.as_document().is_some_and(|stage| {
+                        stage.keys().all(|key| {
+                            matches!(key.as_str(), "$match" | "$sort" | "$limit" | "$skip")
+                        })
+                    })
+                })
+            }));
+
     let mut cursor = database
         .run_cursor_command(command)
         .await
@@ -361,8 +612,8 @@ async fn run(
     if truncated {
         result.mark_truncated();
     }
-    // Documents a `find` returned are found again by `_id`, unless a projection left it out.
-    if name == "find"
+    // Stored documents are found again by `_id`, unless a projection left it out.
+    if stored
         && let Some(collection) = collection
         && (result.row_count() == 0
             || result
@@ -764,5 +1015,43 @@ mod tests {
         assert!(fields[0].primary_key && !fields[0].nullable);
         assert!(fields[1].nullable);
         assert_eq!(fields[1].type_name, "string");
+    }
+
+    #[test]
+    fn a_find_or_an_aggregate_is_filtered_and_sorted() {
+        assert_eq!(
+            filtered(
+                r#"{"find": "people", "filter": {"age": {"$gt": 1}}, "$db": "app"}"#,
+                r#"{"name": "al"}"#,
+                r#"{"age": -1}"#
+            )
+            .unwrap(),
+            r#"{"find":"people","filter":{"$and":[{"age":{"$gt":1}},{"name":"al"}]},"sort":{"age":-1},"$db":"app"}"#
+        );
+        assert_eq!(
+            filtered(
+                r#"{"aggregate": "people", "pipeline": [], "cursor": {}}"#,
+                r#"{"a": 1}"#,
+                ""
+            )
+            .unwrap(),
+            r#"{"aggregate":"people","pipeline":[{"$match":{"a":1}}],"cursor":{}}"#
+        );
+        assert!(filtered(r#"{"count": "people"}"#, r#"{"a": 1}"#, "").is_err());
+        assert!(filtered(r#"{"find": "people"}"#, "[1]", "").is_err());
+    }
+
+    #[test]
+    fn a_cell_becomes_the_filter_that_matches_it() {
+        let id = "65a1b2c3d4e5f60718293a4b";
+        assert_eq!(
+            condition("_id", "objectId", &Cell::Text(id.into())).unwrap(),
+            format!(r#"{{"_id":{{"$oid":"{id}"}}}}"#)
+        );
+        assert_eq!(condition("n", "int", &Cell::Int(3)).unwrap(), r#"{"n":3}"#);
+        assert_eq!(
+            condition("gone", "null", &Cell::Null).unwrap(),
+            r#"{"gone":null}"#
+        );
     }
 }

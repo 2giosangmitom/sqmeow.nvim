@@ -90,10 +90,30 @@ local function host_and_port(address)
   return address, ''
 end
 
---- Take a URL apart into the fields the connection dialog shows.
+--- Take a URL apart into the fields the connection dialog shows. A `{{ ... }}` template is kept
+--- whole in the field it sits in.
 ---@param url string
 ---@return table|nil fields `dialect` plus the keys that dialect asks for.
 function M.parse(url)
+  -- Set aside, since a template holds the characters a URL is split on.
+  local templates = {}
+  url = url:gsub('{{.-}}', function(template)
+    table.insert(templates, template)
+    return '\1' .. #templates .. '\1'
+  end)
+  local fields = M.split(url)
+  for key, value in pairs(fields or {}) do
+    fields[key] = value:gsub('\1(%d+)\1', function(index)
+      return templates[tonumber(index)]
+    end)
+  end
+  return fields
+end
+
+--- Take a URL without templates apart into the connection dialog's fields.
+---@param url string
+---@return table|nil
+function M.split(url)
   local scheme, rest = url:match('^(%w[%w%+%-%.]*):(.*)$')
   if not scheme then
     return nil
@@ -112,6 +132,10 @@ function M.parse(url)
 
   local authority, tail = rest:gsub('^//', ''):match('^([^/%?#]*)(.*)$')
   local user, password, address = credentials(authority)
+  -- Several hosts, as a cluster names, are more than one Host field holds.
+  if address:find(',', 1, true) then
+    return nil
+  end
   local host, port = host_and_port(address)
 
   local fields = {
@@ -133,6 +157,20 @@ function M.parse(url)
     fields.srv = scheme:lower() == 'mongodb+srv' and 'yes' or 'no'
   end
   return fields
+end
+
+--- Percent-encode text for a URL, leaving any `{{ ... }}` template in it as it is.
+---@param text string
+---@return string
+local function encode(text)
+  local out, at = {}, 1
+  for start, template, finish in text:gmatch('()({{.-}})()') do
+    table.insert(out, vim.uri_encode(text:sub(at, start - 1), 'rfc2396'))
+    table.insert(out, template)
+    at = finish
+  end
+  table.insert(out, vim.uri_encode(text:sub(at), 'rfc2396'))
+  return table.concat(out)
 end
 
 --- Write the fields back out as a URL.
@@ -170,9 +208,9 @@ function M.build(dialect, values)
 
   -- A password with no user is written too, as `:secret@host`.
   if value('user') ~= '' or value('password') ~= '' then
-    local login = vim.uri_encode(value('user'), 'rfc2396')
+    local login = encode(value('user'))
     if value('password') ~= '' then
-      login = ('%s:%s'):format(login, vim.uri_encode(value('password'), 'rfc2396'))
+      login = ('%s:%s'):format(login, encode(value('password')))
     end
     authority = ('%s@%s'):format(login, authority)
   end

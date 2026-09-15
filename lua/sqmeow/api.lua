@@ -36,6 +36,7 @@ function M.connect(url, opts)
     parent = opts.parent,
     database = opts.database,
     read_only = opts.read_only,
+    ssh = opts.ssh,
   })
   require('sqmeow.ui.drawer').render()
 
@@ -45,6 +46,7 @@ function M.connect(url, opts)
     name = name,
     database = opts.database,
     read_only = opts.read_only,
+    ssh = opts.ssh,
   })
   if not accepted then
     state.remove_connection(id)
@@ -67,7 +69,7 @@ function M.connect_named(name)
     return nil, message
   end
 
-  return M.connect(spec.url, { name = spec.name, read_only = spec.read_only })
+  return M.connect(spec.url, { name = spec.name, read_only = spec.read_only, ssh = spec.ssh })
 end
 
 --- Every connection the configured sources declare.
@@ -80,13 +82,16 @@ end
 --- Save a connection to the file source.
 ---@param name string
 ---@param url string
----@param opts table|nil `read_only` saves it as a connection that runs only statements that read.
+---@param opts table|nil `read_only` saves it as a connection that runs only statements that read,
+---  and `ssh` as one reached through an SSH tunnel to that `user@host`.
 ---@return boolean written
 function M.save(name, url, opts)
+  opts = opts or {}
   local written, err = require('sqmeow.sources').save({
     name = name,
     url = url,
-    read_only = (opts or {}).read_only,
+    read_only = opts.read_only,
+    ssh = opts.ssh,
   })
   if not written then
     notify(err or 'the connection could not be saved', vim.log.levels.ERROR)
@@ -94,9 +99,11 @@ function M.save(name, url, opts)
   return written
 end
 
---- Change a saved connection's name, URL or read-only flag, and rename its open connection to match.
+--- Change a saved connection's name, URL, read-only flag or SSH tunnel, and rename its open
+--- connection to match.
 ---@param name string The name it is saved under now.
----@param changes table `name`, `url` and `read_only`; any may be left out to keep what is there.
+---@param changes table `name`, `url`, `read_only` and `ssh`, `''` for no tunnel; any may be left out
+---  to keep what is there.
 ---@return boolean written
 ---@usage >lua
 ---   require('sqmeow.api').edit('app', { name = 'production' })
@@ -114,6 +121,11 @@ function M.edit(name, changes)
   else
     wanted.read_only = changes.read_only
   end
+  if changes.ssh == nil then
+    wanted.ssh = spec.ssh
+  elseif changes.ssh ~= '' then
+    wanted.ssh = changes.ssh
+  end
   local written, err = require('sqmeow.sources').update(name, wanted)
   if not written then
     notify(err or 'the connection could not be updated', vim.log.levels.ERROR)
@@ -130,7 +142,8 @@ function M.edit(name, changes)
   -- leaving the user to wonder why their query still goes to the old server.
   local url_changed = changes.url and changes.url ~= spec.url
   local flag_changed = changes.read_only ~= nil and changes.read_only ~= (spec.read_only == true)
-  if url_changed or flag_changed then
+  local tunnel_changed = changes.ssh ~= nil and wanted.ssh ~= spec.ssh
+  if url_changed or flag_changed or tunnel_changed then
     notify(('`%s` will use its new settings the next time you connect'):format(wanted.name))
   end
   return true
@@ -239,6 +252,12 @@ function M.execute(sql, opts)
   if sql:match('^%s*$') then
     return nil, 'there is nothing to run'
   end
+  -- A new result would drop them.
+  if require('sqmeow.ui.edit').settle(function()
+    M.execute(sql, opts)
+  end) then
+    return nil, 'waiting for a decision about the staged changes'
+  end
 
   if not opts.confirmed and require('sqmeow.config').get().query.confirm_destructive then
     local dangers = engine().request('inspect', {
@@ -276,6 +295,7 @@ function M.execute(sql, opts)
     archive = archive,
     where = opts.where,
     order_by = opts.order_by,
+    columns = opts.columns,
     inserted = opts.inserted,
   })
   if not call_id then
@@ -435,6 +455,11 @@ end
 --- Put a past result back in the result window.
 ---@param call_id integer From the query log.
 function M.reopen(call_id)
+  if require('sqmeow.ui.edit').settle(function()
+    M.reopen(call_id)
+  end) then
+    return
+  end
   local state = require('sqmeow.state')
   local result = require('sqmeow.ui.result')
   result.open()
@@ -461,7 +486,11 @@ function M.restore(entry)
   local conn_id = connection and connection.id or 0
 
   result.open()
-  local call_id, err = engine().request('restore', { path = entry.result, conn_id = conn_id })
+  local call_id, err = engine().request('restore', {
+    path = entry.result,
+    others = entry.results,
+    conn_id = conn_id,
+  })
   if not call_id then
     notify(err or 'the saved result could not be read', vim.log.levels.ERROR)
     return nil, err
@@ -677,10 +706,18 @@ function M.scratchpad(connection)
   end)
 end
 
+--- Reopen the last session's connections, once, when `ui.persist_session` is on.
+local function resume()
+  if require('sqmeow.config').get().ui.persist_session then
+    require('sqmeow.session').restore()
+  end
+end
+
 --- Show the schema drawer.
 function M.open_drawer()
   require('sqmeow.events').ensure()
   require('sqmeow.ui.drawer').open()
+  resume()
 end
 
 --- Hide the schema drawer.
@@ -694,6 +731,7 @@ function M.open_all()
 
   require('sqmeow.ui.drawer').open()
   require('sqmeow.ui.result').open()
+  resume()
 end
 
 --- Show everything, or hide it all if any of it is showing.
