@@ -4,6 +4,9 @@ local M = {}
 
 local utils = require('sqmeow.utils')
 
+--- The box every connection dialog ends with.
+local READ_ONLY = { key = 'read_only', label = 'Read only', checkbox = true }
+
 --- What is wrong with the answers, if anything.
 ---@param dialect string
 ---@param existing string|nil The name being edited.
@@ -37,8 +40,8 @@ local function form(dialect, values, existing)
   local spec = assert(require('sqmeow.dialects').get(dialect), 'the menu offers known dialects')
   local opened, err = require('sqmeow.ui.form').open({
     title = existing and ('Edit %s'):format(existing) or ('New %s connection'):format(spec.label),
-    fields = require('sqmeow.dialects').fields(dialect),
-    values = values,
+    fields = vim.list_extend(require('sqmeow.dialects').fields(dialect), { READ_ONLY }),
+    values = vim.tbl_extend('keep', values, { read_only = 'no' }),
     -- A new connection is a run of questions with no answers yet.
     wizard = existing == nil,
     validate = validator(dialect, existing),
@@ -46,15 +49,16 @@ local function form(dialect, values, existing)
       -- The form refuses to submit until `validator` accepts the answers, so this cannot fail.
       local url = assert(require('sqmeow.url').build(dialect, answers))
       local name = vim.trim(answers.name)
+      local read_only = answers.read_only == 'yes'
 
       local api = require('sqmeow.api')
       if existing then
-        api.edit(existing, { name = name, url = url })
+        api.edit(existing, { name = name, url = url, read_only = read_only })
         return
       end
 
-      if api.save(name, url) then
-        api.connect(url, { name = name })
+      if api.save(name, url, { read_only = read_only }) then
+        api.connect(url, { name = name, read_only = read_only })
       end
     end,
   })
@@ -72,8 +76,9 @@ function M.from_url(values)
     fields = {
       { key = 'name', label = 'Name' },
       { key = 'url', label = 'URL', hint = 'postgres://user@localhost/app' },
+      READ_ONLY,
     },
-    values = values,
+    values = vim.tbl_extend('keep', values or {}, { read_only = 'no' }),
     wizard = values == nil,
     validate = function(answers)
       local name, url = vim.trim(answers.name or ''), vim.trim(answers.url or '')
@@ -90,9 +95,10 @@ function M.from_url(values)
     end,
     on_submit = function(answers)
       local name, url = vim.trim(answers.name), vim.trim(answers.url)
+      local read_only = answers.read_only == 'yes'
       local api = require('sqmeow.api')
-      if api.save(name, url) then
-        api.connect(url, { name = name })
+      if api.save(name, url, { read_only = read_only }) then
+        api.connect(url, { name = name, read_only = read_only })
       end
     end,
   })
@@ -148,6 +154,7 @@ function M.edit(spec)
   end
 
   values.name = spec.name
+  values.read_only = spec.read_only and 'yes' or 'no'
   form(values.dialect, values, spec.name)
   return true
 end

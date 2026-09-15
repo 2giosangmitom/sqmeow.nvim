@@ -92,7 +92,7 @@ T['from a url']['saves the url as typed and connects'] = function()
   -- A template for the password is kept whole, which the form of separate fields cannot do.
   local url = 'postgres://app:{{ env "PGPASSWORD" }}@db.internal/shop'
   connection.from_url({ name = 'shop', url = url })
-  eq(rows(), { 'Name shop', 'URL ' .. url })
+  eq(rows(), { 'Name shop', 'URL ' .. url, 'Read only [ ]' })
   press('<C-s>')
   vim.wait(50)
 
@@ -128,12 +128,13 @@ T['edit']['fills the form in from the saved url'] = function()
     'User app',
     'Password *******',
     'Options sslmode=require',
+    'Read only [ ]',
   })
 end
 
 T['edit']['asks a SQLite connection for a file and nothing else'] = function()
-  connection.edit({ name = 'local', url = 'sqlite:app.db' })
-  eq(rows(), { 'Name local', 'File app.db' })
+  connection.edit({ name = 'local', url = 'sqlite:app.db', read_only = true })
+  eq(rows(), { 'Name local', 'File app.db', 'Read only [x]' })
 end
 
 T['edit']['refuses a url holding a template'] = function()
@@ -157,6 +158,21 @@ T['edit']['writes the connection back when the form is saved'] = function()
   eq(#saved, 1)
   eq(saved[1].name, 'shop')
   eq(saved[1].url, 'postgres://app@db.internal/orders')
+  eq(saved[1].read_only, nil)
+end
+
+T['edit']['saves the connection as read-only once its box is ticked'] = function()
+  file.add({ name = 'shop', url = 'postgres://app@db.internal/orders' }, { path = scratch })
+
+  connection.edit({ name = 'shop', url = 'postgres://app@db.internal/orders' })
+  local last = #rows()
+  vim.api.nvim_win_set_cursor(0, { last, 0 })
+  press('<CR>')
+  eq(rows()[last], 'Read only [x]')
+  press('<C-s>')
+  vim.wait(50)
+
+  eq(file.load({ path = scratch })[1].read_only, true)
 end
 
 return T

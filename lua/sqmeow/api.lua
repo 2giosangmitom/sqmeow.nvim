@@ -80,18 +80,23 @@ end
 --- Save a connection to the file source.
 ---@param name string
 ---@param url string
+---@param opts table|nil `read_only` saves it as a connection that runs only statements that read.
 ---@return boolean written
-function M.save(name, url)
-  local written, err = require('sqmeow.sources').save({ name = name, url = url })
+function M.save(name, url, opts)
+  local written, err = require('sqmeow.sources').save({
+    name = name,
+    url = url,
+    read_only = (opts or {}).read_only,
+  })
   if not written then
     notify(err or 'the connection could not be saved', vim.log.levels.ERROR)
   end
   return written
 end
 
---- Change a saved connection's name or URL, and rename its open connection to match.
+--- Change a saved connection's name, URL or read-only flag, and rename its open connection to match.
 ---@param name string The name it is saved under now.
----@param changes table `name` and `url`; either may be left out to keep what is there.
+---@param changes table `name`, `url` and `read_only`; any may be left out to keep what is there.
 ---@return boolean written
 ---@usage >lua
 ---   require('sqmeow.api').edit('app', { name = 'production' })
@@ -104,6 +109,11 @@ function M.edit(name, changes)
   end
 
   local wanted = { name = changes.name or spec.name, url = changes.url or spec.url }
+  if changes.read_only == nil then
+    wanted.read_only = spec.read_only
+  else
+    wanted.read_only = changes.read_only
+  end
   local written, err = require('sqmeow.sources').update(name, wanted)
   if not written then
     notify(err or 'the connection could not be updated', vim.log.levels.ERROR)
@@ -118,8 +128,10 @@ function M.edit(name, changes)
 
   -- A URL that changed reaches an open connection only on the next connect, and saying so beats
   -- leaving the user to wonder why their query still goes to the old server.
-  if changes.url and changes.url ~= spec.url then
-    notify(('`%s` will use its new url the next time you connect'):format(wanted.name))
+  local url_changed = changes.url and changes.url ~= spec.url
+  local flag_changed = changes.read_only ~= nil and changes.read_only ~= (spec.read_only == true)
+  if url_changed or flag_changed then
+    notify(('`%s` will use its new settings the next time you connect'):format(wanted.name))
   end
   return true
 end

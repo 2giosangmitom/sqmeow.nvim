@@ -430,21 +430,22 @@ Return ~
 
 ------------------------------------------------------------------------------
                                                              *sqmeow.api.save()*
-                        `sqmeow.api.save`({name}, {url})
+                    `sqmeow.api.save`({name}, {url}, {opts})
 Save a connection to the file source.
 Parameters ~
 {name} `(string)`
 {url} `(string)`
+{opts} `(table|nil)` `read_only` saves it as a connection that runs only statements that read.
 Return ~
 `(boolean)` written
 
 ------------------------------------------------------------------------------
                                                              *sqmeow.api.edit()*
                       `sqmeow.api.edit`({name}, {changes})
-Change a saved connection's name or URL, and rename its open connection to match.
+Change a saved connection's name, URL or read-only flag, and rename its open connection to match.
 Parameters ~
 {name} `(string)` The name it is saved under now.
-{changes} `(table)` `name` and `url`; either may be left out to keep what is there.
+{changes} `(table)` `name`, `url` and `read_only`; any may be left out to keep what is there.
 Return ~
 `(boolean)` written
 Usage ~
