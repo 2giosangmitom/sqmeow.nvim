@@ -7,11 +7,11 @@ default: lint test docs-check
 
 # Compile the engine in release mode, which is what the plugin prefers to load.
 build:
-    cargo build --release
+    cargo build --release {{cargo_flags}}
 
 # Compile the engine in debug mode, which is faster to iterate on.
 build-debug:
-    cargo build
+    cargo build {{cargo_flags}}
 
 lint: lint-rust lint-lua
 
