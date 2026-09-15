@@ -108,9 +108,13 @@ pub(super) fn changes(value: Option<&Value>) -> Result<Changes, String> {
         items(list)
             .into_iter()
             .map(|cell| {
-                let value = field(cell, "value")
-                    .and_then(Value::as_str)
-                    .map_or(Edit::Null, Edit::from);
+                let expression = field(cell, "sql").and_then(Value::as_str);
+                let value = match expression {
+                    Some(expression) => Edit::Sql(expression.to_owned()),
+                    None => field(cell, "value")
+                        .and_then(Value::as_str)
+                        .map_or(Edit::Null, Edit::from),
+                };
                 Ok((index(cell, "column")?, value))
             })
             .collect()

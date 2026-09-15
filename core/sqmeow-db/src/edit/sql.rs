@@ -169,6 +169,9 @@ impl Planner<'_> {
     }
 
     fn value(&self, index: usize, value: &Value) -> String {
+        if let Value::Sql(expression) = value {
+            return expression.trim().to_owned();
+        }
         let type_name = &self.result.columns()[index].type_name;
         value_literal(self.dialect, type_name, value.text())
     }
@@ -430,6 +433,19 @@ mod tests {
         assert_eq!(
             plan,
             vec![r#"UPDATE "public"."people" SET "name" = 'o''brien', "id" = NULL WHERE "id" = 1"#]
+        );
+    }
+
+    #[test]
+    fn a_sql_expression_is_written_as_is() {
+        let changes = Changes {
+            updates: vec![(0, vec![(1, Value::Sql(" upper('x') ".into()))])],
+            ..Changes::default()
+        };
+        let plan = sql_plan(Dialect::Postgres, &people(), &changes).unwrap();
+        assert_eq!(
+            plan,
+            vec![r#"UPDATE "public"."people" SET "name" = upper('x') WHERE "id" = 1"#]
         );
     }
 

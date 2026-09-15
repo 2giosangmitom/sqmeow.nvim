@@ -14,7 +14,7 @@ local utils = require('sqmeow.utils')
 ---@field on_submit fun(values: table<string, string>)
 ---@field on_cancel nil|fun()
 ---@field on_change nil|fun(values: table<string, string>, key: string) May adjust other values.
----@field preview nil|{ title: string, lines: string[]|(fun(values: table<string, string>): string[]), filetype: nil|string|(fun(values: table<string, string>): string) } Read-only pane below.
+---@field preview nil|{ title: string|(fun(values: table<string, string>): string), lines: string[]|(fun(values: table<string, string>): string[]), filetype: nil|string|(fun(values: table<string, string>): string) } Read-only pane below.
 
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow-form')
 
@@ -115,7 +115,7 @@ function M.open(spec)
         filetype = type(preview_spec.filetype) == 'string' and preview_spec.filetype or nil,
       },
       win_options = { wrap = false },
-    }, preview_spec.title)
+    }, type(preview_spec.title) == 'function' and preview_spec.title(values) or preview_spec.title)
     layout = parts.Layout(
       {
         relative = 'editor',
@@ -146,6 +146,9 @@ function M.open(spec)
     vim.bo[preview.bufnr].modifiable = false
     if type(source.filetype) == 'function' then
       vim.bo[preview.bufnr].filetype = source.filetype(values)
+    end
+    if type(source.title) == 'function' then
+      preview.border:set_text('top', (' %s '):format(source.title(values)), 'center')
     end
   end
 

@@ -4,7 +4,8 @@ local M = {}
 
 local utils = require('sqmeow.utils')
 
---- `updates[row][column]` is the new value: a string, or `vim.NIL` for `NULL`. Zero-based indices.
+--- `updates[row][column]` is the new value: a string, `vim.NIL` for `NULL`, or `{ sql = expression }`.
+--- Zero-based indices.
 local updates = {}
 --- `deletes[row]` is true for a row to delete.
 local deletes = {}
@@ -196,8 +197,12 @@ function M.changes()
   local function cells(values)
     local list = {}
     for column, value in pairs(values) do
-      -- A `NULL` is sent as no value at all, which the engine reads as `NULL`.
-      table.insert(list, { column = column, value = value ~= vim.NIL and value or nil })
+      if type(value) == 'table' then
+        table.insert(list, { column = column, sql = value.sql })
+      else
+        -- A `NULL` is sent as no value at all, which the engine reads as `NULL`.
+        table.insert(list, { column = column, value = value ~= vim.NIL and value or nil })
+      end
     end
     table.sort(list, function(a, b)
       return a.column < b.column
@@ -238,6 +243,9 @@ local function current_text(call, target, column)
     value, staged = M.staged(target.row, column)
   end
   if staged then
+    if type(value) == 'table' then
+      return value.sql
+    end
     return value ~= vim.NIL and value or nil
   end
   if target.insert then
@@ -275,7 +283,8 @@ end
 
 --- Open a float to change one cell.
 ---@param target { row: integer|nil, insert: integer|nil, column: integer, name: string }
-function M.edit_cell(target)
+---@param sql boolean|nil Take a SQL expression, such as `now()`, rather than a value.
+function M.edit_cell(target, sql)
   local call = require('sqmeow.state').call
   local described = call and call.columns and call.columns[target.column + 1]
   if not (call and described and described.editable) then
@@ -288,6 +297,11 @@ function M.edit_cell(target)
   end
 
   local text = current_text(call, target, target.column)
+  if sql then
+    local staged = target.row and select(2, M.staged(target.row, target.column))
+    local value = staged and M.staged(target.row, target.column)
+    text = type(value) == 'table' and value.sql or ''
+  end
   local lines = vim.split(text or '', '\n', { plain = true })
 
   close()
@@ -301,7 +315,10 @@ function M.edit_cell(target)
     border = {
       style = require('sqmeow.config').border(),
       text = {
-        top = (' %s%s '):format(target.name, text == nil and ' (NULL)' or ''),
+        top = (' %s%s '):format(
+          target.name,
+          sql and ' (SQL expression)' or text == nil and ' (NULL)' or ''
+        ),
         bottom = ' <C-s> save   <Esc> then q cancel ',
         bottom_align = 'center',
       },
@@ -310,7 +327,7 @@ function M.edit_cell(target)
       buftype = 'nofile',
       bufhidden = 'wipe',
       swapfile = false,
-      filetype = described.class == 'json' and 'json' or '',
+      filetype = sql and 'sql' or described.class == 'json' and 'json' or '',
     },
     win_options = { wrap = true, number = false, relativenumber = false },
   })
@@ -324,6 +341,12 @@ function M.edit_cell(target)
     local value = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), '\n')
     vim.cmd.stopinsert()
     close()
+    if sql then
+      if vim.trim(value) ~= '' then
+        M.set(target, target.column, { sql = value })
+      end
+      return
+    end
     M.set(target, target.column, value)
   end
 

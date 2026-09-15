@@ -685,6 +685,7 @@ fn value_bson(value: &edit::Value) -> Result<Bson> {
     let text = match value {
         edit::Value::Null => return Ok(Bson::Null),
         edit::Value::Text(text) => text,
+        edit::Value::Sql(_) => return Err(Error::driver("MongoDB takes no SQL expression")),
     };
     Ok(serde_json::from_str::<serde_json::Value>(text)
         .ok()

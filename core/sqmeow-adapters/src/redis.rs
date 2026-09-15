@@ -603,6 +603,7 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             .map(|(_, value)| match value {
                 Edit::Text(text) => Ok(quote(text)),
                 Edit::Null => Err(Error::driver("Redis has no NULL: delete the row instead")),
+                Edit::Sql(_) => Err(Error::driver("Redis takes no SQL expression")),
             })
             .transpose()
     };

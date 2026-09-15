@@ -46,7 +46,14 @@ impl Table {
     pub fn quoted(&self, dialect: Dialect) -> String {
         let name = dialect.quote_ident(&self.name);
         match &self.schema {
-            Some(schema) => format!("{}.{name}", dialect.quote_ident(schema)),
+            // DuckDB names another database's schema as `database.schema`.
+            Some(schema) => {
+                let parts: Vec<String> = schema
+                    .split('.')
+                    .map(|part| dialect.quote_ident(part))
+                    .collect();
+                format!("{}.{name}", parts.join("."))
+            }
             None => name,
         }
     }
@@ -142,6 +149,8 @@ impl Source {
 pub enum Value {
     Null,
     Text(String),
+    /// A SQL expression written into the statement as is, such as `now()`.
+    Sql(String),
 }
 
 impl Value {

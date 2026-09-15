@@ -401,6 +401,48 @@ T['an export as SQL writes an INSERT per row into the table'] = function()
   helpers.contains(vim.fn.getreg('"'), 'INSERT INTO "people" ("id", "name", "age") VALUES (1, ')
 end
 
+T['an export as SQL can batch rows, create the table, and ignore the view'] = function()
+  api.view({ filters = { { column = 1, op = 'contains', value = 'O' } } })
+  wait('the view should arrive', function()
+    return state.call.view_rows == 2
+  end)
+
+  local function copied(opts)
+    vim.fn.setreg('"', '')
+    api.export(vim.tbl_extend('force', { clipboard = true, format = 'sql' }, opts))
+    wait('the export should be copied', function()
+      return vim.fn.getreg('"') ~= ''
+    end)
+    return vim.fn.getreg('"')
+  end
+
+  local text = copied({ batch = true, create = true })
+  helpers.contains(text, 'CREATE TABLE "people" (')
+  eq(select(2, text:gsub('INSERT INTO', '')), 1)
+  eq(select(2, text:gsub('%),\n', '')), 1)
+
+  text = copied({ all = true })
+  eq(select(2, text:gsub('INSERT INTO', '')), 3)
+
+  api.view({ filters = {}, sort = {} })
+  wait('every row should come back', function()
+    return state.call.view_rows == nil
+  end)
+end
+
+T['g= stages a SQL expression that the plan writes as is'] = function()
+  focus_result()
+  edit.set({ row = 0 }, 1, { sql = "upper('ann')" })
+  helpers.contains(
+    table.concat(vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false), '\n'),
+    '= upp'
+  )
+
+  local statements = rpc.request('plan', { call_id = state.call.call_id, changes = edit.changes() })
+  helpers.contains(statements[1], 'SET "name" = upper(\'ann\')')
+  edit.reset()
+end
+
 T['a row added outside the query is still shown after applying'] = function()
   run("select id, name, age from people where name <> 'zed' order by id")
   result.open()

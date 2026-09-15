@@ -84,6 +84,11 @@ M.defaults = {
     },
     { action = 'edit_cell', lhs = { 'i', '<CR>' }, desc = 'Change this cell' },
     { action = 'set_null', lhs = 'X', desc = 'Set this cell to NULL' },
+    {
+      action = 'set_expression',
+      lhs = 'g=',
+      desc = 'Set this cell to a SQL expression, such as now()',
+    },
     { action = 'add_row', lhs = 'o', desc = 'Add a row' },
     { action = 'duplicate_row', lhs = 'D', desc = 'Add a copy of this row' },
     { action = 'delete_row', lhs = 'dd', desc = 'Delete this row, or keep it after all' },

@@ -515,7 +515,6 @@ fn describe(connection: &Connection, sql: &str) -> Option<Described> {
     let node = &statement["node"];
     let empty = |value: &Json| value.as_array().is_some_and(Vec::is_empty);
     let plain = node["type"] == "SELECT_NODE"
-        && empty(&node["cte_map"]["map"])
         && empty(&node["group_expressions"])
         && node["having"].is_null()
         && node["modifiers"]
@@ -529,10 +528,27 @@ fn describe(connection: &Connection, sql: &str) -> Option<Described> {
     // Each table in `FROM` as written, with the index of its catalog entry.
     let mut written = Vec::new();
     from_tables(&node["from_table"], &mut written)?;
+    let ctes: Vec<&str> = node["cte_map"]["map"]
+        .as_array()?
+        .iter()
+        .filter_map(|entry| entry["key"].as_str())
+        .collect();
     let mut tables: Vec<Catalog> = Vec::new();
     let mut scopes: Vec<(&str, &str, usize)> = Vec::new();
-    for (alias, schema, name) in written {
-        let catalog = table_catalog(connection, schema, name)?;
+    for (alias, database, schema, name) in written {
+        // Rows from a common table expression are not table rows.
+        if database.is_empty()
+            && schema.is_empty()
+            && ctes.iter().any(|cte| cte.eq_ignore_ascii_case(name))
+        {
+            return None;
+        }
+        // `db.table` parses as a schema, so an attached database is tried when no schema matches.
+        let catalog = table_catalog(connection, database, schema, name).or_else(|| {
+            (database.is_empty() && !schema.is_empty())
+                .then(|| table_catalog(connection, schema, "", name))
+                .flatten()
+        })?;
         let index = match tables.iter().position(|known| known.table == catalog.table) {
             Some(index) => {
                 tables[index].repeated = true;
@@ -572,12 +588,16 @@ fn describe(connection: &Connection, sql: &str) -> Option<Described> {
                 let relation = item["relation_name"].as_str()?;
                 let bare = item["columns"] == false
                     && item["expr"].is_null()
-                    && empty(&item["replace_list"])
-                    && empty(&item["rename_list"])
                     && empty(&item["qualified_exclude_list"]);
                 if !bare {
                     return None;
                 }
+                // A replaced column is computed; a renamed one is still its table's column.
+                let replaced: Vec<&str> = item["replace_list"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|entry| entry["key"].as_str())
+                    .collect();
                 let excluded: Vec<&str> = item["exclude_list"]
                     .as_array()?
                     .iter()
@@ -590,9 +610,11 @@ fn describe(connection: &Connection, sql: &str) -> Option<Described> {
                 };
                 for table in expanded {
                     for (name, _) in &tables[table].columns {
-                        if !excluded.iter().any(|e| e.eq_ignore_ascii_case(name)) {
-                            origins.push(origin(table, name));
+                        if excluded.iter().any(|e| e.eq_ignore_ascii_case(name)) {
+                            continue;
                         }
+                        let computed = replaced.iter().any(|r| r.eq_ignore_ascii_case(name));
+                        origins.push(if computed { None } else { origin(table, name) });
                     }
                 }
             }
@@ -623,19 +645,21 @@ fn describe(connection: &Connection, sql: &str) -> Option<Described> {
     Some(Described { tables, origins })
 }
 
-/// The base tables a `FROM` joins, as `(alias, schema, table)`, or `None` for any other source.
+/// The base tables a `FROM` joins, as `(alias, database, schema, table)`, or `None` for any other
+/// source.
 fn from_tables<'a>(
     from: &'a serde_json::Value,
-    found: &mut Vec<(&'a str, &'a str, &'a str)>,
+    found: &mut Vec<(&'a str, &'a str, &'a str, &'a str)>,
 ) -> Option<()> {
     match from["type"].as_str()? {
         "JOIN" => {
             from_tables(&from["left"], found)?;
             from_tables(&from["right"], found)
         }
-        "BASE_TABLE" if from["catalog_name"] == "" && from["at_clause"].is_null() => {
+        "BASE_TABLE" if from["at_clause"].is_null() => {
             found.push((
                 from["alias"].as_str()?,
+                from["catalog_name"].as_str()?,
                 from["schema_name"].as_str()?,
                 from["table_name"].as_str()?,
             ));
@@ -645,8 +669,14 @@ fn from_tables<'a>(
     }
 }
 
-/// A table's columns and keys, or `None` when the catalog has no such table.
-fn table_catalog(connection: &Connection, schema: &str, table: &str) -> Option<Catalog> {
+/// A table's columns and keys, or `None` when the catalog has no such table. An empty database or
+/// schema is the current one.
+fn table_catalog(
+    connection: &Connection,
+    database: &str,
+    schema: &str,
+    table: &str,
+) -> Option<Catalog> {
     let columns: Vec<(String, String, String, Option<KeyKind>)> = rows(
         connection,
         "select c.schema_name, c.table_name, c.column_name,
@@ -661,13 +691,13 @@ fn table_catalog(connection: &Connection, schema: &str, table: &str) -> Option<C
          from duckdb_columns() c
          left join duckdb_constraints() p
            on p.table_oid = c.table_oid and p.constraint_type = 'PRIMARY KEY'
-         where c.database_name = current_database()
+         where c.database_name = coalesce(nullif(?, ''), current_database())
            -- A view cannot be written to.
            and exists (select 1 from duckdb_tables() t where t.table_oid = c.table_oid)
            and lower(c.schema_name) = lower(coalesce(nullif(?, ''), current_schema()))
            and lower(c.table_name) = lower(?)
          order by c.column_index",
-        [schema, table],
+        [database, schema, table],
         |row| {
             let kind: String = row.get(3)?;
             Ok((
@@ -682,9 +712,15 @@ fn table_catalog(connection: &Connection, schema: &str, table: &str) -> Option<C
 
     let (schema, table, ..) = columns.first()?;
     let names: Vec<String> = columns.iter().map(|(.., name, _)| name.clone()).collect();
+    // Another database's tables are named through it, which quoting keeps apart.
+    let qualified = if database.is_empty() {
+        schema.clone()
+    } else {
+        format!("{database}.{schema}")
+    };
     Some(Catalog {
-        table: TableName::new(Some(schema), table),
-        unique: unique_keys(connection, schema, table, &names),
+        table: TableName::new(Some(&qualified), table),
+        unique: unique_keys(connection, database, schema, table, &names),
         columns: columns
             .iter()
             .map(|(.., name, kind)| (name.clone(), *kind))
@@ -696,6 +732,7 @@ fn table_catalog(connection: &Connection, schema: &str, table: &str) -> Option<C
 /// The columns of each unique constraint and unique index on a table.
 fn unique_keys(
     connection: &Connection,
+    database: &str,
     schema: &str,
     table: &str,
     names: &[String],
@@ -703,13 +740,15 @@ fn unique_keys(
     let lists = rows(
         connection,
         "select to_json(constraint_column_names)::varchar from duckdb_constraints()
-         where constraint_type = 'UNIQUE' and database_name = current_database()
+         where constraint_type = 'UNIQUE'
+           and database_name = coalesce(nullif(?, ''), current_database())
            and schema_name = ? and table_name = ?
          union all
          select expressions from duckdb_indexes()
-         where is_unique and not is_primary and database_name = current_database()
+         where is_unique and not is_primary
+           and database_name = coalesce(nullif(?, ''), current_database())
            and schema_name = ? and table_name = ?",
-        [schema, table, schema, table],
+        [database, schema, table, database, schema, table],
         |row| row.get::<_, String>(0),
     )
     .unwrap_or_default();

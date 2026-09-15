@@ -332,6 +332,7 @@ result
  Z           Show the result in a float, or back in its split
  i, <CR>     Change this cell
  X           Set this cell to NULL
+ g=          Set this cell to a SQL expression, such as now()
  o           Add a row
  D           Add a copy of this row
  dd          Delete this row, or keep it after all

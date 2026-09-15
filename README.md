@@ -22,8 +22,8 @@ Query your database from your favorite editor.
   with a result for each statement that returns rows.
 - **🧭 EXPLAIN**: Query plans and errors show in the result window.
 - **🕘 Query log**: Reopen the result of any past query, even after a restart.
-- **📤 Export**: Results or selected rows to CSV, JSON or SQL `INSERT` statements, as a file or on
-  the clipboard.
+- **📤 Export**: Results or selected rows to CSV, JSON or SQL `INSERT` statements (one per row or
+  batched, optionally after a `CREATE TABLE`), as a file or on the clipboard.
 - **🔐 Secrets**: Passwords are masked, and URLs can read them with `{{ env "VAR" }}` or `{{ exec "cmd" }}`.
 - **⌨️ Buffer-local keymaps**: No global mappings; `<Plug>` mappings for everything worth a global key.
 
@@ -197,6 +197,7 @@ After applying, the query runs again and opens at the same page and cursor.
 | ------------- | --------------------------------------------------------- |
 | `i`, `<CR>`   | Edit the cell                                             |
 | `X`           | Set the cell to `NULL`                                    |
+| `g=`          | Set the cell to a SQL expression, such as `now()`         |
 | `o` / `D`     | Add a row / a copy of this row without its primary key    |
 | `dd` / `d`    | Delete the row / the selected rows                        |
 | `u` / `U`     | Undo the last change / discard all changes                |

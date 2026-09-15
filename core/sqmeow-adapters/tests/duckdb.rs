@@ -231,6 +231,9 @@ async fn every_spelling_of_one_table_is_editable() {
         "select * from main.people",
         "select p.* exclude (team) from people p",
         "select P.ID, Name from PEOPLE p",
+        "with other as (select 1) select * from people",
+        "select * rename (name as who) from people",
+        "select * replace (upper(name) as name) from people",
     ] {
         let result = run(&backend, sql).await;
         assert!(
@@ -239,6 +242,56 @@ async fn every_spelling_of_one_table_is_editable() {
             result.source()
         );
     }
+}
+
+#[tokio::test]
+async fn a_replaced_column_is_computed_and_an_attached_table_is_editable() {
+    let backend = people().await;
+    let result = run(
+        &backend,
+        "select * replace (upper(name) as name) from people",
+    )
+    .await;
+    assert!(matches!(
+        result.source(),
+        Some(Source::Tables(tables)) if tables[0].columns == [(0, "id".to_owned()), (2, "team".to_owned())]
+    ));
+
+    run(&backend, "attach ':memory:' as other").await;
+    run(
+        &backend,
+        "create table other.main.pets (id integer primary key, name varchar)",
+    )
+    .await;
+    run(&backend, "insert into other.pets values (1, 'rex')").await;
+    for sql in [
+        "select * from other.main.pets",
+        "select id, name from other.pets",
+    ] {
+        let result = run(&backend, sql).await;
+        assert!(
+            matches!(result.source(), Some(Source::Tables(tables)) if tables[0].schema.as_deref() == Some("other.main")),
+            "{sql}: {:?}",
+            result.source()
+        );
+    }
+
+    let result = run(&backend, "select id, name from other.pets").await;
+    let changes = Changes {
+        updates: vec![(
+            0,
+            vec![(1, sqmeow_db::edit::Value::Sql("upper('fido')".into()))],
+        )],
+        ..Changes::default()
+    };
+    let statements = backend.plan(&result, &changes).unwrap();
+    assert_eq!(
+        statements,
+        [r#"UPDATE "other"."main"."pets" SET "name" = upper('fido') WHERE "id" = 1"#]
+    );
+    backend.apply(&statements).await.unwrap();
+    let after = run(&backend, "select name from other.pets").await;
+    assert_eq!(after.cell(0, 0), Some(&Cell::Text("FIDO".into())));
 }
 
 #[tokio::test]

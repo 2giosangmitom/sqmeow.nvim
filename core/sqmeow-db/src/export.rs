@@ -10,12 +10,23 @@ use crate::value::Cell;
 pub enum Format {
     Csv,
     Json,
-    /// An `INSERT` per row, into `table` or else the table the rows came from.
-    Sql {
-        dialect: Dialect,
-        table: Option<String>,
-    },
+    Sql(Sql),
 }
+
+/// How rows are written as SQL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sql {
+    pub dialect: Dialect,
+    /// The table to insert into, else the table the rows came from.
+    pub table: Option<String>,
+    /// Many rows per `INSERT` rather than one each.
+    pub batch: bool,
+    /// Start with a `CREATE TABLE` for the columns written.
+    pub create: bool,
+}
+
+/// The most rows one multi-row `INSERT` holds.
+const BATCH_ROWS: usize = 500;
 
 impl Format {
     /// Parse a format name sent by the editor.
@@ -23,10 +34,12 @@ impl Format {
         match name.to_ascii_lowercase().as_str() {
             "csv" => Some(Self::Csv),
             "json" => Some(Self::Json),
-            "sql" => Some(Self::Sql {
+            "sql" => Some(Self::Sql(Sql {
                 dialect: Dialect::Postgres,
                 table: None,
-            }),
+                batch: false,
+                create: false,
+            })),
             _ => None,
         }
     }
@@ -74,7 +87,7 @@ pub fn write(
     match format {
         Format::Csv => csv(result, rows, columns, headers),
         Format::Json => json(result, rows, columns),
-        Format::Sql { dialect, table } => sql(result, rows, columns, *dialect, table.as_deref()),
+        Format::Sql(options) => sql(result, rows, columns, options),
     }
 }
 
@@ -142,44 +155,85 @@ pub fn json(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>) -> St
         .unwrap_or_else(|_| "[]".to_owned())
 }
 
-/// Write rows as one `INSERT` each, into `table` or else the first table the result came from.
-pub fn sql(
-    result: &ResultSet,
-    rows: &[usize],
-    columns: Option<&[usize]>,
-    dialect: Dialect,
-    table: Option<&str>,
-) -> String {
+/// Write rows as `INSERT`s, into the table asked for or else the first table the result came from.
+pub fn sql(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>, options: &Sql) -> String {
+    let dialect = options.dialect;
     let columns = chosen(result, columns);
     let source = match result.source() {
         Some(Source::Tables(tables)) => tables.first(),
         _ => None,
     };
-    let table = match (table, source) {
-        (Some(table), _) => table.to_owned(),
+    let table = match (&options.table, source) {
+        (Some(table), _) => table.clone(),
         (None, Some(source)) => source.quoted(dialect),
         (None, None) => dialect.quote_ident("result"),
     };
     // A column is named as its table names it, not by its alias in the query.
-    let names = columns
+    let names: Vec<String> = columns
         .iter()
         .map(|&column| {
             let shown = &result.columns()[column].name;
             dialect.quote_ident(source.and_then(|s| s.column(column)).unwrap_or(shown))
         })
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect();
+    let values = |row: usize| {
+        let values = columns
+            .iter()
+            .map(|&column| literal(dialect, result.cell(row, column).unwrap_or(&Cell::Null)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("({values})")
+    };
 
-    rows.iter()
-        .map(|&row| {
-            let values = columns
+    let mut text = String::new();
+    if options.create {
+        let definitions = columns
+            .iter()
+            .zip(&names)
+            .map(|(&column, name)| {
+                format!(
+                    "  {name} {}",
+                    column_type(dialect, &result.columns()[column].type_name)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",\n");
+        text.push_str(&format!("CREATE TABLE {table} (\n{definitions}\n);\n\n"));
+    }
+    let names = names.join(", ");
+    // CQL has no multi-row VALUES.
+    if options.batch && dialect != Dialect::Scylla {
+        for chunk in rows.chunks(BATCH_ROWS) {
+            let values = chunk
                 .iter()
-                .map(|&column| literal(dialect, result.cell(row, column).unwrap_or(&Cell::Null)))
+                .map(|&row| values(row))
                 .collect::<Vec<_>>()
-                .join(", ");
-            format!("INSERT INTO {table} ({names}) VALUES ({values});\n")
-        })
-        .collect()
+                .join(",\n  ");
+            text.push_str(&format!(
+                "INSERT INTO {table} ({names}) VALUES\n  {values};\n"
+            ));
+        }
+    } else {
+        for &row in rows {
+            text.push_str(&format!(
+                "INSERT INTO {table} ({names}) VALUES {};\n",
+                values(row)
+            ));
+        }
+    }
+    text
+}
+
+/// A type a `CREATE TABLE` can declare a column as, from the type name the driver reported.
+fn column_type(dialect: Dialect, type_name: &str) -> String {
+    let name = type_name.trim();
+    match (dialect, name.to_ascii_uppercase().as_str()) {
+        (_, "" | "NULL") => "TEXT".to_owned(),
+        // MySQL needs a length for these, which the driver does not report.
+        (Dialect::MySql, "VARCHAR" | "CHAR") => "TEXT".to_owned(),
+        (Dialect::MySql, "VARBINARY" | "BINARY") => "BLOB".to_owned(),
+        _ => name.to_owned(),
+    }
 }
 
 fn value(cell: &Cell) -> serde_json::Value {
@@ -205,6 +259,15 @@ mod tests {
     use crate::result::Column;
 
     use super::*;
+
+    fn options(dialect: Dialect) -> Sql {
+        Sql {
+            dialect,
+            table: None,
+            batch: false,
+            create: false,
+        }
+    }
 
     fn column(name: &str) -> Column {
         Column::new(name, "TEXT")
@@ -238,7 +301,7 @@ mod tests {
             columns: vec![(0, "id".into()), (1, "full_name".into())],
         }])));
         assert_eq!(
-            sql(&result, &[0, 1], None, Dialect::MySql, None),
+            sql(&result, &[0, 1], None, &options(Dialect::MySql)),
             "INSERT INTO `app`.`people` (`id`, `full_name`) VALUES (1, 'alice');\n\
              INSERT INTO `app`.`people` (`id`, `full_name`) VALUES (2, NULL);\n"
         );
@@ -249,13 +312,67 @@ mod tests {
         let mut result = ResultSet::new("select v", vec![column("v"), column("n")]);
         result.push_row(vec![Cell::Text("it's".into()), Cell::Float(f64::NAN)]);
         assert_eq!(
-            sql(&result, &[0], None, Dialect::Sqlite, Some("copy")),
+            sql(
+                &result,
+                &[0],
+                None,
+                &Sql {
+                    table: Some("copy".into()),
+                    ..options(Dialect::Sqlite)
+                }
+            ),
             "INSERT INTO copy (\"v\", \"n\") VALUES ('it''s', 'NaN');\n"
         );
         assert_eq!(
-            sql(&result, &[0], Some(&[0]), Dialect::Postgres, None),
+            sql(&result, &[0], Some(&[0]), &options(Dialect::Postgres)),
             "INSERT INTO \"result\" (\"v\") VALUES ('it''s');\n"
         );
+    }
+
+    #[test]
+    fn sql_can_batch_rows_and_start_with_create_table() {
+        let mut result = ResultSet::new(
+            "select id, name from people",
+            vec![Column::new("id", "BIGINT"), Column::new("name", "VARCHAR")],
+        );
+        result.push_row(vec![Cell::Int(1), Cell::Text("alice".into())]);
+        result.push_row(vec![Cell::Int(2), Cell::Null]);
+        let options = Sql {
+            batch: true,
+            create: true,
+            ..options(Dialect::MySql)
+        };
+        assert_eq!(
+            sql(&result, &[0, 1], None, &options),
+            "CREATE TABLE `result` (\n  `id` BIGINT,\n  `name` TEXT\n);\n\n\
+             INSERT INTO `result` (`id`, `name`) VALUES\n  (1, 'alice'),\n  (2, NULL);\n"
+        );
+
+        let many: Vec<usize> = (0..BATCH_ROWS + 1).map(|row| row % 2).collect();
+        let text = sql(
+            &result,
+            &many,
+            None,
+            &Sql {
+                create: false,
+                ..options
+            },
+        );
+        assert_eq!(text.matches("INSERT INTO").count(), 2);
+    }
+
+    #[test]
+    fn cql_keeps_an_insert_per_row_when_batching() {
+        let text = sql(
+            &sample(),
+            &[0, 1],
+            None,
+            &Sql {
+                batch: true,
+                ..options(Dialect::Scylla)
+            },
+        );
+        assert_eq!(text.matches("INSERT INTO").count(), 2);
     }
 
     #[test]

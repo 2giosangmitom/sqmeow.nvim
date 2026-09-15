@@ -223,6 +223,9 @@ local function cell_text(value, null_text)
   if type(value) == 'boolean' then
     return value and 'true' or 'false', false
   end
+  if type(value) == 'table' and value.sql then
+    value = '= ' .. value.sql
+  end
   local text = tostring(value):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
   return text, false
 end
@@ -1355,6 +1358,19 @@ function M.actions.edit_cell()
   if cell then
     require('sqmeow.ui.edit').edit_cell(cell)
   end
+end
+
+function M.actions.set_expression()
+  local cell = editing() and M.current_cell()
+  if not cell then
+    return
+  end
+  local state = require('sqmeow.state')
+  local dialect = (state.call and state.connections[state.call.conn_id] or {}).dialect
+  if dialect == 'redis' or dialect == 'mongodb' then
+    return utils.notify(('%s takes no SQL expression'):format(dialect), vim.log.levels.WARN)
+  end
+  require('sqmeow.ui.edit').edit_cell(cell, true)
 end
 
 function M.actions.set_null()

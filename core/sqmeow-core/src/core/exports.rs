@@ -8,7 +8,7 @@ use sqmeow_db::export::{self, Format, Rows};
 
 use super::{Core, Started, params};
 use crate::args::Args;
-use crate::session::CallId;
+use crate::session::{Call, CallId};
 use crate::value::map;
 
 /// The most rows an export preview renders: enough to see what the file will look like.
@@ -18,6 +18,7 @@ impl Core {
     pub(super) fn export(self: Arc<Self>, args: &Args) -> Started {
         let call_id = args.call_id()?;
         let format = self.format(args, call_id)?;
+        let every = args.opt_bool("all").unwrap_or(false);
         let rows = match args.opt_usize("offset") {
             Some(start) => Rows {
                 start,
@@ -33,7 +34,7 @@ impl Core {
         let columns = params::indices(args.get("columns"));
         self.held(call_id)?;
 
-        let work = self.write_export(call_id, format, rows, columns, headers, path);
+        let work = self.write_export(call_id, format, (rows, every), columns, headers, path);
         Ok((Value::from(call_id), Box::pin(work)))
     }
 
@@ -47,6 +48,7 @@ impl Core {
             .unwrap_or(usize::MAX)
             .min(PREVIEW_ROWS);
         let headers = args.opt_bool("headers").unwrap_or(true);
+        let every = args.opt_bool("all").unwrap_or(false);
         let columns = params::indices(args.get("columns"));
 
         self.session
@@ -55,7 +57,10 @@ impl Core {
                     start,
                     end: start.saturating_add(limit),
                 }
-                .resolve(&call.result, call.view().as_deref().map(Vec::as_slice));
+                .resolve(
+                    &call.result,
+                    shown(call, every).as_deref().map(Vec::as_slice),
+                );
                 Value::from(export::write(
                     &call.result,
                     &format,
@@ -72,13 +77,16 @@ impl Core {
         self: Arc<Self>,
         call_id: CallId,
         format: Format,
-        rows: Rows,
+        (rows, every): (Rows, bool),
         columns: Option<Vec<usize>>,
         headers: bool,
         path: Option<String>,
     ) {
         let Some((text, count)) = self.session.with_call(call_id, |call| {
-            let rows = rows.resolve(&call.result, call.view().as_deref().map(Vec::as_slice));
+            let rows = rows.resolve(
+                &call.result,
+                shown(call, every).as_deref().map(Vec::as_slice),
+            );
             let text = export::write(&call.result, &format, &rows, columns.as_deref(), headers);
             (text, rows.len())
         }) else {
@@ -114,19 +122,27 @@ impl Core {
     /// The format asked for, with SQL written in the dialect of the connection the rows came from.
     fn format(&self, args: &Args, call_id: CallId) -> Result<Format, String> {
         let mut format = params::format(args)?;
-        if let Format::Sql { dialect, table } = &mut format {
+        if let Format::Sql(sql) = &mut format {
             // A result from the log names its dialect, since its connection may not be open.
             let open = self
                 .session
                 .with_call(call_id, |call| call.conn_id)
                 .and_then(|conn_id| self.session.connection(conn_id))
                 .map(|connection| connection.backend.dialect());
-            *dialect = open
+            sql.dialect = open
                 .or_else(|| Dialect::from_url(&format!("{}:", args.opt_string("dialect")?)))
                 .unwrap_or(Dialect::Postgres);
-            *table = args
+            if matches!(sql.dialect, Dialect::Redis | Dialect::MongoDb) {
+                return Err(format!(
+                    "{} results cannot be exported as SQL",
+                    sql.dialect.name()
+                ));
+            }
+            sql.table = args
                 .opt_string("table")
                 .filter(|table| !table.trim().is_empty());
+            sql.batch = args.opt_bool("batch").unwrap_or(false);
+            sql.create = args.opt_bool("create").unwrap_or(false);
         }
         Ok(format)
     }
@@ -139,4 +155,9 @@ impl Core {
         }
         self.emit("export:done", map(payload));
     }
+}
+
+/// The rows positions count through: the view, unless every row is wanted.
+fn shown(call: &Call, every: bool) -> Option<Arc<Vec<usize>>> {
+    if every { None } else { call.view() }
 }
