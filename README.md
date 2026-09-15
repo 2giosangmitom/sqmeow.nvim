@@ -64,6 +64,12 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     require('sqmeow').install()
   end,
   opts = {},
+  keys = {
+    { '<leader>Dd', '<cmd>Sqmeow toggle<cr>', desc = 'Toggle' },
+    { '<leader>Dc', '<cmd>Sqmeow cancle<cr>', desc = 'Cancel' },
+    { '<leader>Da', '<cmd>Sqmeow add<cr>', desc = 'Add Connection' },
+    { '<leader>Ds', '<cmd>Sqmeow scratchpad<cr>', desc = 'New Scratchpad' },
+  },
 }
 ```
 
@@ -203,19 +209,6 @@ A column is editable when it is a plain table column and its table's whole prima
 | `<CR>` (visual) | Run selection              |
 | `<leader>E`     | Run whole buffer           |
 | `<C-c>`         | Stop running query         |
-
-### Global Keymaps
-
-Bind `<Plug>` mappings yourself:
-
-```lua
-vim.keymap.set('n', '<leader>dd', '<Plug>(sqmeow-toggle)')
-vim.keymap.set('n', '<leader>de', '<Plug>(sqmeow-execute)')
-vim.keymap.set('n', '<leader>dc', '<Plug>(sqmeow-cancel)')
-vim.keymap.set('n', '<leader>da', '<Plug>(sqmeow-add-connection)')
-vim.keymap.set('n', '<leader>ds', '<Plug>(sqmeow-scratch)')
-vim.keymap.set('n', '<leader>df', '<Plug>(sqmeow-result-float)')
-```
 
 ## ⚙️ Configuration
 
