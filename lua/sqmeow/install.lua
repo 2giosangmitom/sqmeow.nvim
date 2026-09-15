@@ -116,13 +116,23 @@ function M.triple()
   return ('%s-%s'):format(architecture, system)
 end
 
---- Where the manifest for a release lives.
----@param version string|nil Defaults to this plugin's version.
+--- Name of the archive that holds the engine for a target.
+---@param triple string Rust target triple.
 ---@return string
-function M.manifest_url(version)
-  return ('https://github.com/%s/releases/download/v%s/manifest.json'):format(
+function M.archive_name(triple)
+  local extension = triple:find('windows', 1, true) and '.zip' or '.tar.gz'
+  return 'sqmeow-core-' .. triple .. extension
+end
+
+--- Where the archive for a release lives.
+---@param version string|nil Defaults to this plugin's version.
+---@param triple string Rust target triple.
+---@return string
+function M.archive_url(version, triple)
+  return ('https://github.com/%s/releases/download/v%s/%s'):format(
     M.repository,
-    version or require('sqmeow.rpc').version
+    version or require('sqmeow.rpc').version,
+    M.archive_name(triple)
   )
 end
 
@@ -236,31 +246,6 @@ function M.checksum(path)
   return vim.fn.sha256(contents)
 end
 
---- Read the manifest for a release.
----@param version string|nil
----@param method string|nil A download tool to use rather than the detected one.
----@param callback fun(targets: table|nil, err: string|nil) Target triple to `{ url, sha256, size }`.
-function M.manifest(version, method, callback)
-  local path = vim.fn.tempname()
-
-  M.fetch(M.manifest_url(version), path, { method = method }, function(ok, err)
-    if not ok then
-      return callback(nil, err)
-    end
-
-    local decoded
-    ok, decoded = pcall(function()
-      return vim.json.decode(table.concat(vim.fn.readfile(path), '\n'))
-    end)
-    vim.fn.delete(path)
-
-    if not ok or type(decoded) ~= 'table' or type(decoded.targets) ~= 'table' then
-      return callback(nil, 'the release manifest could not be read')
-    end
-    callback(decoded.targets)
-  end)
-end
-
 --- Unpack an archive next to itself.
 ---@param archive string
 ---@param directory string
@@ -300,30 +285,37 @@ function M.download(opts, callback)
   end
   progress('downloading ' .. M.binary)
 
-  M.manifest(opts.version, opts.method, function(targets, manifest_err)
-    if not targets then
-      return callback(nil, manifest_err)
+  local url = M.archive_url(opts.version, triple)
+  local directory = vim.fs.dirname(M.managed_path())
+  vim.fn.mkdir(directory, 'p')
+
+  local archive = vim.fs.joinpath(directory, M.archive_name(triple))
+  local label = 'downloading ' .. M.binary
+
+  M.fetch(url, archive, { label = label, method = opts.method }, function(ok, fetch_err)
+    if not ok then
+      return callback(nil, fetch_err)
     end
 
-    local entry = targets[triple]
-    if not entry then
-      return callback(nil, ('this release has no engine for %s'):format(triple))
-    end
-
-    local directory = vim.fs.dirname(M.managed_path())
-    vim.fn.mkdir(directory, 'p')
-
-    local archive = vim.fs.joinpath(directory, vim.fs.basename(entry.url))
-    local label = 'downloading ' .. M.binary
-
-    M.fetch(entry.url, archive, { label = label, method = opts.method }, function(ok, fetch_err)
-      if not ok then
-        return callback(nil, fetch_err)
+    -- Verify against the .sha256 sidecar published alongside the archive.
+    local sha_path = vim.fn.tempname()
+    M.fetch(url .. '.sha256', sha_path, { method = opts.method }, function(sha_ok, sha_err)
+      if not sha_ok then
+        vim.fn.delete(archive)
+        vim.fn.delete(sha_path)
+        return callback(nil, sha_err)
       end
 
-      -- Checked before unpacking, not after.
+      local ok_read, lines = pcall(vim.fn.readfile, sha_path)
+      vim.fn.delete(sha_path)
+      if not ok_read or not lines[1] then
+        vim.fn.delete(archive)
+        return callback(nil, 'could not read checksum for ' .. M.archive_name(triple))
+      end
+
+      local expected = lines[1]:match('^%S+'):lower()
       local digest = M.checksum(archive)
-      if digest ~= entry.sha256 then
+      if digest ~= expected then
         vim.fn.delete(archive)
         return callback(
           nil,

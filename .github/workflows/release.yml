@@ -86,8 +86,8 @@ jobs:
           name: ${{ matrix.target }}
           path: dist/*
 
-  manifest:
-    name: manifest
+  publish:
+    name: publish
     needs: build
     runs-on: ubuntu-latest
 
@@ -96,30 +96,6 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-
-      # Read by install.lua to pick an archive and verify its hash.
-      - name: Write manifest.json
-        run: |
-          python3 - "$TAG" "https://github.com/${{ github.repository }}/releases/download/$TAG" <<'PY'
-          import hashlib, json, os, sys
-
-          tag, base = sys.argv[1], sys.argv[2]
-          targets = {}
-          for name in sorted(os.listdir('dist')):
-              if name.endswith('.sha256'):
-                  continue
-              path = os.path.join('dist', name)
-              triple = name.removeprefix('sqmeow-core-').removesuffix('.tar.gz').removesuffix('.zip')
-              sha256 = open(path + '.sha256').read().strip()
-              actual = hashlib.sha256(open(path, 'rb').read()).hexdigest()
-              assert actual == sha256, f'{name}: {actual} != {sha256}'
-              targets[triple] = {'url': f'{base}/{name}', 'sha256': sha256, 'size': os.path.getsize(path)}
-
-          with open('dist/manifest.json', 'w') as out:
-              json.dump({'version': tag.lstrip('v'), 'targets': targets}, out, indent=2)
-              out.write('\n')
-          PY
-          cat dist/manifest.json
 
       - uses: softprops/action-gh-release@v3
         with:

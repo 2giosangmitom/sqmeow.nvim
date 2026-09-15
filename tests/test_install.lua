@@ -21,21 +21,37 @@ T['triple']['names this machine the way rustc does'] = function()
 
   local architecture, system = triple:match('^([^%-]+)%-(.+)$')
   eq(vim.tbl_contains({ 'x86_64', 'aarch64' }, architecture), true)
-  -- These are the systems the release workflow builds for, and the manifest is keyed by them.
+  -- These are the systems the release workflow builds for, and archives are named by them.
   eq(vim.tbl_contains({ 'unknown-linux-musl', 'apple-darwin', 'pc-windows-msvc' }, system), true)
 end
 
-T['manifest_url'] = MiniTest.new_set()
+T['archive_name'] = MiniTest.new_set()
 
-T['manifest_url']['points at the release for a version'] = function()
+T['archive_name']['names the archive for a triple'] = function()
   eq(
-    install.manifest_url('1.2.3'),
-    'https://github.com/2giosangmitom/sqmeow.nvim/releases/download/v1.2.3/manifest.json'
+    install.archive_name('x86_64-unknown-linux-musl'),
+    'sqmeow-core-x86_64-unknown-linux-musl.tar.gz'
+  )
+  eq(install.archive_name('aarch64-apple-darwin'), 'sqmeow-core-aarch64-apple-darwin.tar.gz')
+  eq(install.archive_name('x86_64-pc-windows-msvc'), 'sqmeow-core-x86_64-pc-windows-msvc.zip')
+end
+
+T['archive_url'] = MiniTest.new_set()
+
+T['archive_url']['points at the release for a version'] = function()
+  eq(
+    install.archive_url('1.2.3', 'x86_64-unknown-linux-musl'),
+    'https://github.com/2giosangmitom/sqmeow.nvim/releases/download/v1.2.3/sqmeow-core-x86_64-unknown-linux-musl.tar.gz'
+  )
+  eq(
+    install.archive_url('1.2.3', 'x86_64-pc-windows-msvc'),
+    'https://github.com/2giosangmitom/sqmeow.nvim/releases/download/v1.2.3/sqmeow-core-x86_64-pc-windows-msvc.zip'
   )
 end
 
-T['manifest_url']['defaults to the version this plugin was built against'] = function()
-  helpers.contains(install.manifest_url(), '/v' .. rpc.version .. '/')
+T['archive_url']['defaults to the version this plugin was built against'] = function()
+  local triple = assert(install.triple())
+  helpers.contains(install.archive_url(nil, triple), '/v' .. rpc.version .. '/')
 end
 
 T['checksum'] = MiniTest.new_set()
