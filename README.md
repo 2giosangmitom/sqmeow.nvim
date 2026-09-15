@@ -176,7 +176,9 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 `gf` and `go` open a bar above the grid with a `WHERE` line and an `ORDER BY` line. The query runs
 again as a subquery narrowed and ordered by them, so they take any SQL the database accepts, and the
 rows stay editable. `=` adds the cell's value to the `WHERE` line, and `s` fills the `ORDER BY` line.
-Redis, MongoDB and ScyllaDB results are filtered and sorted in memory instead.
+MongoDB takes a filter and a sort document instead. Redis, ScyllaDB and results whose connection is
+closed take the same SQL, run on the rows fetched: comparisons, `AND`/`OR`/`NOT`, `IS NULL`,
+`LIKE`/`ILIKE`, `IN` and `BETWEEN`, ordered by columns with `ASC`/`DESC` and `NULLS FIRST`/`LAST`.
 
 | Key               | Action                                |
 | ----------------- | ------------------------------------- |
