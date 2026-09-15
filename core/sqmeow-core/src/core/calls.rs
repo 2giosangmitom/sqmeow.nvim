@@ -371,7 +371,12 @@ impl Core {
             .session
             .with_call(call_id, |call| call.conn_id)
             .ok_or_else(gone)?;
-        let dialect = self.connection(conn_id)?.backend.dialect();
+        // A filter run on the rows held takes the SQL the filter bar reads, whatever the database.
+        let dialect = if args.opt_bool("memory").unwrap_or(false) {
+            Dialect::Postgres
+        } else {
+            self.connection(conn_id)?.backend.dialect()
+        };
         self.session
             .with_call(call_id, |call| {
                 let result = &call.result;
@@ -441,19 +446,31 @@ impl Core {
         let filters = params::filters(args.get("filters"))?;
         let sort = params::sort(args.get("sort"));
         let scope = params::indices(args.get("rows"));
-        self.held(call_id)?;
+        let condition = args.opt_string("where").unwrap_or_default();
+        let order = args.opt_string("order_by").unwrap_or_default();
+        // Compiled first, so a mistake in the filter is answered before any work starts.
+        let query = self
+            .session
+            .with_call(call_id, |call| {
+                view::Query::parse(&condition, &order, &view::names(call.result.columns()))
+            })
+            .ok_or_else(|| format!("result {call_id} is no longer held"))??;
 
         let work = async move {
             let core = Arc::clone(&self);
             let built = tokio::task::spawn_blocking(move || {
                 core.session.with_call(call_id, |call| {
-                    let narrowed = !filters.is_empty() || !sort.is_empty() || scope.is_some();
+                    let narrowed = !filters.is_empty()
+                        || !sort.is_empty()
+                        || scope.is_some()
+                        || query.is_some();
                     let view = narrowed.then(|| {
-                        Arc::new(view::select(
+                        Arc::new(view::select_with(
                             &call.result,
                             &filters,
                             &sort,
                             scope.as_deref(),
+                            query.as_ref(),
                         ))
                     });
                     let rows = view

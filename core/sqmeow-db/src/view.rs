@@ -1,5 +1,9 @@
 //! Narrowing and ordering the rows a result holds.
 
+mod expression;
+
+pub use expression::{Query, names};
+
 use std::cmp::Ordering;
 
 use crate::result::ResultSet;
@@ -62,15 +66,32 @@ pub fn select(
     sort: &[Sort],
     scope: Option<&[usize]>,
 ) -> Vec<usize> {
+    select_with(result, filters, sort, scope, None)
+}
+
+/// The rows that pass every filter and `query`'s condition, in `query`'s order when it has one and
+/// otherwise in sort order.
+pub fn select_with(
+    result: &ResultSet,
+    filters: &[Filter],
+    sort: &[Sort],
+    scope: Option<&[usize]>,
+    query: Option<&Query>,
+) -> Vec<usize> {
     let count = result.row_count();
     let mut rows: Vec<usize> = match scope {
         Some(scope) => scope.iter().copied().filter(|row| *row < count).collect(),
         None => (0..count).collect(),
     };
 
-    rows.retain(|row| filters.iter().all(|filter| passes(result, *row, filter)));
+    rows.retain(|row| {
+        filters.iter().all(|filter| passes(result, *row, filter))
+            && query.is_none_or(|query| query.passes(result, *row))
+    });
 
-    if !sort.is_empty() {
+    if let Some(query) = query.filter(|query| query.orders()) {
+        rows.sort_by(|a, b| query.compare(result, *a, *b));
+    } else if !sort.is_empty() {
         rows.sort_by(|a, b| {
             sort.iter()
                 .map(|key| {
