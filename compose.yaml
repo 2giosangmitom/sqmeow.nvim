@@ -80,7 +80,8 @@ services:
       - "56390:56390"
       - "56391:56391"
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -p 56391 sentinel get-master-addr-by-name sqmeow | grep -q 56390"]
+      test:
+        ["CMD-SHELL", "redis-cli -p 56391 sentinel get-master-addr-by-name sqmeow | grep -q 56390"]
       interval: 2s
       timeout: 3s
       retries: 30

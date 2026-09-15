@@ -1,15 +1,8 @@
 [workspace]
 resolver = "3"
-members = [
-  "core/sqmeow-rpc",
-  "core/sqmeow-db",
-  "core/sqmeow-adapters",
-  "core/sqmeow-core",
-]
+members = ["core/sqmeow-rpc", "core/sqmeow-db", "core/sqmeow-adapters", "core/sqmeow-core"]
 
 [workspace.package]
-# Bumped by release-please, which finds the line by the annotation rather than by its
-# position, so the comment is load-bearing.
 version = "2.0.0" # x-release-please-version
 edition = "2024"
 rust-version = "1.98"
@@ -39,9 +32,6 @@ sqlx = { version = "0.9", default-features = false, features = [
   "json",
   "uuid",
 ] }
-# sqlx has no Redis driver. TLS through rustls and the machine's roots, as for sqlx above, with
-# `insecure` so `rediss://host/#insecure` reaches a server whose certificate is self-signed. The
-# default features are typed command helpers the adapter never calls.
 redis = { version = "1.7", default-features = false, features = [
   "tokio-rustls-comp",
   "tls-rustls-insecure",
@@ -54,7 +44,12 @@ mongodb = "3.9"
 # Links the machine's libduckdb; GitHub builds bundle it with the `bundled-duckdb` feature.
 duckdb = { version = "1.10505", features = ["chrono"] }
 # CQL, for ScyllaDB and Apache Cassandra alike.
-scylla = { version = "1.8", features = ["chrono-04", "bigdecimal-04", "num-bigint-04", "rustls-023"] }
+scylla = { version = "1.8", features = [
+  "chrono-04",
+  "bigdecimal-04",
+  "num-bigint-04",
+  "rustls-023",
+] }
 # TLS for ScyllaDB, with the same crypto provider and roots as sqlx.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"

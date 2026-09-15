@@ -139,38 +139,38 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Drawer
 
-| Key         | Action                                                      |
-| ----------- | ----------------------------------------------------------- |
-| `<CR>`, `o` | Expand or collapse the node                                 |
-| `u`         | Run queries against this connection                         |
-| `p`         | Preview the relation's first page                           |
-| `K`         | Show the table's or key's structure                         |
-| `f`         | Show only the Redis keys matching a glob                    |
-| `r`         | Reload the subtree                                          |
-| `y` / `s`   | Yank the qualified name / a `SELECT`                        |
-| `a`         | Create a scratchpad                                         |
-| `A` / `e`   | Add / edit a connection                                     |
-| `R`         | Rename the connection or scratchpad                         |
-| `d`         | Delete the connection or scratchpad, or clear the log       |
-| `?` / `q`   | Show keymaps / close the drawer                             |
+| Key         | Action                                                |
+| ----------- | ----------------------------------------------------- |
+| `<CR>`, `o` | Expand or collapse the node                           |
+| `u`         | Run queries against this connection                   |
+| `p`         | Preview the relation's first page                     |
+| `K`         | Show the table's or key's structure                   |
+| `f`         | Show only the Redis keys matching a glob              |
+| `r`         | Reload the subtree                                    |
+| `y` / `s`   | Yank the qualified name / a `SELECT`                  |
+| `a`         | Create a scratchpad                                   |
+| `A` / `e`   | Add / edit a connection                               |
+| `R`         | Rename the connection or scratchpad                   |
+| `d`         | Delete the connection or scratchpad, or clear the log |
+| `?` / `q`   | Show keymaps / close the drawer                       |
 
 ### Result Window
 
-| Key         | Action                                       |
-| ----------- | -------------------------------------------- |
-| `L` / `H`   | Next / previous page                         |
-| `gg` / `G`  | First / last page                            |
-| `K`         | Show the row's details                       |
-| `gK`        | Show the table's columns and indexes         |
-| `]r` / `[r` | Show the next / previous statement's result  |
-| `x`         | Export the result, or the selected rows      |
-| `gf` / `go` | Open the filter bar on `WHERE` / `ORDER BY`  |
-| `=`         | Filter by the cell's value                   |
-| `s` / `S`   | Sort by the column / add it to the sort      |
-| `-` / `g-`  | Hide the column / show hidden columns        |
-| `R`         | Clear filters, sort and hidden columns       |
-| `Z`         | Move between split and float                 |
-| `?` / `q`   | Show keymaps / close the result window       |
+| Key         | Action                                      |
+| ----------- | ------------------------------------------- |
+| `L` / `H`   | Next / previous page                        |
+| `gg` / `G`  | First / last page                           |
+| `K`         | Show the row's details                      |
+| `gK`        | Show the table's columns and indexes        |
+| `]r` / `[r` | Show the next / previous statement's result |
+| `x`         | Export the result, or the selected rows     |
+| `gf` / `go` | Open the filter bar on `WHERE` / `ORDER BY` |
+| `=`         | Filter by the cell's value                  |
+| `s` / `S`   | Sort by the column / add it to the sort     |
+| `-` / `g-`  | Hide the column / show hidden columns       |
+| `R`         | Clear filters, sort and hidden columns      |
+| `Z`         | Move between split and float                |
+| `?` / `q`   | Show keymaps / close the result window      |
 
 ### Filter Bar
 
