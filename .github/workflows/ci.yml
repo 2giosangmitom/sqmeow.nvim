@@ -40,67 +40,6 @@ jobs:
     name: test
     runs-on: ubuntu-latest
 
-    env:
-      SQMEOW_TEST_POSTGRES_URL: postgres://sqmeow:sqmeow@127.0.0.1:5432/sqmeow
-      SQMEOW_TEST_MYSQL_URL: mysql://root:sqmeow@127.0.0.1:3306/sqmeow
-      SQMEOW_TEST_REDIS_URL: redis://127.0.0.1:6379/0
-      SQMEOW_TEST_DRAGONFLY_URL: redis://127.0.0.1:6380/0
-      SQMEOW_TEST_MONGODB_URL: mongodb://127.0.0.1:27017/sqmeow
-      SQMEOW_TEST_SCYLLA_URL: scylla://127.0.0.1:59042/
-      SQMEOW_TEST_CASSANDRA_URL: cassandra://127.0.0.1:59043/
-
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: sqmeow
-          POSTGRES_PASSWORD: sqmeow
-          POSTGRES_DB: sqmeow
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U sqmeow"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-      # Root: creating a stored function needs SUPER while binary logging is on.
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: sqmeow
-          MYSQL_DATABASE: sqmeow
-        ports: ["3306:3306"]
-        options: >-
-          --health-cmd "mysqladmin ping -psqmeow"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-      redis:
-        image: redis:8-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-      # Dragonfly locks its memory on start.
-      dragonfly:
-        image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2
-        ports: ["6380:6379"]
-        options: >-
-          --ulimit memlock=-1
-          --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-      mongodb:
-        image: mongo:8
-        ports: ["27017:27017"]
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping: 1})'"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-
     steps:
       - uses: actions/checkout@v4
 
@@ -109,11 +48,12 @@ jobs:
           neovim: true
           version: stable
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The pinned toolchain from mise.toml: rust, just, stylua, selene, lua-language-server.
+      - uses: jdx/mise-action@v2
       - uses: Swatinem/rust-cache@v2
 
-      # A service container cannot take ScyllaDB's start-up flags.
-      - run: docker compose up -d --wait scylla cassandra
-      - run: cargo test --all-features
-      - run: cargo build --features bundled-duckdb
-      - run: nvim -l tests/minit.lua
+      # The databases come from compose.yaml, on the same ports and with the same
+      # server-backed URLs `just test-rust` and `just test-lua` use locally.
+      - run: just db-up
+      - run: just test-rust
+      - run: just test-lua

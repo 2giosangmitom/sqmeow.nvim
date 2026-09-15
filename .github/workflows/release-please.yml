@@ -37,7 +37,9 @@ jobs:
         with:
           ref: ${{ fromJson(needs.release-please.outputs.pr).headBranchName }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The pinned toolchain from mise.toml, so the synced lockfile never needs a
+      # newer rust than the repo builds with.
+      - uses: jdx/mise-action@v2
 
       - name: Sync Cargo.lock
         run: |
