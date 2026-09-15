@@ -10,8 +10,8 @@ pub mod sqlite;
 mod stream;
 
 use sqmeow_db::{
-    Adapter, Changes, ColumnNode, Dialect, Error, RelationNode, Result, ResultSet, RoutineKind,
-    RoutineNode, SchemaNode,
+    Adapter, Changes, ColumnNode, Dialect, Error, IndexNode, RelationNode, Result, ResultSet,
+    RoutineKind, RoutineNode, SchemaNode,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -198,6 +198,11 @@ impl Backend {
     /// The columns of one relation.
     pub async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         dispatch!(self, adapter => adapter.columns(schema, relation).await)
+    }
+
+    /// The indexes and unique constraints on one table.
+    pub async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<IndexNode>> {
+        dispatch!(self, adapter => adapter.indexes(schema, relation).await)
     }
 
     /// Close the underlying pool.

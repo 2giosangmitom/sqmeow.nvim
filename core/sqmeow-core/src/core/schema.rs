@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use rmpv::Value;
 use sqmeow_db::{
-    ColumnNode, Dialect, Error as DbError, KeyType, RelationKind, RelationNode, RoutineKind,
-    RoutineNode, SchemaNode,
+    ColumnNode, Dialect, Error as DbError, IndexNode, KeyType, RelationKind, RelationNode,
+    RoutineKind, RoutineNode, SchemaNode,
 };
 
 use super::{Core, Started};
@@ -24,6 +24,36 @@ impl Core {
         let connection = self.connection(conn_id)?;
 
         let work = self.read_level(connection, path);
+        Ok((Value::Boolean(true), Box::pin(work)))
+    }
+
+    /// Read a table's columns and indexes, and report them through `structure:done`.
+    pub(super) fn structure(self: Arc<Self>, args: &Args) -> Started {
+        let conn_id = args.conn_id("conn_id")?;
+        let schema = args.string("schema")?;
+        let relation = args.string("relation")?;
+        let connection = self.connection(conn_id)?;
+
+        let work = async move {
+            let backend = &connection.backend;
+            let read = async {
+                let columns = backend.columns(&schema, &relation).await?;
+                Ok::<_, DbError>((columns, backend.indexes(&schema, &relation).await?))
+            };
+            let mut payload = vec![
+                ("conn_id", Value::from(conn_id)),
+                ("schema", Value::from(schema.as_str())),
+                ("relation", Value::from(relation.as_str())),
+            ];
+            match read.await {
+                Ok((columns, indexes)) => {
+                    payload.push(("columns", Value::Array(column_nodes(columns))));
+                    payload.push(("indexes", Value::Array(index_nodes(indexes))));
+                }
+                Err(error) => payload.push(("error", Value::from(error.to_string()))),
+            }
+            self.emit("structure:done", map(payload));
+        };
         Ok((Value::Boolean(true), Box::pin(work)))
     }
 
@@ -261,7 +291,24 @@ fn column_nodes(columns: Vec<ColumnNode>) -> Vec<Value> {
                     Value::from(format!("{}.{}", key.table, key.column)),
                 ));
             }
+            if let Some(default) = column.default {
+                pairs.push(("default", Value::from(default)));
+            }
             map(pairs)
+        })
+        .collect()
+}
+
+fn index_nodes(indexes: Vec<IndexNode>) -> Vec<Value> {
+    indexes
+        .into_iter()
+        .map(|index| {
+            map(vec![
+                ("name", Value::from(index.name)),
+                ("columns", strings(index.columns)),
+                ("unique", Value::from(index.unique)),
+                ("primary", Value::from(index.primary)),
+            ])
         })
         .collect()
 }

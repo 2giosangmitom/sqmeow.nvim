@@ -545,12 +545,12 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
     }
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some(r"c:\x".into())), (2, Some("it's".into()))])],
+        updates: vec![(0, vec![(1, r"c:\x".into()), (2, "it's".into())])],
         deletes: vec![1],
         inserts: vec![vec![
-            (0, Some("3".into())),
-            (1, Some("new".into())),
-            (2, None),
+            (0, "3".into()),
+            (1, "new".into()),
+            (2, sqmeow_db::edit::Value::Null),
         ]],
     };
     let plan = backend
@@ -579,7 +579,7 @@ async fn setting_a_value_to_what_it_already_is_applies() {
 
     // MySQL counts the rows it changed rather than the rows it found, and this changes none.
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("a".into()))])],
+        updates: vec![(0, vec![(1, "a".into())])],
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
@@ -607,7 +607,7 @@ async fn a_composite_key_finds_its_row_by_every_part() {
     let result = run(&backend, "select v, b, a from my_pair order by b").await;
     assert!(result.source().is_some(), "{:?}", result.columns());
     let changes = Changes {
-        updates: vec![(1, vec![(0, Some("changed".into()))])],
+        updates: vec![(1, vec![(0, "changed".into())])],
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
@@ -658,8 +658,8 @@ async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
 
     let changes = Changes {
         updates: vec![
-            (0, vec![(1, Some("first".into()))]),
-            (1, vec![(1, Some("gone".into()))]),
+            (0, vec![(1, "first".into())]),
+            (1, vec![(1, "gone".into())]),
         ],
         ..Changes::default()
     };
@@ -926,7 +926,7 @@ async fn a_query_run_again_after_its_table_changed_shows_the_change() {
     assert_eq!(result.cell(0, 3), Some(&Cell::Int(7)));
 
     let changes = Changes {
-        updates: vec![(0, vec![(2, Some("n".into()))])],
+        updates: vec![(0, vec![(2, "n".into())])],
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
@@ -972,7 +972,7 @@ async fn a_join_is_edited_through_each_table_key() {
     assert!(!source.insertable());
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("amy".into())), (3, Some("blue".into()))])],
+        updates: vec![(0, vec![(1, "amy".into()), (3, "blue".into())])],
         deletes: vec![1],
         ..Changes::default()
     };
@@ -1023,7 +1023,7 @@ async fn a_filtered_result_stays_editable() {
     assert_eq!(result.row_count(), 1);
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("rob".into()))])],
+        updates: vec![(0, vec![(1, "rob".into())])],
         ..Changes::default()
     };
     backend
@@ -1044,4 +1044,56 @@ async fn a_filtered_result_stays_editable() {
         error.to_string().contains("Duplicate column name"),
         "{error}"
     );
+}
+
+#[tokio::test]
+async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
+    let backend = connect(&server!()).await;
+    run(&backend, "drop table if exists tagged_unique").await;
+    run(
+        &backend,
+        "create table tagged_unique (code varchar(10) not null, label varchar(10), n int default 42,
+             unique key tagged_code (code), key tagged_label (label))",
+    )
+    .await;
+    run(&backend, "insert into tagged_unique values ('a', 'one', 1)").await;
+
+    let result = run(&backend, "select code, label, n from tagged_unique").await;
+    match result.source() {
+        Some(Source::Tables(tables)) => assert_eq!(tables[0].key, vec![0]),
+        other => panic!("expected a table source, got {other:?}"),
+    }
+    let changes = Changes {
+        updates: vec![(
+            0,
+            vec![(1, "uno".into()), (2, sqmeow_db::edit::Value::Default)],
+        )],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.expect("the plan should apply");
+    let after = run(&backend, "select label, n from tagged_unique").await;
+    assert_eq!(after.cell(0, 0), Some(&Cell::Text("uno".into())));
+    assert_eq!(after.cell(0, 1), Some(&Cell::Int(42)));
+
+    assert_eq!(
+        backend.indexes(SCHEMA, "tagged_unique").await.unwrap(),
+        vec![
+            sqmeow_db::IndexNode {
+                name: "tagged_code".into(),
+                columns: vec!["code".into()],
+                unique: true,
+                primary: false,
+            },
+            sqmeow_db::IndexNode {
+                name: "tagged_label".into(),
+                columns: vec!["label".into()],
+                unique: false,
+                primary: false,
+            },
+        ]
+    );
+    let columns = backend.columns(SCHEMA, "tagged_unique").await.unwrap();
+    assert_eq!(columns[2].default.as_deref(), Some("42"));
+    run(&backend, "drop table tagged_unique").await;
 }

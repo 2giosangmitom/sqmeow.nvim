@@ -369,7 +369,7 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         let mut set = Document::new();
         for (column, value) in cells {
             check_column(source, result, *column)?;
-            set.insert(field(*column), value_bson(value.as_deref()));
+            set.insert(field(*column), value_bson(value)?);
         }
         commands.push(line(doc! {
             "update": name,
@@ -388,7 +388,7 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             if *column >= result.columns().len() {
                 return Err(Error::driver(format!("there is no column {column}")));
             }
-            document.insert(field(*column), value_bson(value.as_deref()));
+            document.insert(field(*column), value_bson(value)?);
         }
         commands.push(line(doc! { "insert": name, "documents": [document] }));
     }
@@ -396,14 +396,16 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
 }
 
 /// A value typed into a cell.
-fn value_bson(value: Option<&str>) -> Bson {
-    let Some(text) = value else {
-        return Bson::Null;
+fn value_bson(value: &edit::Value) -> Result<Bson> {
+    let text = match value {
+        edit::Value::Null => return Ok(Bson::Null),
+        edit::Value::Default => return Err(Error::driver("MongoDB fields have no default")),
+        edit::Value::Text(text) => text,
     };
-    serde_json::from_str::<serde_json::Value>(text)
+    Ok(serde_json::from_str::<serde_json::Value>(text)
         .ok()
         .and_then(|json| Bson::try_from(json).ok())
-        .unwrap_or_else(|| Bson::String(text.to_owned()))
+        .unwrap_or_else(|| Bson::String(text.clone())))
 }
 
 /// The `_id` a row was read with, as the BSON that matches it again.
@@ -532,6 +534,7 @@ fn field_nodes(documents: &[Document]) -> Vec<ColumnNode> {
                     nullable: null,
                     primary_key: name == "_id",
                     foreign_key: None,
+                    default: None,
                 }),
             }
         }
@@ -596,9 +599,9 @@ mod tests {
     #[test]
     fn changes_become_commands_finding_documents_by_id() {
         let changes = Changes {
-            updates: vec![(0, vec![(1, Some("bob".into()))])],
+            updates: vec![(0, vec![(1, "bob".into())])],
             deletes: vec![0],
-            inserts: vec![vec![(1, Some("42".into()))]],
+            inserts: vec![vec![(1, "42".into())]],
         };
         // The update to a document being deleted is dropped.
         assert_eq!(
@@ -613,7 +616,7 @@ mod tests {
     #[test]
     fn a_planned_command_parses_back_with_its_name_first() {
         let changes = Changes {
-            updates: vec![(0, vec![(1, None)])],
+            updates: vec![(0, vec![(1, sqmeow_db::edit::Value::Null)])],
             ..Changes::default()
         };
         let line = &plan(&people(), &changes).unwrap()[0];
@@ -627,7 +630,7 @@ mod tests {
     #[test]
     fn the_id_itself_cannot_be_edited() {
         let changes = Changes {
-            updates: vec![(0, vec![(0, Some("x".into()))])],
+            updates: vec![(0, vec![(0, "x".into())])],
             ..Changes::default()
         };
         assert!(plan(&people(), &changes).is_err());

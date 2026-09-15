@@ -1,8 +1,9 @@
-//! Exporting results as CSV or JSON.
+//! Exporting results as CSV, JSON or SQL.
 
 use std::sync::Arc;
 
 use rmpv::Value;
+use sqmeow_db::Dialect;
 use sqmeow_db::export::{self, Format, Rows};
 
 use super::{Core, Started, params};
@@ -16,7 +17,7 @@ const PREVIEW_ROWS: usize = 100;
 impl Core {
     pub(super) fn export(self: Arc<Self>, args: &Args) -> Started {
         let call_id = args.call_id()?;
-        let format = params::format(args)?;
+        let format = self.format(args, call_id)?;
         let rows = match args.opt_usize("offset") {
             Some(start) => Rows {
                 start,
@@ -39,7 +40,7 @@ impl Core {
     /// The start of an export, as the text it would write, for the export dialog to show.
     pub(super) fn export_preview(&self, args: &Args) -> Result<Value, String> {
         let call_id = args.call_id()?;
-        let format = params::format(args)?;
+        let format = self.format(args, call_id)?;
         let start = args.opt_usize("offset").unwrap_or(0);
         let limit = args
             .opt_usize("limit")
@@ -57,7 +58,7 @@ impl Core {
                 .resolve(&call.result, call.view().as_deref().map(Vec::as_slice));
                 Value::from(export::write(
                     &call.result,
-                    format,
+                    &format,
                     &rows,
                     columns.as_deref(),
                     headers,
@@ -78,7 +79,7 @@ impl Core {
     ) {
         let Some((text, count)) = self.session.with_call(call_id, |call| {
             let rows = rows.resolve(&call.result, call.view().as_deref().map(Vec::as_slice));
-            let text = export::write(&call.result, format, &rows, columns.as_deref(), headers);
+            let text = export::write(&call.result, &format, &rows, columns.as_deref(), headers);
             (text, rows.len())
         }) else {
             return self.emit_export(call_id, Err("the result is no longer held".into()));
@@ -108,6 +109,26 @@ impl Core {
                 self.emit_export(call_id, Err(format!("could not write {path}: {error}")));
             }
         }
+    }
+
+    /// The format asked for, with SQL written in the dialect of the connection the rows came from.
+    fn format(&self, args: &Args, call_id: CallId) -> Result<Format, String> {
+        let mut format = params::format(args)?;
+        if let Format::Sql { dialect, table } = &mut format {
+            // A result from the log names its dialect, since its connection may not be open.
+            let open = self
+                .session
+                .with_call(call_id, |call| call.conn_id)
+                .and_then(|conn_id| self.session.connection(conn_id))
+                .map(|connection| connection.backend.dialect());
+            *dialect = open
+                .or_else(|| Dialect::from_url(&format!("{}:", args.opt_string("dialect")?)))
+                .unwrap_or(Dialect::Postgres);
+            *table = args
+                .opt_string("table")
+                .filter(|table| !table.trim().is_empty());
+        }
+        Ok(format)
     }
 
     fn emit_export(&self, call_id: CallId, outcome: Result<Vec<(&str, Value)>, String>) {

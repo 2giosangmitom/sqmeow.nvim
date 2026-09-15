@@ -24,6 +24,7 @@ M.defaults = {
   drawer = {
     { action = 'toggle', lhs = { '<CR>', 'o' }, desc = 'Expand or collapse the node' },
     { action = 'preview', lhs = 'p', desc = 'Show the first page of this relation' },
+    { action = 'structure', lhs = 'K', desc = 'Show the columns and indexes of this table' },
     { action = 'refresh', lhs = 'r', desc = 'Reload this subtree' },
     { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified name' },
     { action = 'yank_select', lhs = 's', desc = 'Yank a SELECT for this relation' },
@@ -75,7 +76,9 @@ M.defaults = {
     },
     { action = 'edit_cell', lhs = { 'i', '<CR>' }, desc = 'Change this cell' },
     { action = 'set_null', lhs = 'X', desc = 'Set this cell to NULL' },
+    { action = 'set_default', lhs = 'gX', desc = "Set this cell to its column's default" },
     { action = 'add_row', lhs = 'o', desc = 'Add a row' },
+    { action = 'duplicate_row', lhs = 'D', desc = 'Add a copy of this row' },
     { action = 'delete_row', lhs = 'dd', desc = 'Delete this row, or keep it after all' },
     { action = 'delete_selection', lhs = 'd', mode = 'x', desc = 'Delete the selected rows' },
     { action = 'undo', lhs = 'u', desc = 'Undo the last change' },

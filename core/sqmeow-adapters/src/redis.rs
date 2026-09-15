@@ -254,11 +254,10 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         cells
             .iter()
             .find(|(at, _)| *at == column)
-            .map(|(_, value)| {
-                value
-                    .as_deref()
-                    .map(quote)
-                    .ok_or_else(|| Error::driver("Redis has no NULL: delete the row instead"))
+            .map(|(_, value)| match value {
+                Edit::Text(text) => Ok(quote(text)),
+                Edit::Null => Err(Error::driver("Redis has no NULL: delete the row instead")),
+                Edit::Default => Err(Error::driver("Redis values have no default")),
             })
             .transpose()
     };
@@ -648,7 +647,7 @@ mod tests {
     fn a_hash_field_is_changed_renamed_deleted_and_added() {
         let result = hash();
         let changes = Changes {
-            updates: vec![(0, vec![(1, Some("bob".into()))])],
+            updates: vec![(0, vec![(1, "bob".into())])],
             ..Changes::default()
         };
         assert_eq!(
@@ -657,8 +656,8 @@ mod tests {
         );
 
         let changes = Changes {
-            updates: vec![(0, vec![(0, Some("who".into()))])],
-            inserts: vec![vec![(0, Some("age".into())), (1, Some("3".into()))]],
+            updates: vec![(0, vec![(0, "who".into())])],
+            inserts: vec![vec![(0, "age".into()), (1, "3".into())]],
             ..Changes::default()
         };
         assert_eq!(
@@ -684,7 +683,7 @@ mod tests {
     fn a_planned_command_splits_back_into_its_words() {
         let result = hash();
         let changes = Changes {
-            updates: vec![(0, vec![(1, Some("a b\n".into()))])],
+            updates: vec![(0, vec![(1, "a b\n".into())])],
             ..Changes::default()
         };
         let line = &plan(&result, &changes).unwrap()[0];
@@ -696,7 +695,7 @@ mod tests {
     fn redis_refuses_null_and_a_result_without_a_source() {
         let result = hash();
         let changes = Changes {
-            updates: vec![(0, vec![(1, None)])],
+            updates: vec![(0, vec![(1, sqmeow_db::edit::Value::Null)])],
             ..Changes::default()
         };
         assert!(plan(&result, &changes).is_err());
@@ -711,7 +710,7 @@ mod tests {
         let mut result = to_result("LRANGE l 10 11", reply, usize::MAX);
         result.set_source(source(&split_command("LRANGE l 10 11").unwrap()));
         let changes = Changes {
-            updates: vec![(1, vec![(0, Some("c".into()))])],
+            updates: vec![(1, vec![(0, "c".into())])],
             ..Changes::default()
         };
         assert_eq!(plan(&result, &changes).unwrap(), vec![r#"LSET "l" 11 "c""#]);

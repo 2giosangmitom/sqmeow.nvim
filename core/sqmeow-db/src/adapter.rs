@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::edit::Changes;
 use crate::error::Result;
-use crate::node::{ColumnNode, RelationNode, RoutineNode, SchemaNode};
+use crate::node::{ColumnNode, IndexNode, RelationNode, RoutineNode, SchemaNode};
 use crate::result::ResultSet;
 
 /// Which SQL dialect a connection speaks.
@@ -121,6 +121,15 @@ pub trait Adapter: Send + Sync {
         schema: &str,
         relation: &str,
     ) -> impl Future<Output = Result<Vec<ColumnNode>>> + Send;
+
+    /// The indexes and unique constraints on one table.
+    fn indexes(
+        &self,
+        _schema: &str,
+        _relation: &str,
+    ) -> impl Future<Output = Result<Vec<IndexNode>>> + Send {
+        async { Ok(Vec::new()) }
+    }
 
     /// Close the connection pool.
     fn close(&self) -> impl Future<Output = ()> + Send;

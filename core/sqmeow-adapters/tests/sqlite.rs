@@ -479,9 +479,9 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
     }
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("o'ally".into()))])],
+        updates: vec![(0, vec![(1, "o'ally".into())])],
         deletes: vec![1],
-        inserts: vec![vec![(0, Some("9".into())), (1, Some("zed".into()))]],
+        inserts: vec![vec![(0, "9".into()), (1, "zed".into())]],
     };
     let plan = backend
         .plan(&result, &changes)
@@ -692,7 +692,7 @@ async fn rows_are_found_again_by_a_composite_or_binary_key() {
 
     let result = run(&backend, "select a, b, v from pair order by b").await;
     let changes = Changes {
-        updates: vec![(1, vec![(2, Some("changed".into()))])],
+        updates: vec![(1, vec![(2, "changed".into())])],
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
@@ -719,9 +719,7 @@ async fn rows_are_found_again_by_a_real_key() {
 
     let result = run(&backend, "select k, v from measured order by k").await;
     let changes = Changes {
-        updates: (0..4)
-            .map(|row| (row, vec![(1, Some("x".into()))]))
-            .collect(),
+        updates: (0..4).map(|row| (row, vec![(1, "x".into())])).collect(),
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
@@ -742,8 +740,8 @@ async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
 
     let changes = Changes {
         updates: vec![
-            (0, vec![(1, Some("first".into()))]),
-            (1, vec![(1, Some("gone".into()))]),
+            (0, vec![(1, "first".into())]),
+            (1, vec![(1, "gone".into())]),
         ],
         ..Changes::default()
     };
@@ -826,7 +824,7 @@ async fn a_join_writes_each_table_by_its_own_key() {
     assert!(!source.insertable());
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("cyd".into())), (3, Some("navy".into()))])],
+        updates: vec![(0, vec![(1, "cyd".into()), (3, "navy".into())])],
         deletes: vec![2],
         ..Changes::default()
     };
@@ -841,7 +839,7 @@ async fn a_join_writes_each_table_by_its_own_key() {
 
     // Bob has no team to change.
     let missing = Changes {
-        updates: vec![(1, vec![(3, Some("x".into()))])],
+        updates: vec![(1, vec![(3, "x".into())])],
         ..Changes::default()
     };
     assert!(backend.plan(&result, &missing).is_err());
@@ -873,7 +871,7 @@ async fn a_filtered_result_stays_editable() {
     assert_eq!(result.cell(0, 1), Some(&text("bob")));
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("rob".into()))])],
+        updates: vec![(0, vec![(1, "rob".into())])],
         ..Changes::default()
     };
     backend
@@ -882,4 +880,79 @@ async fn a_filtered_result_stays_editable() {
         .expect("the plan should apply");
     let after = run(&backend, "select name from people where id = 2").await;
     assert_eq!(after.cell(0, 0), Some(&text("rob")));
+}
+
+#[tokio::test]
+async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table tagged (code text not null, kind text not null, label text, unique (code, kind))",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into tagged values ('a', 'x', 'one'), ('b', 'x', 'two')",
+    )
+    .await;
+
+    let result = run(
+        &backend,
+        "select code, kind, label from tagged order by code",
+    )
+    .await;
+    match result.source() {
+        Some(Source::Tables(tables)) => assert_eq!(tables[0].key, vec![0, 1]),
+        other => panic!("expected a table source, got {other:?}"),
+    }
+
+    let changes = Changes {
+        updates: vec![(1, vec![(2, "changed".into())])],
+        inserts: vec![vec![
+            (0, "c".into()),
+            (1, "y".into()),
+            (2, sqmeow_db::edit::Value::Default),
+        ]],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.expect("the plan should apply");
+
+    let after = run(&backend, "select label from tagged order by code").await;
+    assert_eq!(
+        after.column_cells(0),
+        &[text("one"), text("changed"), Cell::Null]
+    );
+}
+
+#[tokio::test]
+async fn a_table_lists_its_indexes_and_column_defaults() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table indexed (id integer primary key, email text unique, score int default 0, a int, b int)",
+    )
+    .await;
+    run(&backend, "create index indexed_ab on indexed (a, b)").await;
+
+    assert_eq!(
+        backend.indexes("main", "indexed").await.unwrap(),
+        vec![
+            sqmeow_db::IndexNode {
+                name: "indexed_ab".into(),
+                columns: vec!["a".into(), "b".into()],
+                unique: false,
+                primary: false,
+            },
+            sqmeow_db::IndexNode {
+                name: "sqlite_autoindex_indexed_1".into(),
+                columns: vec!["email".into()],
+                unique: true,
+                primary: false,
+            },
+        ]
+    );
+    let columns = backend.columns("main", "indexed").await.unwrap();
+    assert_eq!(columns[2].default.as_deref(), Some("0"));
+    assert_eq!(columns[1].default, None);
 }

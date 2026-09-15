@@ -288,9 +288,18 @@ where
     })
 }
 
-/// Which columns of each table are keys, by table name and then column name.
+/// Which columns of one table are keys.
 #[derive(Debug, Default)]
-pub(crate) struct TableKeys(Mutex<HashMap<TableName, HashMap<String, KeyKind>>>);
+pub(crate) struct Keys {
+    /// By column name.
+    pub(crate) kinds: HashMap<String, KeyKind>,
+    /// The columns of each unique key other than the primary one.
+    pub(crate) unique: Vec<Vec<String>>,
+}
+
+/// Which columns of each table are keys, by table name.
+#[derive(Debug, Default)]
+pub(crate) struct TableKeys(Mutex<HashMap<TableName, Keys>>);
 
 impl TableKeys {
     /// Forget every table, so each is read again the next time a result comes from it.
@@ -305,7 +314,7 @@ impl TableKeys {
     pub(crate) async fn mark<F, Fut>(&self, origins: &[Origin], columns: &mut [Column], read: F)
     where
         F: Fn(TableName) -> Fut,
-        Fut: Future<Output = HashMap<String, KeyKind>>,
+        Fut: Future<Output = Keys>,
     {
         let missing: Vec<TableName> = {
             let Ok(known) = self.0.lock() else {
@@ -335,7 +344,7 @@ impl TableKeys {
         for (column, origin) in columns.iter_mut().zip(origins) {
             if let Some(kind) = origin
                 .as_ref()
-                .and_then(|(table, name)| known.get(table)?.get(name))
+                .and_then(|(table, name)| known.get(table)?.kinds.get(name))
             {
                 column.key = *kind;
             }
@@ -353,9 +362,14 @@ impl TableKeys {
         }
         binder.build(|table| {
             known.get(table).map_or_else(Vec::new, |keys| {
-                keys.iter()
+                let primary = keys
+                    .kinds
+                    .iter()
                     .filter(|(_, kind)| **kind == KeyKind::Primary)
                     .map(|(name, _)| name.clone())
+                    .collect();
+                std::iter::once(primary)
+                    .chain(keys.unique.iter().cloned())
                     .collect()
             })
         })

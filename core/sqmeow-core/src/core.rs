@@ -119,6 +119,7 @@ impl Handler for Core {
             "view" => core.view(&args),
             "apply" => core.apply(&args),
             "introspect" => core.introspect(&args),
+            "structure" => core.structure(&args),
             "export" => core.export(&args),
             _ => {
                 return match self.answer(&method, &args) {

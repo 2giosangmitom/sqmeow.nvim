@@ -4,8 +4,9 @@ mod binder;
 mod sql;
 
 pub use binder::{TableBinder, TableName};
-pub use sql::{condition, quote_text, sql_plan, value_literal};
+pub use sql::{condition, literal, quote_text, sql_plan, value_literal};
 
+use crate::adapter::Dialect;
 use crate::error::{Error, Result};
 use crate::result::ResultSet;
 
@@ -38,6 +39,15 @@ impl Table {
             .iter()
             .find(|(at, _)| *at == index)
             .map(|(_, name)| name.as_str())
+    }
+
+    /// The table's name quoted for `dialect`, with its schema when it has one.
+    pub fn quoted(&self, dialect: Dialect) -> String {
+        let name = dialect.quote_ident(&self.name);
+        match &self.schema {
+            Some(schema) => format!("{}.{name}", dialect.quote_ident(schema)),
+            None => name,
+        }
     }
 
     /// `schema.name`, or `name` without a schema.
@@ -115,8 +125,30 @@ impl Source {
     }
 }
 
-/// A new value for a cell. `None` is `NULL`.
-pub type Value = Option<String>;
+/// A new value for a cell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Value {
+    Null,
+    Text(String),
+    /// The column's default, which SQL writes as `DEFAULT`.
+    Default,
+}
+
+impl Value {
+    /// The text, for a value that is text.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            _ => None,
+        }
+    }
+}
+
+impl From<&str> for Value {
+    fn from(text: &str) -> Self {
+        Self::Text(text.to_owned())
+    }
+}
 
 /// Everything staged against one result.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

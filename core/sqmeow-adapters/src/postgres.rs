@@ -231,6 +231,8 @@ struct Relation {
     columns: HashMap<i16, String>,
     /// The attribute numbers of the primary key.
     primary: Vec<i16>,
+    /// The attribute numbers of each unique index on columns alone.
+    unique: Vec<Vec<i16>>,
 }
 
 impl PostgresAdapter {
@@ -275,10 +277,15 @@ impl PostgresAdapter {
                 .values()
                 .find(|relation| relation.table == *table)
                 .map_or_else(Vec::new, |relation| {
-                    relation
-                        .primary
-                        .iter()
-                        .filter_map(|attribute| relation.columns.get(attribute).cloned())
+                    std::iter::once(&relation.primary)
+                        .chain(&relation.unique)
+                        .map(|attributes| {
+                            attributes
+                                .iter()
+                                .map(|attribute| relation.columns.get(attribute).cloned())
+                                .collect::<Option<Vec<_>>>()
+                                .unwrap_or_default()
+                        })
                         .collect()
                 })
         })
@@ -330,10 +337,26 @@ impl PostgresAdapter {
                 },
                 columns: HashMap::new(),
                 primary: Vec::new(),
+                unique: Vec::new(),
             });
             relation.columns.insert(attribute, column);
             if primary {
                 relation.primary.push(attribute);
+            }
+        }
+
+        let unique = sqlx::query_as::<_, (Oid, Vec<i16>)>(
+            "select indrelid, array(select unnest(indkey))::int2[] from pg_catalog.pg_index
+             where indrelid = any($1::oid[]) and indisunique and not indisprimary
+               and indpred is null and indexprs is null",
+        )
+        .bind(wanted.to_vec())
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+        for (oid, attributes) in unique {
+            if let Some(relation) = relations.get_mut(&oid) {
+                relation.unique.push(attributes);
             }
         }
         relations
@@ -500,10 +523,12 @@ impl Adapter for PostgresAdapter {
                     not a.attnotnull as nullable,
                     coalesce(i.indisprimary, false) as primary_key,
                     f.table_name as references_table,
-                    f.column_name as references_column
+                    f.column_name as references_column,
+                    pg_get_expr(d.adbin, d.adrelid) as default_value
              from pg_attribute a
              join pg_class c on c.oid = a.attrelid
              join pg_namespace n on n.oid = c.relnamespace
+             left join pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
              left join pg_index i
                on i.indrelid = c.oid and i.indisprimary and a.attnum = any(i.indkey)
              -- A foreign key can span columns, so the referenced column is the one sitting at the
@@ -537,7 +562,41 @@ impl Adapter for PostgresAdapter {
                     nullable: row.try_get::<bool, _>("nullable").unwrap_or(true),
                     primary_key: row.try_get::<bool, _>("primary_key").unwrap_or(false),
                     foreign_key: foreign_key(row),
+                    default: row
+                        .try_get::<Option<String>, _>("default_value")
+                        .ok()
+                        .flatten(),
                 })
+            })
+            .collect())
+    }
+
+    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+        let rows = sqlx::query_as::<_, (String, Vec<String>, bool, bool)>(
+            "select i.relname::text,
+                    array(select pg_get_indexdef(ix.indexrelid, k, true)
+                          from generate_series(1, ix.indnkeyatts::int) k order by k)::text[],
+                    ix.indisunique, ix.indisprimary
+             from pg_catalog.pg_index ix
+             join pg_catalog.pg_class i on i.oid = ix.indexrelid
+             join pg_catalog.pg_class t on t.oid = ix.indrelid
+             join pg_catalog.pg_namespace n on n.oid = t.relnamespace
+             where n.nspname = $1 and t.relname = $2
+             order by i.relname",
+        )
+        .bind(schema)
+        .bind(relation)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::driver)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(name, columns, unique, primary)| sqmeow_db::IndexNode {
+                name,
+                columns,
+                unique,
+                primary,
             })
             .collect())
     }

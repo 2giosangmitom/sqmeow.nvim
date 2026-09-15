@@ -127,6 +127,11 @@ function M.ensure()
   rpc.on('call:state', M.on_call)
   rpc.on('schema:nodes', M.on_nodes)
   rpc.on('export:done', M.on_export)
+  rpc.on('structure:done', function(payload)
+    vim.schedule(function()
+      require('sqmeow.ui.structure').on_done(payload)
+    end)
+  end)
   -- Both of these ask the engine for more, and the engine can send them before Neovim has read its
   -- answer to the request that started them.
   rpc.on('call:view', function(payload)

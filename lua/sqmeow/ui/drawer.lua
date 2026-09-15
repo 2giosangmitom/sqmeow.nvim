@@ -663,6 +663,15 @@ function M.actions.preview()
   )
 end
 
+--- Show the columns and indexes of the relation under the cursor.
+function M.actions.structure()
+  local node = M.current_node()
+  if not node or not is_relation(node.kind) or node.kind == 'key' then
+    return
+  end
+  require('sqmeow.ui.structure').open(node.conn_id, node.path[1], node.path[#node.path])
+end
+
 --- Copy the qualified name of the node under the cursor.
 function M.actions.yank_name()
   local node = M.current_node()

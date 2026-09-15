@@ -108,11 +108,13 @@ impl ScyllaAdapter {
             }
         }
         binder.build(|_| {
-            meta.partition_key
-                .iter()
-                .chain(&meta.clustering_key)
-                .cloned()
-                .collect()
+            vec![
+                meta.partition_key
+                    .iter()
+                    .chain(&meta.clustering_key)
+                    .cloned()
+                    .collect(),
+            ]
         })
     }
 
@@ -300,6 +302,7 @@ impl Adapter for ScyllaAdapter {
                     nullable: !primary_key,
                     primary_key,
                     foreign_key: None,
+                    default: None,
                 }
             })
             .collect())

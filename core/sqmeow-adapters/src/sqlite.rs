@@ -12,7 +12,7 @@ use sqmeow_db::{
 use tokio_util::sync::CancellationToken;
 
 use crate::stream::{
-    self, SqlxAdapter, TableKeys, origins, prepare, result_columns, text_or_bytes,
+    self, Keys, SqlxAdapter, TableKeys, origins, prepare, result_columns, text_or_bytes,
 };
 
 /// A pool against one SQLite database.
@@ -81,7 +81,7 @@ impl SqliteAdapter {
     }
 
     /// Ask the pragmas which columns of one table are keys.
-    async fn read_keys(&self, table: TableName) -> HashMap<String, KeyKind> {
+    async fn read_keys(&self, table: TableName) -> Keys {
         let mut keys = HashMap::new();
         let table = table.name;
 
@@ -118,7 +118,45 @@ impl SqliteAdapter {
             }
         }
 
-        keys
+        Keys {
+            kinds: keys,
+            unique: self.unique_keys(&table).await,
+        }
+    }
+
+    /// The columns of each unique index on a table that is neither partial nor on an expression.
+    async fn unique_keys(&self, table: &str) -> Vec<Vec<String>> {
+        let sql = format!("pragma index_list({})", self.quote_ident(table));
+        let Ok(indexes) = sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await else {
+            return Vec::new();
+        };
+        let mut unique = Vec::new();
+        for index in &indexes {
+            let wanted = index.try_get::<i64, _>("unique").unwrap_or(0) == 1
+                && index.try_get::<i64, _>("partial").unwrap_or(1) == 0
+                && index
+                    .try_get::<String, _>("origin")
+                    .is_ok_and(|origin| origin != "pk");
+            let Ok(name) = index.try_get::<String, _>("name") else {
+                continue;
+            };
+            if !wanted {
+                continue;
+            }
+            let sql = format!("pragma index_info({})", self.quote_ident(&name));
+            let Ok(columns) = sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await else {
+                continue;
+            };
+            // An expression's column has no name.
+            if let Some(columns) = columns
+                .iter()
+                .map(|column| column.try_get::<Option<String>, _>("name").ok().flatten())
+                .collect::<Option<Vec<_>>>()
+            {
+                unique.push(columns);
+            }
+        }
+        unique
     }
 }
 
@@ -249,9 +287,58 @@ impl Adapter for SqliteAdapter {
                     },
                     nullable: row.try_get::<i64, _>("notnull").unwrap_or(0) == 0,
                     primary_key: row.try_get::<i64, _>("pk").unwrap_or(0) > 0,
+                    default: row
+                        .try_get::<Option<String>, _>("dflt_value")
+                        .ok()
+                        .flatten(),
                 })
             })
             .collect())
+    }
+
+    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+        let sql = format!(
+            "pragma {}.index_list({})",
+            self.quote_ident(schema),
+            self.quote_ident(relation)
+        );
+        let rows = sqlx::query(AssertSqlSafe(sql))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(Error::driver)?;
+
+        let mut indexes = Vec::new();
+        for row in &rows {
+            let name: String = row.try_get("name").map_err(Error::driver)?;
+            let sql = format!(
+                "pragma {}.index_info({})",
+                self.quote_ident(schema),
+                self.quote_ident(&name)
+            );
+            let columns = sqlx::query(AssertSqlSafe(sql))
+                .fetch_all(&self.pool)
+                .await
+                .map_err(Error::driver)?
+                .iter()
+                .map(|column| {
+                    column
+                        .try_get::<Option<String>, _>("name")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "(expression)".to_owned())
+                })
+                .collect();
+            indexes.push(sqmeow_db::IndexNode {
+                columns,
+                unique: row.try_get::<i64, _>("unique").unwrap_or(0) == 1,
+                primary: row
+                    .try_get::<String, _>("origin")
+                    .is_ok_and(|origin| origin == "pk"),
+                name,
+            });
+        }
+        indexes.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(indexes)
     }
 
     async fn close(&self) {

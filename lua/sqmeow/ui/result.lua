@@ -19,6 +19,8 @@ local specs = {}
 local drawn = nil
 --- A view to put on the next result, and the call it is waiting for.
 local carried, pending = nil, nil
+--- Where the page and cursor were, for the next result to open at.
+local resume = nil
 
 --- How many lines the grid opens with before the first row: the column names, and the rule.
 local HEADER_LINES = 2
@@ -204,6 +206,9 @@ end
 local function cell_text(value, null_text)
   if value == nil or value == vim.NIL then
     return null_text, true
+  end
+  if value == require('sqmeow.ui.edit').DEFAULT then
+    return 'DEFAULT', false
   end
   if type(value) == 'boolean' then
     return value and 'true' or 'false', false
@@ -645,8 +650,9 @@ end
 
 --- Run the current result's query again, changing the parts of its view `view` names.
 ---@param view table|nil Fields of the view to replace, such as `where` and `order_by`.
+---@param keep boolean|nil Open the new result at the same page and cursor.
 ---@return boolean started
-function M.rerun(view)
+function M.rerun(view, keep)
   local call = require('sqmeow.state').call
   if not (call and call.call_id and call.conn_id) then
     return false
@@ -669,6 +675,12 @@ function M.rerun(view)
   end
 
   carried = spec
+  resume = keep
+      and {
+        offset = page.offset,
+        cursor = M.window() and vim.api.nvim_win_get_cursor(win),
+      }
+    or nil
   local started = require('sqmeow.api').execute(spec.base, {
     conn_id = call.conn_id,
     history = false,
@@ -727,15 +739,19 @@ function M.render(summary)
     return
   end
 
+  local at
   if pending == id then
-    pending = nil
+    pending, at, resume = nil, resume, nil
     local spec = M.spec()
     -- A result filtered by its query arrives already narrowed.
     if not M.queried(summary) and (#spec.filters > 0 or #spec.sort > 0) and M.send_view() then
       return
     end
   end
-  M.show_page(0)
+  M.show_page(at and at.offset or 0)
+  if at and at.cursor and M.window() then
+    pcall(vim.api.nvim_win_set_cursor, win, at.cursor)
+  end
 end
 
 --- The row the page on screen starts at, counted in the view.
@@ -1199,6 +1215,64 @@ function M.actions.set_null()
     return utils.notify(('`%s` cannot be edited'):format(cell.name), vim.log.levels.WARN)
   end
   require('sqmeow.ui.edit').set(cell, cell.column, vim.NIL)
+end
+
+function M.actions.set_default()
+  local cell = editing() and M.current_cell()
+  if not cell then
+    return
+  end
+  local state = require('sqmeow.state')
+  local column = state.call.columns[cell.column + 1]
+  if not (column and column.editable) then
+    return utils.notify(('`%s` cannot be edited'):format(cell.name), vim.log.levels.WARN)
+  end
+  local connection = state.connections[state.call.conn_id]
+  local dialect = connection and connection.dialect
+  if vim.tbl_contains({ 'redis', 'mongodb', 'scylla' }, dialect) then
+    return utils.notify(('%s has no column defaults'):format(dialect), vim.log.levels.WARN)
+  end
+  require('sqmeow.ui.edit').set(cell, cell.column, require('sqmeow.ui.edit').DEFAULT)
+end
+
+--- Stage a copy of the row under the cursor as a new row, leaving out its primary key.
+function M.actions.duplicate_row()
+  local cell = editing() and M.current_cell()
+  if not (cell and cell.row) then
+    return
+  end
+  local call = require('sqmeow.state').call
+  if not (call and call.source and call.columns) then
+    return
+  end
+  if not call.source.insertable then
+    return utils.notify(
+      'a row cannot be added to a result that shows more than one table',
+      vim.log.levels.WARN
+    )
+  end
+  local row, err = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = cell.row })
+  if not row then
+    return utils.notify(err or 'that row is not there', vim.log.levels.WARN)
+  end
+
+  local edit = require('sqmeow.ui.edit')
+  local values = {}
+  for index, column in ipairs(call.columns) do
+    -- A binary value's text is not the value.
+    if column.editable and column.key ~= 'primary_key' and column.class ~= 'binary' then
+      local staged, has = edit.staged(cell.row, index - 1)
+      if has then
+        values[index - 1] = staged
+      elseif row[index] then
+        values[index - 1] = row[index].is_null and vim.NIL or row[index].value
+      end
+    end
+  end
+  edit.add_row(values)
+  if win then
+    vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(M.buffer()), 0 })
+  end
 end
 
 function M.actions.add_row()

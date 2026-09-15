@@ -21,7 +21,8 @@ Query your database from your favorite editor.
 - **▶️ Flexible execution**: Run the statement under the cursor, a selection, or the whole buffer.
 - **🧭 EXPLAIN**: Query plans and errors show in the result window.
 - **🕘 Query log**: Reopen the result of any past query, even after a restart.
-- **📤 Export**: Results or selected rows to CSV or JSON, as a file or on the clipboard.
+- **📤 Export**: Results or selected rows to CSV, JSON or SQL `INSERT` statements, as a file or on
+  the clipboard.
 - **🔐 Secrets**: Passwords are masked, and URLs can read them with `{{ env "VAR" }}` or `{{ exec "cmd" }}`.
 - **⌨️ Buffer-local keymaps**: No global mappings; `<Plug>` mappings for everything worth a global key.
 
@@ -97,31 +98,31 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ## ⌨️ Commands
 
-| Command                                        | Description                                         |
-| ---------------------------------------------- | --------------------------------------------------- |
-| `:Sqmeow`                                      | Open the drawer and the result window               |
-| `:Sqmeow toggle`                               | Show or hide the schema drawer                      |
-| `:Sqmeow drawer`                               | Show the schema drawer                              |
-| `:Sqmeow open` / `close`                       | Show / hide the result window                       |
-| `:Sqmeow add`                                  | Add a connection                                    |
-| `:Sqmeow save`                                 | Save a connection for next time                     |
-| `:Sqmeow edit [name]`                          | Edit a saved connection                             |
-| `:Sqmeow use [name]`                           | Choose the connection queries run against           |
-| `:Sqmeow bind <name\|none>`                    | Tie the current buffer to a connection, or untie it |
-| `:Sqmeow disconnect`                           | Close the current connection                        |
-| `:Sqmeow scratch [name]`                       | Create a scratchpad for a connection                |
-| `:Sqmeow execute [sql]`                        | Run the buffer, the selection, or the given SQL     |
-| `:Sqmeow statement`                            | Run the statement under the cursor                  |
-| `:Sqmeow cancel`                               | Stop the running query                              |
-| `:Sqmeow next` / `prev`                        | Show the next / previous page                       |
-| `:Sqmeow float`                                | Move the result between its split and a float       |
-| `:Sqmeow review`                               | Review and apply staged edits                       |
-| `:Sqmeow export <csv\|json> [path\|clipboard]` | Export the result to a file or the clipboard        |
-| `:Sqmeow log [clear]`                          | Reopen a past query's result, or clear the log      |
-| `:Sqmeow install [method]`                     | Install the engine binary                           |
-| `:Sqmeow start` / `stop` / `restart`           | Start, stop or restart the engine                   |
-| `:Sqmeow messages`                             | Show the engine's log                               |
-| `:Sqmeow health`                               | Run the health check                                |
+| Command                                             | Description                                         |
+| --------------------------------------------------- | --------------------------------------------------- |
+| `:Sqmeow`                                           | Open the drawer and the result window               |
+| `:Sqmeow toggle`                                    | Show or hide the schema drawer                      |
+| `:Sqmeow drawer`                                    | Show the schema drawer                              |
+| `:Sqmeow open` / `close`                            | Show / hide the result window                       |
+| `:Sqmeow add`                                       | Add a connection                                    |
+| `:Sqmeow save`                                      | Save a connection for next time                     |
+| `:Sqmeow edit [name]`                               | Edit a saved connection                             |
+| `:Sqmeow use [name]`                                | Choose the connection queries run against           |
+| `:Sqmeow bind <name\|none>`                         | Tie the current buffer to a connection, or untie it |
+| `:Sqmeow disconnect`                                | Close the current connection                        |
+| `:Sqmeow scratch [name]`                            | Create a scratchpad for a connection                |
+| `:Sqmeow execute [sql]`                             | Run the buffer, the selection, or the given SQL     |
+| `:Sqmeow statement`                                 | Run the statement under the cursor                  |
+| `:Sqmeow cancel`                                    | Stop the running query                              |
+| `:Sqmeow next` / `prev`                             | Show the next / previous page                       |
+| `:Sqmeow float`                                     | Move the result between its split and a float       |
+| `:Sqmeow review`                                    | Review and apply staged edits                       |
+| `:Sqmeow export <csv\|json\|sql> [path\|clipboard]` | Export the result to a file or the clipboard        |
+| `:Sqmeow log [clear]`                               | Reopen a past query's result, or clear the log      |
+| `:Sqmeow install [method]`                          | Install the engine binary                           |
+| `:Sqmeow start` / `stop` / `restart`                | Start, stop or restart the engine                   |
+| `:Sqmeow messages`                                  | Show the engine's log                               |
+| `:Sqmeow health`                                    | Run the health check                                |
 
 ## 🗺️ Keymaps
 
@@ -132,6 +133,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 | `<CR>`, `o` | Expand or collapse the node             |
 | `u`         | Run queries against this connection     |
 | `p`         | Preview the relation's first page       |
+| `K`         | Show the table's columns and indexes    |
 | `r`         | Reload the subtree                      |
 | `y` / `s`   | Yank the qualified name / a `SELECT`    |
 | `a`         | Create a scratchpad                     |
@@ -172,16 +174,17 @@ Redis, MongoDB and ScyllaDB results are filtered and sorted in memory instead.
 
 ### Editing Results
 
-A column is editable when it is a plain table column and its table's whole primary key is in the
-result, so joined, filtered and sorted queries can be edited. Changes to a joined row update each
+A column is editable when it is a plain table column and its table's whole primary key, or failing
+that a whole unique key, is in the result, so joined, filtered and sorted queries can be edited. Changes to a joined row update each
 table by its own key, a deleted row is removed from the table of the first editable column, and rows
 can only be added to a result from one table. Computed columns such as aggregates stay read-only.
+After applying, the query runs again and opens at the same page and cursor.
 
 | Key           | Action                                                    |
 | ------------- | --------------------------------------------------------- |
 | `i`, `<CR>`   | Edit the cell                                             |
-| `X`           | Set the cell to `NULL`                                    |
-| `o`           | Add a row                                                 |
+| `X` / `gX`    | Set the cell to `NULL` / to its column's default          |
+| `o` / `D`     | Add a row / a copy of this row without its primary key    |
 | `dd` / `d`    | Delete the row / the selected rows                        |
 | `u` / `U`     | Undo the last change / discard all changes                |
 | `gs`, `<C-s>` | Review staged changes; `<C-s>` in the review applies them |

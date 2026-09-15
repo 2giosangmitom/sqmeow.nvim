@@ -42,8 +42,9 @@ impl TableBinder {
         self.bound.push((column, table, name.into()));
     }
 
-    /// The tables whose whole primary key is in the result, or `None` when no table is.
-    pub fn build(mut self, primary_key: impl Fn(&TableName) -> Vec<String>) -> Option<Source> {
+    /// The tables with a whole key in the result, or `None` when no table has one. `keys` lists a
+    /// table's primary key, then its unique keys, and the first one found in full is used.
+    pub fn build(mut self, keys: impl Fn(&TableName) -> Vec<Vec<String>>) -> Option<Source> {
         self.bound.sort_by_key(|(column, ..)| *column);
 
         let mut grouped: Vec<(TableName, Vec<(usize, String)>)> = Vec::new();
@@ -62,19 +63,20 @@ impl TableBinder {
                 if !columns.iter().all(|(_, name)| seen.insert(name)) {
                     return None;
                 }
-                let primary = primary_key(&table);
-                if primary.is_empty() {
-                    return None;
-                }
-                let mut key = primary
-                    .iter()
-                    .map(|wanted| {
-                        columns
-                            .iter()
-                            .find(|(_, name)| name == wanted)
-                            .map(|(at, _)| *at)
-                    })
-                    .collect::<Option<Vec<usize>>>()?;
+                let mut key =
+                    keys(&table)
+                        .iter()
+                        .filter(|key| !key.is_empty())
+                        .find_map(|key| {
+                            key.iter()
+                                .map(|wanted| {
+                                    columns
+                                        .iter()
+                                        .find(|(_, name)| name == wanted)
+                                        .map(|(at, _)| *at)
+                                })
+                                .collect::<Option<Vec<usize>>>()
+                        })?;
                 key.sort_unstable();
                 Some(Table {
                     schema: table.schema,
@@ -93,9 +95,14 @@ impl TableBinder {
 mod tests {
     use super::*;
 
-    fn keys(table: &TableName) -> Vec<String> {
+    fn keys(table: &TableName) -> Vec<Vec<String>> {
         match table.name.as_str() {
-            "people" | "teams" => vec!["id".into()],
+            "people" | "teams" => vec![vec!["id".into()]],
+            "badges" => vec![
+                vec![],
+                vec!["code".into(), "kind".into()],
+                vec!["slug".into()],
+            ],
             _ => Vec::new(),
         }
     }
@@ -121,6 +128,14 @@ mod tests {
         assert_eq!(tables[0].key, vec![0]);
         assert_eq!(tables[1].key, vec![3]);
         assert_eq!(tables[1].column(2), Some("name"));
+    }
+
+    #[test]
+    fn a_table_without_a_primary_key_is_found_by_a_unique_one() {
+        let mut binder = TableBinder::default();
+        binder.bind(0, TableName::parse("badges"), "slug");
+        binder.bind(1, TableName::parse("badges"), "label");
+        assert_eq!(tables(binder.build(keys))[0].key, vec![0]);
     }
 
     #[test]

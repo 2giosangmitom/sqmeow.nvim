@@ -293,6 +293,32 @@ T['actions']['do nothing on a node that is not a relation'] = function()
   eq(vim.fn.getreg('"'), 'untouched')
 end
 
+T['actions']['show the columns and indexes of a table'] = function()
+  run('create index people_name on people (name)')
+  MiniTest.finally(function()
+    run('drop index people_name')
+  end)
+  open_relation('Tables', 'people')
+  goto_line('people')
+  drawer.actions.structure()
+
+  local win
+  helpers.wait_for('the structure should open', function()
+    win = helpers.find_win(function(_, buf)
+      return vim.bo[buf].filetype == 'sqmeow-structure'
+    end)
+    return win ~= nil
+  end, TIMEOUT)
+  local text = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false)
+  eq(text[1], 'Columns')
+  helpers.contains(table.concat(text, '\n'), 'primary key')
+  helpers.contains(table.concat(text, '\n'), 'people_name  (name)')
+
+  vim.api.nvim_set_current_win(win)
+  vim.api.nvim_feedkeys('q', 'mx', false)
+  eq(vim.api.nvim_win_is_valid(win), false)
+end
+
 T['actions']['preview a relation into the result window'] = function()
   open_relation('Tables', 'people')
   goto_line('people')

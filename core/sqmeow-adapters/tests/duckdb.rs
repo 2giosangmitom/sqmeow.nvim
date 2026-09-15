@@ -209,9 +209,9 @@ async fn a_plain_select_from_a_table_is_edited_by_its_key() {
     assert_eq!(result.columns()[0].key, KeyKind::Primary);
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("ann".into()))])],
+        updates: vec![(0, vec![(1, "ann".into())])],
         deletes: vec![1],
-        inserts: vec![vec![(0, Some("3".into())), (1, None)]],
+        inserts: vec![vec![(0, "3".into()), (1, sqmeow_db::edit::Value::Null)]],
     };
     let statements = backend.plan(&result, &changes).unwrap();
     backend.apply(&statements).await.unwrap();
@@ -278,7 +278,7 @@ async fn a_binary_key_finds_its_row() {
 
     let result = run(&backend, "select * from blobs").await;
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("new".into()))])],
+        updates: vec![(0, vec![(1, "new".into())])],
         ..Changes::default()
     };
     backend
@@ -297,7 +297,7 @@ async fn a_row_gone_since_it_was_read_is_not_written() {
     run(&backend, "delete from people where id = 1").await;
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("ann".into()))])],
+        updates: vec![(0, vec![(1, "ann".into())])],
         ..Changes::default()
     };
     let error = backend
@@ -336,10 +336,7 @@ async fn a_join_is_edited_through_each_table_key() {
     assert_eq!(result.columns()[4].key, KeyKind::Primary);
 
     let changes = Changes {
-        updates: vec![(
-            0,
-            vec![(1, Some("ann".into())), (3, Some("crimson".into()))],
-        )],
+        updates: vec![(0, vec![(1, "ann".into()), (3, "crimson".into())])],
         ..Changes::default()
     };
     backend
@@ -379,7 +376,7 @@ async fn a_filtered_result_stays_editable() {
     assert_eq!(result.row_count(), 1);
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("rob".into()))])],
+        updates: vec![(0, vec![(1, "rob".into())])],
         ..Changes::default()
     };
     backend
@@ -388,4 +385,54 @@ async fn a_filtered_result_stays_editable() {
         .expect("the plan should apply");
     let after = run(&backend, "select name from filtered where id = 2").await;
     assert_eq!(after.cell(0, 0), Some(&Cell::Text("rob".into())));
+}
+
+#[tokio::test]
+async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table tagged (code varchar unique, label varchar, n integer default 42)",
+    )
+    .await;
+    run(&backend, "create index tagged_label on tagged (label)").await;
+    run(
+        &backend,
+        "insert into tagged values ('a', 'one', 1), ('b', 'two', 2)",
+    )
+    .await;
+
+    let result = run(&backend, "select code, label, n from tagged order by code").await;
+    match result.source() {
+        Some(Source::Tables(tables)) => assert_eq!(tables[0].key, vec![0]),
+        other => panic!("expected a table source, got {other:?}"),
+    }
+    let changes = Changes {
+        updates: vec![(0, vec![(2, sqmeow_db::edit::Value::Default)])],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    backend.apply(&plan).await.expect("the plan should apply");
+    let after = run(&backend, "select n from tagged order by code").await;
+    assert_eq!(after.column_cells(0), &[Cell::Int(42), Cell::Int(2)]);
+
+    assert_eq!(
+        backend.indexes("main", "tagged").await.unwrap(),
+        vec![
+            sqmeow_db::IndexNode {
+                name: "tagged_code_key".into(),
+                columns: vec!["code".into()],
+                unique: true,
+                primary: false,
+            },
+            sqmeow_db::IndexNode {
+                name: "tagged_label".into(),
+                columns: vec!["label".into()],
+                unique: false,
+                primary: false,
+            },
+        ]
+    );
+    let columns = backend.columns("main", "tagged").await.unwrap();
+    assert_eq!(columns[2].default.as_deref(), Some("42"));
 }

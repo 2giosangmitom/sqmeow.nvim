@@ -60,7 +60,7 @@ T['completes subcommand names, sorted'] = function()
 end
 
 T['completes the arguments a subcommand takes, and nothing for one that takes none'] = function()
-  eq(complete('Sqmeow export '), { 'csv', 'json' })
+  eq(complete('Sqmeow export '), { 'csv', 'json', 'sql' })
   eq(complete('Sqmeow export j'), { 'json' })
   eq(complete('Sqmeow log '), { 'clear' })
   eq(complete('Sqmeow cancel '), {})

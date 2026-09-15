@@ -2,6 +2,7 @@
 
 use rmpv::Value;
 use sqmeow_db::Changes;
+use sqmeow_db::edit::Value as Edit;
 use sqmeow_db::export::Format;
 use sqmeow_db::view::{Filter, Op, Sort};
 
@@ -24,7 +25,7 @@ impl Args {
 pub(super) fn format(args: &Args) -> Result<Format, String> {
     match args.opt_string("format").as_deref().map(Format::parse) {
         Some(Some(format)) => Ok(format),
-        Some(None) => Err("format must be `csv` or `json`".to_owned()),
+        Some(None) => Err("format must be `csv`, `json` or `sql`".to_owned()),
         None => Ok(Format::Csv),
     }
 }
@@ -103,14 +104,18 @@ pub(super) fn changes(value: Option<&Value>) -> Result<Changes, String> {
             .and_then(|index| usize::try_from(index).ok())
             .ok_or_else(|| format!("a change needs a `{key}`"))
     };
-    let cells = |list: Option<&Value>| -> Result<Vec<(usize, Option<String>)>, String> {
+    let cells = |list: Option<&Value>| -> Result<Vec<(usize, Edit)>, String> {
         items(list)
             .into_iter()
             .map(|cell| {
-                let text = field(cell, "value")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                Ok((index(cell, "column")?, text))
+                let value = if field(cell, "default").and_then(Value::as_bool) == Some(true) {
+                    Edit::Default
+                } else {
+                    field(cell, "value")
+                        .and_then(Value::as_str)
+                        .map_or(Edit::Null, Edit::from)
+                };
+                Ok((index(cell, "column")?, value))
             })
             .collect()
     };

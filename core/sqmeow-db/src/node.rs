@@ -130,6 +130,18 @@ pub struct ColumnNode {
     pub primary_key: bool,
     /// What this column points at, when it points at anything.
     pub foreign_key: Option<ForeignKey>,
+    /// The default as the schema writes it.
+    pub default: Option<String>,
+}
+
+/// An index or a unique constraint on a table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexNode {
+    pub name: String,
+    /// Its columns in order, or the expressions it is on.
+    pub columns: Vec<String>,
+    pub unique: bool,
+    pub primary: bool,
 }
 
 impl ColumnNode {
@@ -161,6 +173,7 @@ mod tests {
             nullable: true,
             primary_key: false,
             foreign_key: None,
+            default: None,
         }
     }
 

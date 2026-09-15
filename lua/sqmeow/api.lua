@@ -492,12 +492,17 @@ function M.export(opts)
     return
   end
 
+  -- SQL is written for the database the rows came from.
+  local dialect = call.dialect or (state.connections[call.conn_id] or {}).dialect
+
   --- Without a path the engine sends the text back, and `export:done` puts it on the clipboard.
-  local function write(format, path, headers)
+  local function write(format, path, headers, target)
     local _, err = engine().request('export', {
       call_id = call.call_id,
       format = format,
       headers = headers,
+      table = target,
+      dialect = dialect,
       offset = opts.offset,
       limit = opts.limit,
       columns = require('sqmeow.ui.result').visible_columns(),
@@ -509,7 +514,7 @@ function M.export(opts)
   end
 
   if opts.path or opts.clipboard then
-    return write(opts.format or 'csv', opts.path, opts.headers ~= false)
+    return write(opts.format or 'csv', opts.path, opts.headers ~= false, opts.table)
   end
 
   -- Named after the table the query reads from, else the connection.
@@ -539,7 +544,7 @@ function M.export(opts)
   local ok, err = require('sqmeow.ui.form').open({
     title = 'Export',
     fields = {
-      { key = 'format', label = 'Format', options = { 'CSV', 'JSON' } },
+      { key = 'format', label = 'Format', options = { 'CSV', 'JSON', 'SQL' } },
       { key = 'filename', label = 'Filename', enabled = to_file },
       { key = 'path', label = 'Path', enabled = to_file },
       {
@@ -551,6 +556,15 @@ function M.export(opts)
           return values.format == 'CSV'
         end,
       },
+      {
+        key = 'table',
+        label = 'Table',
+        -- Left empty, the rows go into the table they came from.
+        hint = call.source and call.source.kind == 'table' and call.source.name or 'result',
+        enabled = function(values)
+          return values.format == 'SQL'
+        end,
+      },
       { key = 'destination', label = 'Destination', options = { 'File', 'Clipboard' } },
     },
     values = {
@@ -559,6 +573,7 @@ function M.export(opts)
       filename = stem .. '.' .. format:lower(),
       path = vim.fn.fnamemodify(vim.uv.cwd() or '.', ':~'),
       headers = 'yes',
+      table = '',
     },
     -- What will be written, in the format chosen.
     preview = {
@@ -571,6 +586,8 @@ function M.export(opts)
           call_id = call.call_id,
           format = values.format:lower(),
           headers = values.headers == 'yes',
+          table = values.table,
+          dialect = dialect,
           offset = opts.offset,
           limit = opts.limit,
           columns = result.visible_columns(),
@@ -584,7 +601,9 @@ function M.export(opts)
     on_change = function(values, key)
       -- The extension follows the format, unless the user named the file something else.
       if key == 'format' then
-        local bare = values.filename:match('^(.*)%.csv$') or values.filename:match('^(.*)%.json$')
+        local bare = values.filename:match('^(.*)%.csv$')
+          or values.filename:match('^(.*)%.json$')
+          or values.filename:match('^(.*)%.sql$')
         if bare then
           values.filename = bare .. '.' .. values.format:lower()
         end
@@ -615,7 +634,8 @@ function M.export(opts)
       write(
         values.format:lower(),
         to_file(values) and vim.fs.joinpath(values.path, values.filename) or nil,
-        values.headers == 'yes'
+        values.headers == 'yes',
+        values.table
       )
     end,
   })

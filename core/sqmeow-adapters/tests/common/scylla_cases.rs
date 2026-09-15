@@ -191,7 +191,7 @@ async fn edits_a_row_by_its_whole_primary_key() {
     assert_eq!(result.columns()[1].key, KeyKind::Primary);
 
     let update = Changes {
-        updates: vec![(0, vec![(2, Some("42".into())), (3, Some("it's".into()))])],
+        updates: vec![(0, vec![(2, "42".into()), (3, "it's".into())])],
         ..Changes::default()
     };
     let plan = backend.plan(&result, &update).unwrap();

@@ -266,7 +266,7 @@ M.subcommands = {
     complete = function(lead)
       return vim.tbl_filter(function(format)
         return format:find(lead, 1, true) == 1
-      end, { 'csv', 'json' })
+      end, { 'csv', 'json', 'sql' })
     end,
   },
 

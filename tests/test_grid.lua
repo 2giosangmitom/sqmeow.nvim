@@ -347,6 +347,57 @@ T['an EXPLAIN that is run shows its plan as lines rather than a grid'] = functio
   helpers.absent(text, '│')
 end
 
+T['D stages a copy of the row without its primary key'] = function()
+  local win = focus_result()
+  vim.api.nvim_win_set_cursor(win, { 3, 0 })
+  local row = rpc.request('row', { call_id = state.call.call_id, row = 0 })
+
+  result.actions.duplicate_row()
+  eq(edit.inserts()[1], { [1] = row[2].value, [2] = row[3].is_null and vim.NIL or row[3].value })
+  eq(vim.api.nvim_win_get_cursor(win)[1], vim.api.nvim_buf_line_count(result.buffer()))
+end
+
+T['gX stages a default, which SQLite takes in a new row but not in an update'] = function()
+  local win = focus_result()
+  vim.api.nvim_win_set_cursor(win, { 3, 0 })
+  result.goto_column(3)
+  result.actions.set_default()
+  eq(edit.staged(0, 2), edit.DEFAULT)
+  -- Cut to the width of the numbers the column holds.
+  helpers.contains(rows()[1], 'DEF')
+
+  local _, err = rpc.request('plan', { call_id = state.call.call_id, changes = edit.changes() })
+  helpers.contains(err, 'cannot set a column back to its default')
+
+  edit.reset()
+  edit.add_row({ [1] = 'eve', [2] = edit.DEFAULT })
+  local statements = rpc.request('plan', { call_id = state.call.call_id, changes = edit.changes() })
+  eq(statements, { [[INSERT INTO "people" ("name") VALUES ('eve')]] })
+end
+
+T['applying opens the new result at the same page and cursor'] = function()
+  local win = focus_result()
+  vim.api.nvim_win_set_cursor(win, { 4, 0 })
+  edit.set({ row = 1 }, 2, '44')
+  local statements = rpc.request('plan', { call_id = state.call.call_id, changes = edit.changes() })
+
+  local before = state.call.call_id
+  edit.apply(state.call.conn_id, statements)
+  wait('the result should be read again after applying', function()
+    return state.call.call_id ~= before and state.call.state == 'done' and edit.count() == 0
+  end)
+  eq(vim.api.nvim_win_get_cursor(result.window())[1], 4)
+end
+
+T['an export as SQL writes an INSERT per row into the table'] = function()
+  vim.fn.setreg('"', '')
+  api.export({ clipboard = true, format = 'sql', limit = 1 })
+  wait('the export should be copied', function()
+    return vim.fn.getreg('"') ~= ''
+  end)
+  helpers.contains(vim.fn.getreg('"'), 'INSERT INTO "people" ("id", "name", "age") VALUES (1, ')
+end
+
 T['a DELETE without WHERE asks first, and runs only when told to'] = function()
   run('create table doomed (id integer)')
   run('insert into doomed values (1)')

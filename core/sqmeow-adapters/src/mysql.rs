@@ -1,6 +1,5 @@
 //! The MySQL and MariaDB adapter.
 
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,7 +16,8 @@ use sqmeow_db::{
 use tokio_util::sync::CancellationToken;
 
 use crate::stream::{
-    self, SqlxAdapter, TableKeys, foreign_key, origins, prepare, result_columns, text_or_bytes,
+    self, Keys, SqlxAdapter, TableKeys, foreign_key, origins, prepare, result_columns,
+    text_or_bytes,
 };
 
 /// A pool against one MySQL or MariaDB database.
@@ -106,7 +106,7 @@ impl MySqlAdapter {
     }
 
     /// Ask `information_schema` which columns of one table are keys.
-    async fn read_keys(&self, origin: TableName) -> HashMap<String, KeyKind> {
+    async fn read_keys(&self, origin: TableName) -> Keys {
         let (schema, table) = (origin.schema.as_deref(), origin.name.as_str());
 
         let rows = sqlx::query(
@@ -133,15 +133,58 @@ impl MySqlAdapter {
             Ok(rows) => rows,
             Err(error) => {
                 tracing::debug!(%error, ?origin, "could not read which result columns are keys");
-                return HashMap::new();
+                return Keys::default();
             }
         };
 
-        rows.iter()
-            .filter_map(|row| {
-                let column = row.try_get::<String, _>("column_name").ok()?;
-                Some((column, key_kind(row)))
-            })
+        Keys {
+            kinds: rows
+                .iter()
+                .filter_map(|row| {
+                    let column = row.try_get::<String, _>("column_name").ok()?;
+                    Some((column, key_kind(row)))
+                })
+                .collect(),
+            unique: self.unique_keys(schema, table).await,
+        }
+    }
+
+    /// The columns of each unique index on a table other than its primary key.
+    async fn unique_keys(&self, schema: Option<&str>, table: &str) -> Vec<Vec<String>> {
+        let rows = sqlx::query(
+            "select s.index_name as index_name, s.column_name as column_name
+             from information_schema.statistics s
+             where s.table_schema = coalesce(?, database()) and s.table_name = ?
+               and s.non_unique = 0 and s.index_name <> 'PRIMARY'
+             order by s.index_name, s.seq_in_index",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+
+        let mut indexes: Vec<(String, Option<Vec<String>>)> = Vec::new();
+        for row in &rows {
+            let Ok(index) = row.try_get::<String, _>("index_name") else {
+                continue;
+            };
+            // A functional index part has no column.
+            let column = row
+                .try_get::<Option<String>, _>("column_name")
+                .ok()
+                .flatten();
+            match indexes.last_mut() {
+                Some((name, columns)) if *name == index => match (columns.as_mut(), column) {
+                    (Some(columns), Some(column)) => columns.push(column),
+                    _ => *columns = None,
+                },
+                _ => indexes.push((index, column.map(|column| vec![column]))),
+            }
+        }
+        indexes
+            .into_iter()
+            .filter_map(|(_, columns)| columns)
             .collect()
     }
 }
@@ -301,7 +344,8 @@ impl Adapter for MySqlAdapter {
                     c.is_nullable as nullable,
                     c.column_key as key_kind,
                     k.referenced_table_name as references_table,
-                    k.referenced_column_name as references_column
+                    k.referenced_column_name as references_column,
+                    c.column_default as default_value
              from information_schema.columns c
              -- One row per column even where a column takes part in several constraints: the
              -- drawer shows one target, and the lowest ordinal is the first one declared.
@@ -336,9 +380,48 @@ impl Adapter for MySqlAdapter {
                     nullable: row.try_get::<String, _>("nullable").ok()? == "YES",
                     primary_key: row.try_get::<String, _>("key_kind").ok()? == "PRI",
                     foreign_key: foreign_key(row),
+                    default: row
+                        .try_get::<Option<String>, _>("default_value")
+                        .ok()
+                        .flatten(),
                 })
             })
             .collect())
+    }
+
+    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+        let rows = sqlx::query(
+            "select s.index_name as index_name, s.non_unique as non_unique,
+                    s.column_name as column_name
+             from information_schema.statistics s
+             where s.table_schema = ? and s.table_name = ?
+             order by s.index_name, s.seq_in_index",
+        )
+        .bind(schema)
+        .bind(relation)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::driver)?;
+
+        let mut indexes: Vec<sqmeow_db::IndexNode> = Vec::new();
+        for row in &rows {
+            let name: String = row.try_get("index_name").map_err(Error::driver)?;
+            let column = row
+                .try_get::<Option<String>, _>("column_name")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "(expression)".to_owned());
+            match indexes.last_mut() {
+                Some(index) if index.name == name => index.columns.push(column),
+                _ => indexes.push(sqmeow_db::IndexNode {
+                    unique: row.try_get::<i64, _>("non_unique").unwrap_or(1) == 0,
+                    primary: name == "PRIMARY",
+                    columns: vec![column],
+                    name,
+                }),
+            }
+        }
+        Ok(indexes)
     }
 
     async fn close(&self) {

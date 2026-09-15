@@ -185,7 +185,8 @@ impl Adapter for DuckDbAdapter {
                 "select c.column_name, c.data_type, c.is_nullable,
                         coalesce(list_contains(p.constraint_column_names, c.column_name), false),
                         f.referenced_table,
-                        f.referenced_column_names[list_position(f.constraint_column_names, c.column_name)]
+                        f.referenced_column_names[list_position(f.constraint_column_names, c.column_name)],
+                        c.column_default
                  from duckdb_columns() c
                  left join duckdb_constraints() p
                    on p.table_oid = c.table_oid and p.constraint_type = 'PRIMARY KEY'
@@ -204,6 +205,37 @@ impl Adapter for DuckDbAdapter {
                         nullable: row.get(2)?,
                         primary_key: row.get(3)?,
                         foreign_key: table.zip(column).map(|(table, column)| ForeignKey { table, column }),
+                        default: row.get(6)?,
+                    })
+                },
+            )
+        })
+        .await
+    }
+
+    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+        let params = [schema, relation, schema, relation].map(str::to_owned);
+        self.run(move |connection| {
+            rows(
+                connection,
+                "select * from (
+                     select constraint_name, to_json(constraint_column_names)::varchar,
+                            true, constraint_type = 'PRIMARY KEY'
+                     from duckdb_constraints()
+                     where constraint_type in ('PRIMARY KEY', 'UNIQUE')
+                       and database_name = current_database() and schema_name = ? and table_name = ?
+                     union all
+                     select index_name, expressions, is_unique, is_primary
+                     from duckdb_indexes()
+                     where database_name = current_database() and schema_name = ? and table_name = ?
+                 ) order by 1",
+                params,
+                |row| {
+                    Ok(sqmeow_db::IndexNode {
+                        name: row.get(0)?,
+                        columns: list_names(&row.get::<_, String>(1)?),
+                        unique: row.get(2)?,
+                        primary: row.get(3)?,
                     })
                 },
             )
@@ -278,6 +310,8 @@ struct Catalog {
     table: TableName,
     /// Each column, with the key it is part of.
     columns: Vec<(String, Option<KeyKind>)>,
+    /// The columns of each unique constraint or index.
+    unique: Vec<Vec<String>>,
     /// Read more than once, as in a self-join, so a column cannot be pinned to one side.
     repeated: bool,
 }
@@ -312,11 +346,14 @@ impl Described {
                 .iter()
                 .find(|catalog| catalog.table == *table)
                 .map_or_else(Vec::new, |catalog| {
-                    catalog
+                    let primary = catalog
                         .columns
                         .iter()
                         .filter(|(_, kind)| *kind == Some(KeyKind::Primary))
                         .map(|(name, _)| name.clone())
+                        .collect();
+                    std::iter::once(primary)
+                        .chain(catalog.unique.iter().cloned())
                         .collect()
                 })
         })
@@ -504,13 +541,63 @@ fn table_catalog(connection: &Connection, schema: &str, table: &str) -> Option<C
     .ok()?;
 
     let (schema, table, ..) = columns.first()?;
+    let names: Vec<String> = columns.iter().map(|(.., name, _)| name.clone()).collect();
     Some(Catalog {
         table: TableName::new(Some(schema), table),
+        unique: unique_keys(connection, schema, table, &names),
         columns: columns
             .iter()
             .map(|(.., name, kind)| (name.clone(), *kind))
             .collect(),
         repeated: false,
+    })
+}
+
+/// The columns of each unique constraint and unique index on a table.
+fn unique_keys(
+    connection: &Connection,
+    schema: &str,
+    table: &str,
+    names: &[String],
+) -> Vec<Vec<String>> {
+    let lists = rows(
+        connection,
+        "select to_json(constraint_column_names)::varchar from duckdb_constraints()
+         where constraint_type = 'UNIQUE' and database_name = current_database()
+           and schema_name = ? and table_name = ?
+         union all
+         select expressions from duckdb_indexes()
+         where is_unique and not is_primary and database_name = current_database()
+           and schema_name = ? and table_name = ?",
+        [schema, table, schema, table],
+        |row| row.get::<_, String>(0),
+    )
+    .unwrap_or_default();
+
+    lists
+        .iter()
+        .filter_map(|list| {
+            // An index on an expression names no column.
+            list_names(list)
+                .iter()
+                .map(|part| {
+                    names
+                        .iter()
+                        .find(|name| name.eq_ignore_ascii_case(part))
+                        .cloned()
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect()
+}
+
+/// The names in a constraint's JSON list, or in an index's expressions written as `[a, b]`.
+fn list_names(list: &str) -> Vec<String> {
+    serde_json::from_str(list).unwrap_or_else(|_| {
+        list.trim_matches(['[', ']'])
+            .split(", ")
+            .map(|part| part.trim_matches(['\'', '"']).to_owned())
+            .collect()
     })
 }
 

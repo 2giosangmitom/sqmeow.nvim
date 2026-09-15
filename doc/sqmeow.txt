@@ -288,6 +288,7 @@ Built-in mappings, per surface.
 drawer
  <CR>, o   Expand or collapse the node
  p         Show the first page of this relation
+ K         Show the columns and indexes of this table
  r         Reload this subtree
  y         Yank the qualified name
  s         Yank a SELECT for this relation
@@ -319,7 +320,9 @@ result
  Z           Show the result in a float, or back in its split
  i, <CR>     Change this cell
  X           Set this cell to NULL
+ gX          Set this cell to its column's default
  o           Add a row
+ D           Add a copy of this row
  dd          Delete this row, or keep it after all
  d (x)       Delete the selected rows
  u           Undo the last change

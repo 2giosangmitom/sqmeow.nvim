@@ -1,13 +1,20 @@
-//! Writing a result out as CSV or JSON.
+//! Writing a result out as CSV, JSON or SQL.
 
+use crate::adapter::Dialect;
+use crate::edit::{Source, literal};
 use crate::result::ResultSet;
 use crate::value::Cell;
 
 /// What an export is written as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Format {
     Csv,
     Json,
+    /// An `INSERT` per row, into `table` or else the table the rows came from.
+    Sql {
+        dialect: Dialect,
+        table: Option<String>,
+    },
 }
 
 impl Format {
@@ -16,6 +23,10 @@ impl Format {
         match name.to_ascii_lowercase().as_str() {
             "csv" => Some(Self::Csv),
             "json" => Some(Self::Json),
+            "sql" => Some(Self::Sql {
+                dialect: Dialect::Postgres,
+                table: None,
+            }),
             _ => None,
         }
     }
@@ -55,7 +66,7 @@ impl Rows {
 /// Write rows of a result in the given format.
 pub fn write(
     result: &ResultSet,
-    format: Format,
+    format: &Format,
     rows: &[usize],
     columns: Option<&[usize]>,
     headers: bool,
@@ -63,6 +74,7 @@ pub fn write(
     match format {
         Format::Csv => csv(result, rows, columns, headers),
         Format::Json => json(result, rows, columns),
+        Format::Sql { dialect, table } => sql(result, rows, columns, *dialect, table.as_deref()),
     }
 }
 
@@ -130,6 +142,46 @@ pub fn json(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>) -> St
         .unwrap_or_else(|_| "[]".to_owned())
 }
 
+/// Write rows as one `INSERT` each, into `table` or else the first table the result came from.
+pub fn sql(
+    result: &ResultSet,
+    rows: &[usize],
+    columns: Option<&[usize]>,
+    dialect: Dialect,
+    table: Option<&str>,
+) -> String {
+    let columns = chosen(result, columns);
+    let source = match result.source() {
+        Some(Source::Tables(tables)) => tables.first(),
+        _ => None,
+    };
+    let table = match (table, source) {
+        (Some(table), _) => table.to_owned(),
+        (None, Some(source)) => source.quoted(dialect),
+        (None, None) => dialect.quote_ident("result"),
+    };
+    // A column is named as its table names it, not by its alias in the query.
+    let names = columns
+        .iter()
+        .map(|&column| {
+            let shown = &result.columns()[column].name;
+            dialect.quote_ident(source.and_then(|s| s.column(column)).unwrap_or(shown))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    rows.iter()
+        .map(|&row| {
+            let values = columns
+                .iter()
+                .map(|&column| literal(dialect, result.cell(row, column).unwrap_or(&Cell::Null)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("INSERT INTO {table} ({names}) VALUES ({values});\n")
+        })
+        .collect()
+}
+
 fn value(cell: &Cell) -> serde_json::Value {
     match cell {
         Cell::Null => serde_json::Value::Null,
@@ -172,7 +224,38 @@ mod tests {
     fn a_format_name_is_parsed_either_case() {
         assert_eq!(Format::parse("csv"), Some(Format::Csv));
         assert_eq!(Format::parse("JSON"), Some(Format::Json));
+        assert!(matches!(Format::parse("sql"), Some(Format::Sql { .. })));
         assert_eq!(Format::parse("xml"), None);
+    }
+
+    #[test]
+    fn sql_writes_an_insert_per_row_into_the_source_table() {
+        let mut result = sample();
+        result.set_source(Some(Source::Tables(vec![crate::edit::Table {
+            schema: Some("app".into()),
+            name: "people".into(),
+            key: vec![0],
+            columns: vec![(0, "id".into()), (1, "full_name".into())],
+        }])));
+        assert_eq!(
+            sql(&result, &[0, 1], None, Dialect::MySql, None),
+            "INSERT INTO `app`.`people` (`id`, `full_name`) VALUES (1, 'alice');\n\
+             INSERT INTO `app`.`people` (`id`, `full_name`) VALUES (2, NULL);\n"
+        );
+    }
+
+    #[test]
+    fn sql_quotes_text_and_takes_a_table_it_is_given() {
+        let mut result = ResultSet::new("select v", vec![column("v"), column("n")]);
+        result.push_row(vec![Cell::Text("it's".into()), Cell::Float(f64::NAN)]);
+        assert_eq!(
+            sql(&result, &[0], None, Dialect::Sqlite, Some("copy")),
+            "INSERT INTO copy (\"v\", \"n\") VALUES ('it''s', 'NaN');\n"
+        );
+        assert_eq!(
+            sql(&result, &[0], Some(&[0]), Dialect::Postgres, None),
+            "INSERT INTO \"result\" (\"v\") VALUES ('it''s');\n"
+        );
     }
 
     #[test]

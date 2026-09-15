@@ -465,10 +465,10 @@ async fn documents_found_by_object_id_are_edited_added_and_removed() {
     );
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("alice".into())), (2, Some("10".into()))])],
+        updates: vec![(0, vec![(1, "alice".into()), (2, "10".into())])],
         deletes: vec![1],
         // A quoted number stays text.
-        inserts: vec![vec![(1, Some(r#""007""#.into())), (2, Some("3".into()))]],
+        inserts: vec![vec![(1, r#""007""#.into()), (2, "3".into())]],
     };
     let plan = backend
         .plan(&found, &changes)
@@ -518,7 +518,7 @@ async fn a_write_the_server_refuses_fails_the_apply() {
     let found = run(&backend, r#"{"find": "refused"}"#).await;
 
     let changes = Changes {
-        inserts: vec![vec![(0, Some("1".into()))]],
+        inserts: vec![vec![(0, "1".into())]],
         ..Changes::default()
     };
     let plan = backend.plan(&found, &changes).unwrap();
@@ -534,7 +534,7 @@ async fn an_edit_to_a_document_deleted_since_is_reported() {
     empty(&backend, "vanished").await;
 
     let changes = Changes {
-        updates: vec![(0, vec![(1, Some("2".into()))])],
+        updates: vec![(0, vec![(1, "2".into())])],
         ..Changes::default()
     };
     let plan = backend.plan(&found, &changes).unwrap();

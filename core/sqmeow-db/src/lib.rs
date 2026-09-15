@@ -18,7 +18,8 @@ pub use edit::{Changes, RedisKind, Source, Table, TableBinder, TableName};
 pub use error::{Error, Result};
 pub use export::{Format, Rows};
 pub use node::{
-    ColumnNode, KeyType, RelationKind, RelationNode, RoutineKind, RoutineNode, SchemaNode,
+    ColumnNode, IndexNode, KeyType, RelationKind, RelationNode, RoutineKind, RoutineNode,
+    SchemaNode,
 };
 pub use result::{Column, ResultSet};
 pub use sql::Statement;

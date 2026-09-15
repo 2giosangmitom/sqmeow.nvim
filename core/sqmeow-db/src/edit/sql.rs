@@ -62,6 +62,11 @@ impl Planner<'_> {
             ));
         };
         let name = self.table(table);
+        // A column left at its default is left out.
+        let cells: Vec<&(usize, Value)> = cells
+            .iter()
+            .filter(|(_, value)| *value != Value::Default)
+            .collect();
         if cells.is_empty() {
             return Ok(match self.dialect {
                 Dialect::MySql => format!("INSERT INTO {name} () VALUES ()"),
@@ -72,10 +77,10 @@ impl Planner<'_> {
             .iter()
             .map(|(index, _)| self.column(table, *index))
             .collect::<Result<Vec<_>>>()?;
-        let values: Vec<String> = cells
+        let values = cells
             .iter()
             .map(|(index, value)| self.value(*index, value))
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         Ok(format!(
             "INSERT INTO {name} ({}) VALUES ({})",
             columns.join(", "),
@@ -97,7 +102,7 @@ impl Planner<'_> {
                     Ok(format!(
                         "{} = {}",
                         self.column(table, *index)?,
-                        self.value(*index, value)
+                        self.value(*index, value)?
                     ))
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -116,11 +121,7 @@ impl Planner<'_> {
     }
 
     fn table(&self, table: &Table) -> String {
-        let name = self.dialect.quote_ident(&table.name);
-        match &table.schema {
-            Some(schema) => format!("{}.{name}", self.dialect.quote_ident(schema)),
-            None => name,
-        }
+        table.quoted(self.dialect)
     }
 
     fn column(&self, table: &Table, index: usize) -> Result<String> {
@@ -135,9 +136,18 @@ impl Planner<'_> {
         Ok(self.dialect.quote_ident(name))
     }
 
-    fn value(&self, index: usize, value: &Value) -> String {
+    fn value(&self, index: usize, value: &Value) -> Result<String> {
+        if *value == Value::Default {
+            return match self.dialect {
+                Dialect::Sqlite | Dialect::Scylla => Err(Error::driver(format!(
+                    "{} cannot set a column back to its default",
+                    self.dialect.name()
+                ))),
+                _ => Ok("DEFAULT".to_owned()),
+            };
+        }
         let type_name = &self.result.columns()[index].type_name;
-        value_literal(self.dialect, type_name, value.as_deref())
+        Ok(value_literal(self.dialect, type_name, value.text()))
     }
 
     /// The `WHERE` condition that finds a row's table row by its key.
@@ -155,17 +165,20 @@ impl Planner<'_> {
                 table.qualified()
             )));
         }
+        // A unique key may hold NULL, which more than one row can.
+        if cells.iter().any(|cell| cell.is_null()) {
+            return Err(Error::driver(format!(
+                "row {row} has NULL in the key of `{}`, so it cannot be found again",
+                table.qualified()
+            )));
+        }
         let parts = table
             .key
             .iter()
             .zip(cells)
             .map(|(&index, cell)| {
                 let name = self.column(table, index)?;
-                Ok(if cell.is_null() {
-                    format!("{name} IS NULL")
-                } else {
-                    format!("{name} = {}", cell_literal(self.dialect, cell)?)
-                })
+                Ok(format!("{name} = {}", cell_literal(self.dialect, cell)?))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(parts.join(" AND "))
@@ -226,6 +239,14 @@ pub fn condition(dialect: Dialect, column: &str, cell: &Cell) -> Result<String> 
         Cell::Null => format!("{column} IS NULL"),
         cell => format!("{column} = {}", cell_literal(dialect, cell)?),
     })
+}
+
+/// A value the result holds as a SQL literal, falling back to its text where no literal matches it.
+pub fn literal(dialect: Dialect, cell: &Cell) -> String {
+    match cell {
+        Cell::Null => "NULL".to_owned(),
+        cell => cell_literal(dialect, cell).unwrap_or_else(|_| quote_text(dialect, &cell.text(""))),
+    }
 }
 
 /// A value the result holds, as the SQL literal that matches it again.
@@ -352,7 +373,7 @@ mod tests {
     #[test]
     fn an_update_sets_the_table_column_and_finds_the_row_by_its_key() {
         let changes = Changes {
-            updates: vec![(0, vec![(1, Some("o'brien".into())), (0, None)])],
+            updates: vec![(0, vec![(1, "o'brien".into()), (0, Value::Null)])],
             ..Changes::default()
         };
         let plan = sql_plan(Dialect::Postgres, &people(), &changes).unwrap();
@@ -363,11 +384,51 @@ mod tests {
     }
 
     #[test]
+    fn a_default_is_written_as_default_or_left_out_of_an_insert() {
+        let changes = Changes {
+            updates: vec![(0, vec![(1, Value::Default)])],
+            inserts: vec![
+                vec![(0, "7".into()), (1, Value::Default)],
+                vec![(1, Value::Default)],
+            ],
+            ..Changes::default()
+        };
+        assert_eq!(
+            sql_plan(Dialect::Postgres, &people(), &changes).unwrap(),
+            vec![
+                r#"INSERT INTO "public"."people" ("id") VALUES ('7')"#,
+                r#"INSERT INTO "public"."people" DEFAULT VALUES"#,
+                r#"UPDATE "public"."people" SET "name" = DEFAULT WHERE "id" = 1"#,
+            ]
+        );
+        let error = sql_plan(Dialect::Sqlite, &people(), &changes).unwrap_err();
+        assert!(error.to_string().contains("default"), "{error}");
+    }
+
+    #[test]
+    fn a_row_with_null_in_its_key_is_refused() {
+        let mut result = people();
+        result.push_row(vec![Cell::Int(2), Cell::Null, Cell::Null]);
+        result.set_source(Some(Source::Tables(vec![table(
+            None,
+            "people",
+            &[0, 1],
+            &[(0, "id"), (1, "name")],
+        )])));
+        let changes = Changes {
+            deletes: vec![1],
+            ..Changes::default()
+        };
+        let error = sql_plan(Dialect::Sqlite, &result, &changes).unwrap_err();
+        assert!(error.to_string().contains("NULL in the key"), "{error}");
+    }
+
+    #[test]
     fn deletes_and_inserts_come_before_updates() {
         let changes = Changes {
-            updates: vec![(0, vec![(1, Some("x".into()))])],
+            updates: vec![(0, vec![(1, "x".into())])],
             deletes: vec![0],
-            inserts: vec![vec![(1, Some("new".into()))], vec![]],
+            inserts: vec![vec![(1, "new".into())], vec![]],
         };
         let plan = sql_plan(Dialect::Sqlite, &people(), &changes).unwrap();
         // The update to a row being deleted is dropped.
@@ -384,7 +445,7 @@ mod tests {
     #[test]
     fn an_update_to_a_joined_row_writes_each_table_by_its_own_key() {
         let changes = Changes {
-            updates: vec![(0, vec![(1, Some("amy".into())), (3, Some("blue".into()))])],
+            updates: vec![(0, vec![(1, "amy".into()), (3, "blue".into())])],
             ..Changes::default()
         };
         assert_eq!(
@@ -411,7 +472,7 @@ mod tests {
     #[test]
     fn a_row_cannot_be_added_to_a_join() {
         let changes = Changes {
-            inserts: vec![vec![(1, Some("cat".into()))]],
+            inserts: vec![vec![(1, "cat".into())]],
             ..Changes::default()
         };
         let error = sql_plan(Dialect::Sqlite, &joined(), &changes).unwrap_err();
@@ -422,7 +483,7 @@ mod tests {
     #[test]
     fn the_missing_side_of_an_outer_join_is_refused() {
         let changes = Changes {
-            updates: vec![(1, vec![(3, Some("green".into()))])],
+            updates: vec![(1, vec![(3, "green".into())])],
             ..Changes::default()
         };
         let error = sql_plan(Dialect::Sqlite, &joined(), &changes).unwrap_err();
@@ -432,7 +493,7 @@ mod tests {
     #[test]
     fn an_expression_column_is_refused() {
         let changes = Changes {
-            updates: vec![(0, vec![(2, Some("x".into()))])],
+            updates: vec![(0, vec![(2, "x".into())])],
             ..Changes::default()
         };
         let error = sql_plan(Dialect::Postgres, &people(), &changes).unwrap_err();
@@ -509,7 +570,7 @@ mod tests {
         )])));
 
         let update = Changes {
-            updates: vec![(0, vec![(1, Some("42".into())), (2, Some("42".into()))])],
+            updates: vec![(0, vec![(1, "42".into()), (2, "42".into())])],
             ..Changes::default()
         };
         assert_eq!(
