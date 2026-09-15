@@ -120,6 +120,8 @@ pub struct Session {
     running: Mutex<HashMap<CallId, CancellationToken>>,
     options: Mutex<Options>,
     next_call_id: AtomicU64,
+    /// The rows the last applied inserts returned, by connection.
+    inserted: Mutex<HashMap<ConnId, Vec<ResultSet>>>,
 }
 
 #[derive(Default)]
@@ -259,6 +261,23 @@ impl Session {
             }
         }
         call
+    }
+
+    /// Keep the rows applied inserts returned, for the connection's next run of its query.
+    pub fn stash_inserted(&self, conn_id: ConnId, rows: Vec<ResultSet>) {
+        self.inserted
+            .lock()
+            .expect("inserted poisoned")
+            .insert(conn_id, rows);
+    }
+
+    /// Take the rows kept for a connection.
+    pub fn take_inserted(&self, conn_id: ConnId) -> Vec<ResultSet> {
+        self.inserted
+            .lock()
+            .expect("inserted poisoned")
+            .remove(&conn_id)
+            .unwrap_or_default()
     }
 
     /// Read a stored result.

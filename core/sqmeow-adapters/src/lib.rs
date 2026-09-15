@@ -157,7 +157,7 @@ impl Backend {
     }
 
     /// Run planned statements together.
-    pub async fn apply(&self, statements: &[String]) -> Result<()> {
+    pub async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
         dispatch!(self, adapter => adapter.apply(statements).await)
     }
 

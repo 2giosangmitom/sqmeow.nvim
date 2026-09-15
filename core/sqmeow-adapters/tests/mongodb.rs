@@ -670,3 +670,34 @@ async fn server_and_database_commands_answer_one_row() {
     ));
     assert!(plan.source().is_none());
 }
+
+#[tokio::test]
+async fn lists_a_collections_indexes() {
+    let backend = connect(&server!()).await;
+    run(&backend, r#"{"drop": "indexed_docs"}"#).await;
+    run(
+        &backend,
+        r#"{"createIndexes": "indexed_docs", "indexes": [
+            {"key": {"email": 1}, "name": "email_1", "unique": true},
+            {"key": {"n": -1, "tag": 1}, "name": "mixed"}
+        ]}"#,
+    )
+    .await;
+
+    let indexes = backend.indexes("sqmeow", "indexed_docs").await.unwrap();
+    let listed: Vec<(&str, Vec<&str>, bool, bool)> = indexes
+        .iter()
+        .map(|index| {
+            let columns = index.columns.iter().map(String::as_str).collect();
+            (index.name.as_str(), columns, index.unique, index.primary)
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        vec![
+            ("_id_", vec!["_id"], true, true),
+            ("email_1", vec!["email"], true, false),
+            ("mixed", vec!["n -1", "tag"], false, false),
+        ]
+    );
+}

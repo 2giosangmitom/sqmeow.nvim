@@ -408,7 +408,7 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
         other => panic!("expected a table source, got {other:?}"),
     }
     let changes = Changes {
-        updates: vec![(0, vec![(2, sqmeow_db::edit::Value::Default)])],
+        updates: vec![(0, vec![(2, "42".into())])],
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();

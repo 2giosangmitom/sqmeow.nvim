@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rmpv::Value;
-use sqmeow_db::{Cell, Dialect, Error as DbError, ResultSet, guard, sql, view};
+use sqmeow_db::{Cell, Dialect, Error as DbError, ResultSet, edit, guard, sql, view};
 
 use super::summary::{cell_value, summarize};
 use super::{Core, Started, params};
@@ -63,8 +63,10 @@ impl Core {
             )
         };
 
+        // After applying edits, rows the inserts returned are shown even where the query leaves them out.
+        let inserted = args.opt_bool("inserted").unwrap_or(false);
         let call_id = self.session.next_call_id();
-        let work = self.run(call_id, connection, statements, wrapped, archive);
+        let work = self.run(call_id, connection, statements, wrapped, archive, inserted);
         Ok((Value::from(call_id), Box::pin(work)))
     }
 
@@ -89,6 +91,7 @@ impl Core {
         statements: Vec<sql::Statement>,
         wrapped: Option<String>,
         archive: Option<PathBuf>,
+        inserted: bool,
     ) {
         let conn_id = connection.id;
         let options = self.session.options();
@@ -115,6 +118,8 @@ impl Core {
         );
 
         let mut last: Option<ResultSet> = None;
+        // The rows of earlier statements, each kept as a result of its own.
+        let mut earlier: Vec<Value> = Vec::new();
         for statement in &statements {
             let run = wrapped.as_deref().unwrap_or(&statement.sql);
             let outcome = connection
@@ -122,7 +127,13 @@ impl Core {
                 .execute_wrapped(run, &statement.sql, options.max_rows, running.token())
                 .await;
             match outcome {
-                Ok(result) => last = Some(result),
+                Ok(result) => {
+                    if let Some(previous) = last.replace(result)
+                        && !previous.columns().is_empty()
+                    {
+                        earlier.push(self.keep(conn_id, previous));
+                    }
+                }
                 Err(DbError::Cancelled) => {
                     return self.emit_call(call_id, conn_id, "cancelled", elapsed(started));
                 }
@@ -135,6 +146,15 @@ impl Core {
                         );
                     }
                     let mut payload = elapsed(started);
+                    if !earlier.is_empty() {
+                        earlier.push(map(vec![
+                            ("call_id", Value::from(call_id)),
+                            ("conn_id", Value::from(conn_id)),
+                            ("state", Value::from("error")),
+                            ("error", Value::from(error.as_str())),
+                        ]));
+                        payload.push(("results", Value::Array(earlier)));
+                    }
                     payload.push(("error", Value::from(error)));
                     return self.emit_call(call_id, conn_id, "error", payload);
                 }
@@ -144,13 +164,28 @@ impl Core {
         // Only the last statement's rows are shown, timed over the whole call.
         let mut result = last.unwrap_or_default();
         result.set_elapsed(started.elapsed());
+        let appended = if inserted {
+            let rows = self.session.take_inserted(conn_id);
+            edit::append_inserted(&mut result, connection.backend.dialect(), &rows)
+        } else {
+            0
+        };
 
         let call = Call::new(call_id, conn_id, result);
         let mut payload = summarize(&call);
         payload.extend(elapsed(started));
+        if appended > 0 {
+            payload.push(("appended", Value::from(appended as u64)));
+        }
         // After the statements, so a `use` among them is what the winbar shows.
         if let Some(database) = connection.backend.database() {
             payload.push(("current_database", Value::from(database)));
+        }
+        if !earlier.is_empty() {
+            let mut current = payload.clone();
+            current.push(("state", Value::from("done")));
+            earlier.push(map(current));
+            payload.push(("results", Value::Array(earlier)));
         }
 
         let call = self.session.store_call(call);
@@ -160,6 +195,17 @@ impl Core {
         if let Some(path) = archive {
             save(path, call);
         }
+    }
+
+    /// Store an earlier statement's rows as a result of their own, and describe it.
+    fn keep(&self, conn_id: ConnId, result: ResultSet) -> Value {
+        let elapsed_ms = result.elapsed().as_millis() as u64;
+        let call = Call::new(self.session.next_call_id(), conn_id, result);
+        let mut summary = summarize(&call);
+        summary.push(("state", Value::from("done")));
+        summary.push(("elapsed_ms", Value::from(elapsed_ms)));
+        self.session.store_call(call);
+        map(summary)
     }
 
     /// Read a result saved by an earlier `execute` back into the session.

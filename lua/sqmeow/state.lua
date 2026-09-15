@@ -33,12 +33,15 @@ local M = {}
 ---@field connection string|nil For a result shown from the log, the database it ran on.
 ---@field dialect string|nil For a result shown from the log, what that database speaks.
 ---@field ran_at integer|nil For a result shown from the log, when it ran, in seconds since the epoch.
+---@field results table[]|nil Each statement's result, when several statements returned rows.
+---@field appended integer|nil How many rows applied inserts returned that the query left out.
 
 --- One column of a result, as the engine describes it.
 ---@class sqmeow.ResultSource Where a result's rows are stored.
 ---@field kind string What the relation is, as the engine names it.
 ---@field name string
 ---@field insertable boolean|nil Present when rows can be added, which a join does not allow.
+---@field tables { schema: string|nil, name: string, columns: integer[] }[]|nil The tables of a SQL result, each with its zero-based columns.
 
 ---@class sqmeow.ResultColumn
 ---@field name string

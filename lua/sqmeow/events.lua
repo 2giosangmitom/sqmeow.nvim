@@ -68,6 +68,14 @@ function M.on_call(payload)
   if payload.state == 'cancelled' then
     notify('query cancelled', vim.log.levels.WARN)
   end
+  if payload.appended then
+    notify(
+      ('%d added row%s the query leaves out shown at the end'):format(
+        payload.appended,
+        payload.appended == 1 and '' or 's'
+      )
+    )
+  end
 
   -- A MongoDB `use` changes the database both winbars show.
   local connection = state.connections[payload.conn_id]

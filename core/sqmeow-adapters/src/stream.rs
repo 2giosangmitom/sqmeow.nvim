@@ -197,25 +197,45 @@ where
     }
 }
 
-/// Run statements in one transaction, rolling all of them back when any fails.
+/// Run statements in one transaction, rolling all of them back when any fails, and answer with the
+/// rows any of them returned.
 pub(crate) async fn transact<DB>(
     pool: &Pool<DB>,
     statements: &[String],
     affected: impl Fn(&DB::QueryResult) -> u64,
-) -> Result<()>
+    decode: impl Fn(&DB::Row, usize) -> Cell,
+) -> Result<Vec<ResultSet>>
 where
     DB: Database,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
 {
     let mut transaction = pool.begin().await.map_err(Error::driver)?;
+    let mut returned = Vec::new();
     for statement in statements {
-        let outcome = sqlx::raw_sql(AssertSqlSafe(statement.clone()))
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| Error::driver(format!("{error}\nin: {statement}")))?;
-        check_affected(statement, affected(&outcome))?;
+        let failed = |error: sqlx::Error| Error::driver(format!("{error}\nin: {statement}"));
+        let mut result = ResultSet::new(statement.as_str(), Vec::new());
+        let mut changed = 0;
+        let mut stream =
+            sqlx::raw_sql(AssertSqlSafe(statement.clone())).fetch_many(&mut *transaction);
+        while let Some(item) = stream.next().await {
+            match item.map_err(failed)? {
+                Either::Left(outcome) => changed += affected(&outcome),
+                Either::Right(row) => {
+                    if result.columns().is_empty() {
+                        result.adopt_columns(result_columns(row.columns()));
+                    }
+                    result.push_row((0..row.len()).map(|index| decode(&row, index)).collect());
+                }
+            }
+        }
+        drop(stream);
+        check_affected(statement, changed)?;
+        if result.row_count() > 0 {
+            returned.push(result);
+        }
     }
-    transaction.commit().await.map_err(Error::driver)
+    transaction.commit().await.map_err(Error::driver)?;
+    Ok(returned)
 }
 
 /// Refuse a planned `UPDATE` or `DELETE` that found no row.

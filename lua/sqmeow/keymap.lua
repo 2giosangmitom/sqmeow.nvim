@@ -49,6 +49,13 @@ M.defaults = {
     { action = 'first_page', lhs = 'gg', desc = 'First page' },
     { action = 'last_page', lhs = 'G', desc = 'Last page' },
     { action = 'detail', lhs = 'K', desc = 'Show this row down the page' },
+    {
+      action = 'structure',
+      lhs = 'gK',
+      desc = 'Show the columns and indexes of the table this column is from',
+    },
+    { action = 'next_result', lhs = ']r', desc = "Show the next statement's result" },
+    { action = 'prev_result', lhs = '[r', desc = "Show the previous statement's result" },
     -- Not `e`, which is a word motion.
     { action = 'export', lhs = 'x', desc = 'Export the result to a file' },
     { action = 'export_selection', lhs = 'x', mode = 'x', desc = 'Export the selected rows' },
@@ -76,7 +83,6 @@ M.defaults = {
     },
     { action = 'edit_cell', lhs = { 'i', '<CR>' }, desc = 'Change this cell' },
     { action = 'set_null', lhs = 'X', desc = 'Set this cell to NULL' },
-    { action = 'set_default', lhs = 'gX', desc = "Set this cell to its column's default" },
     { action = 'add_row', lhs = 'o', desc = 'Add a row' },
     { action = 'duplicate_row', lhs = 'D', desc = 'Add a copy of this row' },
     { action = 'delete_row', lhs = 'dd', desc = 'Delete this row, or keep it after all' },

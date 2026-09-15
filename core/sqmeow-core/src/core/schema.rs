@@ -8,6 +8,8 @@ use sqmeow_db::{
     RoutineKind, RoutineNode, SchemaNode,
 };
 
+use sqmeow_adapters::Backend;
+
 use super::{Core, Started};
 use crate::args::Args;
 use crate::session::Connection;
@@ -30,15 +32,20 @@ impl Core {
     /// Read a table's columns and indexes, and report them through `structure:done`.
     pub(super) fn structure(self: Arc<Self>, args: &Args) -> Started {
         let conn_id = args.conn_id("conn_id")?;
-        let schema = args.string("schema")?;
+        // Empty for a table the result names without one.
+        let schema = args.opt_string("schema").unwrap_or_default();
         let relation = args.string("relation")?;
         let connection = self.connection(conn_id)?;
 
         let work = async move {
             let backend = &connection.backend;
             let read = async {
-                let columns = backend.columns(&schema, &relation).await?;
-                Ok::<_, DbError>((columns, backend.indexes(&schema, &relation).await?))
+                let named = match schema.as_str() {
+                    "" => default_schema(backend).await?,
+                    named => named.to_owned(),
+                };
+                let columns = backend.columns(&named, &relation).await?;
+                Ok::<_, DbError>((columns, backend.indexes(&named, &relation).await?))
             };
             let mut payload = vec![
                 ("conn_id", Value::from(conn_id)),
@@ -89,6 +96,17 @@ impl Core {
         }
         self.emit("schema:nodes", map(payload));
     }
+}
+
+/// The schema unqualified names resolve to.
+pub(super) async fn default_schema(backend: &Backend) -> Result<String, DbError> {
+    backend
+        .schemas()
+        .await?
+        .into_iter()
+        .find(|schema| schema.is_default)
+        .map(|schema| schema.name)
+        .ok_or_else(|| DbError::driver("no schema is the default, so the table needs one named"))
 }
 
 fn schema_nodes(schemas: Vec<SchemaNode>) -> Vec<Value> {

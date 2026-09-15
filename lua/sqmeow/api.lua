@@ -276,6 +276,7 @@ function M.execute(sql, opts)
     archive = archive,
     where = opts.where,
     order_by = opts.order_by,
+    inserted = opts.inserted,
   })
   if not call_id then
     notify(err or 'the query was refused', vim.log.levels.ERROR)

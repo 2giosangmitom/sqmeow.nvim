@@ -168,7 +168,7 @@ impl Adapter for ScyllaAdapter {
     }
 
     /// One statement after another, since CQL has no transactions.
-    async fn apply(&self, statements: &[String]) -> Result<()> {
+    async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
         for (done, statement) in statements.iter().enumerate() {
             let failed = |error: String| {
                 Error::driver(format!(
@@ -189,7 +189,28 @@ impl Adapter for ScyllaAdapter {
                 return Err(failed("no row had that key any more".to_owned()));
             }
         }
-        Ok(())
+        Ok(Vec::new())
+    }
+
+    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+        let mut rows = self
+            .rows::<(String, std::collections::HashMap<String, String>)>(
+                "select index_name, options from system_schema.indexes
+                 where keyspace_name = ? and table_name = ?",
+                (schema, relation),
+            )
+            .await?;
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(rows
+            .into_iter()
+            .map(|(name, options)| sqmeow_db::IndexNode {
+                name,
+                // What the index is on, such as `v` or `keys(m)`.
+                columns: options.get("target").cloned().into_iter().collect(),
+                unique: false,
+                primary: false,
+            })
+            .collect())
     }
 
     async fn execute(

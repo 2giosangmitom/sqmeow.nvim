@@ -108,13 +108,9 @@ pub(super) fn changes(value: Option<&Value>) -> Result<Changes, String> {
         items(list)
             .into_iter()
             .map(|cell| {
-                let value = if field(cell, "default").and_then(Value::as_bool) == Some(true) {
-                    Edit::Default
-                } else {
-                    field(cell, "value")
-                        .and_then(Value::as_str)
-                        .map_or(Edit::Null, Edit::from)
-                };
+                let value = field(cell, "value")
+                    .and_then(Value::as_str)
+                    .map_or(Edit::Null, Edit::from);
                 Ok((index(cell, "column")?, value))
             })
             .collect()

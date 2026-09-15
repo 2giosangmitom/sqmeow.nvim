@@ -85,14 +85,22 @@ function M.describe(summary, highlight)
   if summary.state == 'executing' then
     return 'running…'
   end
+
+  -- Which statement's result this is, when several returned rows.
+  local position
+  for index, entry in ipairs(summary.results or {}) do
+    if entry.call_id == summary.call_id then
+      position = ('result %d/%d'):format(index, #summary.results)
+    end
+  end
   if summary.state == 'error' then
-    return 'error: ' .. (summary.error or 'unknown')
+    return (position and position .. '  ' or '') .. 'error: ' .. (summary.error or 'unknown')
   end
   if summary.state == 'cancelled' then
     return 'cancelled'
   end
 
-  local parts = {}
+  local parts = { position }
 
   if summary.rows and summary.rows > 0 then
     table.insert(parts, ('%d row%s'):format(summary.rows, summary.rows == 1 and '' or 's'))
@@ -206,9 +214,6 @@ end
 local function cell_text(value, null_text)
   if value == nil or value == vim.NIL then
     return null_text, true
-  end
-  if value == require('sqmeow.ui.edit').DEFAULT then
-    return 'DEFAULT', false
   end
   if type(value) == 'boolean' then
     return value and 'true' or 'false', false
@@ -648,9 +653,23 @@ function M.quote(name)
   return '"' .. (name:gsub('"', '""')) .. '"'
 end
 
+--- Whether staged changes keep the result from being replaced, saying so when they do.
+---@return boolean
+local function blocked()
+  local staged = require('sqmeow.ui.edit').count()
+  if staged == 0 then
+    return false
+  end
+  utils.notify(
+    ('apply or discard the %d staged change%s first'):format(staged, staged == 1 and '' or 's'),
+    vim.log.levels.WARN
+  )
+  return true
+end
+
 --- Run the current result's query again, changing the parts of its view `view` names.
 ---@param view table|nil Fields of the view to replace, such as `where` and `order_by`.
----@param keep boolean|nil Open the new result at the same page and cursor.
+---@param keep boolean|nil Open the new result at the same page and cursor, with the rows inserts returned.
 ---@return boolean started
 function M.rerun(view, keep)
   local call = require('sqmeow.state').call
@@ -658,12 +677,7 @@ function M.rerun(view, keep)
     return false
   end
   -- A new result would drop them.
-  local staged = require('sqmeow.ui.edit').count()
-  if staged > 0 then
-    utils.notify(
-      ('apply or discard the %d staged change%s first'):format(staged, staged == 1 and '' or 's'),
-      vim.log.levels.WARN
-    )
+  if blocked() then
     return false
   end
 
@@ -686,6 +700,7 @@ function M.rerun(view, keep)
     history = false,
     where = spec.where,
     order_by = spec.order_by,
+    inserted = keep,
   })
   if not started then
     carried = nil
@@ -1112,6 +1127,60 @@ function M.actions.toggle_float()
   M.toggle_float()
 end
 
+--- Show the columns and indexes of the table the column under the cursor comes from.
+function M.actions.structure()
+  local call = require('sqmeow.state').call
+  local tables = call and call.source and call.source.tables
+  if not (call and tables and #tables > 0) then
+    return utils.notify('this result cannot be traced back to a table', vim.log.levels.WARN)
+  end
+  local here = cursor_column()
+  local chosen = tables[1]
+  for _, candidate in ipairs(tables) do
+    if here and vim.tbl_contains(candidate.columns, here.column) then
+      chosen = candidate
+      break
+    end
+  end
+  require('sqmeow.ui.structure').open(call.conn_id, chosen.schema or '', chosen.name)
+end
+
+--- Show another statement's result from the same run.
+---@param step integer
+local function switch(step)
+  local state = require('sqmeow.state')
+  local call = state.call
+  local results = call and call.results
+  if not (call and results and #results > 1) then
+    return utils.notify('this query returned one result')
+  end
+  if blocked() then
+    return
+  end
+  local at = 1
+  for index, entry in ipairs(results) do
+    if entry.call_id == call.call_id then
+      at = index
+    end
+  end
+  local shown = vim.tbl_extend(
+    'force',
+    { conn_id = call.conn_id, statement = call.statement, history = false },
+    results[(at - 1 + step) % #results + 1],
+    { results = results }
+  )
+  state.call = shown
+  M.render(shown)
+end
+
+function M.actions.next_result()
+  switch(1)
+end
+
+function M.actions.prev_result()
+  switch(-1)
+end
+
 --- Show only the rows holding the value under the cursor in its column.
 function M.actions.filter_cell()
   local cell = M.current_cell()
@@ -1215,24 +1284,6 @@ function M.actions.set_null()
     return utils.notify(('`%s` cannot be edited'):format(cell.name), vim.log.levels.WARN)
   end
   require('sqmeow.ui.edit').set(cell, cell.column, vim.NIL)
-end
-
-function M.actions.set_default()
-  local cell = editing() and M.current_cell()
-  if not cell then
-    return
-  end
-  local state = require('sqmeow.state')
-  local column = state.call.columns[cell.column + 1]
-  if not (column and column.editable) then
-    return utils.notify(('`%s` cannot be edited'):format(cell.name), vim.log.levels.WARN)
-  end
-  local connection = state.connections[state.call.conn_id]
-  local dialect = connection and connection.dialect
-  if vim.tbl_contains({ 'redis', 'mongodb', 'scylla' }, dialect) then
-    return utils.notify(('%s has no column defaults'):format(dialect), vim.log.levels.WARN)
-  end
-  require('sqmeow.ui.edit').set(cell, cell.column, require('sqmeow.ui.edit').DEFAULT)
 end
 
 --- Stage a copy of the row under the cursor as a new row, leaving out its primary key.

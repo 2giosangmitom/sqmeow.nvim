@@ -62,12 +62,10 @@ T['deleting rows twice keeps them, and deleting a new row drops it'] = function(
   eq(edit.inserts()[1][0], 'kept')
 end
 
-T['a default is sent as one, and a new row can start with values'] = function()
-  edit.set({ row = 0 }, 1, edit.DEFAULT)
+T['a new row can start with values'] = function()
   edit.add_row({ [2] = 'copied' })
-  eq(tostring(edit.staged(0, 1)), 'DEFAULT')
   eq(edit.changes(), {
-    updates = { { row = 0, cells = { { column = 1, default = true } } } },
+    updates = {},
     deletes = {},
     inserts = { { { column = 2, value = 'copied' } } },
   })

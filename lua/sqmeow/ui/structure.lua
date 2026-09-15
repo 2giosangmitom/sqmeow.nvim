@@ -140,7 +140,12 @@ function M.on_done(payload)
     zindex = 50,
     border = {
       style = require('sqmeow.config').border(),
-      text = { top = (' %s.%s '):format(payload.schema, payload.relation), top_align = 'center' },
+      text = {
+        top = (' %s '):format(
+          payload.schema == '' and payload.relation or (payload.schema .. '.' .. payload.relation)
+        ),
+        top_align = 'center',
+      },
     },
     buf_options = {
       buftype = 'nofile',

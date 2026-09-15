@@ -103,8 +103,9 @@ pub trait Adapter: Send + Sync {
         crate::edit::sql_plan(self.dialect(), result, changes)
     }
 
-    /// Run planned statements together: all of them or, as far as the database allows, none.
-    fn apply(&self, statements: &[String]) -> impl Future<Output = Result<()>> + Send;
+    /// Run planned statements together: all of them or, as far as the database allows, none. Answers
+    /// with the rows any of them returned.
+    fn apply(&self, statements: &[String]) -> impl Future<Output = Result<Vec<ResultSet>>> + Send;
 
     /// The schemas, or for MySQL the databases, this connection can see.
     fn schemas(&self) -> impl Future<Output = Result<Vec<SchemaNode>>> + Send;

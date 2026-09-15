@@ -52,8 +52,9 @@ impl Core {
                 ("conn_id", Value::from(conn_id)),
                 ("statements", Value::from(statements.len() as u64)),
             ];
-            if let Err(error) = connection.backend.apply(&statements).await {
-                payload.push(("error", Value::from(error.to_string())));
+            match connection.backend.apply(&statements).await {
+                Ok(returned) => self.session.stash_inserted(conn_id, returned),
+                Err(error) => payload.push(("error", Value::from(error.to_string()))),
             }
             self.emit("apply:done", map(payload));
         };

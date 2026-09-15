@@ -1,7 +1,7 @@
 //! Describing results to the editor.
 
 use rmpv::Value;
-use sqmeow_db::Cell;
+use sqmeow_db::{Cell, Source};
 
 use crate::session::Call;
 use crate::value::map;
@@ -66,6 +66,31 @@ pub(super) fn summarize(call: &Call) -> Vec<(&'static str, Value)> {
         ];
         if source.insertable() {
             described.push(("insertable", Value::from(true)));
+        }
+        if let Source::Tables(tables) = source {
+            let tables = tables
+                .iter()
+                .map(|table| {
+                    let mut pairs = vec![
+                        ("name", Value::from(table.name.as_str())),
+                        (
+                            "columns",
+                            Value::Array(
+                                table
+                                    .columns
+                                    .iter()
+                                    .map(|(index, _)| Value::from(*index as u64))
+                                    .collect(),
+                            ),
+                        ),
+                    ];
+                    if let Some(schema) = &table.schema {
+                        pairs.push(("schema", Value::from(schema.as_str())));
+                    }
+                    map(pairs)
+                })
+                .collect();
+            described.push(("tables", Value::Array(tables)));
         }
         pairs.push(("source", map(described)));
     }

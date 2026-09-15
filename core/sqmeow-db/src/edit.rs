@@ -9,6 +9,7 @@ pub use sql::{condition, literal, quote_text, sql_plan, value_literal};
 use crate::adapter::Dialect;
 use crate::error::{Error, Result};
 use crate::result::ResultSet;
+use crate::value::Cell;
 
 /// Where a result's rows are stored, for a result whose rows can be written back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,8 +131,6 @@ impl Source {
 pub enum Value {
     Null,
     Text(String),
-    /// The column's default, which SQL writes as `DEFAULT`.
-    Default,
 }
 
 impl Value {
@@ -198,4 +197,93 @@ pub fn check_column(source: &Source, result: &ResultSet, column: usize) -> Resul
         .get(column)
         .map_or_else(|| column.to_string(), |meta| meta.name.clone());
     Err(Error::driver(format!("`{name}` cannot be edited")))
+}
+
+/// Append the rows inserts returned into `result`'s one table that it does not hold yet, so a new row
+/// the query does not select is still shown. Answers with how many were added.
+pub fn append_inserted(result: &mut ResultSet, dialect: Dialect, inserted: &[ResultSet]) -> usize {
+    let Some(Source::Tables(tables)) = result.source() else {
+        return 0;
+    };
+    let [table] = tables.as_slice() else {
+        return 0;
+    };
+    let table = table.clone();
+    let into = format!("INSERT INTO {} ", table.quoted(dialect));
+    let width = result.columns().len();
+
+    let mut added = 0;
+    for returned in inserted.iter().filter(|r| r.statement().starts_with(&into)) {
+        for row in 0..returned.row_count() {
+            let value = |name: &str| {
+                returned
+                    .columns()
+                    .iter()
+                    .position(|column| column.name.eq_ignore_ascii_case(name))
+                    .and_then(|at| returned.cell(row, at))
+                    .cloned()
+                    .unwrap_or(Cell::Null)
+            };
+            let cells: Vec<Cell> = (0..width)
+                .map(|index| table.column(index).map_or(Cell::Null, value))
+                .collect();
+            let held = (0..result.row_count()).any(|held| {
+                table
+                    .key
+                    .iter()
+                    .all(|&key| result.cell(held, key) == Some(&cells[key]))
+            });
+            if !held {
+                result.push_row(cells);
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::result::Column;
+
+    use super::*;
+
+    #[test]
+    fn an_inserted_row_the_result_lacks_is_appended_once() {
+        let mut result = ResultSet::new(
+            "select id, name as who, 1 as one from t",
+            vec![
+                Column::new("id", "INTEGER"),
+                Column::new("who", "TEXT"),
+                Column::new("one", "INTEGER"),
+            ],
+        );
+        result.push_row(vec![Cell::Int(1), Cell::Text("a".into()), Cell::Int(1)]);
+        result.set_source(Some(Source::Tables(vec![Table {
+            schema: None,
+            name: "t".into(),
+            key: vec![0],
+            columns: vec![(0, "id".into()), (1, "name".into())],
+        }])));
+
+        let mut returned = ResultSet::new(
+            r#"INSERT INTO "t" ("name") VALUES ('b') RETURNING *"#,
+            vec![Column::new("id", "INTEGER"), Column::new("name", "TEXT")],
+        );
+        returned.push_row(vec![Cell::Int(2), Cell::Text("b".into())]);
+        returned.push_row(vec![Cell::Int(1), Cell::Text("a".into())]);
+        let mut elsewhere = ResultSet::new(
+            r#"INSERT INTO "u" DEFAULT VALUES RETURNING *"#,
+            vec![Column::new("id", "INTEGER")],
+        );
+        elsewhere.push_row(vec![Cell::Int(3)]);
+
+        assert_eq!(
+            append_inserted(&mut result, Dialect::Sqlite, &[returned, elsewhere]),
+            1
+        );
+        assert_eq!(result.row_count(), 2);
+        assert_eq!(result.cell(1, 1), Some(&Cell::Text("b".into())));
+        assert_eq!(result.cell(1, 2), Some(&Cell::Null));
+    }
 }

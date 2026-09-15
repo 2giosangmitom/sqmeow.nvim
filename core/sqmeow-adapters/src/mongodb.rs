@@ -119,7 +119,7 @@ impl Adapter for MongoAdapter {
     }
 
     /// One command after another, stopping at the first that fails.
-    async fn apply(&self, statements: &[String]) -> Result<()> {
+    async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
         for (done, statement) in statements.iter().enumerate() {
             let Statement::Command { db, command } = parse(statement)? else {
                 return Err(Error::driver("only commands can be applied"));
@@ -147,7 +147,7 @@ impl Adapter for MongoAdapter {
                 return Err(failed("no document had that _id any more".to_owned()));
             }
         }
-        Ok(())
+        Ok(Vec::new())
     }
 
     async fn execute(
@@ -234,6 +234,40 @@ impl Adapter for MongoAdapter {
             documents.push(document.map_err(Error::driver)?);
         }
         Ok(field_nodes(&documents))
+    }
+
+    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+        let mut cursor = self
+            .client
+            .database(schema)
+            .collection::<Document>(relation)
+            .list_indexes()
+            .await
+            .map_err(Error::driver)?;
+
+        let mut indexes = Vec::new();
+        while let Some(model) = cursor.next().await {
+            let model = model.map_err(Error::driver)?;
+            let options = model.options.unwrap_or_default();
+            let name = options.name.unwrap_or_default();
+            let primary = name == "_id_";
+            indexes.push(sqmeow_db::IndexNode {
+                // An ascending key is named alone, and any other kind with its direction or type.
+                columns: model
+                    .keys
+                    .iter()
+                    .map(|(field, kind)| match kind {
+                        Bson::Int32(1) | Bson::Int64(1) => field.clone(),
+                        Bson::String(kind) => format!("{field} {kind}"),
+                        other => format!("{field} {}", other.clone().into_relaxed_extjson()),
+                    })
+                    .collect(),
+                unique: primary || options.unique == Some(true),
+                primary,
+                name,
+            });
+        }
+        Ok(indexes)
     }
 
     /// Close the pool without waiting on a cursor a running query still holds.
@@ -399,7 +433,6 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
 fn value_bson(value: &edit::Value) -> Result<Bson> {
     let text = match value {
         edit::Value::Null => return Ok(Bson::Null),
-        edit::Value::Default => return Err(Error::driver("MongoDB fields have no default")),
         edit::Value::Text(text) => text,
     };
     Ok(serde_json::from_str::<serde_json::Value>(text)

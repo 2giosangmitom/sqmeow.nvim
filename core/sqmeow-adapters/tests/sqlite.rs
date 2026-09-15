@@ -908,11 +908,7 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
 
     let changes = Changes {
         updates: vec![(1, vec![(2, "changed".into())])],
-        inserts: vec![vec![
-            (0, "c".into()),
-            (1, "y".into()),
-            (2, sqmeow_db::edit::Value::Default),
-        ]],
+        inserts: vec![vec![(0, "c".into()), (1, "y".into())]],
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
@@ -955,4 +951,29 @@ async fn a_table_lists_its_indexes_and_column_defaults() {
     let columns = backend.columns("main", "indexed").await.unwrap();
     assert_eq!(columns[2].default.as_deref(), Some("0"));
     assert_eq!(columns[1].default, None);
+}
+
+#[tokio::test]
+async fn an_insert_returns_its_row() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table defaulted (id integer primary key, label text default 'none', n integer)",
+    )
+    .await;
+    run(&backend, "insert into defaulted values (1, 'x', 5)").await;
+
+    let result = run(&backend, "select id, label, n from defaulted").await;
+    let changes = Changes {
+        inserts: vec![vec![(2, "7".into())]],
+        ..Changes::default()
+    };
+    let plan = backend.plan(&result, &changes).unwrap();
+    let returned = backend.apply(&plan).await.expect("the plan should apply");
+
+    assert_eq!(returned.len(), 1);
+    assert_eq!(returned[0].cell(0, 0), Some(&Cell::Int(2)));
+    assert_eq!(returned[0].cell(0, 1), Some(&text("none")));
+    let after = run(&backend, "select label from defaulted order by id").await;
+    assert_eq!(after.column_cells(0), &[text("x"), text("none")]);
 }

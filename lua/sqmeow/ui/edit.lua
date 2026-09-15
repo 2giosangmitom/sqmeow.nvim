@@ -19,13 +19,6 @@ local popup = nil
 --- The deepest the undo history goes, past which the oldest change can no longer be undone.
 local HISTORY_LIMIT = 200
 
---- A staged value that sets a cell to its column's default.
-M.DEFAULT = setmetatable({}, {
-  __tostring = function()
-    return 'DEFAULT'
-  end,
-})
-
 local function close()
   local closing = popup
   popup = nil
@@ -93,7 +86,7 @@ end
 --- Stage a new value for a cell of a row the result holds, or of a new row.
 ---@param target { row: integer|nil, insert: integer|nil } Which row: `row` in the result, or the `insert`th new one.
 ---@param column integer Zero-based.
----@param value any A string, `vim.NIL` for `NULL`, or `M.DEFAULT`.
+---@param value any A string, or `vim.NIL` for `NULL`.
 function M.set(target, column, value)
   local cells
   if target.insert then
@@ -187,12 +180,8 @@ function M.changes()
   local function cells(values)
     local list = {}
     for column, value in pairs(values) do
-      if value == M.DEFAULT then
-        table.insert(list, { column = column, default = true })
-      else
-        -- A `NULL` is sent as no value at all, which the engine reads as `NULL`.
-        table.insert(list, { column = column, value = value ~= vim.NIL and value or nil })
-      end
+      -- A `NULL` is sent as no value at all, which the engine reads as `NULL`.
+      table.insert(list, { column = column, value = value ~= vim.NIL and value or nil })
     end
     table.sort(list, function(a, b)
       return a.column < b.column
@@ -233,9 +222,6 @@ local function current_text(call, target, column)
     value, staged = M.staged(target.row, column)
   end
   if staged then
-    if value == M.DEFAULT then
-      return ''
-    end
     return value ~= vim.NIL and value or nil
   end
   if target.insert then

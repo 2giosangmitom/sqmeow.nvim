@@ -307,6 +307,9 @@ result
  gg          First page
  G           Last page
  K           Show this row down the page
+ gK          Show the columns and indexes of the table this column is from
+ ]r          Show the next statement's result
+ [r          Show the previous statement's result
  x           Export the result to a file
  x (x)       Export the selected rows
  =           Show only rows holding this value in this column
@@ -320,7 +323,6 @@ result
  Z           Show the result in a float, or back in its split
  i, <CR>     Change this cell
  X           Set this cell to NULL
- gX          Set this cell to its column's default
  o           Add a row
  D           Add a copy of this row
  dd          Delete this row, or keep it after all

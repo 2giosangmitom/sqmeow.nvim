@@ -225,3 +225,20 @@ async fn a_result_without_the_whole_key_is_not_editable() {
     let result = run(&backend, "SELECT pk, v FROM sqmeow.partial").await;
     assert_eq!(result.source(), None);
 }
+
+#[tokio::test]
+async fn lists_a_tables_secondary_indexes() {
+    let backend = connect(&server!()).await;
+    table(&backend, "indexed", "pk int PRIMARY KEY, v text, w int").await;
+    run(&backend, "CREATE INDEX indexed_v ON sqmeow.indexed (v)").await;
+
+    assert_eq!(
+        backend.indexes("sqmeow", "indexed").await.unwrap(),
+        vec![sqmeow_db::IndexNode {
+            name: "indexed_v".into(),
+            columns: vec!["v".into()],
+            unique: false,
+            primary: false,
+        }]
+    );
+}

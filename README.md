@@ -18,7 +18,8 @@ Query your database from your favorite editor.
 - **📄 Scratchpads**: Query buffers tied to a connection, kept across restarts.
 - **✏️ In-grid editing**: Edit cells, add or delete rows, and review staged changes before applying them.
 - **🔎 Filter and sort**: Type a `WHERE` condition and an `ORDER BY` list in a bar above the grid, and the database runs them on your query.
-- **▶️ Flexible execution**: Run the statement under the cursor, a selection, or the whole buffer.
+- **▶️ Flexible execution**: Run the statement under the cursor, a selection, or the whole buffer,
+  with a result for each statement that returns rows.
 - **🧭 EXPLAIN**: Query plans and errors show in the result window.
 - **🕘 Query log**: Reopen the result of any past query, even after a restart.
 - **📤 Export**: Results or selected rows to CSV, JSON or SQL `INSERT` statements, as a file or on
@@ -149,6 +150,8 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 | `L` / `H`   | Next / previous page                         |
 | `gg` / `G`  | First / last page                            |
 | `K`         | Show the row's details                       |
+| `gK`        | Show the table's columns and indexes         |
+| `]r` / `[r` | Show the next / previous statement's result  |
 | `x`         | Export the result, or the selected rows      |
 | `gf` / `go` | Open the filter bar on `WHERE` / `ORDER BY`  |
 | `=`         | Filter by the cell's value                   |
@@ -183,7 +186,7 @@ After applying, the query runs again and opens at the same page and cursor.
 | Key           | Action                                                    |
 | ------------- | --------------------------------------------------------- |
 | `i`, `<CR>`   | Edit the cell                                             |
-| `X` / `gX`    | Set the cell to `NULL` / to its column's default          |
+| `X`           | Set the cell to `NULL`                                    |
 | `o` / `D`     | Add a row / a copy of this row without its primary key    |
 | `dd` / `d`    | Delete the row / the selected rows                        |
 | `u` / `U`     | Undo the last change / discard all changes                |

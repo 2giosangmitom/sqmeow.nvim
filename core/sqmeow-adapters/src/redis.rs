@@ -73,7 +73,7 @@ impl Adapter for RedisAdapter {
     }
 
     /// One `MULTI`/`EXEC`.
-    async fn apply(&self, statements: &[String]) -> Result<()> {
+    async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
         let mut pipeline = redis::pipe();
         pipeline.atomic();
         for line in statements {
@@ -97,7 +97,7 @@ impl Adapter for RedisAdapter {
                 "a command failed, and Redis kept the ones that did not: {error}"
             )));
         }
-        Ok(())
+        Ok(Vec::new())
     }
 
     async fn execute(
@@ -257,7 +257,6 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             .map(|(_, value)| match value {
                 Edit::Text(text) => Ok(quote(text)),
                 Edit::Null => Err(Error::driver("Redis has no NULL: delete the row instead")),
-                Edit::Default => Err(Error::driver("Redis values have no default")),
             })
             .transpose()
     };

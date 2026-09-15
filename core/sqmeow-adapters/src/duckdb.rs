@@ -65,17 +65,46 @@ impl Adapter for DuckDbAdapter {
         Dialect::DuckDb
     }
 
-    async fn apply(&self, statements: &[String]) -> Result<()> {
+    async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
         let statements = statements.to_vec();
         self.run(move |connection| {
             let transaction = connection.unchecked_transaction().map_err(Error::driver)?;
+            let failed = |statement: &str, error: duckdb::Error| {
+                Error::driver(format!("{error}\nin: {statement}"))
+            };
+            let mut returned = Vec::new();
             for statement in &statements {
-                let affected = transaction
-                    .execute(statement, [])
-                    .map_err(|error| Error::driver(format!("{error}\nin: {statement}")))?;
-                check_affected(statement, affected as u64)?;
+                if !statement.ends_with(" RETURNING *") {
+                    let affected = transaction
+                        .execute(statement, [])
+                        .map_err(|error| failed(statement, error))?;
+                    check_affected(statement, affected as u64)?;
+                    continue;
+                }
+                let mut prepared = transaction
+                    .prepare(statement)
+                    .map_err(|error| failed(statement, error))?;
+                let mut rows = prepared
+                    .query([])
+                    .map_err(|error| failed(statement, error))?;
+                let columns = rows.as_ref().map(result_columns).unwrap_or_default();
+                let uuids: Vec<bool> = columns.iter().map(|c| c.type_name == "UUID").collect();
+                let mut result = ResultSet::new(statement.as_str(), columns);
+                while let Some(row) = rows.next().map_err(Error::driver)? {
+                    let cells = uuids
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &uuid)| match decode_cell(row, index) {
+                            Cell::Text(text) if uuid => Cell::Uuid(text),
+                            cell => cell,
+                        })
+                        .collect();
+                    result.push_row(cells);
+                }
+                returned.push(result);
             }
-            transaction.commit().map_err(Error::driver)
+            transaction.commit().map_err(Error::driver)?;
+            Ok(returned)
         })
         .await
     }

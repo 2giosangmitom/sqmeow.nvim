@@ -62,27 +62,27 @@ impl Planner<'_> {
             ));
         };
         let name = self.table(table);
-        // A column left at its default is left out.
-        let cells: Vec<&(usize, Value)> = cells
-            .iter()
-            .filter(|(_, value)| *value != Value::Default)
-            .collect();
+        // The row comes back, so one the query does not select can still be shown.
+        let returning = match self.dialect {
+            Dialect::Postgres | Dialect::Sqlite | Dialect::DuckDb => " RETURNING *",
+            _ => "",
+        };
         if cells.is_empty() {
             return Ok(match self.dialect {
                 Dialect::MySql => format!("INSERT INTO {name} () VALUES ()"),
-                _ => format!("INSERT INTO {name} DEFAULT VALUES"),
+                _ => format!("INSERT INTO {name} DEFAULT VALUES{returning}"),
             });
         }
         let columns = cells
             .iter()
             .map(|(index, _)| self.column(table, *index))
             .collect::<Result<Vec<_>>>()?;
-        let values = cells
+        let values: Vec<String> = cells
             .iter()
             .map(|(index, value)| self.value(*index, value))
-            .collect::<Result<Vec<_>>>()?;
+            .collect();
         Ok(format!(
-            "INSERT INTO {name} ({}) VALUES ({})",
+            "INSERT INTO {name} ({}) VALUES ({}){returning}",
             columns.join(", "),
             values.join(", ")
         ))
@@ -102,7 +102,7 @@ impl Planner<'_> {
                     Ok(format!(
                         "{} = {}",
                         self.column(table, *index)?,
-                        self.value(*index, value)?
+                        self.value(*index, value)
                     ))
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -136,18 +136,9 @@ impl Planner<'_> {
         Ok(self.dialect.quote_ident(name))
     }
 
-    fn value(&self, index: usize, value: &Value) -> Result<String> {
-        if *value == Value::Default {
-            return match self.dialect {
-                Dialect::Sqlite | Dialect::Scylla => Err(Error::driver(format!(
-                    "{} cannot set a column back to its default",
-                    self.dialect.name()
-                ))),
-                _ => Ok("DEFAULT".to_owned()),
-            };
-        }
+    fn value(&self, index: usize, value: &Value) -> String {
         let type_name = &self.result.columns()[index].type_name;
-        Ok(value_literal(self.dialect, type_name, value.text()))
+        value_literal(self.dialect, type_name, value.text())
     }
 
     /// The `WHERE` condition that finds a row's table row by its key.
@@ -384,28 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn a_default_is_written_as_default_or_left_out_of_an_insert() {
-        let changes = Changes {
-            updates: vec![(0, vec![(1, Value::Default)])],
-            inserts: vec![
-                vec![(0, "7".into()), (1, Value::Default)],
-                vec![(1, Value::Default)],
-            ],
-            ..Changes::default()
-        };
-        assert_eq!(
-            sql_plan(Dialect::Postgres, &people(), &changes).unwrap(),
-            vec![
-                r#"INSERT INTO "public"."people" ("id") VALUES ('7')"#,
-                r#"INSERT INTO "public"."people" DEFAULT VALUES"#,
-                r#"UPDATE "public"."people" SET "name" = DEFAULT WHERE "id" = 1"#,
-            ]
-        );
-        let error = sql_plan(Dialect::Sqlite, &people(), &changes).unwrap_err();
-        assert!(error.to_string().contains("default"), "{error}");
-    }
-
-    #[test]
     fn a_row_with_null_in_its_key_is_refused() {
         let mut result = people();
         result.push_row(vec![Cell::Int(2), Cell::Null, Cell::Null]);
@@ -436,8 +405,8 @@ mod tests {
             plan,
             vec![
                 r#"DELETE FROM "public"."people" WHERE "id" = 1"#.to_owned(),
-                r#"INSERT INTO "public"."people" ("name") VALUES ('new')"#.to_owned(),
-                r#"INSERT INTO "public"."people" DEFAULT VALUES"#.to_owned(),
+                r#"INSERT INTO "public"."people" ("name") VALUES ('new') RETURNING *"#.to_owned(),
+                r#"INSERT INTO "public"."people" DEFAULT VALUES RETURNING *"#.to_owned(),
             ]
         );
     }
