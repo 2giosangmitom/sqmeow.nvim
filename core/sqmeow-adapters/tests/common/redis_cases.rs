@@ -309,6 +309,7 @@ async fn a_stream_entry_is_deleted_and_added_and_a_listed_key_renamed() {
     let after = run(&backend, "XLEN test:stream").await;
     assert_eq!(after.cell(0, 0), Some(&Cell::Int(1)));
 
+    run(&backend, "DEL test:to-rename test:renamed").await;
     run(&backend, "SET test:to-rename x").await;
     let keys = run(&backend, "KEYS test:to-rename").await;
     let changes = sqmeow_db::Changes {
@@ -321,4 +322,58 @@ async fn a_stream_entry_is_deleted_and_added_and_a_listed_key_renamed() {
         .expect("the rename should apply");
     let renamed = run(&backend, "GET test:renamed").await;
     assert_eq!(renamed.cell(0, 0), Some(&Cell::Text("x".into())));
+}
+
+#[tokio::test]
+async fn an_edit_keeps_ttls_positions_and_existing_keys() {
+    let backend = connect(&server!()).await;
+    run(&backend, "DEL test:ttl test:dupes test:taken test:taker").await;
+
+    run(&backend, "SET test:ttl a EX 600").await;
+    let value = run(&backend, "GET test:ttl").await;
+    let changes = sqmeow_db::Changes {
+        updates: vec![(0, vec![(0, "b".into())])],
+        ..sqmeow_db::Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&value, &changes).unwrap())
+        .await
+        .expect("the edit should apply");
+    let ttl = run(&backend, "TTL test:ttl").await;
+    assert!(matches!(ttl.cell(0, 0), Some(Cell::Int(seconds)) if *seconds > 0));
+
+    run(&backend, "RPUSH test:dupes x y x z").await;
+    let list = run(&backend, "LRANGE test:dupes 0 -1").await;
+    let changes = sqmeow_db::Changes {
+        deletes: vec![2],
+        ..sqmeow_db::Changes::default()
+    };
+    backend
+        .apply(&backend.plan(&list, &changes).unwrap())
+        .await
+        .expect("the delete should apply");
+    let after = run(&backend, "LRANGE test:dupes 0 -1").await;
+    assert_eq!(
+        after.column_cells(0),
+        &[
+            Cell::Text("x".into()),
+            Cell::Text("y".into()),
+            Cell::Text("z".into())
+        ]
+    );
+
+    run(&backend, "SET test:taken kept").await;
+    run(&backend, "SET test:taker moved").await;
+    let keys = run(&backend, "KEYS test:taker").await;
+    let changes = sqmeow_db::Changes {
+        updates: vec![(0, vec![(0, "test:taken".into())])],
+        ..sqmeow_db::Changes::default()
+    };
+    let error = backend
+        .apply(&backend.plan(&keys, &changes).unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("already exists"), "{error}");
+    let kept = run(&backend, "GET test:taken").await;
+    assert_eq!(kept.cell(0, 0), Some(&Cell::Text("kept".into())));
 }

@@ -422,14 +422,29 @@ impl Adapter for RedisAdapter {
             .query_async(&mut self.link.clone())
             .await
             .map_err(Error::driver)?;
-        if let Value::Array(replies) = &reply
-            && let Some(Value::ServerError(error)) = replies
-                .iter()
-                .find(|reply| matches!(reply, Value::ServerError(_)))
+        let Value::Array(replies) = &reply else {
+            return Ok(Vec::new());
+        };
+        if let Some(Value::ServerError(error)) = replies
+            .iter()
+            .find(|reply| matches!(reply, Value::ServerError(_)))
         {
             return Err(Error::driver(format!(
                 "a command failed, and Redis kept the ones that did not: {error}"
             )));
+        }
+        // `RENAMENX` answers 0 rather than failing when the new name is taken.
+        for (line, reply) in statements.iter().zip(replies) {
+            if let (Value::Int(0), Ok(words)) = (reply, split_command(line))
+                && let [command, from, to] = words.as_slice()
+                && command.eq_ignore_ascii_case(b"RENAMENX")
+            {
+                return Err(Error::driver(format!(
+                    "`{}` already exists, so `{}` was not renamed, and Redis kept the other changes",
+                    String::from_utf8_lossy(to),
+                    String::from_utf8_lossy(from)
+                )));
+            }
         }
         Ok(Vec::new())
     }
@@ -587,6 +602,14 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
     };
     let kind = *kind;
     let key = quote(key);
+    // A deleted list element is marked by its index, then every mark is removed at once, so an equal
+    // element elsewhere in the list stays.
+    let deleted = quote(&format!(
+        "sqmeow:deleted:{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos())
+    ));
 
     let original = |row: usize, column: usize| -> Result<String> {
         check_row(result, row)?;
@@ -616,7 +639,10 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             }
             RedisKind::Hash => format!("HDEL {key} {}", original(row, 0)?),
             RedisKind::Set => format!("SREM {key} {}", original(row, 0)?),
-            RedisKind::List { .. } => format!("LREM {key} 1 {}", original(row, 0)?),
+            RedisKind::List { start } => {
+                check_row(result, row)?;
+                format!("LSET {key} {} {deleted}", start + row as i64)
+            }
             RedisKind::SortedSet => format!("ZREM {key} {}", original(row, 0)?),
             RedisKind::Stream => format!("XDEL {key} {}", original(row, 0)?),
             RedisKind::Keys => format!("DEL {}", original(row, 0)?),
@@ -637,7 +663,7 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         match kind {
             RedisKind::String => {
                 if let Some(value) = given(cells, 0)? {
-                    commands.push(format!("SET {key} {value}"));
+                    commands.push(format!("SET {key} {value} KEEPTTL"));
                 }
             }
             RedisKind::Json => {
@@ -692,7 +718,7 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             }
             RedisKind::Keys => {
                 if let Some(renamed) = given(cells, 0)? {
-                    commands.push(format!("RENAME {} {renamed}", original(row, 0)?));
+                    commands.push(format!("RENAMENX {} {renamed}", original(row, 0)?));
                 }
             }
         }
@@ -700,6 +726,11 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
 
     for &row in &changes.deletes {
         commands.push(removal(row)?);
+    }
+    if matches!(kind, RedisKind::List { .. })
+        && commands.iter().any(|command| command.ends_with(&deleted))
+    {
+        commands.push(format!("LREM {key} 0 {deleted}"));
     }
 
     for cells in &changes.inserts {
@@ -1104,7 +1135,7 @@ mod tests {
         };
         assert_eq!(
             plan(&keys, &changes).unwrap(),
-            vec![r#"RENAME "a" "c""#, r#"DEL "b""#]
+            vec![r#"RENAMENX "a" "c""#, r#"DEL "b""#]
         );
     }
 
@@ -1188,6 +1219,41 @@ mod tests {
             ..Changes::default()
         };
         assert_eq!(plan(&result, &changes).unwrap(), vec![r#"LSET "l" 11 "c""#]);
+    }
+
+    #[test]
+    fn a_list_element_is_deleted_by_its_index_and_a_string_keeps_its_ttl() {
+        let reply = Value::Array(vec![text("a"), text("a")]);
+        let mut result = to_result("LRANGE l 0 -1", reply, usize::MAX);
+        result.set_source(source(&split_command("LRANGE l 0 -1").unwrap()));
+        let changes = Changes {
+            updates: vec![(0, vec![(0, sqmeow_db::edit::Value::Null)])],
+            deletes: vec![1],
+            inserts: vec![vec![(0, "b".into())]],
+        };
+        let planned = plan(&result, &changes).unwrap();
+        let mark = planned[0].rsplit(' ').next().unwrap().to_owned();
+        assert!(mark.starts_with(r#""sqmeow:deleted:"#), "{mark}");
+        assert_eq!(
+            planned,
+            vec![
+                format!(r#"LSET "l" 0 {mark}"#),
+                format!(r#"LSET "l" 1 {mark}"#),
+                format!(r#"LREM "l" 0 {mark}"#),
+                r#"RPUSH "l" "b""#.to_owned(),
+            ]
+        );
+
+        let mut string = to_result("GET s", text("x"), usize::MAX);
+        string.set_source(source(&split_command("GET s").unwrap()));
+        let changes = Changes {
+            updates: vec![(0, vec![(0, "y".into())])],
+            ..Changes::default()
+        };
+        assert_eq!(
+            plan(&string, &changes).unwrap(),
+            vec![r#"SET "s" "y" KEEPTTL"#]
+        );
     }
 
     #[test]
