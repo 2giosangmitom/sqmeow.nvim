@@ -189,12 +189,16 @@ impl Adapter for ScyllaAdapter {
                 .query_unpaged(statement.as_str(), ())
                 .await
                 .map_err(|error| failed(error.to_string()))?;
-            // `IF EXISTS` answers `[applied]`, false when the row is gone.
+            // `IF EXISTS` and `IF NOT EXISTS` answer `[applied]`, false when the row is gone or taken.
             if let Ok(rows) = reply.into_rows_result()
                 && let Ok(Some(row)) = rows.maybe_first_row::<Row>()
                 && matches!(row.columns.first(), Some(Some(CqlValue::Boolean(false))))
             {
-                return Err(failed("no row had that key any more".to_owned()));
+                return Err(failed(if statement.starts_with("INSERT ") {
+                    "a row with that key already exists".to_owned()
+                } else {
+                    "no row had that key any more".to_owned()
+                }));
             }
         }
         Ok(Vec::new())

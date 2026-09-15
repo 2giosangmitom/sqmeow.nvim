@@ -203,6 +203,17 @@ async fn edits_a_row_by_its_whole_primary_key() {
     );
     backend.apply(&plan).await.unwrap();
 
+    // Adding a row with a stored key would replace it, so it is refused.
+    let taken = Changes {
+        inserts: vec![vec![(0, "1".into()), (1, "1".into()), (3, "new".into())]],
+        ..Changes::default()
+    };
+    let error = backend
+        .apply(&backend.plan(&result, &taken).unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("already exists"), "{error}");
+
     let delete = Changes {
         deletes: vec![1],
         ..Changes::default()

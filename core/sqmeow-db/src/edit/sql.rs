@@ -84,8 +84,14 @@ impl Planner<'_> {
             .iter()
             .map(|(index, value)| self.value(*index, value))
             .collect();
+        // A CQL insert would replace a stored row with the same key.
+        let absent = if self.dialect == Dialect::Scylla {
+            " IF NOT EXISTS"
+        } else {
+            ""
+        };
         let insert = format!(
-            "INSERT INTO {name} ({}) VALUES ({}){returning}",
+            "INSERT INTO {name} ({}) VALUES ({}){absent}{returning}",
             columns.join(", "),
             values.join(", ")
         );
@@ -685,6 +691,16 @@ mod tests {
             sql_plan(Dialect::Scylla, &result, &delete).unwrap(),
             vec![format!(
                 r#"DELETE FROM "ks"."t" WHERE "id" = {id} IF EXISTS"#
+            )]
+        );
+        let insert = Changes {
+            inserts: vec![vec![(0, id.into()), (1, "7".into())]],
+            ..Changes::default()
+        };
+        assert_eq!(
+            sql_plan(Dialect::Scylla, &result, &insert).unwrap(),
+            vec![format!(
+                r#"INSERT INTO "ks"."t" ("id", "n") VALUES ({id}, 7) IF NOT EXISTS"#
             )]
         );
         // Anything that is not a valid literal stays quoted.
