@@ -1,4 +1,4 @@
-//! The method table. Each group of methods lives in a submodule.
+//! Routes RPC methods to their handlers.
 
 mod calls;
 mod connections;

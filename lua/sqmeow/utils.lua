@@ -1,22 +1,22 @@
---- Helpers more than one part of the plugin needs.
+--- Shared helpers used across the plugin.
 
 local M = {}
 
---- Tell the user something, saying which plugin it came from.
+--- Notifies the user with a `sqmeow:` prefix.
 ---@param message string
----@param level integer|nil One of `vim.log.levels`, INFO when left out.
+---@param level integer|nil One of `vim.log.levels`; defaults to `INFO`.
 function M.notify(message, level)
   vim.notify('sqmeow: ' .. message, level or vim.log.levels.INFO)
 end
 
---- Whether a buffer handle still names a buffer.
+--- Returns whether `buf` is a valid buffer handle.
 ---@param buf integer|nil
 ---@return boolean
 function M.buf_valid(buf)
   return buf ~= nil and vim.api.nvim_buf_is_valid(buf)
 end
 
---- Whether a window still shows the buffer a surface put in it.
+--- Returns whether `win` still shows `buf`.
 ---@param win integer|nil
 ---@param buf integer|nil
 ---@return boolean
@@ -27,11 +27,11 @@ function M.shows(win, buf)
     and vim.api.nvim_win_get_buf(win) == buf
 end
 
---- nui.nvim's components by name, or nil and a message when it is not installed.
----@param names string[] Component modules without their `nui.` prefix, such as `{ 'popup', 'line' }`.
----@param surface string What needs them, for the message, such as `the drawer`.
----@return table<string, any>|nil components Keyed by capitalised name, such as `Popup` and `Line`.
----@return string error Empty when every component loaded.
+--- Loads `nui.nvim` components.
+---@param names string[] Component modules without the `nui.` prefix (e.g. `{ 'popup', 'line' }`).
+---@param surface string Human-readable caller name used in the error message.
+---@return table<string, any>|nil components Keyed by capitalised name (e.g. `Popup`).
+---@return string error Empty when every component loaded; otherwise the failure reason.
 function M.nui(names, surface)
   local components = {}
   for _, name in ipairs(names) do

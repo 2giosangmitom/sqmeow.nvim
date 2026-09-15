@@ -1,4 +1,4 @@
---- The databases the plugin can connect to, and what a connection to each one needs.
+--- Describes supported database dialects and their connection fields.
 
 local M = {}
 
@@ -128,7 +128,7 @@ local aliases = {
   file = 'sqlite',
 }
 
---- One dialect by the name the engine uses.
+--- Returns one dialect by the engine's id.
 ---@param id string
 ---@return sqmeow.Dialect|nil
 function M.get(id)
@@ -140,7 +140,7 @@ function M.get(id)
   return nil
 end
 
---- Which dialect a URL scheme belongs to.
+--- Returns which dialect a URL scheme belongs to.
 ---@param scheme string
 ---@return string|nil id
 function M.from_scheme(scheme)
@@ -152,7 +152,7 @@ function M.from_scheme(scheme)
   return aliases[scheme]
 end
 
---- Which dialect a URL is for, without taking the rest of it apart.
+--- Returns which dialect a URL is for, without parsing the rest.
 ---@param url string
 ---@return string|nil id
 function M.of_url(url)
@@ -160,7 +160,7 @@ function M.of_url(url)
   return scheme and M.from_scheme(scheme) or nil
 end
 
---- The fields a dialect asks for, with the name every connection carries at the top.
+--- Returns the fields a dialect asks for, prefixed by the name field.
 ---@param id string
 ---@return sqmeow.Field[]
 function M.fields(id)

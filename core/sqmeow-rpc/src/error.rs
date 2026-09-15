@@ -1,6 +1,8 @@
 use rmpv::Value;
 
-/// Errors produced by the transport, the codec, or a peer.
+/// Represents an error produced by the transport, the codec, or the peer.
+///
+/// Covers malformed frames, I/O failures, and remote error payloads.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A message did not have the shape msgpack-rpc requires.
@@ -29,12 +31,15 @@ pub enum Error {
 }
 
 impl Error {
-    /// Build a [`Error::Protocol`] from anything printable.
+    /// Creates a [`Error::Protocol`] from any displayable message.
     pub fn protocol(msg: impl std::fmt::Display) -> Self {
         Self::Protocol(msg.to_string())
     }
 
-    /// Build a [`Error::Remote`] from a peer error payload.
+    /// Creates a [`Error::Remote`] from a peer error payload.
+    ///
+    /// Neovim encodes remote errors as `[code, message]`; other payloads are
+    /// stringified verbatim.
     pub fn remote(value: &Value) -> Self {
         // Neovim answers with [code, message]; anything else is echoed verbatim.
         let text = match value {

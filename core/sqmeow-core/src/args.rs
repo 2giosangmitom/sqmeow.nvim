@@ -1,8 +1,8 @@
-//! Reading the keyword arguments Lua sends.
+//! Parses keyword arguments sent from Lua.
 
 use rmpv::Value;
 
-/// The argument table of one call.
+/// Holds the argument table for one RPC call.
 #[derive(Debug, Default)]
 pub struct Args {
     entries: Vec<(String, Value)>,

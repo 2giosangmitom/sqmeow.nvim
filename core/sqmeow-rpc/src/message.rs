@@ -9,7 +9,7 @@ pub const KIND_RESPONSE: u64 = 1;
 /// Message type tag for a notification.
 pub const KIND_NOTIFICATION: u64 = 2;
 
-/// One msgpack-rpc frame.
+/// Represents one msgpack-rpc frame.
 #[derive(Debug, Clone)]
 pub enum Message {
     /// A call that expects a [`Message::Response`] carrying the same `msgid`.
@@ -29,7 +29,12 @@ pub enum Message {
 }
 
 impl Message {
-    /// Decode a frame from a raw msgpack value.
+    /// Decodes a frame from a raw msgpack value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Protocol`] if the value does not match the
+    /// msgpack-rpc array shape for any message kind.
     pub fn from_value(value: Value) -> Result<Self> {
         let parts = match value {
             Value::Array(parts) => parts,
@@ -62,7 +67,7 @@ impl Message {
         }
     }
 
-    /// Encode this frame back into a raw msgpack value.
+    /// Encodes this frame back into a raw msgpack value.
     pub fn into_value(self) -> Value {
         match self {
             Self::Request {
@@ -93,7 +98,7 @@ impl Message {
         }
     }
 
-    /// The method name, for a request or a notification.
+    /// Returns the method name for a request or notification.
     pub fn method(&self) -> Option<&str> {
         match self {
             Self::Request { method, .. } | Self::Notification { method, .. } => Some(method),

@@ -1,4 +1,4 @@
-//! What a column holds, and whether it is a key.
+//! Classifies column types and key kinds.
 
 /// What kind of value a column holds, as a small closed set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

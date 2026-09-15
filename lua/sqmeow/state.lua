@@ -1,4 +1,4 @@
---- What the plugin knows about the engine's session.
+--- Mirrors engine session state on the Lua side.
 
 local M = {}
 

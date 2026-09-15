@@ -1,4 +1,4 @@
-//! Changing the rows a result showed.
+//! Tracks and plans edits to rows shown in a result.
 
 mod binder;
 mod sql;

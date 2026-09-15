@@ -1,4 +1,4 @@
-//! One decoded cell.
+//! Defines a single decoded cell value.
 
 use std::borrow::Cow;
 

@@ -1,4 +1,4 @@
-//! Telling statements that destroy or write from statements that only read.
+//! Detects destructive and write statements.
 
 use crate::adapter::Dialect;
 use crate::sql::first_word;
@@ -86,7 +86,9 @@ const MONGO_READS: &[&str] = &[
     "explain",
 ];
 
-/// What a statement destroys, said for a confirmation, or `None` when it destroys nothing.
+/// Returns a description of what `statement` would destroy, if anything.
+///
+/// Used to prompt for confirmation before destructive statements.
 pub fn danger(dialect: Dialect, statement: &str) -> Option<String> {
     match dialect {
         Dialect::Redis => {
@@ -137,7 +139,9 @@ pub fn danger(dialect: Dialect, statement: &str) -> Option<String> {
     }
 }
 
-/// Whether a statement may change data or schema, for a connection opened read-only.
+/// Returns whether `statement` may change data or schema.
+///
+/// Used to block writes on read-only connections.
 pub fn writes(dialect: Dialect, statement: &str) -> bool {
     match dialect {
         Dialect::Redis => !REDIS_READS.contains(&first_word(statement).as_str()),

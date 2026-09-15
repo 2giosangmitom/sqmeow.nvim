@@ -1,4 +1,9 @@
-//! The database contract for sqmeow.nvim.
+//! Defines the database contract for sqmeow.nvim.
+//!
+//! This crate owns the adapter trait, the value and schema types, and the
+//! helpers for editing, exporting, and filtering results. Adapters in
+//! `sqmeow-adapters` implement [`Adapter`] for each dialect, while the
+//! engine in `sqmeow-core` orchestrates calls through that trait.
 
 pub mod adapter;
 pub mod edit;

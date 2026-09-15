@@ -1,4 +1,4 @@
-//! Narrowing and ordering the rows a result holds.
+//! Filters and sorts rows held in memory.
 
 mod expression;
 

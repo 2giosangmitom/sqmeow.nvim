@@ -7,14 +7,17 @@ use crate::handler::{Handler, Reply};
 use crate::message::Message;
 use crate::transport::{self, Transport};
 
-/// A live msgpack-rpc session with one peer.
+/// Represents a live msgpack-rpc session with one peer.
+///
+/// Owns the inbound frame queue and a [`Client`] for outbound calls. Call
+/// [`Connection::serve`] to dispatch frames until the peer hangs up.
 pub struct Connection {
     client: Client,
     incoming: UnboundedReceiver<Message>,
 }
 
 impl Connection {
-    /// Build a connection over an existing transport.
+    /// Creates a connection over an existing transport.
     pub fn new(transport: Transport) -> Self {
         let Transport { incoming, outgoing } = transport;
         Self {
@@ -23,17 +26,23 @@ impl Connection {
         }
     }
 
-    /// Build a connection over this process's stdin and stdout.
+    /// Creates a connection over this process's stdin and stdout.
     pub fn stdio() -> Self {
         Self::new(transport::stdio())
     }
 
-    /// A handle for calling the peer. Clone it as needed.
+    /// Returns a handle for calling the peer.
+    ///
+    /// The handle can be cloned and shares the underlying channel.
     pub fn client(&self) -> Client {
         self.client.clone()
     }
 
-    /// Read frames until the peer hangs up, dispatching each one.
+    /// Dispatches frames until the peer hangs up.
+    ///
+    /// Reads from the inbound queue and routes requests and notifications to
+    /// `handler`, and responses to the waiting [`Client`] calls. Returns
+    /// when the channel closes.
     pub async fn serve<H: Handler>(mut self, handler: Arc<H>) {
         while let Some(message) = self.incoming.recv().await {
             match message {

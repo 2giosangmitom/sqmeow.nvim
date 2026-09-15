@@ -1,4 +1,4 @@
-//! Splitting a buffer of SQL into statements.
+//! Splits SQL buffers into statements.
 
 mod sides;
 
@@ -6,7 +6,7 @@ pub use sides::{Side, Sides};
 
 use crate::adapter::Dialect;
 
-/// One statement, with enough position information to point an error back at the buffer.
+/// Represents one statement with its buffer line range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Statement {
     /// The statement text, trimmed, without its terminating semicolon.
@@ -17,7 +17,7 @@ pub struct Statement {
     pub end_line: usize,
 }
 
-/// The statement the cursor is in, or the nearest one before it.
+/// Returns the statement containing `line`, or the nearest one before it.
 pub fn statement_at(statements: &[Statement], line: usize) -> Option<&Statement> {
     if let Some(inside) = statements
         .iter()
@@ -33,7 +33,7 @@ pub fn statement_at(statements: &[Statement], line: usize) -> Option<&Statement>
         .or_else(|| statements.first())
 }
 
-/// The first word of a statement past its leading comments, in lower case.
+/// Returns the first word of `statement` past leading comments, in lower case.
 pub fn first_word(statement: &str) -> String {
     let mut rest = statement.trim_start();
     loop {
@@ -57,8 +57,10 @@ pub fn first_word(statement: &str) -> String {
         .to_lowercase()
 }
 
-/// Whether each row of a query can be a table row: no grouping, `DISTINCT` or set operation at
-/// its top level.
+/// Returns whether each row of `statement` maps directly to a table row.
+///
+/// A plain query has no grouping, `DISTINCT`, or set operation at the top
+/// level and is therefore editable.
 pub fn plain(dialect: Dialect, statement: &str) -> bool {
     !crate::guard::words(dialect, statement)
         .iter()
@@ -71,9 +73,10 @@ pub fn plain(dialect: Dialect, statement: &str) -> bool {
         })
 }
 
-/// A query run as a subquery narrowed by `condition` and ordered by `order`, or `None` for a
-/// statement that returns no rows. `columns` are the names its rows have, which are told apart where
-/// two are the same.
+/// Wraps `statement` as a subquery filtered by `condition` and ordered by `order`.
+///
+/// Returns `None` if `statement` is not a row-returning query. `columns`
+/// disambiguates repeated names via a CTE.
 pub fn filtered(
     dialect: Dialect,
     statement: &str,
@@ -157,7 +160,7 @@ enum Mode {
     BlockComment,
 }
 
-/// Split a buffer of Redis commands into statements, one per line.
+/// Splits a buffer of Redis commands into statements, one per non-comment line.
 pub fn split_lines(input: &str) -> Vec<Statement> {
     input
         .lines()
@@ -174,7 +177,7 @@ pub fn split_lines(input: &str) -> Vec<Statement> {
         .collect()
 }
 
-/// Split a buffer of MongoDB commands into statements.
+/// Splits a buffer of MongoDB commands into Extended JSON documents.
 pub fn split_documents(input: &str) -> Vec<Statement> {
     let mut statements = Vec::new();
     let mut current: Option<(usize, String)> = None;
@@ -239,7 +242,7 @@ pub fn split_documents(input: &str) -> Vec<Statement> {
     statements
 }
 
-/// Split a buffer of SQL into its statements.
+/// Splits a SQL buffer into statements respecting the given dialect.
 pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
     let mut statements = Vec::new();
     let chars: Vec<char> = input.chars().collect();

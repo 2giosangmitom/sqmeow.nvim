@@ -18,10 +18,21 @@
 ---@toc_entry Making a connection
 
 --- Which database a query runs on ~
+---
+--- The buffer-local `b:sqmeow_connection` pins a buffer to a connection
+--- by name; `:Sqmeow bind <name|none>` sets or clears it. Without a pin,
+--- queries run on |sqmeow.api.use()|'s current connection, or fail when
+--- nothing is connected. Scratchpads remember their binding in `session.json`
+--- when `ui.persist_session` is on.
 ---@tag sqmeow-active
 ---@toc_entry Which database a query runs on
 
 --- The query log ~
+---
+--- Every statement that returns rows is appended to `history/log.jsonl`,
+--- and its rows are saved under `history/results/` when
+--- `query.persist_history` is on. The drawer shows the last
+--- `query.history_limit` entries; `sqmeow.history` reads and trims the file.
 ---@tag sqmeow-history
 ---@toc_entry The query log
 

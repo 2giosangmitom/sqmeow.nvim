@@ -29,9 +29,20 @@ opens it as its own connection, `connection/database`.
                                                                  *sqmeow-active*
 Which database a query runs on ~
 
+The buffer-local `b:sqmeow_connection` pins a buffer to a connection
+by name; `:Sqmeow bind <name|none>` sets or clears it. Without a pin,
+queries run on |sqmeow.api.use()|'s current connection, or fail when
+nothing is connected. Scratchpads remember their binding in `session.json`
+when `ui.persist_session` is on.
+
 ------------------------------------------------------------------------------
                                                                 *sqmeow-history*
 The query log ~
+
+Every statement that returns rows is appended to `history/log.jsonl`,
+and its rows are saved under `history/results/` when
+`query.persist_history` is on. The drawer shows the last
+`query.history_limit` entries; `sqmeow.history` reads and trims the file.
 
 ------------------------------------------------------------------------------
                                                             *sqmeow.user_config*
@@ -233,7 +244,7 @@ The active configuration. Replaced wholesale by `setup()`.
 ------------------------------------------------------------------------------
                                                       *sqmeow.config.validate()*
                         `sqmeow.config.validate`({opts})
-Validate a user configuration against the defaults.
+Validates a user configuration against the defaults.
 Parameters ~
 {opts} `(table)` Configuration as passed to `setup()`.
 Return ~
@@ -242,7 +253,7 @@ Return ~
 ------------------------------------------------------------------------------
                                                          *sqmeow.config.apply()*
                          `sqmeow.config.apply`({opts})
-Merge a user configuration over the defaults and make it current.
+Merges a user configuration over the defaults and makes it current.
 Parameters ~
 {opts} `(table|nil)` Configuration as passed to `setup()`.
 Return ~
@@ -253,14 +264,14 @@ Return ~
 ------------------------------------------------------------------------------
                                                            *sqmeow.config.get()*
                              `sqmeow.config.get`()
-Read the active configuration.
+Returns the active configuration.
 Return ~
 `(table)` config
 
 ------------------------------------------------------------------------------
                                                         *sqmeow.config.border()*
                             `sqmeow.config.border`()
-The border style dialogs are drawn with.
+Returns the border style dialogs are drawn with.
 Return ~
 `(string|string[])` style
 

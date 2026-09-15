@@ -1,13 +1,13 @@
-//! Measuring and cutting text by how wide it looks, not how many bytes it is.
+//! Measures and truncates text by display width.
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// How many terminal columns a string occupies.
+/// Returns how many terminal columns `text` occupies.
 pub fn width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
-/// How many columns a string occupies, giving up once past `cap`.
+/// Returns how many columns `text` occupies, stopping once past `cap`.
 pub fn width_capped(text: &str, cap: usize) -> usize {
     let mut total = 0usize;
     for character in text.chars() {
@@ -19,7 +19,7 @@ pub fn width_capped(text: &str, cap: usize) -> usize {
     total
 }
 
-/// Cut a string to at most `limit` columns, marking it if anything was dropped.
+/// Truncates `text` to at most `limit` columns, appending `marker` if truncated.
 pub fn truncate(text: &str, limit: usize, marker: &str) -> String {
     if width_capped(text, limit) <= limit {
         return text.to_owned();
@@ -45,7 +45,7 @@ pub fn truncate(text: &str, limit: usize, marker: &str) -> String {
     out
 }
 
-/// Pad a string to `target` columns.
+/// Pads `text` to `target` columns.
 pub fn pad(text: &str, target: usize, align_right: bool) -> String {
     let current = width(text);
     if current >= target {

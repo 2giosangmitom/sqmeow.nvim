@@ -1,8 +1,8 @@
---- Reading and hiding parts of a connection URL.
+--- Parses and redacts connection URLs.
 
 local M = {}
 
---- Replace the password in a URL with a mask.
+--- Returns the URL with its password replaced by `***`.
 ---@param url string
 ---@return string
 function M.redact(url)
@@ -26,7 +26,7 @@ function M.redact(url)
   return ('%s%s:***@%s%s'):format(scheme, user, authority:sub(at + 1), tail)
 end
 
---- Hide the password only when the configuration asks for it.
+--- Returns the URL redacted only when `redact_urls` is enabled.
 ---@param url string
 ---@return string
 function M.display(url)
@@ -36,7 +36,7 @@ function M.display(url)
   return url
 end
 
---- A short name for a URL, for a tab label or a list row.
+--- Returns a short human-readable label for a URL.
 ---@param url string
 ---@return string
 function M.label(url)

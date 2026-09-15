@@ -1,11 +1,11 @@
-//! Writing a result out as CSV, JSON or SQL.
+//! Exports results as CSV, JSON, or SQL.
 
 use crate::adapter::Dialect;
 use crate::edit::{Source, literal};
 use crate::result::ResultSet;
 use crate::value::Cell;
 
-/// What an export is written as.
+/// Describes the format an export is written in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Format {
     Csv,
@@ -45,7 +45,7 @@ impl Format {
     }
 }
 
-/// Which rows to write. `end` is exclusive and is clamped to the result.
+/// Specifies which rows to write; `end` is exclusive and clamped.
 #[derive(Debug, Clone, Copy)]
 pub struct Rows {
     pub start: usize,
@@ -76,7 +76,7 @@ impl Rows {
     }
 }
 
-/// Write rows of a result in the given format.
+/// Writes rows of a result in the given format.
 pub fn write(
     result: &ResultSet,
     format: &Format,

@@ -1,4 +1,4 @@
-//! Telling apart the sides of a table a query reads more than once.
+//! Distinguishes the sides of a table read more than once.
 
 use sqlparser::ast::{Expr, Query, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins};
 use sqlparser::dialect::{

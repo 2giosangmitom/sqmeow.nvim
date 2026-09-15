@@ -1,4 +1,8 @@
---- The connections and drawer nodes that were open, kept across restarts by `ui.persist_session`.
+--- Persists open connections and drawer expansion across restarts.
+---
+--- When `ui.persist_session` is on, the set of open connection names, the
+--- current connection, and the expanded drawer paths are saved to
+--- `session.json` on `VimLeavePre` and restored once on next `open_drawer`.
 
 local M = {}
 
@@ -10,7 +14,7 @@ local function path()
   return vim.fs.joinpath(require('sqmeow.paths').root(), 'session.json')
 end
 
---- Write down what is open now.
+--- Saves the current session to disk.
 function M.save()
   local state = require('sqmeow.state')
   local sources = require('sqmeow.sources')
@@ -32,7 +36,9 @@ function M.save()
   vim.fn.writefile({ vim.json.encode(session) }, path())
 end
 
---- Reopen what the last session had open. Only the first call does anything.
+--- Restores the last session's connections and drawer state.
+---
+--- Only the first call does anything; subsequent calls are no-ops.
 function M.restore()
   if restored then
     return
@@ -66,7 +72,7 @@ function M.restore()
   end
 end
 
---- Open the drawer nodes that were waiting for a connection to come up.
+--- Expands pending drawer nodes once `connection` is available.
 ---@param connection sqmeow.Connection
 function M.connected(connection)
   local paths = pending[connection.name]

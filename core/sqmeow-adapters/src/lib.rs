@@ -1,4 +1,8 @@
-//! Database adapters for sqmeow.nvim.
+//! Provides database adapters for sqmeow.nvim.
+//!
+//! Each adapter implements [`sqmeow_db::Adapter`] for one dialect. The
+//! [`Backend`] enum erases the concrete type so the engine can hold a
+//! heterogenous set of connections.
 
 pub mod duckdb;
 pub mod mongodb;

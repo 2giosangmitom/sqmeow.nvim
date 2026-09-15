@@ -12,7 +12,11 @@ use crate::message::Message;
 
 type Pending = Arc<Mutex<HashMap<u32, oneshot::Sender<Result<Value>>>>>;
 
-/// The outbound half of a connection.
+/// Sends requests and notifications to the peer.
+///
+///
+/// Holds the outbound channel and the table of in-flight requests. Cloning
+/// shares the same underlying channel and request table.
 #[derive(Clone)]
 pub struct Client {
     outgoing: UnboundedSender<Message>,
@@ -21,7 +25,7 @@ pub struct Client {
 }
 
 impl Client {
-    /// Wrap the sending half of a [`crate::Transport`].
+    /// Creates a client from the outbound channel of a [`crate::Transport`].
     pub fn new(outgoing: UnboundedSender<Message>) -> Self {
         Self {
             outgoing,
@@ -30,7 +34,13 @@ impl Client {
         }
     }
 
-    /// Call the peer and wait for its answer.
+    /// Calls the peer and waits for its answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Closed`] if the peer hung up or the writer task
+    /// disappeared before a response arrived, or [`Error::Remote`] if the
+    /// peer answered with an error payload.
     pub async fn request(&self, method: impl Into<String>, params: Vec<Value>) -> Result<Value> {
         let msgid = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
@@ -55,7 +65,11 @@ impl Client {
         rx.await.map_err(|_| Error::Closed)?
     }
 
-    /// Call the peer without waiting.
+    /// Notifies the peer without waiting for a response.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Closed`] if the outbound channel is gone.
     pub fn notify(&self, method: impl Into<String>, params: Vec<Value>) -> Result<()> {
         self.send(Message::Notification {
             method: method.into(),
@@ -63,7 +77,13 @@ impl Client {
         })
     }
 
-    /// Answer a request the peer made of us.
+    /// Responds to a request the peer made.
+    ///
+    /// Sends a msgpack-rpc response frame with the given `msgid`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Closed`] if the peer is gone.
     pub fn respond(&self, msgid: u32, outcome: std::result::Result<Value, String>) -> Result<()> {
         let (error, result) = match outcome {
             Ok(value) => (Value::Nil, value),

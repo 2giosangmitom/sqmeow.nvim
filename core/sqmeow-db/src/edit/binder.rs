@@ -1,4 +1,4 @@
-//! Tracing result columns back to the tables that store them.
+//! Traces result columns back to their source tables.
 
 use std::collections::HashSet;
 

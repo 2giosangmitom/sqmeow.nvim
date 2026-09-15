@@ -1,4 +1,4 @@
-//! Building the msgpack payloads that events carry.
+//! Builds msgpack payloads for events sent to the editor.
 
 use rmpv::Value;
 

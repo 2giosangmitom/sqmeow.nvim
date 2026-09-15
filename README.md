@@ -1,49 +1,56 @@
-# 🐱 sqmeow.nvim
+<h1 align="center">🐱 sqmeow.nvim</h1>
 
-Query your database from your favorite editor.
+<p align="center">Query your database from your favorite editor — fast, keyboard-driven, and Rust-powered.</p>
 
-[![Release](https://img.shields.io/github/v/release/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=github&color=a6da95&logoColor=D9E0EE&labelColor=302D41)](https://github.com/2giosangmitom/sqmeow.nvim/releases/latest)
-![Stars](https://img.shields.io/github/stars/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=apachespark&color=C9CBFF&logoColor=D9E0EE&labelColor=302D41)
-![Last commit](https://img.shields.io/github/last-commit/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=github&color=7dc4e4&logoColor=D9E0EE&labelColor=302D41)
-![Forks](https://img.shields.io/github/forks/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=starship&color=8bd5ca&logoColor=D9E0EE&labelColor=302D41)
-![Issues](https://img.shields.io/github/issues/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=lightning&color=8bd5ca&logoColor=D9E0EE&labelColor=302D41)
-![Repo size](https://img.shields.io/github/repo-size/2giosangmitom/sqmeow.nvim?color=%23DDB6F2&label=SIZE&logo=codesandbox&style=for-the-badge&logoColor=D9E0EE&labelColor=302D41)
-![License](https://img.shields.io/github/license/2giosangmitom/sqmeow.nvim?style=for-the-badge&logo=alpinedotjs&color=ee999f&logoColor=D9E0EE&labelColor=302D41)
+<p align="center">
+  <a href="https://github.com/2giosangmitom/sqmeow.nvim/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/2giosangmitom/sqmeow.nvim/ci.yml?branch=master&style=flat-square&label=ci" alt="ci status"></a>
+  <a href="https://github.com/2giosangmitom/sqmeow.nvim/releases/latest"><img src="https://img.shields.io/github/v/release/2giosangmitom/sqmeow.nvim?style=flat-square&label=release" alt="latest release"></a>
+  <a href="https://github.com/2giosangmitom/sqmeow.nvim/blob/master/LICENSE"><img src="https://img.shields.io/github/license/2giosangmitom/sqmeow.nvim?style=flat-square&label=license" alt="license"></a>
+  <a href="https://deepwiki.com/2giosangmitom/sqmeow.nvim"><img src="https://img.shields.io/badge/DeepWiki-Ask-blue?style=flat-square" alt="Ask DeepWiki"></a>
+  <a href="https://github.com/2giosangmitom/sqmeow.nvim/stargazers"><img src="https://img.shields.io/github/stars/2giosangmitom/sqmeow.nvim?style=flat-square&label=stars" alt="stars"></a>
+</p>
+
+<p align="center">
+  <a href="#-features">Features</a> •
+  <a href="#%EF%B8%8F-supported-databases">Databases</a> •
+  <a href="#-installation">Installation</a> •
+  <a href="#-quick-start">Quick Start</a> •
+  <a href="#%EF%B8%8F-configuration">Configuration</a> •
+  <a href="#-contributing">Contributing</a>
+</p>
+
+---
 
 ## ✨ Features
 
-- **⚡ Rust engine**: Queries run off the editor thread and results are paged, so large results never freeze Neovim.
-- **🐘 Multiple connections**: Keep several databases open at once.
-- **🌲 Schema drawer**: Browse schemas, tables, views, routines and columns with their types and keys.
-- **📄 Scratchpads**: Query buffers kept across restarts. Use `u` on a connection to make it the active one.
-- **✏️ In-grid editing**: Edit cells, add or delete rows, and review staged changes before applying them.
-- **🔎 Filter and sort**: Type a `WHERE` condition and an `ORDER BY` list in a bar above the grid, and the database runs them on your query.
-- **▶️ Flexible execution**: Run the statement under the cursor, a selection, or the whole buffer,
-  with a result for each statement that returns rows.
-- **🧭 EXPLAIN**: Query plans and errors show in the result window.
-- **🕘 Query log**: Reopen the result of any past query, even after a restart.
-- **📤 Export**: Results or selected rows to CSV, JSON or SQL `INSERT` statements (one per row or
-  batched, optionally after a `CREATE TABLE`), as a file or on the clipboard.
-- **🔐 Secrets**: Passwords are masked, and URLs can read them with `{{ env "VAR" }}` or `{{ exec "cmd" }}`.
-- **⌨️ Buffer-local keymaps**: No global mappings; `<Plug>` mappings for everything worth a global key.
+- **⚡ Rust engine** — queries run off the editor thread with paged results; large results never freeze Neovim.
+- **🐘 Multiple connections** — keep several databases open at once.
+- **🌲 Schema drawer** — browse schemas, tables, views, routines and columns with types and keys.
+- **📄 Scratchpads** — persistent query buffers; press `u` on a connection to make it active.
+- **✏️ In-grid editing** — edit cells, add or delete rows, review staged changes before applying.
+- **🔎 Filter and sort** — `WHERE` / `ORDER BY` bar runs on the database (or in-memory for Redis/ScyllaDB).
+- **▶️ Flexible execution** — run the statement under the cursor, a visual selection, or the whole buffer.
+- **🧭 EXPLAIN** — query plans and errors render in the result window.
+- **🕘 Query log** — reopen any past result, even after restart.
+- **📤 Export** — to CSV, JSON or SQL `INSERT` (single or batched, with optional `CREATE TABLE`) — to file or clipboard.
+- **🔐 Secrets** — passwords are masked; URLs can read `{{ env "VAR" }}`, `{{ exec "cmd" }}` or `{{ file "path" }}`.
+- **⌨️ Buffer-local keymaps** — no global mappings; `<Plug>` for everything worth a global key.
 
 ## 🗄️ Supported Databases
 
-- PostgreSQL, and servers speaking its protocol such as CockroachDB
-- MySQL, MariaDB
-- SQLite
-- DuckDB
-- Redis, Valkey, Dragonfly
-- MongoDB
-- ScyllaDB, Apache Cassandra
-
-## 🎬 Preview
-
-![preview](./assets/preview.webp)
+| Database                       | Notes                                                                                  |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| **PostgreSQL** / CockroachDB   | Full support, including `EXPLAIN`, TLS, `postgres://`                                  |
+| **MySQL** / MariaDB            | Full support, `mysql://`                                                               |
+| **SQLite**                     | `sqlite://` / `file:` — zero-config                                                    |
+| **DuckDB**                     | `duckdb:` — local analytics                                                            |
+| **Redis** / Valkey / Dragonfly | Keys grouped by type; `redis://`, `rediss://`, `redis+cluster://`, `redis+sentinel://` |
+| **MongoDB**                    | Extended JSON commands, `mongodb://` / `mongodb+srv://`                                |
+| **ScyllaDB** / Cassandra       | CQL via `scylla://` / `cassandra://`, `?ssl=true`                                      |
 
 ## 🚀 Installation
 
-**Requirements**: Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim).
+**Requirements:** Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim).
 
 With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
@@ -61,33 +68,28 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```
 
 > [!NOTE]
-> To track `master`, remove `version` and build with `install('cargo')`, which needs a Rust toolchain and DuckDB installed.
-> Run `:checkhealth sqmeow` to verify the installation.
+> To track `master`, remove `version` and build with `install('cargo')` (needs Rust toolchain + DuckDB). Run `:checkhealth sqmeow` to verify.
 
 ## ⚡ Quick Start
 
-1. `:Sqmeow` opens the drawer and the result window.
-2. `A` in the drawer, or `:Sqmeow add`, adds a connection.
-3. `<CR>` on a connection connects; `a` creates a scratchpad; `u` makes a connection active.
-4. Write a query and press `<CR>` to run the statement under the cursor, or a visual selection.
+1. `:Sqmeow` opens the drawer and result window.
+2. `A` in the drawer (or `:Sqmeow add`) adds a connection.
+3. `<CR>` on a connection connects; `a` creates a scratchpad; `u` makes it active.
+4. Write a query and press `<CR>` to run the statement under cursor (or a visual selection).
 
 > [!TIP]
-> Press `?` in the drawer or the result window to list its keymaps.
+> Press `?` in the drawer or result window to list its keymaps. See `:h sqmeow-keymaps` for the full reference.
 
 ### Dialect Notes
 
-- **SQL**: `<CR>` runs the statement under the cursor; `<leader>E` runs the whole buffer.
-- **Redis**: One command per line, such as `GET key`. The drawer lists keys by type. Reach a cluster
-  with `redis+cluster://host:7000,host:7001`, or the master Sentinels watch with
-  `redis+sentinel://host:26379,host:26380/mymaster/0`.
-- **MongoDB**: Database commands as Extended JSON, such as `{"find": "users"}`. `use db_name` switches database.
-- **ScyllaDB**: `?ssl=true` speaks TLS, and `?sslrootcert=/path/ca.pem` trusts a CA of your own.
+- **SQL** — `<CR>` runs statement under cursor; `<leader>E` runs whole buffer.
+- **Redis** — one command per line, e.g. `GET key`. Drawer lists keys by type. Cluster: `redis+cluster://host:7000,host:7001`. Sentinel: `redis+sentinel://host:26379,host:26380/mymaster/0`.
+- **MongoDB** — database commands as Extended JSON, e.g. `{"find": "users"}`. `use db_name` switches database.
+- **ScyllaDB** — `?ssl=true` for TLS, `?sslrootcert=/path/ca.pem` for custom CA.
 
 ### SSH Tunnels
 
-Fill **SSH** in the connection dialog, or add `"ssh": "user@bastion"` (or `user@bastion:2222`) to a
-saved connection, to reach its database through a tunnel. It runs your own `ssh`, so keys, the agent
-and `~/.ssh/config` all apply, and the URL's host is resolved from the bastion.
+Fill **SSH** in the connection dialog or add `"ssh": "user@bastion"` (or `user@bastion:2222`) to a saved connection. Uses your own `ssh`, so keys, agent and `~/.ssh/config` all apply, and the URL host is resolved from the bastion.
 
 ### Environment Connections
 
@@ -99,125 +101,112 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Safety
 
-- Tick **Read only** in the connection dialog, or add `"read_only": true` to a connection here or in
-  `connections.json`, to run only statements that
-  read and refuse edits. It guards against mistakes; a database user without write access is the real
-  protection.
-- Before a `DELETE` or `UPDATE` without `WHERE`, a `DROP`, a `TRUNCATE`, or emptying a Redis or
-  MongoDB database, sqmeow asks first. Set `query.confirm_destructive = false` to turn it off.
+- Tick **Read only** in the dialog or add `"read_only": true` to a connection (or `connections.json`) to allow only reads.
+- Before `DELETE`/`UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, or emptying a Redis/MongoDB database, sqmeow asks first. Set `query.confirm_destructive = false` to disable.
 
 ## ⌨️ Commands
 
-| Command                                             | Description                                         |
-| --------------------------------------------------- | --------------------------------------------------- |
-| `:Sqmeow`                                           | Open the drawer and the result window               |
-| `:Sqmeow toggle`                                    | Show or hide the schema drawer                      |
-| `:Sqmeow drawer`                                    | Show the schema drawer                              |
-| `:Sqmeow open` / `close`                            | Show / hide the result window                       |
-| `:Sqmeow add`                                       | Add a connection                                    |
-| `:Sqmeow save`                                      | Save a connection for next time                     |
-| `:Sqmeow edit [name]`                               | Edit a saved connection                             |
-| `:Sqmeow remove <name>`                             | Delete a saved connection                           |
-| `:Sqmeow use [name]`                                | Choose the connection queries run against           |
-| `:Sqmeow bind <name\|none>`                         | Tie the current buffer to a connection, or untie it |
-| `:Sqmeow disconnect`                                | Close the current connection                        |
-| `:Sqmeow scratch [name]`                            | Create a scratchpad                                 |
-| `:Sqmeow execute [sql]`                             | Run the buffer, the selection, or the given SQL     |
-| `:Sqmeow statement`                                 | Run the statement under the cursor                  |
-| `:Sqmeow cancel`                                    | Stop the running query                              |
-| `:Sqmeow next` / `prev`                             | Show the next / previous page                       |
-| `:Sqmeow float`                                     | Move the result between its split and a float       |
-| `:Sqmeow review`                                    | Review and apply staged edits                       |
-| `:Sqmeow export <csv\|json\|sql> [path\|clipboard]` | Export the result to a file or the clipboard        |
-| `:Sqmeow log [clear]`                               | Reopen a past query's result, or clear the log      |
-| `:Sqmeow install [method]`                          | Install the engine binary                           |
-| `:Sqmeow start` / `stop` / `restart`                | Start, stop or restart the engine                   |
-| `:Sqmeow messages`                                  | Show the engine's log                               |
-| `:Sqmeow health`                                    | Run the health check                                |
+| Command                                             | Description                                     |
+| --------------------------------------------------- | ----------------------------------------------- |
+| `:Sqmeow`                                           | Open drawer and result window                   |
+| `:Sqmeow toggle`                                    | Show or hide schema drawer                      |
+| `:Sqmeow drawer`                                    | Show schema drawer                              |
+| `:Sqmeow open` / `close`                            | Show / hide result window                       |
+| `:Sqmeow add`                                       | Add a connection                                |
+| `:Sqmeow save`                                      | Save connection for next time                   |
+| `:Sqmeow edit [name]`                               | Edit a saved connection                         |
+| `:Sqmeow remove <name>`                             | Delete a saved connection                       |
+| `:Sqmeow use [name]`                                | Choose connection queries run against           |
+| `:Sqmeow bind <name\|none>`                         | Tie current buffer to a connection, or untie it |
+| `:Sqmeow disconnect`                                | Close current connection                        |
+| `:Sqmeow scratch [name]`                            | Create a scratchpad                             |
+| `:Sqmeow execute [sql]`                             | Run buffer, selection, or given SQL             |
+| `:Sqmeow statement`                                 | Run statement under cursor                      |
+| `:Sqmeow cancel`                                    | Stop running query                              |
+| `:Sqmeow next` / `prev`                             | Next / previous page                            |
+| `:Sqmeow float`                                     | Move result between split and float             |
+| `:Sqmeow review`                                    | Review and apply staged edits                   |
+| `:Sqmeow export <csv\|json\|sql> [path\|clipboard]` | Export result to file or clipboard              |
+| `:Sqmeow log [clear]`                               | Reopen past result, or clear log                |
+| `:Sqmeow install [method]`                          | Install engine binary                           |
+| `:Sqmeow start` / `stop` / `restart`                | Start, stop or restart engine                   |
+| `:Sqmeow messages`                                  | Show engine log                                 |
+| `:Sqmeow health`                                    | Run health check                                |
 
 ## 🗺️ Keymaps
 
 ### Drawer
 
-| Key         | Action                                                |
-| ----------- | ----------------------------------------------------- |
-| `<CR>`, `o` | Expand or collapse the node                           |
-| `u`         | Run queries against this connection                   |
-| `p`         | Preview the relation's first page                     |
-| `K`         | Show the table's or key's structure                   |
-| `f`         | Show only the Redis keys matching a glob              |
-| `r`         | Reload the subtree                                    |
-| `y` / `s`   | Yank the qualified name / a `SELECT`                  |
-| `a`         | Create a scratchpad                                   |
-| `A` / `e`   | Add / edit a connection                               |
-| `R`         | Rename the connection or scratchpad                   |
-| `d`         | Delete the connection or scratchpad, or clear the log |
-| `?` / `q`   | Show keymaps / close the drawer                       |
+| Key         | Action                                     |
+| ----------- | ------------------------------------------ |
+| `<CR>`, `o` | Expand or collapse node                    |
+| `u`         | Run queries against this connection        |
+| `p`         | Preview relation's first page              |
+| `K`         | Show table's or key's structure            |
+| `f`         | Show only Redis keys matching a glob       |
+| `r`         | Reload subtree                             |
+| `y` / `s`   | Yank qualified name / a `SELECT`           |
+| `a`         | Create a scratchpad                        |
+| `A` / `e`   | Add / edit a connection                    |
+| `R`         | Rename connection or scratchpad            |
+| `d`         | Delete connection/scratchpad, or clear log |
+| `?` / `q`   | Show keymaps / close drawer                |
 
 ### Result Window
 
-| Key         | Action                                      |
-| ----------- | ------------------------------------------- |
-| `L` / `H`   | Next / previous page                        |
-| `gg` / `G`  | First / last page                           |
-| `K`         | Show the row's details                      |
-| `gK`        | Show the table's columns and indexes        |
-| `]r` / `[r` | Show the next / previous statement's result |
-| `x`         | Export the result, or the selected rows     |
-| `gf` / `go` | Open the filter bar on `WHERE` / `ORDER BY` |
-| `=`         | Filter by the cell's value                  |
-| `s` / `S`   | Sort by the column / add it to the sort     |
-| `-` / `g-`  | Hide the column / show hidden columns       |
-| `R`         | Clear filters, sort and hidden columns      |
-| `Z`         | Move between split and float                |
-| `?` / `q`   | Show keymaps / close the result window      |
+| Key         | Action                                  |
+| ----------- | --------------------------------------- |
+| `L` / `H`   | Next / previous page                    |
+| `gg` / `G`  | First / last page                       |
+| `K`         | Show row's details                      |
+| `gK`        | Show table's columns and indexes        |
+| `]r` / `[r` | Next / previous statement's result      |
+| `x`         | Export result, or selected rows         |
+| `gf` / `go` | Open filter bar on `WHERE` / `ORDER BY` |
+| `=`         | Filter by cell's value                  |
+| `s` / `S`   | Sort by column / add to sort            |
+| `-` / `g-`  | Hide column / show hidden columns       |
+| `R`         | Clear filters, sort and hidden columns  |
+| `Z`         | Move between split and float            |
+| `?` / `q`   | Show keymaps / close result window      |
 
 ### Filter Bar
 
-`gf` and `go` open a bar above the grid with a `WHERE` line and an `ORDER BY` line. The query runs
-again as a subquery narrowed and ordered by them, so they take any SQL the database accepts, and the
-rows stay editable. `=` adds the cell's value to the `WHERE` line, and `s` fills the `ORDER BY` line.
-MongoDB takes a filter and a sort document instead. Redis, ScyllaDB and results whose connection is
-closed take the same SQL, run on the rows fetched: comparisons, `AND`/`OR`/`NOT`, `IS NULL`,
-`LIKE`/`ILIKE`, `IN` and `BETWEEN`, ordered by columns with `ASC`/`DESC` and `NULLS FIRST`/`LAST`.
+`gf`/`go` open a bar above the grid with `WHERE` and `ORDER BY`. The query reruns as a subquery; `=` adds cell value to `WHERE`, `s` fills `ORDER BY`. MongoDB takes filter/sort documents; Redis/ScyllaDB and closed connections filter in-memory with `AND`/`OR`/`NOT`, `IS NULL`, `LIKE`/`ILIKE`, `IN`, `BETWEEN`.
 
-| Key               | Action                                |
-| ----------------- | ------------------------------------- |
-| `<CR>`            | Run the query with what the bar holds |
-| `q`, `<Esc>`      | Close the bar without filtering       |
-| `<C-p>` / `<C-n>` | Show an older / newer filter          |
-| `<C-x><C-o>`      | Complete a column name                |
+| Key               | Action                       |
+| ----------------- | ---------------------------- |
+| `<CR>`            | Run query with bar's content |
+| `q`, `<Esc>`      | Close bar without filtering  |
+| `<C-p>` / `<C-n>` | Older / newer filter         |
+| `<C-x><C-o>`      | Complete column name         |
 
 ### Editing Results
 
-A column is editable when it is a plain table column and its table's whole primary key, or failing
-that a whole unique key, is in the result, so joined, filtered and sorted queries can be edited. Changes to a joined row update each
-table by its own key, a deleted row is removed from the table of the first editable column, and rows
-can only be added to a result from one table. Computed columns such as aggregates stay read-only.
-After applying, the query runs again and opens at the same page and cursor.
+A column is editable when it is a plain table column and its table's whole primary (or unique) key is in the result. Joined rows update each table by its own key; deleted row removes from first editable column's table; rows only addable to single-table results.
 
-| Key           | Action                                                    |
-| ------------- | --------------------------------------------------------- |
-| `i`, `<CR>`   | Edit the cell                                             |
-| `X`           | Set the cell to `NULL`                                    |
-| `g=`          | Set the cell to a SQL expression, such as `now()`         |
-| `o` / `D`     | Add a row / a copy of this row without its primary key    |
-| `dd` / `d`    | Delete the row / the selected rows                        |
-| `u` / `U`     | Undo the last change / discard all changes                |
-| `gs`, `<C-s>` | Review staged changes; `<C-s>` in the review applies them |
+| Key           | Action                                           |
+| ------------- | ------------------------------------------------ |
+| `i`, `<CR>`   | Edit cell                                        |
+| `X`           | Set cell to `NULL`                               |
+| `g=`          | Set cell to SQL expression, e.g. `now()`         |
+| `o` / `D`     | Add row / copy row without primary key           |
+| `dd` / `d`    | Delete row / selected rows                       |
+| `u` / `U`     | Undo last change / discard all                   |
+| `gs`, `<C-s>` | Review staged changes; `<C-s>` in review applies |
 
 ### Scratchpad
 
-| Key             | Action                             |
-| --------------- | ---------------------------------- |
-| `<CR>`          | Run the statement under the cursor |
-| `<CR>` (visual) | Run the selection                  |
-| `<leader>E`     | Run the whole buffer               |
-| `<C-c>`         | Stop the running query             |
+| Key             | Action                     |
+| --------------- | -------------------------- |
+| `<CR>`          | Run statement under cursor |
+| `<CR>` (visual) | Run selection              |
+| `<leader>E`     | Run whole buffer           |
+| `<C-c>`         | Stop running query         |
 
 ### Global Keymaps
 
-Bind the `<Plug>` mappings to keys of your own:
+Bind `<Plug>` mappings yourself:
 
 ```lua
 vim.keymap.set('n', '<leader>dd', '<Plug>(sqmeow-toggle)')
@@ -230,7 +219,7 @@ vim.keymap.set('n', '<leader>df', '<Plug>(sqmeow-result-float)')
 
 ## ⚙️ Configuration
 
-`setup()` is optional. The defaults:
+`setup()` is optional. Defaults:
 
 ```lua
 require('sqmeow').setup({
@@ -248,13 +237,13 @@ require('sqmeow').setup({
   },
   query = {
     max_rows = 100000,
-    timeout_ms = 0, -- 0 disables the timeout
+    timeout_ms = 0, -- 0 disables timeout
     history_size = 32, -- results kept in memory
-    persist_history = true, -- save the log and its results to disk
+    persist_history = true, -- save log and results to disk
     history_limit = 500,
-    confirm_destructive = true, -- ask before DELETE/UPDATE without WHERE, DROP, TRUNCATE
+    confirm_destructive = true, -- ask before destructive statements
   },
-  icons = {}, -- Nerd Font glyphs; recolour them through the SqmeowIcon* highlight groups
+  icons = {}, -- Nerd Font glyphs; recolour via SqmeowIcon* highlight groups
   keymaps = {},
   redact_urls = true, -- mask passwords wherever a URL is shown
 })
@@ -264,12 +253,12 @@ See `:h sqmeow-config` for every option.
 
 ## 🤝 Contributing
 
-The toolchain is pinned with [mise](https://mise.jdx.dev) and tasks are [just](https://just.systems) recipes:
+Toolchain is pinned with [mise](https://mise.jdx.dev) and tasks are [just](https://just.systems) recipes:
 
 ```sh
 mise install   # rust, just, stylua, selene, lua-language-server
-just db-up     # start the test databases in Docker
-just           # lint, test and check the help file, as CI does
+just db-up     # start test databases in Docker
+just           # lint, test and check help file, as CI does
 just docs      # regenerate doc/sqmeow.txt
 ```
 

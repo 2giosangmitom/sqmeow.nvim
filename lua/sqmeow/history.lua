@@ -1,8 +1,12 @@
---- The queries the user ran, and what they returned.
+--- Persists the query log and archived results on disk.
+---
+--- The log lives at `history/log.jsonl` (newline-delimited JSON) and results
+--- under `history/results/`. Entries are filtered to valid objects with a
+--- `statement` field; corrupted lines are skipped.
 
 local M = {}
 
---- Tells calls this Neovim made apart from ones read back from disk.
+--- Identifies calls made by this Neovim instance.
 M.session = ('%d.%d'):format(vim.uv.os_getpid(), vim.uv.hrtime())
 
 -- Entries in the order they were run, with the path and the state of the file they were read from.
@@ -11,13 +15,13 @@ local cache = { path = '', entries = {}, stamp = nil }
 -- Counts the result files this Neovim has named, so two queries in the same second get two.
 local named = 0
 
---- Where the log is kept.
+--- Returns the path to the log file.
 ---@return string
 function M.path()
   return require('sqmeow.paths').history()
 end
 
---- A new file for the engine to save one result in.
+--- Returns a new unique path for the engine to save one result in.
 ---@return string
 function M.result_path()
   named = named + 1
@@ -155,7 +159,7 @@ local function write(entry)
   cache.stamp = stamp(cache.path)
 end
 
---- Record a query the user ran, once it has stopped running.
+--- Records a finished query in the log.
 ---@param summary sqmeow.CallSummary
 function M.append(summary)
   if summary.history == false then
@@ -206,8 +210,8 @@ function M.append(summary)
   end
 end
 
---- The queries to show, newest first, one per run.
----@param opts table|nil `connection` narrows to one name, `limit` caps the list.
+--- Returns log entries newest-first, one per run.
+---@param opts table|nil Optional `connection` to filter by name and `limit` to cap length.
 ---@return table[]
 function M.entries(opts)
   opts = opts or {}
@@ -228,7 +232,7 @@ function M.entries(opts)
   return newest
 end
 
---- Whether the engine running now still holds this call's rows in memory.
+--- Returns whether the current engine still holds this call's rows.
 ---@param entry table
 ---@return boolean
 function M.reopenable(entry)
@@ -244,14 +248,14 @@ function M.reopenable(entry)
   return false
 end
 
---- Whether this entry's result was saved and is still there to read.
+--- Returns whether this entry's result file still exists on disk.
 ---@param entry table
 ---@return boolean
 function M.saved(entry)
   return owned(entry.result) and vim.uv.fs_stat(entry.result) ~= nil
 end
 
---- Forget everything, on disk and in memory, results included.
+--- Clears the log and all archived results from disk and memory.
 ---@return boolean cleared
 function M.clear()
   local path = M.path()

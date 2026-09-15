@@ -1,4 +1,4 @@
-//! Everything one editor session holds.
+//! Holds state for one editor session.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};

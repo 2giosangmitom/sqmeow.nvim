@@ -1,4 +1,4 @@
---- Icons for the things the interface names.
+--- Resolves icons for labelled interface elements.
 
 local M = {}
 
@@ -6,7 +6,9 @@ local function configured()
   return require('sqmeow.config').get().icons
 end
 
---- Highlight group for each icon kind. Override the group to recolour one: >lua
+--- Highlight group for each icon kind.
+---
+--- Override the group to recolour one: >lua
 ---   vim.api.nvim_set_hl(0, 'SqmeowIconTable', { fg = '#7aa2f7' })
 --- <
 M.highlights = {
@@ -60,7 +62,7 @@ M.highlights = {
   foreign_key = 'SqmeowIconKeyForeign',
 }
 
---- The icon for a kind, and the group it is drawn in.
+--- Returns the icon and highlight group for a kind.
 ---@param kind string A key of `M.highlights`, or anything else for a blank.
 ---@return string icon
 ---@return string highlight
@@ -78,13 +80,13 @@ function M.get(kind)
   return icon, M.highlights[kind] or 'SqmeowText'
 end
 
---- What sits before a drawer row, by whether it is open, closed, or has no children.
+--- Returns the markers drawn before a drawer row.
 ---@return { open: string, closed: string, leaf: string }
 function M.markers()
   return configured().markers
 end
 
---- Which icon a drawer column is drawn with.
+--- Returns which icon a drawer column is drawn with.
 ---@param node table A drawer column node, carrying `class` and possibly `references`.
 ---@return string kind A key of `M.highlights`.
 function M.column_kind(node)
@@ -97,7 +99,7 @@ function M.column_kind(node)
   return node.class or 'unknown'
 end
 
---- Which icon a connection shows.
+--- Returns which icon a connection shows.
 ---@param dialect string|nil
 ---@return string kind A key of `M.highlights`.
 function M.connection_kind(dialect)

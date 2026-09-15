@@ -4,25 +4,28 @@ use rmpv::Value;
 
 use crate::client::Client;
 
-/// A request that still owes the peer an answer.
+/// Represents a pending reply to a peer request.
+///
+/// Dropping the reply without answering sends a generic error so
+/// `rpcrequest` in Neovim does not block forever.
 pub struct Reply {
     inner: Option<(Client, u32)>,
 }
 
 impl Reply {
-    /// Create a pending answer for `msgid`.
+    /// Creates a pending reply for `msgid`.
     pub fn new(client: Client, msgid: u32) -> Self {
         Self {
             inner: Some((client, msgid)),
         }
     }
 
-    /// Answer with a value.
+    /// Answers with a success value.
     pub fn ok(mut self, value: Value) {
         self.finish(Ok(value));
     }
 
-    /// Answer with an error message.
+    /// Answers with an error message.
     pub fn err(mut self, message: impl std::fmt::Display) {
         self.finish(Err(message.to_string()));
     }
@@ -46,12 +49,21 @@ impl Drop for Reply {
     }
 }
 
-/// What a peer's calls get dispatched to.
+/// Dispatches peer calls to handler implementations.
+///
+/// Implementors receive requests via [`Handler::on_request`] and
+/// notifications via [`Handler::on_notification`].
 pub trait Handler: Send + Sync + 'static {
-    /// Handle a call that expects an answer. Return promptly; answer through `reply`.
+    /// Handles a call that expects an answer.
+    ///
+    /// Returns promptly; answers through `reply`. Dropping `reply` without
+    /// answering sends a generic error.
     fn on_request(self: Arc<Self>, method: String, params: Vec<Value>, reply: Reply);
 
-    /// Handle a call that expects no answer. Ignored by default.
+    /// Handles a fire-and-forget notification.
+    ///
+    /// The default implementation ignores the notification and logs at
+    /// `debug` level.
     fn on_notification(self: Arc<Self>, method: String, params: Vec<Value>) {
         tracing::debug!(%method, count = params.len(), "ignoring a notification");
     }

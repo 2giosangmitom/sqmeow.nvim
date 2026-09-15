@@ -1,4 +1,4 @@
---- The channel to the engine.
+--- Manages the msgpack-rpc channel to the engine.
 
 local M = {}
 
@@ -50,25 +50,25 @@ local function on_exit(job, code)
   end
 end
 
---- Engine log lines collected from its stderr.
+--- Returns engine log lines collected from stderr, oldest first.
 ---@return string[]
 function M.messages()
   return vim.deepcopy(log)
 end
 
---- Whether the engine is running.
+--- Returns whether the engine is running.
 ---@return boolean
 function M.is_running()
   return channel ~= nil
 end
 
---- What the running engine reported at handshake.
+--- Returns the handshake info reported by the running engine.
 ---@return sqmeow.EngineInfo|nil
 function M.info()
   return info
 end
 
---- Start the engine if it is not already running.
+--- Starts the engine if it is not already running.
 ---@return integer|nil channel
 ---@return string|nil error
 function M.start()
@@ -139,8 +139,8 @@ function M.start()
   return channel
 end
 
---- Mirror the plugin's configuration into the engine.
----@return table|nil applied What the engine says it applied, after clamping.
+--- Mirrors the plugin's configuration into the engine.
+---@return table|nil applied What the engine applied, after clamping.
 function M.configure()
   if not channel then
     return nil
@@ -160,7 +160,7 @@ function M.configure()
   return applied
 end
 
---- Stop the engine.
+--- Stops the engine gracefully.
 function M.stop()
   if not channel then
     return
@@ -174,7 +174,7 @@ function M.stop()
   forget(job)
 end
 
---- Stop and start the engine.
+--- Restarts the engine.
 ---@return integer|nil channel
 ---@return string|nil error
 function M.restart()
@@ -182,7 +182,7 @@ function M.restart()
   return M.start()
 end
 
---- Call an engine method and wait for its answer.
+--- Calls an engine method and waits for its answer.
 ---@param method string
 ---@param args table|nil Keyword arguments for the method.
 ---@return any|nil result
@@ -200,7 +200,7 @@ function M.request(method, args)
   return result
 end
 
---- Call an engine method without waiting.
+--- Calls an engine method without waiting.
 ---@param method string
 ---@param args table|nil
 ---@return boolean started
@@ -215,8 +215,8 @@ function M.notify(method, args)
   return true
 end
 
---- Subscribe to an engine event.
----@param event string Event name, such as 'call:state'.
+--- Subscribes to an engine event.
+---@param event string Event name (e.g. `'call:state'`).
 ---@param callback fun(payload: any)
 ---@return fun() unsubscribe
 function M.on(event, callback)
@@ -234,7 +234,7 @@ function M.on(event, callback)
   end
 end
 
---- Deliver an engine event.
+--- Delivers an engine event to subscribers.
 ---@param event string
 ---@param payload any
 function M.dispatch(event, payload)

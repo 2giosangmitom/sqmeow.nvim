@@ -1,4 +1,8 @@
-//! The sqmeow.nvim database engine.
+//! Runs the sqmeow.nvim database engine.
+//!
+//! The binary reads msgpack-rpc from stdin and serves requests through
+//! [`Core`]. Pass `--version` to print the engine version without starting
+//! the async runtime.
 
 mod archive;
 mod args;

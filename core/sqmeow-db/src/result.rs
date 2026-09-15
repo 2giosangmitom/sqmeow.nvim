@@ -1,4 +1,4 @@
-//! A result set, stored by column.
+//! Defines the in-memory result set stored column-wise.
 
 use std::time::Duration;
 
@@ -10,7 +10,7 @@ use crate::width;
 /// The widest a column is measured to, past which the exact figure stops mattering.
 pub const MAX_MEASURED_WIDTH: usize = 512;
 
-/// One column of a result.
+/// Describes one column of a result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Column {
     /// The name the database gave it.
@@ -26,7 +26,7 @@ pub struct Column {
 }
 
 impl Column {
-    /// A column whose class follows from its type name and which is not a key.
+    /// Creates a column whose class is inferred from its type name.
     pub fn new(name: impl Into<String>, type_name: impl Into<String>) -> Self {
         let type_name = type_name.into();
         Self {
@@ -38,14 +38,14 @@ impl Column {
         }
     }
 
-    /// The same column, marked as a key.
+    /// Returns this column marked with `key`.
     pub fn with_key(mut self, key: KeyKind) -> Self {
         self.key = key;
         self
     }
 }
 
-/// What the editor needs to size a column, measured once over the whole result.
+/// Stores measurements used by the editor to size a column.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ColumnStats {
     /// Display columns taken by the widest value, `NULL`s excluded and capped at
@@ -57,7 +57,7 @@ pub struct ColumnStats {
     pub numeric: bool,
 }
 
-/// The rows one statement produced.
+/// Holds the rows one statement produced, stored column-wise.
 #[derive(Debug, Clone, Default)]
 pub struct ResultSet {
     columns: Vec<Column>,

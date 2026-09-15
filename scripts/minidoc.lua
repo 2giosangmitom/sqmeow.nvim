@@ -1,4 +1,8 @@
--- How `doc/sqmeow.txt` is built.
+--- Generates `doc/sqmeow.txt` from EmmyLua annotations.
+---
+--- The input order controls the sections in the help file. Each Lua file's
+--- `M` is rewritten to its public module name (e.g. `sqmeow.config`) by the
+--- `block_pre` hook so tags and signatures read as `sqmeow.xxx`.
 
 local doc = require('mini.doc')
 

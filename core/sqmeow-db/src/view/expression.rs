@@ -1,4 +1,4 @@
-//! Filtering and ordering held rows by a `WHERE` condition and an `ORDER BY` list typed as SQL.
+//! Filters and orders held rows via SQL `WHERE` and `ORDER BY` fragments.
 
 use std::borrow::Cow;
 use std::cmp::Ordering;

@@ -4,7 +4,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::message::Message;
 
-/// Both halves of a framed msgpack-rpc stream.
+/// Holds both halves of a framed msgpack-rpc stream.
 pub struct Transport {
     /// Frames arriving from the peer.
     pub incoming: UnboundedReceiver<Message>,
@@ -12,7 +12,10 @@ pub struct Transport {
     pub outgoing: UnboundedSender<Message>,
 }
 
-/// Speak msgpack-rpc over this process's stdin and stdout.
+/// Creates a transport speaking msgpack-rpc over stdin and stdout.
+///
+/// Spawns a reader thread blocking on stdin and a writer thread blocking
+/// on stdout, each forwarding frames through channels.
 pub fn stdio() -> Transport {
     let (incoming_tx, incoming) = mpsc::unbounded_channel();
     let (outgoing, outgoing_rx) = mpsc::unbounded_channel();

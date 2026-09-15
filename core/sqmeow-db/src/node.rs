@@ -1,4 +1,4 @@
-//! What the schema drawer shows.
+//! Defines nodes rendered by the schema drawer.
 
 use crate::types::{ForeignKey, KeyKind, TypeClass};
 

@@ -1,4 +1,4 @@
-/// What can go wrong talking to a database.
+/// Represents an error returned when talking to a database.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The driver rejected something.
@@ -15,7 +15,7 @@ pub enum Error {
 }
 
 impl Error {
-    /// Wrap a driver's own error.
+    /// Wraps a driver error into [`Error::Driver`].
     pub fn driver(error: impl std::fmt::Display) -> Self {
         Self::Driver(error.to_string())
     }

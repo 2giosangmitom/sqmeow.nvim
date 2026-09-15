@@ -1,9 +1,9 @@
---- Writing SQL that names things.
+--- Builds SQL that names things correctly per dialect.
 
 local M = {}
 
---- Quote one identifier for a dialect.
----@param dialect string|nil 'mysql' uses backticks.
+--- Quotes one identifier for a dialect.
+---@param dialect string|nil `'mysql'` uses backticks, others use double quotes.
 ---@param name string
 ---@return string
 function M.quote(dialect, name)
@@ -13,7 +13,7 @@ function M.quote(dialect, name)
   return '"' .. name:gsub('"', '""') .. '"'
 end
 
---- Join name parts into a qualified name.
+--- Joins name parts into a qualified identifier.
 ---@param dialect string|nil
 ---@param parts string[] Such as `{ 'public', 'users' }`.
 ---@return string
@@ -30,7 +30,7 @@ function M.qualify(dialect, parts)
   )
 end
 
---- A `SELECT` over a relation.
+--- Returns a `SELECT` over a relation.
 ---@param dialect string|nil
 ---@param parts string[]
 ---@param limit integer|nil Nil reads every row.
@@ -48,8 +48,8 @@ function M.select_from(dialect, parts, limit)
   return limit and ('%s limit %d'):format(sql, limit) or sql
 end
 
---- The command that reads a Redis key back, by the drawer group it is listed under.
----@param group string A drawer group key, such as `hashes`.
+--- Returns the command that reads a Redis key for a drawer group.
+---@param group string A drawer group key (e.g. `'hashes'`).
 ---@param key string
 ---@param limit integer|nil Nil reads every element.
 ---@return string|nil command Nil for a group that is not a Redis type.

@@ -1,39 +1,42 @@
---- Where the plugin keeps the files it writes.
+--- Resolves filesystem paths under `core.path`.
+---
+--- All persistent state — the engine binary, saved connections, scratchpads,
+--- and the query log — lives under one root.
 
 local M = {}
 
---- The directory everything is kept under.
----@return string
+--- Returns the normalized root directory.
+---@return string # Absolute path to `core.path`.
 function M.root()
   return vim.fs.normalize(require('sqmeow.config').get().core.path)
 end
 
---- Where an installed engine is kept.
----@return string
+--- Returns where an installed engine binary is kept.
+---@return string # Absolute path to the `bin` directory.
 function M.bin()
   return vim.fs.joinpath(M.root(), 'bin')
 end
 
---- The file saved connections are written to.
----@return string
+--- Returns the path to the saved connections file.
+---@return string # Absolute path to `connections.json`.
 function M.connections()
   return vim.fs.joinpath(M.root(), 'connections.json')
 end
 
---- Where scratchpads are kept.
----@return string
+--- Returns where scratchpads are stored.
+---@return string # Absolute path to the `scratch` directory.
 function M.scratch()
   return vim.fs.joinpath(M.root(), 'scratch')
 end
 
---- The query log.
----@return string
+--- Returns the path to the query log.
+---@return string # Absolute path to `history/log.jsonl`.
 function M.history()
   return vim.fs.joinpath(M.root(), 'history', 'log.jsonl')
 end
 
---- Where the results of logged queries are kept, one file each.
----@return string
+--- Returns where archived result files are kept.
+---@return string # Absolute path to `history/results`.
 function M.results()
   return vim.fs.joinpath(M.root(), 'history', 'results')
 end

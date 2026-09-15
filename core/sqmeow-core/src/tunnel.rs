@@ -1,4 +1,4 @@
-//! Reaching a database through an SSH tunnel.
+//! Opens SSH tunnels to reach databases.
 
 use std::process::Stdio;
 use std::time::Duration;

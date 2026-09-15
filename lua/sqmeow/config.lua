@@ -175,7 +175,7 @@ local function validate(user, defaults, path, errors)
   end
 end
 
---- Validate a user configuration against the defaults.
+--- Validates a user configuration against the defaults.
 ---@param opts table Configuration as passed to `setup()`.
 ---@return string[] # Every problem found, so one call reports them all.
 function M.validate(opts)
@@ -186,7 +186,7 @@ function M.validate(opts)
   return errors
 end
 
---- Merge a user configuration over the defaults and make it current.
+--- Merges a user configuration over the defaults and makes it current.
 ---@param opts table|nil Configuration as passed to `setup()`.
 ---@return table config The merged configuration.
 ---@return string[] errors Problems found.
@@ -197,13 +197,13 @@ function M.apply(opts)
   return M.current, errors
 end
 
---- Read the active configuration.
+--- Returns the active configuration.
 ---@return table config
 function M.get()
   return M.current
 end
 
---- The border style dialogs are drawn with.
+--- Returns the border style dialogs are drawn with.
 ---@return string|string[] style
 function M.border()
   local style = M.get().ui.border

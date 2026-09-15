@@ -1,4 +1,4 @@
-//! Keeping a finished result on disk.
+//! Persists finished results to disk.
 
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -16,7 +16,7 @@ const FORMAT: &str = "sqmeow-result";
 /// Bumped when the layout changes in a way an older reader would get wrong.
 const VERSION: u64 = 1;
 
-/// Save a result.
+/// Saves a result to `path`.
 pub fn write(path: &Path, result: &ResultSet) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -30,7 +30,11 @@ pub fn write(path: &Path, result: &ResultSet) -> io::Result<()> {
     outcome
 }
 
-/// Read a saved result back.
+/// Reads a saved result from `path`.
+///
+/// # Errors
+///
+/// Returns a string describing why the file could not be decoded.
 pub fn read(path: &Path) -> Result<ResultSet, String> {
     let file =
         File::open(path).map_err(|error| format!("could not open the saved result: {error}"))?;

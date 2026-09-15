@@ -11,7 +11,7 @@ use crate::node::{
 };
 use crate::result::ResultSet;
 
-/// Which SQL dialect a connection speaks.
+/// Represents the SQL dialect a connection speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
     Sqlite,
@@ -28,7 +28,7 @@ pub enum Dialect {
 }
 
 impl Dialect {
-    /// The name shown in the drawer and the statusline.
+    /// Returns the canonical name shown in the drawer and statusline.
     pub fn name(self) -> &'static str {
         match self {
             Self::Sqlite => "sqlite",
@@ -41,7 +41,7 @@ impl Dialect {
         }
     }
 
-    /// Quote an SQL identifier.
+    /// Quotes an SQL identifier for this dialect.
     pub fn quote_ident(self, name: &str) -> String {
         match self {
             Self::MySql => format!("`{}`", name.replace('`', "``")),
@@ -49,7 +49,9 @@ impl Dialect {
         }
     }
 
-    /// Work out the dialect from a connection URL's scheme.
+    /// Infers the dialect from a connection URL's scheme.
+    ///
+    /// Returns `None` if the scheme is unknown.
     pub fn from_url(url: &str) -> Option<Self> {
         let scheme = url.split_once("://").map_or_else(
             || url.split_once(':').map(|(scheme, _)| scheme),
@@ -75,17 +77,20 @@ impl Dialect {
     }
 }
 
-/// One live connection to a database.
+/// Defines the contract every database adapter implements.
+///
+/// Each adapter owns its connection pool and translates `sqmeow-db` types
+/// to and from the underlying driver.
 pub trait Adapter: Send + Sync {
-    /// Which dialect this connection speaks.
+    /// Returns the dialect this connection speaks.
     fn dialect(&self) -> Dialect;
 
-    /// Quote an identifier for this dialect.
+    /// Quotes an identifier for this dialect.
     fn quote_ident(&self, name: &str) -> String {
         self.dialect().quote_ident(name)
     }
 
-    /// Run one statement, streaming rows until the cap is reached or the token is cancelled.
+    /// Executes one statement and streams rows until `max_rows` or cancellation.
     fn execute(
         &self,
         statement: &str,
@@ -93,7 +98,9 @@ pub trait Adapter: Send + Sync {
         cancel: CancellationToken,
     ) -> impl Future<Output = Result<ResultSet>> + Send;
 
-    /// Run `statement`, a query wrapping `origin`, tracing its columns to tables through `origin`.
+    /// Executes `statement` as a wrapper around `origin`.
+    ///
+    /// Tracing of columns to their source tables uses `origin`.
     fn execute_wrapped(
         &self,
         statement: &str,
@@ -104,32 +111,33 @@ pub trait Adapter: Send + Sync {
         self.execute(statement, max_rows, cancel)
     }
 
-    /// Plan staged changes to a result into the statements that make them.
+    /// Plans staged changes to a result into the SQL statements that make them.
     fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         crate::edit::sql_plan(self.dialect(), result, changes)
     }
 
-    /// Run planned statements together: all of them or, as far as the database allows, none. Answers
-    /// with the rows any of them returned.
+    /// Applies planned statements transactionally where the dialect allows.
+    ///
+    /// Returns rows produced by the statements that returned them.
     fn apply(&self, statements: &[String]) -> impl Future<Output = Result<Vec<ResultSet>>> + Send;
 
-    /// The schemas, or for MySQL the databases, this connection can see.
+    /// Lists schemas visible to this connection.
     fn schemas(&self) -> impl Future<Output = Result<Vec<SchemaNode>>> + Send;
 
-    /// The tables and views in one schema.
+    /// Lists relations in a schema.
     fn relations(&self, schema: &str) -> impl Future<Output = Result<Vec<RelationNode>>> + Send;
 
-    /// The stored functions and procedures in one schema.
+    /// Lists routines in a schema.
     fn routines(&self, schema: &str) -> impl Future<Output = Result<Vec<RoutineNode>>> + Send;
 
-    /// The columns of one relation.
+    /// Lists columns of a relation.
     fn columns(
         &self,
         schema: &str,
         relation: &str,
     ) -> impl Future<Output = Result<Vec<ColumnNode>>> + Send;
 
-    /// The indexes and unique constraints on one table.
+    /// Lists indexes and unique constraints on a table.
     fn indexes(
         &self,
         _schema: &str,
@@ -138,12 +146,12 @@ pub trait Adapter: Send + Sync {
         async { Ok(Vec::new()) }
     }
 
-    /// The roles or users the server knows.
+    /// Lists roles or users known to the server.
     fn roles(&self) -> impl Future<Output = Result<Vec<RoleNode>>> + Send {
         async { Ok(Vec::new()) }
     }
 
-    /// Comments, foreign keys, checks, triggers and the definition of one relation.
+    /// Returns details for a relation, including comments and constraints.
     fn details(
         &self,
         _schema: &str,
@@ -152,7 +160,7 @@ pub trait Adapter: Send + Sync {
         async { Ok(Details::default()) }
     }
 
-    /// Close the connection pool.
+    /// Closes the underlying connection pool.
     fn close(&self) -> impl Future<Output = ()> + Send;
 }
 
