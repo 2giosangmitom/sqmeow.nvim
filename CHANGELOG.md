@@ -1,5 +1,54 @@
 # Changelog
 
+## [2.1.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.0.0...v2.1.0) (2026-09-15)
+
+
+### Features
+
+* add a read-only checkbox to the connection dialog ([399c193](https://github.com/2giosangmitom/sqmeow.nvim/commit/399c193c4dcd64e50226f010392f0297a1150efa))
+* add delete connection ([ce410bc](https://github.com/2giosangmitom/sqmeow.nvim/commit/ce410bc9916a174c1a54256d98011fbc25a1fca8))
+* add SQL export, row duplication, defaults and a structure view ([30bea21](https://github.com/2giosangmitom/sqmeow.nvim/commit/30bea219feb2058fc6947cf59987c885d1465230))
+* batch SQL export, SQL expression values and wider DuckDB editing ([4143701](https://github.com/2giosangmitom/sqmeow.nvim/commit/4143701267b1054d293f22e47ea32554e4dd8608))
+* confirm destructive statements and add read-only connections ([cad3ee8](https://github.com/2giosangmitom/sqmeow.nvim/commit/cad3ee89cd0a18e13a0cbf1d9557843a686072f6))
+* edit DuckDB results in the grid ([61caf98](https://github.com/2giosangmitom/sqmeow.nvim/commit/61caf98c17c36d9db0dceca2611dc4fb8213ff11))
+* edit rows of joined, filtered and sorted results ([7da7060](https://github.com/2giosangmitom/sqmeow.nvim/commit/7da7060b549048deec5df6cca6b1719d43935014))
+* filter results with a typed WHERE and ORDER BY ([3e184f2](https://github.com/2giosangmitom/sqmeow.nvim/commit/3e184f25f129f0e56c3e55687625e792b41f81aa))
+* filter, sort and edit results, and copy them to the clipboard ([#9](https://github.com/2giosangmitom/sqmeow.nvim/issues/9)) ([b9527e2](https://github.com/2giosangmitom/sqmeow.nvim/commit/b9527e26177a4e21b75f9954061547b2f017e6ff))
+* **filter:** filter Redis, ScyllaDB and closed-connection results in the bar ([bd8435f](https://github.com/2giosangmitom/sqmeow.nvim/commit/bd8435fb31bfce57bd9e6e9143cbf48bc1edf0e5))
+* keep a result per statement, return inserted rows, and extend the structure view ([290523b](https://github.com/2giosangmitom/sqmeow.nvim/commit/290523bb0cf279caafd4b2fb228cb2a030a45694))
+* lift limits across connections, editing, results, filtering and the drawer ([9b19a5e](https://github.com/2giosangmitom/sqmeow.nvim/commit/9b19a5eb5657e1c8247f25d5f0b0c19e676e693d))
+* show query errors in the result buffer instead of diagnostics ([c84503c](https://github.com/2giosangmitom/sqmeow.nvim/commit/c84503c99829e4b242118d46dd943871de24e0d8))
+* support DuckDB ([c3d4d9c](https://github.com/2giosangmitom/sqmeow.nvim/commit/c3d4d9c8399ac34fd2b26c1567ad05f6e526416a))
+* support ScyllaDB and Cassandra ([dee59f0](https://github.com/2giosangmitom/sqmeow.nvim/commit/dee59f0ce830dab93eee3fa6c46e7dc303995314))
+* **view:** filter held rows by a WHERE condition and an ORDER BY list ([efc511b](https://github.com/2giosangmitom/sqmeow.nvim/commit/efc511b706172237999f78671739bed52b5c0e32))
+
+
+### Fixes
+
+* **core:** fix tunnel test ([fc5d4e7](https://github.com/2giosangmitom/sqmeow.nvim/commit/fc5d4e75b5a859faee5d029ff11fc23af0b78a2e))
+* drop create scratchpads for specific connection ([fc1afdd](https://github.com/2giosangmitom/sqmeow.nvim/commit/fc1afdd0c486a2144abbee29e4981506ac0c03c8))
+* **edit:** write each side of a self-join through its own key ([39473ad](https://github.com/2giosangmitom/sqmeow.nvim/commit/39473ad7f3e596623db5a319ee480d92984d8c07))
+* let the form's keys work from an open field ([edf69f5](https://github.com/2giosangmitom/sqmeow.nvim/commit/edf69f5a0a819f2979470ccd43c2e26380e513e0))
+* **redis:** keep TTLs, delete list elements by position and refuse taken names ([5cb9c92](https://github.com/2giosangmitom/sqmeow.nvim/commit/5cb9c925b0f04d0e0037ff77d61a54908e8cb618))
+* **scylla:** refuse an added row whose key is already stored ([8c9065c](https://github.com/2giosangmitom/sqmeow.nvim/commit/8c9065cd96675fa68ae584741848d44ce16edc12))
+* split, edit, cancel and read SQL results reliably ([#11](https://github.com/2giosangmitom/sqmeow.nvim/issues/11)) ([65fcc7f](https://github.com/2giosangmitom/sqmeow.nvim/commit/65fcc7ffe988fa25e89db102420aafec2716eef7))
+* **sqlite:** keep a view over a self-join read-only ([7088c02](https://github.com/2giosangmitom/sqmeow.nvim/commit/7088c025209181736f1c3c84b586247c7d77bde5))
+* stop a DuckDB query cancelled before it starts ([f05fae3](https://github.com/2giosangmitom/sqmeow.nvim/commit/f05fae3993eed6473b1b88c42fbb5bb66b2feb89))
+
+
+### Refactoring
+
+* remove ponytail comments ([514593d](https://github.com/2giosangmitom/sqmeow.nvim/commit/514593d9b9fe4ad3315f40350950362e4c7aca98))
+* trim verbose comments and remove dead code ([ccef876](https://github.com/2giosangmitom/sqmeow.nvim/commit/ccef87694599fc41fef1f46414543d0245daaef8))
+
+
+### Documentation
+
+* correct the README and add a release badge ([eb52780](https://github.com/2giosangmitom/sqmeow.nvim/commit/eb52780aa61e3ec4eec19f7ac6b32e803cf7fc92))
+* describe filtering Redis, ScyllaDB and closed-connection results ([dbcbd45](https://github.com/2giosangmitom/sqmeow.nvim/commit/dbcbd454b7f4bdca53c2b8907592c46335966c49))
+* improve documents ([338bc48](https://github.com/2giosangmitom/sqmeow.nvim/commit/338bc489138f1ff175c5d8e100f64f88dd268f78))
+* improve keymap document [skip ci] ([d5e103b](https://github.com/2giosangmitom/sqmeow.nvim/commit/d5e103b5d62a333b5bcc8807b9a785f1fe3ca602))
+
 ## [2.0.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v1.0.2...v2.0.0) (2026-09-13)
 
 
