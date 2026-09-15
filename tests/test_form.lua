@@ -157,6 +157,43 @@ T['editing']['hides what is typed into a masked field'] = function()
   eq(vim.fn.getmatches(win)[1].conceal, '*')
 end
 
+T['editing']['q in an open field cancels the dialog'] = function()
+  local cancelled = false
+  open_form({ { key = 'host', label = 'Host' } }, {
+    wizard = true,
+    on_cancel = function()
+      cancelled = true
+    end,
+  })
+
+  vim.wait(50)
+  vim.api.nvim_set_current_win(assert(editing()))
+  vim.api.nvim_feedkeys(vim.keycode('<C-\\><C-n>q'), 'x', false)
+  vim.wait(50)
+  eq(cancelled, true)
+  eq(dialog(), nil)
+  eq(editing(), nil)
+end
+
+T['editing']['<C-s> in an open field saves what it holds'] = function()
+  local got
+  open_form({ { key = 'host', label = 'Host' } }, {
+    wizard = true,
+    on_submit = function(values)
+      got = values
+    end,
+  })
+
+  vim.wait(50)
+  local win = assert(editing())
+  vim.api.nvim_set_current_win(win)
+  vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(win), 0, -1, false, { 'db.internal' })
+  vim.api.nvim_feedkeys(vim.keycode('<C-s>'), 'x', false)
+  vim.wait(50)
+  eq(got, { host = 'db.internal' })
+  eq(dialog(), nil)
+end
+
 T['editing']['leaves an ordinary field readable'] = function()
   open_form({ { key = 'host', label = 'Host' } }, { wizard = true })
 

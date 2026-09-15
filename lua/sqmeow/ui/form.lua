@@ -177,7 +177,8 @@ function M.open(spec)
   end
 
   local function focus(index)
-    if vim.api.nvim_win_is_valid(popup.winid) then
+    -- A field closes after a delay, when the dialog may already be gone.
+    if popup.winid and vim.api.nvim_win_is_valid(popup.winid) then
       vim.api.nvim_set_current_win(popup.winid)
       vim.api.nvim_win_set_cursor(popup.winid, { math.max(1, math.min(index, #fields)), 0 })
     end
@@ -216,7 +217,7 @@ function M.open(spec)
     return index
   end
 
-  local edit
+  local edit, submit, cancel
   edit = function(index)
     local field = fields[index]
     if not field then
@@ -264,6 +265,24 @@ function M.open(spec)
     if field.mask then
       mask(input.winid)
     end
+
+    -- The dialog's keys work from an open field too: `q` cancels it, `<C-s>` saves what is typed.
+    local opts = { noremap = true, nowait = true }
+    input:map('n', 'q', function()
+      input:unmount()
+      cancel()
+    end, opts)
+    input:map('n', '<Esc>', function()
+      input:unmount()
+    end, opts)
+    for _, mode in ipairs({ 'n', 'i' }) do
+      input:map(mode, '<C-s>', function()
+        local value = vim.api.nvim_buf_get_lines(input.bufnr, 0, 1, false)[1] or ''
+        input:unmount()
+        change(field.key, value)
+        submit()
+      end, opts)
+    end
   end
 
   local function close()
@@ -273,7 +292,7 @@ function M.open(spec)
     end
   end
 
-  local function submit()
+  submit = function()
     local problem = spec.validate and spec.validate(values)
     if problem then
       popup.border:set_text('bottom', parts.Text((' %s '):format(problem), 'SqmeowError'), 'center')
@@ -329,12 +348,13 @@ function M.open(spec)
     end
   end
   map({ '<C-s>' }, submit)
-  map({ 'q', '<Esc>' }, function()
+  cancel = function()
     close()
     if spec.on_cancel then
       spec.on_cancel()
     end
-  end)
+  end
+  map({ 'q', '<Esc>' }, cancel)
 
   if spec.wizard then
     edit(typed(1))
