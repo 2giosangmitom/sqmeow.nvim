@@ -31,6 +31,8 @@ pub struct Sides {
     qualifiers: Option<Vec<Option<(String, String)>>>,
     /// The lower-case words of a statement the parser could not read.
     words: Option<Vec<String>>,
+    /// A view the query reads could not be read, so no table's reads are known.
+    opaque: bool,
 }
 
 impl Sides {
@@ -45,24 +47,63 @@ impl Sides {
                 sides
             }
             _ => Self {
-                words: Some(
-                    Tokenizer::new(grammar.as_ref(), statement)
-                        .tokenize()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter_map(|token| match token {
-                            Token::Word(word) => Some(word.value.to_lowercase()),
-                            _ => None,
-                        })
-                        .collect(),
-                ),
+                words: Some(words(grammar.as_ref(), statement)),
                 ..Self::default()
             },
         }
     }
 
+    /// Count the tables each view the query reads reads in turn, from `views`' names and definitions,
+    /// for a driver that traces a view's columns to its tables. Each read of a view counts again.
+    pub fn expand_views(&mut self, dialect: Dialect, views: &[(String, String)]) {
+        // Far past any real nesting, so a definition that reads itself cannot loop.
+        const LIMIT: usize = 10_000;
+
+        let grammar = grammar(dialect);
+        let mut at = 0;
+        loop {
+            let read = match &self.words {
+                Some(words) => words.get(at).cloned(),
+                None => self.reads.get(at).map(|(table, _)| table.clone()),
+            };
+            let Some(read) = read else {
+                return;
+            };
+            at += 1;
+            let Some((view, definition)) = views
+                .iter()
+                .find(|(view, _)| view.eq_ignore_ascii_case(&read))
+            else {
+                continue;
+            };
+            if at > LIMIT {
+                self.opaque = true;
+                return;
+            }
+            if let Some(words) = &mut self.words {
+                let own = view.to_lowercase();
+                words.extend(
+                    self::words(grammar.as_ref(), definition)
+                        .into_iter()
+                        .filter(|word| *word != own),
+                );
+                continue;
+            }
+            match Parser::parse_sql(grammar.as_ref(), definition).as_deref() {
+                Ok([Statement::CreateView(created)]) => self.query(&created.query, false),
+                _ => {
+                    self.opaque = true;
+                    return;
+                }
+            }
+        }
+    }
+
     /// Which read of `table` result column `column`, its column `name`, came through.
     pub fn side(&self, table: &TableName, column: usize, name: &str) -> Side {
+        if self.opaque {
+            return Side::Unknown;
+        }
         let wanted = table.name.to_lowercase();
         if let Some(words) = &self.words {
             return match words.iter().filter(|word| **word == wanted).count() {
@@ -175,6 +216,19 @@ fn qualifiers(query: &Query) -> Option<Vec<Option<(String, String)>>> {
         .collect()
 }
 
+/// The lower-case words of a statement.
+fn words(grammar: &dyn Grammar, statement: &str) -> Vec<String> {
+    Tokenizer::new(grammar, statement)
+        .tokenize()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|token| match token {
+            Token::Word(word) => Some(word.value.to_lowercase()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn grammar(dialect: Dialect) -> Box<dyn Grammar> {
     match dialect {
         Dialect::Postgres => Box::new(PostgreSqlDialect {}),
@@ -248,5 +302,39 @@ mod tests {
     fn a_statement_the_parser_cannot_read_counts_the_table_name() {
         assert_eq!(side("select id from t where id @@@ 1", 0, "id"), Side::Only);
         assert_eq!(side("select id from t, t @@@ 1", 0, "id"), Side::Unknown);
+    }
+
+    #[test]
+    fn a_table_read_twice_inside_a_view_is_unknown() {
+        let views = [
+            (
+                "family".to_owned(),
+                "CREATE VIEW family AS SELECT c.id, p.name FROM t c JOIN t p ON p.id = c.parent"
+                    .to_owned(),
+            ),
+            (
+                "named".to_owned(),
+                "create view named as select id, name from t".to_owned(),
+            ),
+            (
+                "again".to_owned(),
+                "create view again as select * from named".to_owned(),
+            ),
+            ("broken".to_owned(), "create view broken as @@@".to_owned()),
+        ];
+        let side = |statement: &str| {
+            let mut sides = Sides::read(Dialect::Sqlite, statement);
+            sides.expand_views(Dialect::Sqlite, &views);
+            sides.side(&TableName::parse("t"), 0, "id")
+        };
+        assert_eq!(side("select * from family"), Side::Unknown);
+        assert_eq!(side("select * from again"), Side::Only);
+        assert_eq!(
+            side("select a.id from again a join named n on n.id = a.id"),
+            Side::Unknown
+        );
+        assert_eq!(side("select * from family where id @@@ 1"), Side::Unknown);
+        assert_eq!(side("select * from named where id @@@ 1"), Side::Only);
+        assert_eq!(side("select * from broken"), Side::Unknown);
     }
 }

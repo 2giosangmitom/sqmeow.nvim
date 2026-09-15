@@ -93,12 +93,29 @@ impl SqliteAdapter {
             .await;
         // SQLite traces a compound `SELECT`'s columns to its first part, though rows come from every part.
         let plain = sqmeow_db::sql::plain(Dialect::Sqlite, statement);
-        let sides = sqmeow_db::sql::Sides::read(Dialect::Sqlite, statement);
+        let mut sides = sqmeow_db::sql::Sides::read(Dialect::Sqlite, statement);
+        // SQLite traces a view's columns to its tables, so what a view reads counts as read.
+        sides.expand_views(Dialect::Sqlite, &self.views().await);
         let source = match self.keys.source(&origins, plain, sides) {
             Some(source) if !self.compound(statement).await => Some(source),
             _ => None,
         };
         (columns, source)
+    }
+
+    /// Every view's name and definition, in the main and temporary schemas.
+    async fn views(&self) -> Vec<(String, String)> {
+        sqlx::query_as::<_, (String, String)>(
+            "select name, sql from sqlite_master where type = 'view'
+             union all
+             select name, sql from sqlite_temp_master where type = 'view'",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::debug!(%error, "could not read the views");
+            Vec::new()
+        })
     }
 
     /// Whether a statement's plan combines `SELECT`s with `UNION`, `INTERSECT` or `EXCEPT`.

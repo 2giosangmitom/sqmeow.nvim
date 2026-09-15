@@ -1213,3 +1213,40 @@ async fn a_table_describes_its_keys_triggers_and_definition() {
         }]
     );
 }
+
+#[tokio::test]
+async fn a_view_over_a_self_join_is_read_only() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table nodes (id integer primary key, name text, parent integer)",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into nodes values (1, 'root', null), (2, 'child', 1)",
+    )
+    .await;
+    run(
+        &backend,
+        "create view family as
+         select c.id, c.name, p.id as parent_id, p.name as parent
+         from nodes c join nodes p on p.id = c.parent",
+    )
+    .await;
+    run(&backend, "create view named as select id, name from nodes").await;
+
+    // SQLite names `nodes` for both sides of the view, which cannot be told apart.
+    assert!(
+        run(&backend, "select * from family")
+            .await
+            .source()
+            .is_none()
+    );
+    assert!(
+        run(&backend, "select * from named")
+            .await
+            .source()
+            .is_some()
+    );
+}
