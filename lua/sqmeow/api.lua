@@ -416,8 +416,9 @@ function M.review()
   require('sqmeow.ui.edit').review()
 end
 
---- Filter and order the current result by running its query again with a WHERE condition and an
---- ORDER BY list. Needs an open SQL connection; empty strings clear them.
+--- Filter and order the current result with a WHERE condition and an ORDER BY list, which an open
+--- SQL or MongoDB connection runs in the query and Redis, ScyllaDB or a closed connection runs on the
+--- rows held. Empty strings clear them.
 ---@param view { where: string|nil, order_by: string|nil }
 ---@return boolean started
 ---@usage >lua

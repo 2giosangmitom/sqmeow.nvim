@@ -209,9 +209,9 @@ function M.open(line)
   if not (call and call.call_id and win) then
     return utils.notify('there is no result to filter', vim.log.levels.WARN)
   end
-  if not result.queried(call) then
+  if not result.filterable(call) then
     return utils.notify(
-      'filtering in the query needs an open SQL or MongoDB connection',
+      'a MongoDB result is filtered in its query, and its connection is closed',
       vim.log.levels.WARN
     )
   end

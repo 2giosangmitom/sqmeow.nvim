@@ -179,6 +179,19 @@ for _, server in ipairs({ 'redis', 'dragonfly' }) do
     eq(state.current_connection().dialect, 'redis')
   end
 
+  T[server]['filters and sorts a hash on the rows held'] = function()
+    run('DEL lua:filtered')
+    run('HSET lua:filtered a 1 b 5 c 9')
+    run('HGETALL lua:filtered')
+    result.open()
+
+    eq(result.filter('value >= 5', 'value desc'), true)
+    helpers.wait_for('the held rows should narrow', function()
+      return state.call.view_rows == 2
+    end, TIMEOUT)
+    helpers.contains(lines()[1], '9')
+  end
+
   T[server]['runs a script one command per line'] = function()
     -- Read as one statement, these would be a `SET` with three words too many and fail.
     local summary = run('SET test:lua:visits 41\nINCR test:lua:visits')
@@ -435,6 +448,22 @@ for _, server in ipairs({ 'scylla', 'cassandra' }) do
 
   T[server]['connects and reports its dialect'] = function()
     eq(state.current_connection().dialect, 'scylla')
+  end
+
+  T[server]['filters and sorts a table on the rows held'] = function()
+    run('drop table if exists sqmeow.lua_filtered')
+    run('create table sqmeow.lua_filtered (id int primary key, n int)')
+    for id, n in ipairs({ 1, 5, 9 }) do
+      run(('insert into sqmeow.lua_filtered (id, n) values (%d, %d)'):format(id, n))
+    end
+    run('select id, n from sqmeow.lua_filtered')
+    result.open()
+
+    eq(result.filter('n >= 5 and id <> 2 or n = 1', 'n desc'), true)
+    helpers.wait_for('the held rows should narrow', function()
+      return state.call.view_rows == 2
+    end, TIMEOUT)
+    helpers.contains(lines()[1], '9')
   end
 
   T[server]['lists keyspaces and previews a table with its key'] = function()

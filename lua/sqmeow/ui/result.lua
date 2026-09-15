@@ -638,10 +638,14 @@ function M.send_view()
   end
 
   local spec = M.spec()
+  -- A result filtered by its query arrives narrowed, so only held rows take the condition here.
+  local held = not M.queried(call)
   local _, err = require('sqmeow.rpc').request('view', {
     call_id = call.call_id,
     filters = spec.filters,
     sort = spec.sort,
+    where = held and spec.where or nil,
+    order_by = held and spec.order_by or nil,
   })
   if err then
     utils.notify(err, vim.log.levels.WARN)
@@ -663,7 +667,7 @@ function M.on_view(payload)
 end
 
 --- Whether a result is filtered and ordered by running its query again, which needs an open SQL
---- connection, rather than in the engine's memory.
+--- or MongoDB connection, rather than in the engine's memory.
 ---@param call sqmeow.CallSummary|nil
 ---@return boolean
 function M.queried(call)
@@ -671,6 +675,14 @@ function M.queried(call)
   return connection ~= nil
     and connection.dialect ~= nil
     and not vim.tbl_contains({ 'redis', 'scylla' }, connection.dialect)
+end
+
+--- Whether the filter bar can narrow a result: in its query, or with the same SQL on the rows the
+--- engine holds, which suits every result but a MongoDB one whose connection is closed.
+---@param call sqmeow.CallSummary|nil
+---@return boolean
+function M.filterable(call)
+  return call ~= nil and call.call_id ~= nil and (M.queried(call) or M.dialect(call) ~= 'mongodb')
 end
 
 --- The names a filter knows the result's columns by, each repeated name numbered as the engine
@@ -737,11 +749,13 @@ function M.rerun(view, keep)
         cursor = M.window() and vim.api.nvim_win_get_cursor(win),
       }
     or nil
+  -- A filter on held rows is applied again once the new result arrives.
+  local queried = M.queried(call)
   local started = require('sqmeow.api').execute(spec.base, {
     conn_id = call.conn_id,
     history = false,
-    where = spec.where,
-    order_by = spec.order_by,
+    where = queried and spec.where or nil,
+    order_by = queried and spec.order_by or nil,
     columns = vim.tbl_map(function(column)
       return column.name
     end, call.columns or {}),
@@ -753,19 +767,37 @@ function M.rerun(view, keep)
   return started ~= nil
 end
 
---- Filter and order the current result by running its query again.
+--- Narrow held rows with SQL, keeping the view as it was when the engine refuses it.
+---@return boolean sent
+local function narrow(where, order_by, sort)
+  local spec = M.spec()
+  local before = { spec.where, spec.order_by, spec.sort }
+  spec.where, spec.order_by, spec.sort = where, order_by, sort
+  if M.send_view() then
+    return true
+  end
+  spec.where, spec.order_by, spec.sort = before[1], before[2], before[3]
+  return false
+end
+
+--- Filter and order the current result: by running its query again where its connection can, and
+--- otherwise with the same SQL on the rows the engine holds.
 ---@param where string A WHERE condition, or empty for none.
 ---@param order_by string An ORDER BY list, or empty for none.
 ---@return boolean started
 function M.filter(where, order_by)
-  if not M.queried(require('sqmeow.state').call) then
+  local call = require('sqmeow.state').call
+  if M.queried(call) then
+    return M.rerun({ where = where, order_by = order_by, sort = {} })
+  end
+  if not M.filterable(call) then
     utils.notify(
-      'filtering in the query needs an open SQL or MongoDB connection',
+      'a MongoDB result is filtered in its query, and its connection is closed',
       vim.log.levels.WARN
     )
     return false
   end
-  return M.rerun({ where = where, order_by = order_by, sort = {} })
+  return narrow(where, order_by, {})
 end
 
 --- Draw a result from its beginning.
@@ -804,7 +836,11 @@ function M.render(summary)
     pending, at, resume = nil, resume, nil
     local spec = M.spec()
     -- A result filtered by its query arrives already narrowed.
-    if not M.queried(summary) and (#spec.filters > 0 or #spec.sort > 0) and M.send_view() then
+    local held = #spec.filters > 0
+      or #spec.sort > 0
+      or (spec.where or '') ~= ''
+      or (spec.order_by or '') ~= ''
+    if not M.queried(summary) and held and M.send_view() then
       return
     end
   end
@@ -1097,7 +1133,7 @@ local function sort_by(column, add)
     sort = {}
   end
 
-  if not (call and M.queried(call)) then
+  if not (call and M.filterable(call)) then
     spec.sort = sort
     M.send_view()
     return
@@ -1118,7 +1154,11 @@ local function sort_by(column, add)
   if mongodb and order_by ~= '' then
     order_by = '{' .. order_by .. '}'
   end
-  M.rerun({ sort = sort, order_by = order_by })
+  if M.queried(call) then
+    M.rerun({ sort = sort, order_by = order_by })
+  else
+    narrow(spec.where, order_by, sort)
+  end
 end
 
 -- -- actions --------------------------------------------------------------------------------
@@ -1274,18 +1314,25 @@ function M.actions.filter_cell()
   end
 
   local call = require('sqmeow.state').call
-  if call and M.queried(call) then
+  if call and M.filterable(call) then
+    local queried = M.queried(call)
     local condition, err = require('sqmeow.rpc').request('condition', {
       call_id = call.call_id,
       row = cell.row,
       column = cell.column,
+      memory = not queried or nil,
     })
     if not condition then
       return utils.notify(err or 'the value could not be matched', vim.log.levels.WARN)
     end
-    local where = M.spec().where
-    local both = M.dialect(call) == 'mongodb' and '{"$and": [%s, %s]}' or '(%s) AND %s'
-    M.rerun({ where = where == '' and condition or both:format(where, condition) })
+    local spec = M.spec()
+    local both = queried and M.dialect(call) == 'mongodb' and '{"$and": [%s, %s]}' or '(%s) AND %s'
+    local where = spec.where == '' and condition or both:format(spec.where, condition)
+    if queried then
+      M.rerun({ where = where })
+    else
+      narrow(where, spec.order_by, spec.sort)
+    end
     return
   end
 
@@ -1345,7 +1392,7 @@ function M.actions.reset_view()
     return
   end
   local spec = M.spec()
-  if spec.where ~= '' or spec.order_by ~= '' then
+  if M.queried(call) and (spec.where ~= '' or spec.order_by ~= '') then
     M.rerun({ where = '', order_by = '', sort = {}, filters = {}, hidden = {} })
     return
   end

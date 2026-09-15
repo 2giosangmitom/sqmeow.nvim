@@ -122,6 +122,36 @@ T['the filter bar docks above the grid and filters in the database'] = function(
   helpers.contains(vim.wo[result.window()].winbar, 'where age > 20')
 end
 
+T['a result that cannot be queried again is filtered on the rows held with the same SQL'] = function()
+  helpers.stub(result, 'queried', function()
+    return false
+  end)
+  local win = focus_result()
+
+  eq(result.filter('nope = 1', ''), false)
+  eq(result.spec().where, '')
+
+  eq(result.filter('age > 20 or age is null', 'id desc'), true)
+  wait('the held rows should narrow', function()
+    return state.call.view_rows == 2
+  end)
+  eq(rows()[1]:match('^%s*(%d)'), '2')
+  helpers.contains(vim.wo[win].winbar, 'where age > 20')
+
+  vim.api.nvim_win_set_cursor(win, { 3, 0 })
+  result.goto_column(2)
+  result.actions.filter_cell()
+  wait('the cell should narrow them further', function()
+    return state.call.view_rows == 1
+  end)
+  eq(result.spec().where, [[(age > 20 or age is null) AND "name" = 'bob']])
+
+  result.actions.reset_view()
+  wait('every row should come back', function()
+    return state.call.view_rows == nil and #rows() == 3
+  end)
+end
+
 T['= and s narrow and order in the database, and R runs the query as written'] = function()
   local win = focus_result()
   vim.api.nvim_win_set_cursor(win, { 3, 0 })
