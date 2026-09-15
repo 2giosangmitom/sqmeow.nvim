@@ -618,7 +618,7 @@ end
 T['scratchpads']['expand into the saved files'] = function()
   expand('scratchpads')
   -- The icon sits in the same column as one on a branch, so a leaf lines up with its siblings.
-  eq(lines()[line_matching('notes')], '    * notes')
+  eq(lines()[line_matching('notes.sql')], '    * notes.sql')
 end
 
 T['scratchpads']['open the file when chosen'] = function()
@@ -654,7 +654,7 @@ end
 
 T['scratchpads']['are renamed once a new name is given'] = function()
   helpers.stub(vim.ui, 'input', function(_, on_confirm)
-    on_confirm('renamed')
+    on_confirm('renamed.sql')
   end)
   MiniTest.finally(function()
     vim.fn.delete(vim.fs.joinpath(editor.directory(), 'renamed.sql'))
@@ -665,7 +665,7 @@ T['scratchpads']['are renamed once a new name is given'] = function()
   drawer.actions.rename()
 
   eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'notes.sql')), nil)
-  eq(lines()[line_matching('renamed')], '    * renamed')
+  eq(lines()[line_matching('renamed.sql')], '    * renamed.sql')
 end
 
 T['scratchpads']['offer the current name to edit'] = function()
@@ -678,7 +678,7 @@ T['scratchpads']['offer the current name to edit'] = function()
   goto_line('notes')
   drawer.actions.rename()
 
-  eq(offered, 'notes')
+  eq(offered, 'notes.sql')
 end
 
 T['scratchpads']['are left alone when the rename is abandoned'] = function()
@@ -807,43 +807,52 @@ T['scratchpads']['are not deleted from a row that is not one'] = function()
   eq(called, false)
 end
 
-T['scratchpads']['are created for the connection under the cursor'] = function()
+T['scratchpads']['are created as simple files'] = function()
   helpers.stub(vim.ui, 'input', function(opts, on_confirm)
-    helpers.contains(opts.prompt, 'scratch')
-    on_confirm('report')
+    eq(opts.prompt, 'New scratchpad: ')
+    on_confirm('report.sql')
   end)
   MiniTest.finally(function()
     vim.cmd('silent! bwipeout!')
-    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'scratch'), 'rf')
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'report.sql'))
     drawer.open()
     drawer.render()
   end)
 
-  goto_line('scratch  sqlite')
   vim.api.nvim_set_current_win(drawer.open())
   drawer.actions.new_scratchpad()
 
-  -- Opened beside the drawer, as a SQL file in the connection's folder, and listed under its name.
+  -- Opened beside the drawer as a SQL file, untied from any connection, `u` switches the db.
   eq(vim.fs.basename(vim.api.nvim_buf_get_name(0)), 'report.sql')
   eq(vim.bo.filetype, 'sql')
-  eq(vim.b.sqmeow_connection, 'scratch')
+  eq(vim.b.sqmeow_connection, nil)
   expand('scratchpads')
-  eq(lines()[line_matching('report')], '    * report  scratch')
+  eq(lines()[line_matching('report.sql')], '    * report.sql')
 end
 
-T['scratchpads']['are not created from a row outside every connection'] = function()
+T['scratchpads']['are created even from a row outside every connection'] = function()
   local called = false
-  helpers.stub(vim.ui, 'input', function()
+  helpers.stub(vim.ui, 'input', function(_, on_confirm)
     called = true
+    on_confirm('anywhere.sql')
+  end)
+  MiniTest.finally(function()
+    vim.cmd('silent! bwipeout!')
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'anywhere.sql'))
+    drawer.open()
+    drawer.render()
   end)
 
   goto_line('scratchpads')
   drawer.actions.new_scratchpad()
-  eq(called, false)
+  eq(called, true)
 end
 
 T['scratchpads']['say so when there are none'] = function()
   vim.fn.delete(vim.fs.joinpath(editor.directory(), 'notes.sql'))
+  vim.fn.delete(vim.fs.joinpath(editor.directory(), 'report.sql'))
+  vim.fn.delete(vim.fs.joinpath(editor.directory(), 'anywhere.sql'))
+  vim.fn.delete(vim.fs.joinpath(editor.directory(), 'scratch'), 'rf')
   drawer.render()
 
   eq(lines()[line_matching('scratchpads')]:find('none saved') ~= nil, true)

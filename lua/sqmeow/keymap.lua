@@ -36,7 +36,7 @@ M.defaults = {
     {
       action = 'new_scratchpad',
       lhs = 'a',
-      desc = 'Create a scratchpad for the connection under the cursor',
+      desc = 'Create a scratchpad',
     },
     { action = 'edit', lhs = 'e', desc = 'Edit the connection under the cursor' },
     {
@@ -171,7 +171,7 @@ M.plug = {
     end,
   },
   ['sqmeow-scratch'] = {
-    desc = 'Create a scratchpad for this connection',
+    desc = 'Create a scratchpad',
     run = function()
       require('sqmeow.api').scratchpad()
     end,

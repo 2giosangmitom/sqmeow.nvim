@@ -282,7 +282,7 @@ M.subcommands = {
   },
 
   scratch = {
-    desc = 'Create a scratchpad for a connection',
+    desc = 'Create a scratchpad',
     run = function(args)
       void(require('sqmeow.api').scratchpad(args[1]))
     end,

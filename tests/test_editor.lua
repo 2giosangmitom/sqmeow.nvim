@@ -39,55 +39,59 @@ T['scratchpad'] = MiniTest.new_set({
   },
 })
 
-T['scratchpad']['keeps a file in a folder named after its connection'] = function()
-  eq(
-    editor.path('dev db', 'monthly report'),
-    vim.fs.joinpath(editor.directory(), 'dev-db', 'monthly-report.sql')
-  )
+T['scratchpad']['keeps a file at the top level'] = function()
+  eq(editor.path('monthly report.sql'), vim.fs.joinpath(editor.directory(), 'monthly-report.sql'))
 end
 
-T['scratchpad']['gives a mongodb connection a json file'] = function()
+T['scratchpad']['is raw filename with extension'] = function()
   use_connection('docs', 'mongodb://h/app')
-  eq(vim.fs.basename(editor.path('docs', 'orders')), 'orders.json')
-  eq(vim.bo[assert(editor.create('docs', 'orders'))].filetype, 'json')
+  eq(vim.fs.basename(editor.path('orders.sql')), 'orders.sql')
+  eq(vim.bo[assert(editor.create('orders.sql'))].filetype, 'sql')
+  eq(vim.fs.basename(editor.path('cache.redis')), 'cache.redis')
+  eq(vim.bo[assert(editor.create('cache.redis'))].filetype, 'redis')
+  eq(vim.fs.basename(editor.path('docs.json')), 'docs.json')
+  eq(vim.bo[assert(editor.create('docs.json'))].filetype, 'json')
 end
 
-T['scratchpad']['gives a redis connection a redis file'] = function()
+T['scratchpad']['preserves extension as typed'] = function()
   use_connection('cache', 'redis://h/0')
-  eq(vim.fs.basename(editor.path('cache', 'keys')), 'keys.redis')
+  eq(vim.fs.basename(editor.path('keys.redis')), 'keys.redis')
+  eq(vim.fs.basename(editor.path('keys.sql')), 'keys.sql')
 end
 
-T['scratchpad']['opens with the filetype its connection speaks'] = function()
+T['scratchpad']['opens with filetype of extension'] = function()
   use_connection('cache', 'redis://h/0')
   use_connection('shop', 'sqlite://x.db', { id = 2 })
 
-  local redis = assert(editor.create('cache', 'keys'))
-  eq(vim.bo[redis].filetype, 'redis')
-  local sql = assert(editor.create('shop', 'orders'))
-  eq(vim.bo[sql].filetype, 'sql')
+  local a = assert(editor.create('keys.redis'))
+  eq(vim.bo[a].filetype, 'redis')
+  local b = assert(editor.create('orders.sql'))
+  eq(vim.bo[b].filetype, 'sql')
+  local c = assert(editor.create('docs.json'))
+  eq(vim.bo[c].filetype, 'json')
 end
 
 T['scratchpad']['is written as soon as it is created, so it is listed'] = function()
   use_connection('shop', 'sqlite://x.db')
-  editor.create('shop', 'orders')
+  editor.create('orders.sql')
 
   local pads = editor.list()
   eq(#pads, 1)
-  eq({ pads[1].name, pads[1].folder }, { 'orders', 'shop' })
+  eq(pads[1].name, 'orders.sql')
 end
 
 T['scratchpad']['refuses to be created without a name'] = function()
-  local buf, err = editor.create('shop', '  ')
+  local buf, err = editor.create('  ')
   eq(buf, nil)
   eq(err, 'a scratchpad needs a name')
 end
 
-T['scratchpad']['keeps its folder and extension when renamed'] = function()
+T['scratchpad']['keeps its extension when renamed'] = function()
   use_connection('cache', 'redis://h/0')
-  editor.create('cache', 'keys')
+  editor.create('keys.sql')
 
-  local renamed = editor.rename(editor.path('cache', 'keys'), 'sessions')
-  eq(renamed, vim.fs.normalize(vim.fs.joinpath(editor.directory(), 'cache', 'sessions.redis')))
+  local renamed = editor.rename(editor.path('keys.sql'), 'sessions.sql')
+  eq(renamed, vim.fs.normalize(vim.fs.joinpath(editor.directory(), 'sessions.sql')))
 end
 
 T['scratchpad']['makes a connection name safe to use as a file name'] = function()
@@ -102,7 +106,7 @@ T['scratchpad']['falls back to a name when there is nothing usable left'] = func
 end
 
 T['scratchpad']['lives under core.path'] = function()
-  eq(vim.fs.dirname(vim.fs.dirname(editor.path('dev', 'x'))), paths.scratch())
+  eq(vim.fs.dirname(editor.path('x.sql')), paths.scratch())
 end
 
 T['scratchpad']['marks the buffers it attaches to'] = function()
@@ -304,21 +308,21 @@ local function winbar(buf)
   return win and vim.wo[win].winbar or nil
 end
 
-T['knowing where a query goes']['ties a scratchpad to the connection whose folder it is in'] = function()
+T['knowing where a query goes']['leaves a scratchpad untied so it follows the active connection'] = function()
   use_connection('orders', 'sqlite://x.db')
 
-  local buf = editor.create('orders', 'monthly')
-  eq(vim.b[buf].sqmeow_connection, 'orders')
+  local buf = editor.create('monthly.sql')
+  eq(vim.b[buf].sqmeow_connection, nil)
 end
 
-T['knowing where a query goes']['still ties a file from before folders by its name'] = function()
+T['knowing where a query goes']['still leaves a legacy file untied'] = function()
   use_connection('orders', 'sqlite://x.db')
 
   local path = vim.fs.joinpath(editor.directory(), 'orders.sql')
   helpers.writefile(path, { 'select 1' })
 
   local buf = editor.open_path(path)
-  eq(vim.b[buf].sqmeow_connection, 'orders')
+  eq(vim.b[buf].sqmeow_connection, nil)
 end
 
 T['knowing where a query goes']['leaves a file that names no connection alone'] = function()
@@ -336,25 +340,29 @@ end
 
 T['knowing where a query goes']['says so above the scratchpad'] = function()
   use_connection('orders', 'postgres://x/orders', { dialect = 'postgres' })
+  -- Make it the active connection so the untied scratchpad follows it.
+  state.current = 1
 
-  local buf = editor.create('orders', 'monthly')
+  local buf = editor.create('monthly.sql')
   helpers.contains(winbar(buf), 'orders (postgres)')
 end
 
-T['knowing where a query goes']['says what is wrong when the connection is closed'] = function()
+T['knowing where a query goes']['says no connection when the active one is gone'] = function()
   use_connection('orders', 'sqlite://x.db')
-  local buf = editor.create('orders', 'monthly')
+  state.current = 1
+  local buf = editor.create('monthly.sql')
   state.remove_connection(1)
+  state.current = nil
   editor.update_winbar()
 
-  helpers.contains(winbar(buf), '`orders` is not open')
+  helpers.contains(winbar(buf), 'connect to a database first')
 end
 
 T['knowing where a query goes']['draws no winbar when the option is off'] = function()
   config.apply({ ui = { winbar = false } })
   use_connection('orders', 'sqlite://x.db')
 
-  local buf = editor.create('orders', 'monthly')
+  local buf = editor.create('monthly.sql')
   eq(winbar(buf), '')
 end
 
@@ -524,7 +532,7 @@ T['rename']['moves the file'] = function()
     vim.fn.delete(vim.fs.joinpath(editor.directory(), 'after.sql'))
   end)
 
-  local renamed = assert(editor.rename(path, 'after'))
+  local renamed = assert(editor.rename(path, 'after.sql'))
   eq(vim.fs.basename(renamed), 'after.sql')
   eq(vim.uv.fs_stat(path), nil)
   eq(vim.fn.readfile(renamed), { 'select 1' })
@@ -536,7 +544,7 @@ T['rename']['slugs a name that would not make a file'] = function()
     vim.fn.delete(vim.fs.joinpath(editor.directory(), 'my-notes.sql'))
   end)
 
-  eq(vim.fs.basename(editor.rename(path, 'my notes')), 'my-notes.sql')
+  eq(vim.fs.basename(editor.rename(path, 'my notes.sql')), 'my-notes.sql')
 end
 
 T['rename']['cannot write outside the scratchpad directory'] = function()
@@ -555,7 +563,7 @@ T['rename']['refuses a name already taken'] = function()
   local path = scratchpad('before')
   scratchpad('taken')
 
-  local renamed, err = editor.rename(path, 'taken')
+  local renamed, err = editor.rename(path, 'taken.sql')
   eq(renamed, nil)
   helpers.contains(assert(err, 'there should be an error'), 'already a scratchpad')
   eq(vim.uv.fs_stat(path) ~= nil, true)
@@ -564,21 +572,21 @@ end
 T['rename']['does nothing when the name has not changed'] = function()
   local path = scratchpad('before')
 
-  eq(editor.rename(path, 'before'), vim.fs.normalize(path))
+  eq(editor.rename(path, 'before.sql'), vim.fs.normalize(path))
   eq(vim.uv.fs_stat(path) ~= nil, true)
 end
 
 T['rename']['refuses a path outside the scratchpad directory'] = function()
   local elsewhere = helpers.temp_file({ 'important' })
 
-  local renamed, err = editor.rename(elsewhere, 'mine')
+  local renamed, err = editor.rename(elsewhere, 'mine.sql')
   eq(renamed, nil)
   helpers.contains(assert(err, 'there should be an error'), 'is not a scratchpad')
   eq(vim.uv.fs_stat(elsewhere) ~= nil, true)
 end
 
 T['rename']['says so when there is nothing there'] = function()
-  local renamed, err = editor.rename(vim.fs.joinpath(editor.directory(), 'absent.sql'), 'other')
+  local renamed, err = editor.rename(vim.fs.joinpath(editor.directory(), 'absent.sql'), 'other.sql')
   eq(renamed, nil)
   helpers.contains(assert(err, 'there should be an error'), 'there is no scratchpad')
 end
@@ -590,7 +598,7 @@ T['rename']['carries an open buffer over to the new name'] = function()
   end)
 
   local buf = editor.open_path(path)
-  local renamed = editor.rename(path, 'moved')
+  local renamed = editor.rename(path, 'moved.sql')
 
   -- The buffer must follow the file.
   eq(vim.fs.normalize(vim.api.nvim_buf_get_name(buf)), renamed)
@@ -638,7 +646,7 @@ end
 
 T['list'] = MiniTest.new_set()
 
-T['list']['names the saved files without their extension, newest first'] = function()
+T['list']['names the saved files with extension, newest first'] = function()
   scratchpad('older')
   scratchpad('newer')
 
@@ -646,8 +654,8 @@ T['list']['names the saved files without their extension, newest first'] = funct
     return pad.name
   end, editor.list())
 
-  eq(vim.tbl_contains(names, 'older'), true)
-  eq(vim.tbl_contains(names, 'newer'), true)
+  eq(vim.tbl_contains(names, 'older.sql'), true)
+  eq(vim.tbl_contains(names, 'newer.sql'), true)
 end
 
 return T

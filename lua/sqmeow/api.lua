@@ -790,31 +790,26 @@ function M.export(opts)
   end
 end
 
---- Create a scratchpad for a connection, asking what to call it.
----@param connection string|nil Connection name.
-function M.scratchpad(connection)
+--- Create a scratchpad, asking what to call it.
+---@param name string|nil Raw filename with extension (e.g. `report.sql`, `cache.redis`). If given, it is created directly; otherwise the user is prompted.
+function M.scratchpad(name)
   require('sqmeow.events').ensure()
-  local state = require('sqmeow.state')
 
-  if not connection then
-    local current = state.current_connection()
-    if not current then
-      return notify('connect to a database first, or name one', vim.log.levels.WARN)
+  -- ` :Sqmeow scratch <name>` passes the desired name directly.
+  if name and vim.trim(name) ~= '' then
+    local _, err = require('sqmeow.ui.editor').create(name)
+    if err then
+      return notify(err, vim.log.levels.ERROR)
     end
-    connection = current.name
-  end
-  -- A folder for a name nobody has saved would hold scratchpads tied to nothing.
-  if
-    not state.connection_by_name(connection) and not require('sqmeow.sources').find(connection)
-  then
-    return notify(('there is no connection named `%s`'):format(connection), vim.log.levels.ERROR)
+    require('sqmeow.ui.drawer').render()
+    return
   end
 
-  vim.ui.input({ prompt = ('New scratchpad for %s: '):format(connection) }, function(name)
-    if not name or vim.trim(name) == '' then
+  vim.ui.input({ prompt = 'New scratchpad: ' }, function(input)
+    if not input or vim.trim(input) == '' then
       return
     end
-    local _, err = require('sqmeow.ui.editor').create(connection, name)
+    local _, err = require('sqmeow.ui.editor').create(input)
     if err then
       return notify(err, vim.log.levels.ERROR)
     end

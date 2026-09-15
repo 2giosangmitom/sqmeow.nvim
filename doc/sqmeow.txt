@@ -304,7 +304,7 @@ drawer
  R         Rename the connection or scratchpad under the cursor
  u         Run queries against this connection
  A         Add a connection
- a         Create a scratchpad for the connection under the cursor
+ a         Create a scratchpad
  e         Edit the connection under the cursor
  d         Delete the connection or scratchpad, or empty the query log
  ?         Show these mappings
@@ -653,10 +653,10 @@ Parameters ~
 
 ------------------------------------------------------------------------------
                                                        *sqmeow.api.scratchpad()*
-                     `sqmeow.api.scratchpad`({connection})
-Create a scratchpad for a connection, asking what to call it.
+                        `sqmeow.api.scratchpad`({name})
+Create a scratchpad, asking what to call it.
 Parameters ~
-{connection} `(string|nil)` Connection name.
+{name} `(string|nil)` Raw filename with extension (e.g. `report.sql`, `cache.redis`). If given, it is created directly; otherwise the user is prompted.
 
 ------------------------------------------------------------------------------
                                                       *sqmeow.api.open_drawer()*

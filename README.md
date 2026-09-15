@@ -15,7 +15,7 @@ Query your database from your favorite editor.
 - **⚡ Rust engine**: Queries run off the editor thread and results are paged, so large results never freeze Neovim.
 - **🐘 Multiple connections**: Keep several databases open at once.
 - **🌲 Schema drawer**: Browse schemas, tables, views, routines and columns with their types and keys.
-- **📄 Scratchpads**: Query buffers tied to a connection, kept across restarts.
+- **📄 Scratchpads**: Query buffers kept across restarts. Use `u` on a connection to make it the active one.
 - **✏️ In-grid editing**: Edit cells, add or delete rows, and review staged changes before applying them.
 - **🔎 Filter and sort**: Type a `WHERE` condition and an `ORDER BY` list in a bar above the grid, and the database runs them on your query.
 - **▶️ Flexible execution**: Run the statement under the cursor, a selection, or the whole buffer,
@@ -68,7 +68,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 1. `:Sqmeow` opens the drawer and the result window.
 2. `A` in the drawer, or `:Sqmeow add`, adds a connection.
-3. `<CR>` on a connection connects; `a` creates a scratchpad for it.
+3. `<CR>` on a connection connects; `a` creates a scratchpad; `u` makes a connection active.
 4. Write a query and press `<CR>` to run the statement under the cursor, or a visual selection.
 
 > [!TIP]
@@ -121,7 +121,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 | `:Sqmeow use [name]`                                | Choose the connection queries run against           |
 | `:Sqmeow bind <name\|none>`                         | Tie the current buffer to a connection, or untie it |
 | `:Sqmeow disconnect`                                | Close the current connection                        |
-| `:Sqmeow scratch [name]`                            | Create a scratchpad for a connection                |
+| `:Sqmeow scratch [name]`                            | Create a scratchpad                                 |
 | `:Sqmeow execute [sql]`                             | Run the buffer, the selection, or the given SQL     |
 | `:Sqmeow statement`                                 | Run the statement under the cursor                  |
 | `:Sqmeow cancel`                                    | Stop the running query                              |
