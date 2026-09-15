@@ -306,7 +306,7 @@ drawer
  A         Add a connection
  a         Create a scratchpad for the connection under the cursor
  e         Edit the connection under the cursor
- d         Delete the scratchpad, or empty the query log
+ d         Delete the connection or scratchpad, or empty the query log
  ?         Show these mappings
  q         Close the drawer
 
@@ -479,6 +479,17 @@ Parameters ~
 {name} `(string)`
 Return ~
 `(boolean)` renamed
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.api.remove()*
+                          `sqmeow.api.remove`({name})
+Delete a connection: close it while it is open, and forget the saved entry.
+A connection from a source other than the file is only closed, since its entry cannot be
+removed.
+Parameters ~
+{name} `(string)` The name it is saved or open under.
+Return ~
+`(boolean)` removed Whether anything was closed or forgotten.
 
 ------------------------------------------------------------------------------
                                                        *sqmeow.api.disconnect()*

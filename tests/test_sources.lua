@@ -26,7 +26,7 @@ end
 
 --- Read only the scratch file, and nothing else.
 local function only_file()
-  only_file()
+  only({ type = 'file', path = scratch })
 end
 
 --- Save a connection to the scratch file.
@@ -136,6 +136,29 @@ T['file']['refuses to edit one that is not there'] = function()
   helpers.contains(assert(err, 'there should be an error'), 'nope')
 end
 
+T['file']['deletes one connection, keeping the rest'] = function()
+  save('a', 'sqlite://a.db')
+  save('b', 'sqlite://b.db')
+
+  eq(file.remove('a', { path = scratch }), true)
+  only_file()
+
+  local found = sources.load()
+  eq(#found, 1)
+  eq(found[1].name, 'b')
+end
+
+T['file']['refuses to delete one that is not there'] = function()
+  save('a', 'sqlite://a.db')
+
+  local written, err = file.remove('nope', { path = scratch })
+  eq(written, false)
+  helpers.contains(assert(err, 'there should be an error'), 'nope')
+
+  only_file()
+  eq(#sources.load(), 1)
+end
+
 T['file']['refuses a rename onto a name already taken'] = function()
   save('a', 'sqlite://a.db')
   save('b', 'sqlite://b.db')
@@ -209,6 +232,85 @@ T['editing']['renames an open connection on its own'] = function()
   -- An empty name would leave a row with nothing on it.
   eq(api.rename(id, ''), false)
   eq(api.rename(id + 99, 'nowhere'), false)
+end
+
+T['removing'] = MiniTest.new_set({
+  hooks = {
+    post_case = function()
+      state.reset()
+    end,
+  },
+})
+
+T['removing']['forgets the saved connection and closes it while it is open'] = function()
+  save('app', 'sqlite://app.db')
+  only_file()
+
+  local id = state.next_connection_id()
+  state.add_connection({
+    id = id,
+    name = 'app',
+    url = 'sqlite://app.db',
+    dialect = 'sqlite',
+    state = 'connected',
+  })
+  helpers.stub(require('sqmeow.rpc'), 'request', function()
+    return true
+  end)
+
+  eq(api.remove('app'), true)
+  eq(sources.find('app'), nil)
+  eq(state.connections[id], nil)
+end
+
+T['removing']['forgets a saved connection that was never opened'] = function()
+  save('app', 'sqlite://app.db')
+  only_file()
+
+  eq(api.remove('app'), true)
+  eq(sources.load(), {})
+end
+
+T['removing']['closes a connection that was never saved'] = function()
+  only_file()
+
+  local id = state.next_connection_id()
+  state.add_connection({ id = id, name = 'scratch', url = 'sqlite::memory:', state = 'connected' })
+  helpers.stub(require('sqmeow.rpc'), 'request', function()
+    return true
+  end)
+
+  eq(api.remove('scratch'), true)
+  eq(state.connections[id], nil)
+end
+
+T['removing']['only closes a connection from another source'] = function()
+  vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'ci', url = 'sqlite://ci.db' } })
+  only({ type = 'env' })
+
+  local id = state.next_connection_id()
+  state.add_connection({ id = id, name = 'ci', url = 'sqlite://ci.db', state = 'connected' })
+  helpers.stub(require('sqmeow.rpc'), 'request', function()
+    return true
+  end)
+
+  -- The open connection is closed, but the entry it came from stays.
+  eq(api.remove('ci'), true)
+  eq(state.connections[id], nil)
+  eq(sources.find('ci').url, 'sqlite://ci.db')
+end
+
+T['removing']['refuses a connection from another source that is not open'] = function()
+  vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'ci', url = 'sqlite://ci.db' } })
+  only({ type = 'env' })
+
+  eq(api.remove('ci'), false)
+  eq(sources.find('ci').url, 'sqlite://ci.db')
+end
+
+T['removing']['refuses a connection nothing declares'] = function()
+  only_file()
+  eq(api.remove('nope'), false)
 end
 
 T['combining'] = MiniTest.new_set()

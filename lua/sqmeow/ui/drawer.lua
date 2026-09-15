@@ -122,6 +122,18 @@ function M.invalidate(conn_id, path)
   end
 end
 
+--- Forget everything a connection opened or held: its open nodes and what they showed.
+---@param conn_id integer
+function M.forget(conn_id)
+  for key in pairs(expanded) do
+    if under(key, tostring(conn_id)) then
+      expanded[key] = nil
+    end
+  end
+  M.invalidate(conn_id, {})
+  patterns[conn_id] = nil
+end
+
 --- Kinds whose name says nothing the row above it has not already said.
 local implied = {
   database = true,
@@ -869,7 +881,43 @@ function M.actions.edit()
   end
 end
 
---- Delete the scratchpad under the cursor, or empty the query log.
+--- Ask before deleting the connection a node shows, then close it and forget its saved entry.
+---@param node table A connection node, or the name and id of one.
+local function delete_connection(node)
+  local spec = require('sqmeow.sources').find(node.name)
+  -- Nothing open to close, and nothing saved that can be forgotten.
+  if not node.conn_id and not (spec and spec.source == 'file') then
+    if spec then
+      return utils.notify(
+        ('`%s` comes from %s, so it cannot be deleted'):format(node.name, spec.source),
+        vim.log.levels.WARN
+      )
+    end
+    return
+  end
+
+  vim.ui.select({ 'no', 'yes' }, {
+    prompt = ('Delete the connection `%s`?'):format(node.name),
+  }, function(answer)
+    if answer ~= 'yes' then
+      return
+    end
+
+    if not require('sqmeow.api').remove(node.name) then
+      return
+    end
+
+    -- A connection from any other source is only closed, since its entry cannot be removed.
+    if spec and spec.source ~= 'file' then
+      utils.notify('disconnected from ' .. node.name)
+    else
+      utils.notify('deleted the connection ' .. node.name)
+    end
+    M.render()
+  end)
+end
+
+--- Delete the connection under the cursor, delete the scratchpad there, or empty the query log.
 function M.actions.delete()
   local node = M.current_node()
   if node and (node.kind == 'history' or node.kind == 'query') then
@@ -885,6 +933,19 @@ function M.actions.delete()
         M.render()
       end
     )
+  end
+
+  if node and node.kind == 'connection' then
+    return delete_connection(node)
+  end
+
+  -- One database of a cluster is a connection of its own once it has been opened.
+  if node and node.kind == 'database' then
+    local opened = opened_database(node)
+    if not opened then
+      return
+    end
+    return delete_connection({ kind = 'connection', name = opened.name, conn_id = opened.id })
   end
 
   if not node or node.kind ~= 'scratchpad' then

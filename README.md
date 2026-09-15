@@ -117,6 +117,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 | `:Sqmeow add`                                       | Add a connection                                    |
 | `:Sqmeow save`                                      | Save a connection for next time                     |
 | `:Sqmeow edit [name]`                               | Edit a saved connection                             |
+| `:Sqmeow remove <name>`                             | Delete a saved connection                           |
 | `:Sqmeow use [name]`                                | Choose the connection queries run against           |
 | `:Sqmeow bind <name\|none>`                         | Tie the current buffer to a connection, or untie it |
 | `:Sqmeow disconnect`                                | Close the current connection                        |
@@ -138,20 +139,20 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Drawer
 
-| Key         | Action                                  |
-| ----------- | --------------------------------------- |
-| `<CR>`, `o` | Expand or collapse the node             |
-| `u`         | Run queries against this connection     |
-| `p`         | Preview the relation's first page       |
-| `K`         | Show the table's or key's structure     |
-| `f`         | Show only the Redis keys matching a glob |
-| `r`         | Reload the subtree                      |
-| `y` / `s`   | Yank the qualified name / a `SELECT`    |
-| `a`         | Create a scratchpad                     |
-| `A` / `e`   | Add / edit a connection                 |
-| `R`         | Rename the connection or scratchpad     |
-| `d`         | Delete the scratchpad, or clear the log |
-| `?` / `q`   | Show keymaps / close the drawer         |
+| Key         | Action                                                      |
+| ----------- | ----------------------------------------------------------- |
+| `<CR>`, `o` | Expand or collapse the node                                 |
+| `u`         | Run queries against this connection                         |
+| `p`         | Preview the relation's first page                           |
+| `K`         | Show the table's or key's structure                         |
+| `f`         | Show only the Redis keys matching a glob                    |
+| `r`         | Reload the subtree                                          |
+| `y` / `s`   | Yank the qualified name / a `SELECT`                        |
+| `a`         | Create a scratchpad                                         |
+| `A` / `e`   | Add / edit a connection                                     |
+| `R`         | Rename the connection or scratchpad                         |
+| `d`         | Delete the connection or scratchpad, or clear the log       |
+| `?` / `q`   | Show keymaps / close the drawer                             |
 
 ### Result Window
 

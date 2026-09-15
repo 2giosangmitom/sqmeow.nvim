@@ -106,6 +106,32 @@ function M.update(name, connection, opts)
   return M.save(connections, opts)
 end
 
+--- Delete one connection, keeping the rest.
+---@param name string The name it is saved under.
+---@param opts table|nil
+---@return boolean written
+---@return string|nil error
+function M.remove(name, opts)
+  local connections, err = M.load(opts)
+  if err then
+    return false, err
+  end
+
+  local found
+  for index, existing in ipairs(connections) do
+    if existing.name == name then
+      found = index
+      break
+    end
+  end
+  if not found then
+    return false, ('there is no saved connection called `%s`'):format(name)
+  end
+
+  table.remove(connections, found)
+  return M.save(connections, opts)
+end
+
 --- Add one connection, keeping the rest.
 ---@param connection sqmeow.ConnectionSpec
 ---@param opts table|nil

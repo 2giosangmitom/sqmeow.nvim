@@ -431,6 +431,32 @@ T['saved connections']['say they are connecting while they do'] = function()
   eq(marks_on(number)[2].group, 'SqmeowConnecting')
 end
 
+T['saved connections']['are deleted once the question is answered'] = function()
+  helpers.stub(vim.ui, 'select', function(_, _, on_choice)
+    on_choice('yes')
+  end)
+
+  goto_line('ledger')
+  drawer.actions.delete()
+
+  eq(require('sqmeow.sources').find('ledger'), nil)
+  for _, line in ipairs(lines()) do
+    eq(line:find('ledger', 1, true), nil)
+  end
+end
+
+T['saved connections']['are left alone when the question is declined'] = function()
+  helpers.stub(vim.ui, 'select', function(_, _, on_choice)
+    on_choice('no')
+  end)
+
+  goto_line('ledger')
+  drawer.actions.delete()
+
+  eq(require('sqmeow.sources').find('ledger').url, 'postgres://localhost/ledger')
+  line_matching('ledger')
+end
+
 T['saved connections']['can be tried again after failing to open'] = function()
   file.add({ name = 'broken', url = 'oracle://localhost/broken' })
   drawer.render()
@@ -710,6 +736,38 @@ T['connections']['keep their name when the prompt is dismissed'] = function()
   eq(state.connections[state.current].name, 'scratch')
 end
 
+T['connections']['ask before closing the open connection'] = function()
+  local prompt
+  helpers.stub(vim.ui, 'select', function(_, opts, on_choice)
+    prompt = opts.prompt
+    on_choice('no')
+  end)
+
+  goto_line('scratch  sqlite')
+  drawer.actions.delete()
+
+  helpers.contains(prompt, 'scratch')
+  -- Declined, so the connection is still open.
+  eq(state.connection_by_name('scratch') ~= nil, true)
+end
+
+T['connections']['close the open connection once the question is answered'] = function()
+  helpers.stub(vim.ui, 'select', function(_, _, on_choice)
+    on_choice('yes')
+  end)
+  MiniTest.finally(function()
+    if not state.connection_by_name('scratch') then
+      helpers.connect('sqlite::memory:', { name = 'scratch' })
+      drawer.render()
+    end
+  end)
+
+  goto_line('scratch  sqlite')
+  drawer.actions.delete()
+
+  eq(state.connection_by_name('scratch'), nil)
+end
+
 T['scratchpads']['are deleted once the question is answered'] = function()
   local answer = 'yes'
   helpers.stub(vim.ui, 'select', function(_, _, on_choice)
@@ -742,7 +800,9 @@ T['scratchpads']['are not deleted from a row that is not one'] = function()
     called = true
   end)
 
-  goto_line('scratch  sqlite')
+  -- A schema is neither a scratchpad nor a connection, so there is nothing to delete.
+  expand('scratch')
+  goto_line('@ main')
   drawer.actions.delete()
   eq(called, false)
 end

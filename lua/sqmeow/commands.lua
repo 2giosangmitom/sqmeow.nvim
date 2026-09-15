@@ -116,6 +116,39 @@ M.subcommands = {
     end,
   },
 
+  remove = {
+    desc = 'Delete a saved connection, closing it while it is open',
+    run = function(args)
+      local name = args[1]
+      if not name or name == '' then
+        return notify('name a connection to delete', vim.log.levels.WARN)
+      end
+      local spec = require('sqmeow.sources').find(name)
+      if require('sqmeow.api').remove(name) then
+        -- A connection from any other source is only closed, since its entry cannot be removed.
+        if spec and spec.source ~= 'file' then
+          notify(('disconnected from %s'):format(name))
+        else
+          notify(('deleted the connection %s'):format(name))
+        end
+      end
+    end,
+    complete = function(lead)
+      local names = {}
+      for _, spec in ipairs((require('sqmeow.sources').load())) do
+        table.insert(names, spec.name)
+      end
+      for _, connection in ipairs(require('sqmeow.api').connections()) do
+        table.insert(names, connection.name)
+      end
+
+      table.sort(names)
+      return vim.tbl_filter(function(name)
+        return name:find(lead, 1, true) == 1
+      end, names)
+    end,
+  },
+
   use = {
     desc = 'Choose the connection queries run against',
     run = function(args)

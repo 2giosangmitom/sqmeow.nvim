@@ -166,6 +166,71 @@ function M.rename(id, name)
   return true
 end
 
+--- Delete a connection: close it while it is open, and forget the saved entry.
+--- A connection from a source other than the file is only closed, since its entry cannot be
+--- removed.
+---@param name string The name it is saved or open under.
+---@return boolean removed Whether anything was closed or forgotten.
+function M.remove(name)
+  local state = require('sqmeow.state')
+  local sources = require('sqmeow.sources')
+
+  local open = {}
+  for _, connection in ipairs(state.connection_list()) do
+    if connection.name == name then
+      table.insert(open, connection)
+    end
+  end
+  local spec = sources.find(name)
+
+  if not spec and #open == 0 then
+    notify(('there is no connection called `%s`'):format(name), vim.log.levels.WARN)
+    return false
+  end
+  if spec and spec.source ~= 'file' and #open == 0 then
+    notify(
+      ('`%s` comes from %s, so it cannot be deleted'):format(name, spec.source),
+      vim.log.levels.WARN
+    )
+    return false
+  end
+
+  -- Collected before anything is forgotten, so the drawer can drop what went with it.
+  local gone = {}
+  for _, connection in ipairs(open) do
+    table.insert(gone, connection.id)
+    for _, child in ipairs(state.connection_list()) do
+      if child.parent == connection.id then
+        table.insert(gone, child.id)
+      end
+    end
+  end
+
+  if spec and spec.source == 'file' then
+    local written, err = sources.remove(name)
+    if not written then
+      notify(err or 'the connection could not be deleted', vim.log.levels.ERROR)
+      return false
+    end
+    state.failures[name] = nil
+  end
+
+  -- A database opened from a cluster goes with it, and one deleted on its own has no parent
+  -- to take it along.
+  for _, id in ipairs(gone) do
+    if state.connections[id] then
+      M.disconnect(id)
+    end
+  end
+
+  local drawer = require('sqmeow.ui.drawer')
+  for _, id in ipairs(gone) do
+    drawer.forget(id)
+  end
+  drawer.render()
+  return true
+end
+
 --- Close a connection.
 ---@param id integer|nil Defaults to the current connection.
 function M.disconnect(id)

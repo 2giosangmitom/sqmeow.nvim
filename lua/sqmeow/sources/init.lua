@@ -118,4 +118,20 @@ function M.update(name, connection)
   return require('sqmeow.sources.file').update(name, connection, writable())
 end
 
+--- Delete a saved connection, by the name it is saved under. Only the file source is writable,
+--- so a connection from any other source cannot be deleted.
+---@param name string
+---@return boolean written
+---@return string|nil error
+function M.remove(name)
+  local spec = M.find(name)
+  if not spec then
+    return false, ('there is no configured connection named `%s`'):format(name)
+  end
+  if spec.source ~= 'file' then
+    return false, ('`%s` comes from %s, so it cannot be deleted'):format(name, spec.source)
+  end
+  return require('sqmeow.sources.file').remove(name, writable())
+end
+
 return M
