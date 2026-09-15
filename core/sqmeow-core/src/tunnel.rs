@@ -158,11 +158,25 @@ while True:
 "#;
 
     fn script(name: &str, body: &str) -> String {
-        use std::os::unix::fs::PermissionsExt;
+        use std::io::Write;
+        use std::process::{Command, Stdio};
 
         let path = std::env::temp_dir().join(format!("sqmeow-{name}-{}", std::process::id()));
-        std::fs::write(&path, body).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Written by a child: a write descriptor inherited by a process another test forks would
+        // make running the script fail with ETXTBSY.
+        let mut writer = Command::new("sh")
+            .args(["-c", r#"cat > "$1" && chmod 755 "$1""#, "sh"])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        writer
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(body.as_bytes())
+            .unwrap();
+        assert!(writer.wait().unwrap().success());
         path.display().to_string()
     }
 
