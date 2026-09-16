@@ -7,7 +7,6 @@
   <a href="https://github.com/2giosangmitom/sqmeow.nvim/releases/latest"><img src="https://img.shields.io/github/v/release/2giosangmitom/sqmeow.nvim?style=flat-square&label=release" alt="latest release"></a>
   <a href="https://github.com/2giosangmitom/sqmeow.nvim/blob/master/LICENSE"><img src="https://img.shields.io/github/license/2giosangmitom/sqmeow.nvim?style=flat-square&label=license" alt="license"></a>
   <a href="https://deepwiki.com/2giosangmitom/sqmeow.nvim"><img src="https://img.shields.io/badge/DeepWiki-Ask-blue?style=flat-square" alt="Ask DeepWiki"></a>
-  <a href="https://github.com/2giosangmitom/sqmeow.nvim/stargazers"><img src="https://img.shields.io/github/stars/2giosangmitom/sqmeow.nvim?style=flat-square&label=stars" alt="stars"></a>
 </p>
 
 <p align="center">
