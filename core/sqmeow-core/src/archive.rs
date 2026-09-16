@@ -125,8 +125,7 @@ fn encode(out: &mut impl Write, value: &Value) -> io::Result<()> {
 }
 
 fn decode(input: &mut impl Read) -> Result<Value, String> {
-    // A file that ends early is the one failure worth naming.
-    rmpv::decode::read_value(input).map_err(|_| "the saved result is incomplete".to_string())
+    rmpv::decode::read_value(input).map_err(|error| format!("the saved result is incomplete: {error}"))
 }
 
 fn header(result: &ResultSet) -> Value {
@@ -416,10 +415,10 @@ mod tests {
         let bytes = fs::read(scratch.file()).unwrap();
         fs::write(scratch.file(), &bytes[..bytes.len() - 4]).unwrap();
 
-        assert_eq!(
-            read(&scratch.file()).err().as_deref(),
-            Some("the saved result is incomplete")
-        );
+        assert!(read(&scratch.file())
+            .err()
+            .unwrap()
+            .starts_with("the saved result is incomplete"));
     }
 
     #[test]

@@ -57,13 +57,17 @@ function M.read_key(group, key, limit)
   local escaped = key:gsub('[\\"]', '\\%0'):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
   local quoted = '"' .. escaped .. '"'
 
+  -- limit=nil means no cap; limit=0 means empty result; limit>0 means at most N elements.
   local commands = {
     strings = ('GET %s'):format(quoted),
     hashes = ('HGETALL %s'):format(quoted),
-    lists = ('LRANGE %s 0 %d'):format(quoted, limit and limit - 1 or -1),
+    lists = limit == 0 and ('LRANGE %s 1 0'):format(quoted)
+      or ('LRANGE %s 0 %d'):format(quoted, limit and limit - 1 or -1),
     sets = ('SMEMBERS %s'):format(quoted),
-    sorted_sets = ('ZRANGE %s 0 %d WITHSCORES'):format(quoted, limit and limit - 1 or -1),
-    streams = ('XRANGE %s - +%s'):format(quoted, limit and (' COUNT %d'):format(limit) or ''),
+    sorted_sets = limit == 0 and ('ZRANGE %s 1 0 WITHSCORES'):format(quoted)
+      or ('ZRANGE %s 0 %d WITHSCORES'):format(quoted, limit and limit - 1 or -1),
+    streams = limit == 0 and ('XRANGE %s - -'):format(quoted)
+      or ('XRANGE %s - +%s'):format(quoted, limit and (' COUNT %d'):format(limit) or ''),
     json = ('JSON.GET %s'):format(quoted),
   }
   return commands[group]

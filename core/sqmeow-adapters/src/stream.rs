@@ -241,8 +241,11 @@ where
 
 /// Refuse a planned `UPDATE` or `DELETE` that did not change exactly one row.
 pub(crate) fn check_affected(statement: &str, affected: u64) -> Result<()> {
-    // The planner spells these in capitals; a statement it did not write is not checked.
-    if !(statement.starts_with("UPDATE ") || statement.starts_with("DELETE ")) {
+    // `first_word` lowercases and strips comments, so user-supplied lowercase is caught too.
+    if !matches!(
+        sqmeow_db::sql::first_word(statement).as_str(),
+        "update" | "delete"
+    ) {
         return Ok(());
     }
     match affected {

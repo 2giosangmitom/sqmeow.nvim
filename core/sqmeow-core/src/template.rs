@@ -80,10 +80,14 @@ fn read(path: &str) -> Result<String, String> {
         .map_err(|error| format!("`{path}` could not be read: {error}"))
 }
 
+/// The maximum time a `{{ exec }}` command may run before it is killed.
+const EXEC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Run a command and take its output as the value.
 async fn run(command: &str) -> Result<String, String> {
-    let output = shell(command)
+    let output = tokio::time::timeout(EXEC_TIMEOUT, shell(command))
         .await
+        .map_err(|_| format!("`{command}` timed out after {}s", EXEC_TIMEOUT.as_secs()))?
         .map_err(|error| format!("`{command}` could not be run: {error}"))?;
 
     if !output.status.success() {

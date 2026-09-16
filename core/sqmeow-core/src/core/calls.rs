@@ -59,7 +59,7 @@ impl Core {
         let condition = args.opt_string("where").unwrap_or_default();
         let order = args.opt_string("order_by").unwrap_or_default();
         // The names the rows have, which a filter tells apart where two are the same.
-        let columns = args.opt_strings("columns").unwrap_or_default();
+        let columns = args.opt_strings("columns")?.unwrap_or_default();
         let wrapped = if condition.trim().is_empty() && order.trim().is_empty() {
             None
         } else {
@@ -262,7 +262,7 @@ impl Core {
         let path = PathBuf::from(args.string("path")?);
         // The results of the run's earlier statements, saved beside its own.
         let others: Vec<PathBuf> = args
-            .opt_strings("others")
+            .opt_strings("others")?
             .unwrap_or_default()
             .into_iter()
             .map(PathBuf::from)

@@ -38,7 +38,7 @@ impl Core {
     /// Run the statements a review approved, together, and report through `apply:done`.
     pub(super) fn apply(self: Arc<Self>, args: &Args) -> Started {
         let conn_id = args.conn_id("conn_id")?;
-        let statements = args.opt_strings("statements").unwrap_or_default();
+        let statements = args.opt_strings("statements")?.unwrap_or_default();
         if statements.is_empty() {
             return Err("there is nothing to apply".to_owned());
         }

@@ -69,18 +69,27 @@ impl Args {
         self.get(key)?.as_bool()
     }
 
-    /// An optional array of strings. Anything that is not a string is dropped.
-    pub fn opt_strings(&self, key: &str) -> Option<Vec<String>> {
-        match self.get(key)? {
-            Value::Array(items) => Some(
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str().map(str::to_owned))
-                    .collect(),
-            ),
+    /// An optional array of strings. Returns an error if the array contains non-string items.
+    pub fn opt_strings(&self, key: &str) -> Result<Option<Vec<String>>, String> {
+        match self.get(key) {
+            None => Ok(None),
+            Some(Value::Array(items)) => {
+                let mut strings = Vec::with_capacity(items.len());
+                for (i, item) in items.iter().enumerate() {
+                    match item.as_str() {
+                        Some(s) => strings.push(s.to_owned()),
+                        None => {
+                            return Err(format!(
+                                "`{key}[{i}]` must be a string, got {item}"
+                            ))
+                        }
+                    }
+                }
+                Ok(Some(strings))
+            }
             // Lua sends an empty table as an empty map, since it cannot tell a list from a table.
-            Value::Map(pairs) if pairs.is_empty() => Some(Vec::new()),
-            _ => None,
+            Some(Value::Map(pairs)) if pairs.is_empty() => Ok(Some(Vec::new())),
+            Some(_) => Ok(None),
         }
     }
 
@@ -160,7 +169,7 @@ mod tests {
         )]);
         let args = Args::from_params(&params).unwrap();
         assert_eq!(
-            args.opt_strings("path"),
+            args.opt_strings("path").unwrap(),
             Some(vec!["public".to_owned(), "users".to_owned()])
         );
     }
@@ -169,8 +178,22 @@ mod tests {
     fn an_empty_lua_list_reads_as_an_empty_array() {
         let params = table(vec![("path", Value::Map(vec![]))]);
         let args = Args::from_params(&params).unwrap();
-        assert_eq!(args.opt_strings("path"), Some(vec![]));
-        assert_eq!(Args::from_params(&[]).unwrap().opt_strings("path"), None);
+        assert_eq!(args.opt_strings("path").unwrap(), Some(vec![]));
+        assert_eq!(
+            Args::from_params(&[]).unwrap().opt_strings("path").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn non_string_items_in_array_are_rejected() {
+        let params = table(vec![(
+            "path",
+            Value::Array(vec![Value::from("host1"), Value::from(5432), Value::from(true)]),
+        )]);
+        let args = Args::from_params(&params).unwrap();
+        let err = args.opt_strings("path").unwrap_err();
+        assert!(err.contains("`path[1]` must be a string"));
     }
 
     #[test]

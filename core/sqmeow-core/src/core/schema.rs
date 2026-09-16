@@ -19,7 +19,7 @@ impl Core {
     pub(super) fn introspect(self: Arc<Self>, args: &Args) -> Started {
         let conn_id = args.conn_id("conn_id")?;
         // An empty path means the connection itself, whose children are its schemas.
-        let path = args.opt_strings("path").unwrap_or_default();
+        let path = args.opt_strings("path")?.unwrap_or_default();
         if path.len() > 3 {
             return Err("a schema path is at most [schema, group, relation]".to_owned());
         }
