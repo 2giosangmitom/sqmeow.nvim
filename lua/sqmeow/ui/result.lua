@@ -3,6 +3,7 @@
 local M = {}
 
 local utils = require('sqmeow.utils')
+local Table = require('sqmeow.ui.table')
 
 local buf = nil
 local win = nil
@@ -27,6 +28,9 @@ local HEADER_LINES = 2
 
 --- Where the grid puts its highlights.
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow')
+
+--- The table grid, lazily created on the first draw.
+local tbl = nil
 
 --- How many rows fit in one page.
 ---@return integer
@@ -206,11 +210,6 @@ end
 
 -- -- drawing ---------------------------------------------------------------------------------
 
---- The nui.nvim components the result grid is built from.
-local function nui()
-  return utils.nui({ 'line', 'text' }, 'the result grid')
-end
-
 --- What a cell reads as in the grid.
 ---@param value any
 ---@param null_text string
@@ -229,10 +228,6 @@ local function cell_text(value, null_text)
   local text = tostring(value):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
   return text, false
 end
-
---- Where each display column starts, how wide it is, and which result column it shows.
----@type { start: integer, width: integer, column: integer }[]
-local spans = {}
 
 --- The characters the grid is drawn with.
 local function glyphs()
@@ -318,90 +313,6 @@ local function measure(columns, hidden)
   return measured
 end
 
---- How wide a cell's pieces are together.
-local function segments_width(segments)
-  local total = 0
-  for _, segment in ipairs(segments) do
-    total = total + vim.api.nvim_strwidth(segment[1])
-  end
-  return total
-end
-
---- Build one line of the grid, and record where each column landed.
----@param cells table[][] One list of pieces per column.
----@param measured table[]
----@param align boolean Whether to right-align the columns that hold numbers.
----@return table line A `NuiLine`.
-local function build_row(grid, cells, measured, align)
-  local parts, vertical = grid.parts, grid.marks.vertical
-  local separator_width = grid.separator_width
-
-  local line = parts.Line()
-  line:append(' ')
-
-  local at = 1
-  for index, column in ipairs(measured) do
-    local segments = cells[index] or {}
-    if index > 1 then
-      -- The same group as the rule under the header.
-      line:append(' ')
-      line:append(parts.Text(vertical, 'SqmeowRule'))
-      -- The space after the glyph is room before a value.
-      if not (index == #measured and segments_width(segments) == 0) then
-        line:append(' ')
-      end
-      at = at + separator_width
-    end
-    -- Where the column sits, in display columns.
-    spans[index] = { start = at, width = column.width, column = column.index }
-
-    local room = column.width - segments_width(segments)
-    if room < 0 then
-      -- Only the last piece can overflow: everything before it was sized to fit.
-      local last = segments[#segments]
-      if last then
-        last[1] = truncate(last[1], vim.api.nvim_strwidth(last[1]) + room, grid.marks.ellipsis)
-        room = column.width - segments_width(segments)
-      end
-    end
-
-    local right = align and column.numeric
-    -- The padding carries no group.
-    if right and room > 0 then
-      line:append((' '):rep(room))
-    end
-    for _, segment in ipairs(segments) do
-      line:append(segment[2] and parts.Text(segment[1], segment[2]) or parts.Text(segment[1]))
-    end
-    -- Nothing pads the last column.
-    if not right and room > 0 and index < #measured then
-      line:append((' '):rep(room))
-    end
-
-    at = at + column.width
-  end
-
-  return line
-end
-
---- The rule under the column names.
-local function build_rule(grid, measured)
-  local parts, marks = grid.parts, grid.marks
-  local joint = ('%s%s%s'):format(marks.horizontal, marks.cross, marks.horizontal)
-
-  local text = marks.horizontal
-  for index, column in ipairs(measured) do
-    if index > 1 then
-      text = text .. joint
-    end
-    text = text .. marks.horizontal:rep(column.width)
-  end
-
-  local line = parts.Line()
-  line:append(parts.Text(text, 'SqmeowRule'))
-  return line
-end
-
 --- How a result that is a query plan reads as lines, or nil for any other result.
 ---@param call table
 ---@return string[]|nil
@@ -455,21 +366,11 @@ local function draw()
   local edit = require('sqmeow.ui.edit')
   local handle = M.buffer()
 
-  local parts, err = nui()
-  if not parts then
-    return utils.notify(err, vim.log.levels.ERROR)
-  end
-
-  -- Read once per draw rather than once per row.
-  local grid = { parts = parts, marks = glyphs() }
-  grid.separator_width = vim.api.nvim_strwidth(grid.marks.vertical) + 2
-
   vim.bo[handle].modifiable = true
   vim.api.nvim_buf_clear_namespace(handle, NAMESPACE, 0, -1)
 
   -- A failed query's error is shown here, where its rows would have been, and nowhere else.
   if call and call.state == 'error' then
-    spans = {}
     local lines = vim.split(call.error or 'the query failed', '\n')
     vim.api.nvim_buf_set_lines(handle, 0, -1, false, lines)
     for row, text in ipairs(lines) do
@@ -483,13 +384,10 @@ local function draw()
   end
 
   if not (call and call.columns and #call.columns > 0) then
-    spans = {}
     vim.api.nvim_buf_set_lines(handle, 0, -1, false, {})
     vim.bo[handle].modifiable = false
     return
   end
-
-  spans = {}
 
   local plan = plan_lines(call)
   if plan then
@@ -500,74 +398,101 @@ local function draw()
 
   local measured = measure(call.columns, M.spec().hidden)
   local null_text = require('sqmeow.config').get().ui.result.null_text
-  local lines = {}
 
-  local names = {}
-  for index, column in ipairs(measured) do
-    local cell = {}
-    if column.icon then
-      table.insert(cell, { column.icon, column.icon_group })
-      table.insert(cell, { ' ' })
-    end
-    table.insert(cell, { column.name, 'SqmeowHeader' })
-    names[index] = cell
-  end
-
-  table.insert(lines, build_row(grid, names, measured, false))
-  table.insert(lines, build_rule(grid, measured))
-
-  for position, row in ipairs(page.rows) do
-    local absolute = page.indices[position]
-    local deleted = absolute ~= nil and edit.deleted(absolute)
-    local cells = {}
-    for index, column in ipairs(measured) do
-      local value, staged = row[column.index], false
-      if absolute then
-        local changed, has = edit.staged(absolute, column.index - 1)
-        if has then
-          value, staged = changed, true
-        end
+  --- Build column definitions for the table module.
+  ---@return table[]
+  local function build_columns()
+    local columns = {}
+    for _, column in ipairs(measured) do
+      -- The header includes the type/key icon when configured.
+      local header_content = {}
+      if column.icon then
+        table.insert(header_content, { column.icon, column.icon_group })
+        table.insert(header_content, { ' ' })
       end
+      table.insert(header_content, { column.name, 'SqmeowHeader' })
 
-      local text, is_null = cell_text(value, null_text)
-      local group = 'SqmeowText'
-      if deleted then
-        group = 'SqmeowDeleted'
-      elseif staged then
-        group = 'SqmeowChanged'
-      elseif is_null then
-        group = 'SqmeowNull'
-      elseif column.numeric then
-        group = 'SqmeowNumber'
-      end
-      cells[index] = { { text, group } }
+      -- Each column index is captured by the closures below.
+      local col_index = column.index
+      table.insert(columns, {
+        id = tostring(col_index),
+        header = header_content,
+        width = column.width,
+        align = column.numeric and 'right' or 'left',
+        accessor_fn = function(row)
+          return row[col_index]
+        end,
+        --- The cell callback resolves the edit state: deleted rows, staged changes,
+        --- inserted rows, nulls, and the type highlight.
+        cell = function(info)
+          local row_pos = info.row.index
+          local raw = info.row.original
+
+          if row_pos <= #page.rows then
+            local absolute = page.indices[row_pos]
+            local value = raw[col_index]
+            local staged = false
+            if absolute then
+              local changed, has = edit.staged(absolute, col_index - 1)
+              if has then
+                value, staged = changed, true
+              end
+            end
+
+            local text, is_null = cell_text(value, null_text)
+            local deleted = absolute ~= nil and edit.deleted(absolute)
+            local group = 'SqmeowText'
+            if deleted then
+              group = 'SqmeowDeleted'
+            elseif staged then
+              group = 'SqmeowChanged'
+            elseif is_null then
+              group = 'SqmeowNull'
+            elseif column.numeric then
+              group = 'SqmeowNumber'
+            end
+            return { text, group }
+          else
+            -- Staged inserts sit below the page rows.
+            local insert_pos = row_pos - #page.rows
+            local values = edit.inserts()[insert_pos]
+            local value = values and values[col_index - 1] or nil
+            local text = value == nil and '' or cell_text(value, null_text)
+            return { text, 'SqmeowInserted' }
+          end
+        end,
+      })
     end
-    table.insert(lines, build_row(grid, cells, measured, true))
+    return columns
   end
 
-  -- New rows go under whatever page is showing, so they are in sight wherever the user added them.
-  for _, values in ipairs(edit.inserts()) do
-    local cells = {}
-    for index, column in ipairs(measured) do
-      local value = values[column.index - 1]
-      cells[index] = { { value == nil and '' or cell_text(value, null_text), 'SqmeowInserted' } }
+  --- Assemble the data the table module draws: page rows followed by inserts.
+  ---@return table[]
+  local function build_data()
+    local data = {}
+    for i, row in ipairs(page.rows) do
+      data[i] = row
     end
-    table.insert(lines, build_row(grid, cells, measured, true))
+    for _, values in ipairs(edit.inserts()) do
+      table.insert(data, values)
+    end
+    return data
   end
 
-  vim.api.nvim_buf_set_lines(
-    handle,
-    0,
-    -1,
-    false,
-    vim.tbl_map(function(line)
-      return line:content()
-    end, lines)
-  )
-  for number, line in ipairs(lines) do
-    line:highlight(handle, NAMESPACE, number)
+  -- The table instance is created once and reconfigured per draw.
+  if not tbl then
+    tbl = Table.new({
+      bufnr = handle,
+      ns_id = NAMESPACE,
+      columns = build_columns(),
+      data = build_data(),
+    })
+  else
+    tbl:set_columns(build_columns())
+    tbl:set_data(build_data())
   end
 
+  tbl:render()
   vim.bo[handle].modifiable = false
 end
 
@@ -903,28 +828,21 @@ end
 ---@return { column: integer, name: string, line: integer }|nil # `column` zero-based.
 local function cursor_column()
   local call = require('sqmeow.state').call
-  if not (win and utils.shows(win, buf) and call and call.columns and #spans > 0) then
+  if not (win and utils.shows(win, buf) and call and call.columns and tbl) then
     return nil
   end
 
-  local cursor = vim.api.nvim_win_get_cursor(win)
-  local line = vim.api.nvim_buf_get_lines(M.buffer(), cursor[1] - 1, cursor[1], false)[1]
-  if not line then
+  local cell = tbl:get_cell(nil, win)
+  if not cell then
     return nil
   end
 
-  local display = vim.fn.strdisplaywidth(line:sub(1, cursor[2]))
-  local found = spans[1]
-  for _, span in ipairs(spans) do
-    if display >= span.start then
-      found = span
-    end
-  end
-
+  -- The column id is the 1-based engine index stored as a string.
+  local col_index = tonumber(cell.column.id) or 1
   return {
-    column = found.column - 1,
-    name = call.columns[found.column] and call.columns[found.column].name or '',
-    line = cursor[1],
+    column = col_index - 1,
+    name = call.columns[col_index] and call.columns[col_index].name or '',
+    line = vim.api.nvim_win_get_cursor(win)[1],
   }
 end
 
@@ -960,22 +878,16 @@ end
 ---@param index integer One-based column.
 ---@return boolean moved
 function M.goto_column(index)
-  local span
-  for _, candidate in ipairs(spans) do
-    if candidate.column == index then
-      span = candidate
-    end
-  end
-  if not (span and win and utils.shows(win, buf)) then
+  if not (win and utils.shows(win, buf) and tbl) then
     return false
   end
 
-  local row = vim.api.nvim_win_get_cursor(win)[1]
-  local line = vim.api.nvim_buf_get_lines(M.buffer(), row - 1, row, false)[1] or ''
-
-  vim.api.nvim_win_set_cursor(win, { row, M.byte_at(line, span.start) })
-  vim.api.nvim_set_current_win(win)
-  return true
+  local cell = tbl:goto_column(index, win)
+  if cell then
+    vim.api.nvim_set_current_win(win)
+    return true
+  end
+  return false
 end
 
 --- The rows a visual selection covers, leaving visual mode.
