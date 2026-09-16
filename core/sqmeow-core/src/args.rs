@@ -78,11 +78,7 @@ impl Args {
                 for (i, item) in items.iter().enumerate() {
                     match item.as_str() {
                         Some(s) => strings.push(s.to_owned()),
-                        None => {
-                            return Err(format!(
-                                "`{key}[{i}]` must be a string, got {item}"
-                            ))
-                        }
+                        None => return Err(format!("`{key}[{i}]` must be a string, got {item}")),
                     }
                 }
                 Ok(Some(strings))
@@ -189,7 +185,11 @@ mod tests {
     fn non_string_items_in_array_are_rejected() {
         let params = table(vec![(
             "path",
-            Value::Array(vec![Value::from("host1"), Value::from(5432), Value::from(true)]),
+            Value::Array(vec![
+                Value::from("host1"),
+                Value::from(5432),
+                Value::from(true),
+            ]),
         )]);
         let args = Args::from_params(&params).unwrap();
         let err = args.opt_strings("path").unwrap_err();

@@ -125,7 +125,8 @@ fn encode(out: &mut impl Write, value: &Value) -> io::Result<()> {
 }
 
 fn decode(input: &mut impl Read) -> Result<Value, String> {
-    rmpv::decode::read_value(input).map_err(|error| format!("the saved result is incomplete: {error}"))
+    rmpv::decode::read_value(input)
+        .map_err(|error| format!("the saved result is incomplete: {error}"))
 }
 
 fn header(result: &ResultSet) -> Value {
@@ -415,10 +416,12 @@ mod tests {
         let bytes = fs::read(scratch.file()).unwrap();
         fs::write(scratch.file(), &bytes[..bytes.len() - 4]).unwrap();
 
-        assert!(read(&scratch.file())
-            .err()
-            .unwrap()
-            .starts_with("the saved result is incomplete"));
+        assert!(
+            read(&scratch.file())
+                .err()
+                .unwrap()
+                .starts_with("the saved result is incomplete")
+        );
     }
 
     #[test]
