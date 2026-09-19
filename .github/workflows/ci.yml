@@ -11,8 +11,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # The runners have no libduckdb.
-  SQMEOW_CARGO_FLAGS: --features bundled-duckdb
+  # Link DuckDB's prebuilt libduckdb instead of compiling it from source.
+  DUCKDB_DOWNLOAD_LIB: 1
+  # No debug info: smaller cache, faster links.
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 jobs:
   lint:
