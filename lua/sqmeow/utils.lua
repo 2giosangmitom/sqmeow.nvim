@@ -44,4 +44,68 @@ function M.nui(names, surface)
   return components, ''
 end
 
+--- Cuts `text` to `limit` display columns, ending in `marker` when cut.
+---@param text string
+---@param limit integer
+---@param marker string
+---@return string
+function M.truncate(text, limit, marker)
+  if vim.api.nvim_strwidth(text) <= limit then
+    return text
+  end
+  if limit <= 0 then
+    return ''
+  end
+  -- A marker wider than the room left would overflow the column itself.
+  if vim.api.nvim_strwidth(marker) > limit then
+    marker = ''
+  end
+
+  local budget = limit - vim.api.nvim_strwidth(marker)
+  local out, at = {}, 0
+
+  -- One character at a time, because cutting by byte would split a wide one in half.
+  for char in M.characters(text) do
+    local step = vim.api.nvim_strwidth(char)
+    if at + step > budget then
+      break
+    end
+    at = at + step
+    table.insert(out, char)
+  end
+
+  return table.concat(out) .. marker
+end
+
+--- Iterates the UTF-8 characters of `text`.
+---@param text string
+---@return fun(): string|nil
+function M.characters(text)
+  return text:gmatch('[%z\1-\127\194-\244][\128-\191]*')
+end
+
+--- Byte offset of a display column on a line.
+---@param line string
+---@param display integer
+---@return integer bytes
+function M.byte_at(line, display)
+  local at, bytes = 0, 0
+  for char in M.characters(line) do
+    if at >= display then
+      break
+    end
+    at = at + vim.api.nvim_strwidth(char)
+    bytes = bytes + #char
+  end
+  return bytes
+end
+
+--- Display column of a byte offset on a line.
+---@param line string
+---@param bytes integer Zero-based byte column.
+---@return integer display
+function M.display_at(line, bytes)
+  return vim.fn.strdisplaywidth(line:sub(1, bytes))
+end
+
 return M
