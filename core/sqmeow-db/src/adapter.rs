@@ -27,6 +27,7 @@ pub enum Dialect {
     Scylla,
     /// SurrealQL, with namespaces and databases where others have schemas.
     SurrealDb,
+    ClickHouse,
 }
 
 impl Dialect {
@@ -41,6 +42,7 @@ impl Dialect {
             Self::MongoDb => "mongodb",
             Self::Scylla => "scylla",
             Self::SurrealDb => "surrealdb",
+            Self::ClickHouse => "clickhouse",
         }
     }
 
@@ -77,6 +79,7 @@ impl Dialect {
             "mongodb" | "mongodb+srv" => Some(Self::MongoDb),
             "scylla" | "cassandra" => Some(Self::Scylla),
             "surrealdb" | "surrealdbs" => Some(Self::SurrealDb),
+            "clickhouse" | "clickhouses" => Some(Self::ClickHouse),
             _ => None,
         }
     }
@@ -220,6 +223,9 @@ mod tests {
         }
         for url in ["surrealdb://h/ns/db", "surrealdbs://h"] {
             assert_eq!(Dialect::from_url(url), Some(Dialect::SurrealDb), "{url}");
+        }
+        for url in ["clickhouse://h/db", "clickhouses://h:8443"] {
+            assert_eq!(Dialect::from_url(url), Some(Dialect::ClickHouse), "{url}");
         }
     }
 

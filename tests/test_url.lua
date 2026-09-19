@@ -265,6 +265,16 @@ T['build']['writes a surrealdb namespace and database as its path'] = function()
   eq(url.parse('surrealdb://h/shop').database, '')
 end
 
+T['build']['writes clickhouse tls as the clickhouses scheme'] = function()
+  eq(
+    url.build('clickhouse', { host = 'h', database = 'logs', tls = 'yes' }),
+    'clickhouses://h/logs'
+  )
+  eq(url.build('clickhouse', { host = 'h', tls = 'no' }), 'clickhouse://h/')
+  eq(url.parse('clickhouses://u:p@h:8443/logs').tls, 'yes')
+  eq(url.parse('clickhouses://u:p@h:8443/logs').dialect, 'clickhouse')
+end
+
 T['build']['writes a scylla keyspace where a database would be'] = function()
   eq(url.build('scylla', { host = 'h', database = 'shop' }), 'scylla://h/shop')
   eq(url.parse('cassandra://u:p@h:9042/shop').dialect, 'scylla')

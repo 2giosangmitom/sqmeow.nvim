@@ -47,6 +47,7 @@
 | **MongoDB**                    | Extended JSON commands, `mongodb://` / `mongodb+srv://`                                |
 | **ScyllaDB** / Cassandra       | CQL via `scylla://` / `cassandra://`, `?ssl=true`                                      |
 | **SurrealDB**                  | SurrealQL via `surrealdb://` / `surrealdbs://`                                         |
+| **ClickHouse**                 | HTTP via `clickhouse://`, HTTPS via `clickhouses://`; results are read-only            |
 
 ## 🚀 Installation
 
@@ -108,7 +109,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Safety
 
-- Tick **Read only** in the dialog or add `"read_only": true` to a connection (or `connections.json`) to allow only reads. PostgreSQL, MySQL, SQLite and DuckDB enforce it in the database session (a server that speaks the PostgreSQL protocol without read-only sessions falls back to the check below, with a warning); Redis, MongoDB, ScyllaDB and SurrealDB only check commands against a list of reads, so use a read-only database user where it matters.
+- Tick **Read only** in the dialog or add `"read_only": true` to a connection (or `connections.json`) to allow only reads. PostgreSQL, MySQL, ClickHouse, SQLite and DuckDB enforce it in the database session (a server that speaks the PostgreSQL protocol without read-only sessions falls back to the check below, with a warning); Redis, MongoDB, ScyllaDB and SurrealDB only check commands against a list of reads, so use a read-only database user where it matters.
 - Before `DELETE`/`UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, or emptying a Redis/MongoDB database, sqmeow asks first. Set `query.confirm_destructive = false` to disable.
 
 ## ⌨️ Commands

@@ -4,6 +4,7 @@
 //! [`Backend`] enum erases the concrete type so the engine can hold a
 //! heterogenous set of connections.
 
+pub mod clickhouse;
 pub mod duckdb;
 pub mod mongodb;
 pub mod mysql;
@@ -64,7 +65,8 @@ where
     }
 }
 
-// `self::`, because a bare `duckdb` or `mongodb` would also name the driver crate.
+// `self::`, because a bare `clickhouse`, `duckdb` or `mongodb` would also name the driver crate.
+pub use self::clickhouse::ClickHouseAdapter;
 pub use self::duckdb::DuckDbAdapter;
 pub use self::mongodb::MongoAdapter;
 pub use mysql::MySqlAdapter;
@@ -98,6 +100,7 @@ macro_rules! dispatch {
             Backend::MongoDb($adapter) => $body,
             Backend::Scylla($adapter) => $body,
             Backend::SurrealDb($adapter) => $body,
+            Backend::ClickHouse($adapter) => $body,
         }
     };
 }
@@ -113,6 +116,7 @@ pub enum Backend {
     MongoDb(MongoAdapter),
     Scylla(ScyllaAdapter),
     SurrealDb(SurrealAdapter),
+    ClickHouse(ClickHouseAdapter),
 }
 
 impl Backend {
@@ -141,6 +145,9 @@ impl Backend {
             Dialect::Scylla => Ok(Self::Scylla(ScyllaAdapter::connect(url).await?)),
             Dialect::SurrealDb => Ok(Self::SurrealDb(
                 SurrealAdapter::connect(url, database).await?,
+            )),
+            Dialect::ClickHouse => Ok(Self::ClickHouse(
+                ClickHouseAdapter::connect(url, read_only).await?,
             )),
         }
     }
@@ -283,6 +290,7 @@ pub fn supported() -> Vec<&'static str> {
         Dialect::MongoDb.name(),
         Dialect::Scylla.name(),
         Dialect::SurrealDb.name(),
+        Dialect::ClickHouse.name(),
     ]
 }
 

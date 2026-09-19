@@ -145,6 +145,7 @@ T['connections']['use the glyph of the dialect they speak'] = function()
     'mongodb',
     'scylla',
     'surrealdb',
+    'clickhouse',
   }) do
     eq(icons.connection_kind(dialect), dialect)
   end

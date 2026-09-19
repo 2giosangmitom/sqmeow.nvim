@@ -60,6 +60,7 @@ T['reports the engine, its adapters, the configuration and nui.nvim'] = function
     'mongodb',
     'scylla',
     'surrealdb',
+    'clickhouse',
   }) do
     eq({ dialect, engine:find(dialect, 1, true) ~= nil }, { dialect, true })
   end
@@ -100,6 +101,8 @@ T['knows the dialect of every scheme the engine accepts'] = function()
     duckdb = 'duckdb',
     scylla = 'scylla',
     cassandra = 'scylla',
+    clickhouse = 'clickhouse',
+    clickhouses = 'clickhouse',
     postgres = 'postgres',
     postgresql = 'postgres',
     PostgreSQL = 'postgres',
