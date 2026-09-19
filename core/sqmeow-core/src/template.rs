@@ -106,6 +106,7 @@ async fn shell(command: &str) -> std::io::Result<std::process::Output> {
     tokio::process::Command::new("sh")
         .arg("-c")
         .arg(command)
+        .kill_on_drop(true)
         .output()
         .await
 }
@@ -114,6 +115,7 @@ async fn shell(command: &str) -> std::io::Result<std::process::Output> {
 async fn shell(command: &str) -> std::io::Result<std::process::Output> {
     tokio::process::Command::new("cmd")
         .args(["/C", command])
+        .kill_on_drop(true)
         .output()
         .await
 }

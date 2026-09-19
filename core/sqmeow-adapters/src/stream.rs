@@ -294,9 +294,19 @@ where
     if let Ok(bytes) = row.try_get::<Vec<u8>, _>(index) {
         return Cell::bytes(&bytes);
     }
-    Cell::Unsupported {
-        type_name: type_name.to_owned(),
-        raw: String::new(),
+    // Skipping the type check still reads the driver's raw form.
+    match row.try_get_unchecked::<Vec<u8>, _>(index) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(raw) => Cell::Unsupported {
+                type_name: type_name.to_owned(),
+                raw,
+            },
+            Err(error) => Cell::bytes(error.as_bytes()),
+        },
+        Err(_) => Cell::Unsupported {
+            type_name: type_name.to_owned(),
+            raw: String::new(),
+        },
     }
 }
 
