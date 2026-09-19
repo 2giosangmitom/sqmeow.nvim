@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use sqlx::postgres::types::Oid;
@@ -10,7 +10,8 @@ use sqlx::postgres::{
     PgColumn, PgConnectOptions, PgConnection, PgHasArrayType, PgPool, PgPoolOptions, PgRow,
 };
 use sqlx::{
-    Connection, Decode, Pool, Postgres, Row, Statement as _, Type, TypeInfo, ValueRef, types,
+    Connection, Decode, Executor as _, Pool, Postgres, Row, Statement as _, Type, TypeInfo,
+    ValueRef, types,
 };
 use sqmeow_db::{
     Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
@@ -36,6 +37,11 @@ pub struct PostgresAdapter {
     options: PgConnectOptions,
     /// The server process behind the pool's one connection, which is what a cancel names.
     backend_pid: Arc<AtomicI32>,
+    /// The CockroachDB session behind the pool's one connection, which it cancels by instead.
+    cockroach_session: Arc<Mutex<Option<String>>>,
+    /// Whether a read-only connection's server keeps the session read-only; some servers that
+    /// speak the protocol ignore or refuse the setting, leaving only the engine's check.
+    read_only_session: Arc<AtomicBool>,
 }
 
 impl PostgresAdapter {
@@ -52,12 +58,14 @@ impl PostgresAdapter {
         } else if cluster {
             options = options.database("postgres");
         }
-        if read_only {
-            options = options.options([("default_transaction_read_only", "on")]);
-        }
         let backend_pid = Arc::new(AtomicI32::new(0));
+        let read_only_session = Arc::new(AtomicBool::new(false));
+        let cockroach_session = Arc::new(Mutex::new(None));
         let pool = crate::connect_retrying(|| {
             let backend_pid = backend_pid.clone();
+            let cockroach_session = cockroach_session.clone();
+            let session = read_only_session.clone();
+            let armed = read_only_session.clone();
             PgPoolOptions::new()
                 .max_connections(1)
                 // sqlx retries a refused connection until this expires.
@@ -65,12 +73,45 @@ impl PostgresAdapter {
                 // Read on every connect, since the pool opens a new session after losing one.
                 .after_connect(move |connection, _| {
                     let backend_pid = backend_pid.clone();
+                    let cockroach_session = cockroach_session.clone();
+                    let session = session.clone();
                     Box::pin(async move {
-                        let pid: i32 = sqlx::query_scalar("select pg_backend_pid()")
-                            .fetch_one(&mut *connection)
-                            .await?;
+                        // Not every server that speaks the protocol has it; such a session cannot
+                        // be cancelled.
+                        let found: Option<(i32, String)> =
+                            sqlx::query_as("select pg_backend_pid()::int4, version()")
+                                .fetch_one(&mut *connection)
+                                .await
+                                .ok();
+                        let (pid, version) = found.unwrap_or_default();
                         backend_pid.store(pid, Ordering::Relaxed);
+                        let id = if version.starts_with("CockroachDB") {
+                            sqlx::query_scalar("show session_id")
+                                .fetch_one(&mut *connection)
+                                .await
+                                .ok()
+                        } else {
+                            None
+                        };
+                        if let Ok(mut session) = cockroach_session.lock() {
+                            *session = id;
+                        }
+                        if read_only {
+                            session.store(make_read_only(connection).await, Ordering::Relaxed);
+                        }
                         Ok(())
+                    })
+                })
+                // `set_config` can turn the session default off, so it is set again before each use.
+                .before_acquire(move |connection, _| {
+                    let armed = armed.clone();
+                    Box::pin(async move {
+                        if armed.load(Ordering::Relaxed) {
+                            connection
+                                .execute("set default_transaction_read_only = on")
+                                .await?;
+                        }
+                        Ok(true)
                     })
                 })
                 .connect_with(options.clone())
@@ -91,6 +132,8 @@ impl PostgresAdapter {
             cluster,
             options,
             backend_pid,
+            cockroach_session,
+            read_only_session,
         })
     }
 
@@ -111,15 +154,34 @@ impl PostgresAdapter {
         )
     }
 
+    /// Whether the server itself keeps a read-only connection read-only.
+    pub fn read_only_session(&self) -> bool {
+        self.read_only_session.load(Ordering::Relaxed)
+    }
+
     /// Stop the query the session is running, from a connection of its own.
     async fn stop_query(&self) {
         let pid = self.backend_pid.load(Ordering::Relaxed);
+        let cockroach = self
+            .cockroach_session
+            .lock()
+            .ok()
+            .and_then(|session| session.clone());
+        if pid == 0 && cockroach.is_none() {
+            return;
+        }
         let stop = async {
             let mut connection = PgConnection::connect_with(&self.options).await?;
-            sqlx::query("select pg_cancel_backend($1)")
-                .bind(pid)
-                .execute(&mut connection)
-                .await?;
+            let query = match &cockroach {
+                // CockroachDB has no `pg_cancel_backend`.
+                Some(session) => sqlx::query(
+                    "cancel queries if exists (select query_id from [show cluster statements]
+                     where session_id = $1)",
+                )
+                .bind(session),
+                None => sqlx::query("select pg_cancel_backend($1)").bind(pid),
+            };
+            query.execute(&mut connection).await?;
             connection.close().await
         };
         match tokio::time::timeout(crate::STOP_TIMEOUT, stop).await {
@@ -443,6 +505,23 @@ impl PostgresAdapter {
         }
         relations
     }
+}
+
+/// Make the session read-only, and read the setting back, since some servers accept it silently.
+async fn make_read_only(connection: &mut PgConnection) -> bool {
+    if connection
+        .execute("set default_transaction_read_only = on")
+        .await
+        .is_err()
+    {
+        return false;
+    }
+    let setting: Option<Option<String>> =
+        sqlx::query_scalar("select current_setting('default_transaction_read_only')")
+            .fetch_one(connection)
+            .await
+            .ok();
+    setting.flatten().as_deref() == Some("on")
 }
 
 impl SqlxAdapter for PostgresAdapter {

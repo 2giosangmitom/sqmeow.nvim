@@ -81,6 +81,14 @@ impl Core {
                 if let Some(database) = backend.database() {
                     payload.push(("current_database", Value::from(database)));
                 }
+                if read_only && backend.read_only_unenforced() {
+                    payload.push((
+                        "notice",
+                        Value::from(
+                            "this server has no read-only sessions, so only statements are checked",
+                        ),
+                    ));
+                }
                 self.session.insert_connection(Connection {
                     id,
                     name,

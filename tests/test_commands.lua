@@ -196,4 +196,15 @@ T['log clear forgets the query log'] = function()
   eq(messages(), { 'sqmeow: the query log is empty' })
 end
 
+T['a notice from connecting is shown as a warning'] = function()
+  local state = require('sqmeow.state')
+  local id = state.next_connection_id()
+  state.add_connection({ id = id, name = 'quest', url = 'postgres://quest', state = 'connecting' })
+
+  require('sqmeow.events').on_connection({ id = id, state = 'connected', notice = 'no sessions' })
+
+  eq(notes, { { message = 'sqmeow: quest: no sessions', level = vim.log.levels.WARN } })
+  state.remove_connection(id)
+end
+
 return T

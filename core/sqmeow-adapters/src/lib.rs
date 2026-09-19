@@ -200,6 +200,12 @@ impl Backend {
         }
     }
 
+    /// Whether a read-only PostgreSQL-protocol server ignored the read-only session, so only the
+    /// engine's statement check applies.
+    pub fn read_only_unenforced(&self) -> bool {
+        matches!(self, Self::Postgres(adapter) if !adapter.read_only_session())
+    }
+
     /// The schemas, or for MySQL, Redis and MongoDB the databases, this connection can see.
     pub async fn schemas(&self) -> Result<Vec<SchemaNode>> {
         dispatch!(self, adapter => adapter.schemas().await)

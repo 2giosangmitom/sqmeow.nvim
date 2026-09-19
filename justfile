@@ -30,7 +30,7 @@ fmt:
 
 test: test-rust test-lua
 
-# Rust tests. The PostgreSQL, MySQL, Redis, Dragonfly, MongoDB, ScyllaDB and Cassandra tests report themselves skipped unless `just db-up` has
+# Rust tests. The server-backed tests report themselves skipped unless `just db-up` has
 # started the servers they need.
 test-rust:
     #!/usr/bin/env bash
@@ -63,6 +63,12 @@ test-rust:
     fi
     if [ -n "$(docker compose ps --status running --quiet cassandra 2>/dev/null)" ]; then
         export SQMEOW_TEST_CASSANDRA_URL="cassandra://127.0.0.1:59043/"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet cockroach 2>/dev/null)" ]; then
+        export SQMEOW_TEST_COCKROACH_URL="postgres://root@127.0.0.1:56257/defaultdb"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet questdb 2>/dev/null)" ]; then
+        export SQMEOW_TEST_QUESTDB_URL="postgres://admin:quest@127.0.0.1:58812/qdb"
     fi
     cargo test {{cargo_flags}}
 

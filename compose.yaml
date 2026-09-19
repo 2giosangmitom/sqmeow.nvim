@@ -15,6 +15,29 @@ services:
       timeout: 3s
       retries: 30
 
+  # CockroachDB speaks the PostgreSQL protocol, so the PostgreSQL adapter serves it.
+  cockroach:
+    image: cockroachdb/cockroach:v26.2.6
+    command: start-single-node --insecure
+    ports:
+      - "56257:26257"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health?ready=1"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  # Speaks the PostgreSQL protocol but ignores `default_transaction_read_only`.
+  questdb:
+    image: questdb/questdb:10.0.1
+    ports:
+      - "58812:8812"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9000/exec?query=select%201"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
   # The tests connect as root: MySQL 8 keeps binary logging on, so creating a stored function
   # needs SUPER, which an ordinary account does not have.
   mysql:

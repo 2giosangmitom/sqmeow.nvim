@@ -1271,6 +1271,25 @@ async fn a_read_only_connection_is_refused_writes_by_the_server() {
 }
 
 #[tokio::test]
+async fn a_read_only_connection_stays_read_only_after_set_config() {
+    let backend = Backend::connect_to(&server!(), None, true).await.unwrap();
+    run(
+        &backend,
+        "select set_config('default_transaction_read_only', 'off', false)",
+    )
+    .await;
+    let error = backend
+        .execute(
+            "create table read_only_probe (id int)",
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("read-only"), "{error}");
+}
+
+#[tokio::test]
 async fn a_table_without_a_key_is_edited_by_every_column() {
     let backend = connect(&server!()).await;
     run(&backend, "drop table if exists keyless_rows").await;

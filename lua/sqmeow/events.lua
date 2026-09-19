@@ -52,6 +52,9 @@ function M.on_connection(payload)
       vim.log.levels.ERROR
     )
   end
+  if payload.notice then
+    notify(('%s: %s'):format(connection.name, payload.notice), vim.log.levels.WARN)
+  end
 end
 
 --- Handle a query changing state.
