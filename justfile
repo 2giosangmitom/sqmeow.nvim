@@ -43,6 +43,9 @@ test-rust:
     if [ -n "$(docker compose ps --status running --quiet mysql 2>/dev/null)" ]; then
         export SQMEOW_TEST_MYSQL_URL="mysql://root:sqmeow@127.0.0.1:53306/sqmeow"
     fi
+    if [ -n "$(docker compose ps --status running --quiet clickhouse 2>/dev/null)" ]; then
+        export SQMEOW_TEST_CLICKHOUSE_URL="clickhouse://sqmeow:sqmeow@127.0.0.1:58123/default"
+    fi
     if [ -n "$(docker compose ps --status running --quiet redis 2>/dev/null)" ]; then
         export SQMEOW_TEST_REDIS_URL="redis://127.0.0.1:56379/0"
     fi
@@ -72,7 +75,7 @@ test-rust:
     fi
     cargo test {{cargo_flags}}
 
-# Start the PostgreSQL, MySQL, Redis, Dragonfly, MongoDB, ScyllaDB and Cassandra servers the integration tests use.
+# Start the PostgreSQL, MySQL, ClickHouse, Redis, Dragonfly, MongoDB, ScyllaDB and Cassandra servers the integration tests use.
 db-up:
     docker compose up -d --wait
 
@@ -98,6 +101,9 @@ test-lua: build-debug
     fi
     if [ -n "$(docker compose ps --status running --quiet mysql 2>/dev/null)" ]; then
         export SQMEOW_TEST_MYSQL_URL="mysql://root:sqmeow@127.0.0.1:53306/sqmeow"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet clickhouse 2>/dev/null)" ]; then
+        export SQMEOW_TEST_CLICKHOUSE_URL="clickhouse://sqmeow:sqmeow@127.0.0.1:58123/default"
     fi
     if [ -n "$(docker compose ps --status running --quiet redis 2>/dev/null)" ]; then
         export SQMEOW_TEST_REDIS_URL="redis://127.0.0.1:56379/0"

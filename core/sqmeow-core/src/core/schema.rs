@@ -120,7 +120,7 @@ async fn top_nodes(connection: &Connection) -> Result<Vec<Value>, DbError> {
     // Left out where the roles cannot be read, as by a user without the right to.
     if matches!(
         connection.backend.dialect(),
-        Dialect::Postgres | Dialect::MySql
+        Dialect::Postgres | Dialect::MySql | Dialect::ClickHouse
     ) && let Ok(roles) = connection.backend.roles().await
     {
         nodes.push(group_node(ROLES, "Roles", "roles", roles.len()));
@@ -258,8 +258,8 @@ async fn group_nodes(
             group_node("sequences", "Sequences", "sequences", sequences),
         );
     }
-    // CQL has user-defined functions and aggregates, but no procedures.
-    if dialect != Dialect::Scylla {
+    // CQL and ClickHouse have user-defined functions, but no procedures.
+    if !matches!(dialect, Dialect::Scylla | Dialect::ClickHouse) {
         groups.push(group_node(
             "procedures",
             "Procedures",

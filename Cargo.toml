@@ -50,6 +50,11 @@ scylla = { version = "1.8", features = [
   "num-bigint-04",
   "rustls-023",
 ] }
+# ClickHouse over HTTP(S), with the same crypto provider and machine roots as sqlx.
+clickhouse = { version = "0.15", default-features = false, features = [
+  "rustls-tls-ring",
+  "rustls-tls-native-roots",
+] }
 # TLS for ScyllaDB, with the same crypto provider and roots as sqlx.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"

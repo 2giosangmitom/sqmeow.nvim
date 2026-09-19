@@ -25,6 +25,7 @@ pub enum Dialect {
     MongoDb,
     /// CQL, spoken by ScyllaDB and Apache Cassandra.
     Scylla,
+    ClickHouse,
 }
 
 impl Dialect {
@@ -38,6 +39,7 @@ impl Dialect {
             Self::Redis => "redis",
             Self::MongoDb => "mongodb",
             Self::Scylla => "scylla",
+            Self::ClickHouse => "clickhouse",
         }
     }
 
@@ -72,6 +74,7 @@ impl Dialect {
             // `+srv` finds the hosts through DNS, which is the driver's business too.
             "mongodb" | "mongodb+srv" => Some(Self::MongoDb),
             "scylla" | "cassandra" => Some(Self::Scylla),
+            "clickhouse" | "clickhouses" => Some(Self::ClickHouse),
             _ => None,
         }
     }
@@ -212,6 +215,9 @@ mod tests {
         }
         for url in ["scylla://h/ks", "cassandra://h"] {
             assert_eq!(Dialect::from_url(url), Some(Dialect::Scylla), "{url}");
+        }
+        for url in ["clickhouse://h/db", "clickhouses://h:8443"] {
+            assert_eq!(Dialect::from_url(url), Some(Dialect::ClickHouse), "{url}");
         }
     }
 

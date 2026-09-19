@@ -103,6 +103,7 @@ M.defaults = {
     redis = '',
     mongodb = '',
     scylla = '󰆼',
+    clickhouse = '',
 
     -- What sits before a drawer row: whether its children are showing, or that it has none.
     markers = { open = '', closed = '', leaf = ' ' },

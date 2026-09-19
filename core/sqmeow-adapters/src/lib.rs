@@ -4,6 +4,7 @@
 //! [`Backend`] enum erases the concrete type so the engine can hold a
 //! heterogenous set of connections.
 
+pub mod clickhouse;
 pub mod duckdb;
 pub mod mongodb;
 pub mod mysql;
@@ -63,7 +64,8 @@ where
     }
 }
 
-// `self::`, because a bare `duckdb` or `mongodb` would also name the driver crate.
+// `self::`, because a bare `clickhouse`, `duckdb` or `mongodb` would also name the driver crate.
+pub use self::clickhouse::ClickHouseAdapter;
 pub use self::duckdb::DuckDbAdapter;
 pub use self::mongodb::MongoAdapter;
 pub use mysql::MySqlAdapter;
@@ -94,6 +96,7 @@ macro_rules! dispatch {
             Backend::Redis($adapter) => $body,
             Backend::MongoDb($adapter) => $body,
             Backend::Scylla($adapter) => $body,
+            Backend::ClickHouse($adapter) => $body,
         }
     };
 }
@@ -108,6 +111,7 @@ pub enum Backend {
     Redis(RedisAdapter),
     MongoDb(MongoAdapter),
     Scylla(ScyllaAdapter),
+    ClickHouse(ClickHouseAdapter),
 }
 
 impl Backend {
@@ -134,6 +138,9 @@ impl Backend {
             Dialect::Redis => Ok(Self::Redis(RedisAdapter::connect(url).await?)),
             Dialect::MongoDb => Ok(Self::MongoDb(MongoAdapter::connect(url, database).await?)),
             Dialect::Scylla => Ok(Self::Scylla(ScyllaAdapter::connect(url).await?)),
+            Dialect::ClickHouse => Ok(Self::ClickHouse(
+                ClickHouseAdapter::connect(url, read_only).await?,
+            )),
         }
     }
 
@@ -266,6 +273,7 @@ pub fn supported() -> Vec<&'static str> {
         Dialect::Redis.name(),
         Dialect::MongoDb.name(),
         Dialect::Scylla.name(),
+        Dialect::ClickHouse.name(),
     ]
 }
 

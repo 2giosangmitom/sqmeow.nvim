@@ -97,6 +97,21 @@ M.list = {
     },
   },
   {
+    id = 'clickhouse',
+    label = 'ClickHouse',
+    scheme = 'clickhouse',
+    port = 8123,
+    fields = {
+      { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
+      { key = 'port', label = 'Port', optional = true, hint = '8123' },
+      { key = 'database', label = 'Database', optional = true, hint = 'all' },
+      { key = 'user', label = 'User', optional = true, hint = 'default' },
+      { key = 'password', label = 'Password', mask = true, optional = true },
+      { key = 'options', label = 'Options', optional = true, hint = 'max_threads=4' },
+      { key = 'tls', label = 'TLS', checkbox = true },
+    },
+  },
+  {
     id = 'sqlite',
     label = 'SQLite',
     scheme = 'sqlite',
@@ -124,6 +139,7 @@ local aliases = {
   valkeys = 'redis',
   ['mongodb+srv'] = 'mongodb',
   cassandra = 'scylla',
+  clickhouses = 'clickhouse',
   sqlite3 = 'sqlite',
   file = 'sqlite',
 }

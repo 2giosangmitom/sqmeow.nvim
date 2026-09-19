@@ -156,6 +156,9 @@ function M.split(url)
   if dialect == 'mongodb' then
     fields.srv = scheme:lower() == 'mongodb+srv' and 'yes' or 'no'
   end
+  if dialect == 'clickhouse' then
+    fields.tls = scheme:lower() == 'clickhouses' and 'yes' or 'no'
+  end
   return fields
 end
 
@@ -226,6 +229,8 @@ function M.build(dialect, values)
       return nil, 'a MongoDB SRV address takes no port'
     end
     scheme = 'mongodb+srv'
+  elseif dialect == 'clickhouse' and value('tls') == 'yes' then
+    scheme = 'clickhouses'
   end
 
   local url = ('%s://%s/%s'):format(scheme, authority, value('database'))
