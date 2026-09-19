@@ -155,7 +155,8 @@ function M.toggle_delete(targets)
   end)
   local before = {}
   for _, row in ipairs(rows) do
-    before[row] = deletes[row]
+    -- `false` rather than nil, so a row that was not deleted is still remembered.
+    before[row] = deletes[row] or false
     deletes[row] = (not keep) or nil
   end
 
@@ -170,7 +171,7 @@ function M.toggle_delete(targets)
 
   remember(function()
     for row, was in pairs(before) do
-      deletes[row] = was
+      deletes[row] = was or nil
     end
     for position = #removed, 1, -1 do
       table.insert(inserts, removed[position].index, removed[position].row)

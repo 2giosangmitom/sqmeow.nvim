@@ -62,6 +62,14 @@ T['deleting rows twice keeps them, and deleting a new row drops it'] = function(
   eq(edit.inserts()[1][0], 'kept')
 end
 
+T['undo takes back a deleted row'] = function()
+  edit.toggle_delete({ { row = 1 } })
+  eq(edit.deleted(1), true)
+  eq(edit.undo(), true)
+  eq(edit.deleted(1), false)
+  eq(edit.count(), 0)
+end
+
 T['a new row can start with values'] = function()
   edit.add_row({ [2] = 'copied' })
   eq(edit.changes(), {
