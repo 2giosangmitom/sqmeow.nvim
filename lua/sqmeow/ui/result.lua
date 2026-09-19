@@ -234,35 +234,6 @@ local function glyphs()
   return require('sqmeow.config').get().icons.grid
 end
 
---- Cut text to `limit` display columns, marking it when anything was dropped.
----@param text string
----@param limit integer
----@param marker string
----@return string
-local function truncate(text, limit, marker)
-  if vim.api.nvim_strwidth(text) <= limit then
-    return text
-  end
-  if limit == 0 then
-    return ''
-  end
-
-  local budget = math.max(limit - vim.api.nvim_strwidth(marker), 0)
-  local out, at = {}, 0
-
-  -- One character at a time, because cutting by byte would split a wide one in half.
-  for char in text:gmatch('[%z\1-\127\194-\244][\128-\191]*') do
-    local step = vim.api.nvim_strwidth(char)
-    if at + step > budget then
-      break
-    end
-    at = at + step
-    table.insert(out, char)
-  end
-
-  return table.concat(out) .. marker
-end
-
 --- What each shown column of a result is drawn as.
 ---@param columns table[] As the engine described them.
 ---@param hidden table<integer, boolean> Zero-based columns left out.
@@ -286,7 +257,7 @@ local function measure(columns, hidden)
         end
       end
 
-      local name = truncate(column.name, cap, glyphs().ellipsis)
+      local name = utils.truncate(column.name, cap, glyphs().ellipsis)
       local header = vim.api.nvim_strwidth(name)
       if icon then
         -- The icon is chrome rather than content.
@@ -480,14 +451,19 @@ local function draw()
   end
 
   -- The table instance is created once and reconfigured per draw.
+  if tbl and tbl.bufnr ~= handle then
+    tbl:set_buffer(handle)
+  end
   if not tbl then
     tbl = Table.new({
       bufnr = handle,
       ns_id = NAMESPACE,
       columns = build_columns(),
       data = build_data(),
+      trim = true,
     })
   else
+    tbl.trim = true
     tbl:set_columns(build_columns())
     tbl:set_data(build_data())
   end
@@ -801,29 +777,6 @@ end
 
 -- -- where the cursor is ---------------------------------------------------------------------
 
--- One UTF-8 character at a time.
-local function characters(line)
-  return line:gmatch('[%z\1-\127\194-\244][\128-\191]*')
-end
-
---- The byte offset of a display column on a line.
----@param line string
----@param display integer
----@return integer
-function M.byte_at(line, display)
-  local at, bytes = 0, 0
-
-  for char in characters(line) do
-    if at >= display then
-      break
-    end
-    at = at + vim.api.nvim_strwidth(char)
-    bytes = bytes + #char
-  end
-
-  return bytes
-end
-
 --- Which result column the cursor is in, wherever it is in the grid, header included.
 ---@return { column: integer, name: string, line: integer }|nil # `column` zero-based.
 local function cursor_column()
@@ -1093,9 +1046,6 @@ end
 function M.actions.last_page()
   require('sqmeow.api').last_page()
 end
-
---- Cut text to a display width, ending in `marker` when anything was cut. The row detail uses it too.
-M.truncate = truncate
 
 --- Write the whole result to a file.
 function M.actions.export()

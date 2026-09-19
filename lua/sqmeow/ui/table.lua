@@ -1,17 +1,14 @@
---- A small table grid in the result's style, with Nui-inspired structure.
----
---- Nui's `Table` is not used here on purpose: this keeps the `│` separators,
---- the `─┼─` rule and the `Sqmeow*` highlights the result grid already draws
---- with, while borrowing the parts of Nui worth keeping: nested column defs
---- with `row_span`/`col_span`, per-cell ranges, and cursor movement over one
---- continuous header/data/footer grid.
+--- A table grid in the result's style, structured after Nui's `Table`: nested column
+--- definitions with `row_span`/`col_span`, per-cell ranges, and cursor movement over one
+--- continuous header/data/footer grid. Drawn with the `Sqmeow*` highlights and `│`/`─┼─`
+--- separators instead of a box border.
 ---
 ---@alias sqmeow.TableAlign 'left'|'center'|'right'
 ---@alias sqmeow.TableHeaderKind 1|-1
 ---@alias sqmeow.TableSegment { [1]: string, [2]: string|nil }
 
 ---@class sqmeow.Table.ColumnDef
----@field id? string
+---@field id? string Required when `header` is not a string.
 ---@field accessor_key? string
 ---@field accessor_fn? fun(row: table, index: integer): any
 ---@field header? string|table|fun(info: { column: table }): any
@@ -51,19 +48,23 @@
 ---@field ridx integer Which slice of a tall cell this line shows.
 ---@field range integer[] { line, start_display, line, end_display }
 
+---@class sqmeow.Table.BuiltLine
+---@field text string
+---@field hls { [1]: integer, [2]: integer, [3]: string }[] Byte ranges with a highlight.
+
+local utils = require('sqmeow.utils')
+
 local M = {}
 M.__index = M
 
---- Characters the grid is drawn with, from the configuration.
+local HEADER_HL = 'SqmeowHeader'
+local RULE_HL = 'SqmeowRule'
+
+--- Characters the grid is drawn with.
 local function glyphs()
-  local ok, config = pcall(require, 'sqmeow.config')
-  if ok and config.get then
-    return config.get().icons.grid
-  end
-  return { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' }
+  return require('sqmeow.config').get().icons.grid
 end
 
---- Display width of one string.
 ---@param text string
 ---@return integer
 local function strwidth(text)
@@ -81,133 +82,40 @@ local function segments_width(segments)
   return total
 end
 
---- Cut `text` to `limit` display columns, ending in `marker` when cut.
+--- Escapes what a buffer line cannot hold.
 ---@param text string
----@param limit integer
----@param marker string
 ---@return string
-local function truncate(text, limit, marker)
-  if strwidth(text) <= limit then
-    return text
-  end
-  if limit <= 0 then
-    return ''
-  end
-  local budget = math.max(limit - strwidth(marker), 0)
-  local out, at = {}, 0
-  for char in text:gmatch('[%z\1-\127\194-\244][\128-\191]*') do
-    local step = strwidth(char)
-    if at + step > budget then
-      break
-    end
-    at = at + step
-    table.insert(out, char)
-  end
-  return table.concat(out) .. marker
+local function sanitize(text)
+  return (text:gsub('[\n\r\t]', { ['\n'] = '\\n', ['\r'] = '\\r', ['\t'] = '\\t' }))
 end
 
---- Read one Nui text-ish value as segments, best effort.
----@param value any
----@param out sqmeow.TableSegment[]
-local function append_nui_value(value, out)
-  if type(value) == 'string' then
-    table.insert(out, { value })
-    return
-  end
-  if type(value) ~= 'table' then
-    return
-  end
-  if type(value.content) == 'string' then
-    local hl = value.hl_group or value.hl
-    table.insert(out, { value.content, hl })
-    return
-  end
-  if type(value._content) == 'string' then
-    table.insert(out, { value._content, value.hl_group })
-    return
-  end
-end
-
---- Whatever a header/cell/formatter returned, as drawable pieces.
----@param content any
+--- Whatever a header, footer or cell returned, as drawable pieces.
+---@param content any A string, a `{ text, hl }` pair, or a list of either.
 ---@param default_hl string|nil
 ---@return sqmeow.TableSegment[]
 local function normalize(content, default_hl)
   if content == nil or content == vim.NIL then
     return default_hl and { { '', default_hl } } or {}
   end
-  local kind = type(content)
-  if kind == 'string' then
-    return { { content, default_hl } }
+  if type(content) ~= 'table' then
+    return { { sanitize(tostring(content)), default_hl } }
   end
-  if kind == 'number' or kind == 'boolean' then
-    return { { tostring(content), default_hl } }
+  if type(content[1]) == 'string' and #content <= 2 then
+    return { { sanitize(content[1]), content[2] or default_hl } }
   end
-  if kind ~= 'table' then
-    return { { tostring(content), default_hl } }
-  end
-  -- A NuiLine: a list of NuiTexts under `_texts`.
-  if content._texts then
-    local out = {}
-    for _, text in ipairs(content._texts) do
-      if type(text) == 'string' then
-        table.insert(out, { text, default_hl })
-      elseif type(text.content) == 'string' then
-        table.insert(out, { text.content, text.hl_group or default_hl })
-      elseif type(text._content) == 'string' then
-        table.insert(out, { text._content, text.hl_group or default_hl })
-      elseif type(text.content) == 'function' then
-        local ok, value = pcall(text.content, text)
-        if ok and type(value) == 'string' then
-          table.insert(out, { value, text.hl_group or default_hl })
-        end
-      end
-    end
-    return out
-  end
-  -- A NuiText.
-  if type(content.content) == 'string' or type(content._content) == 'string' then
-    local out = {}
-    append_nui_value(content, out)
-    if #out > 0 then
-      if default_hl and not out[1][2] then
-        out[1][2] = default_hl
-      end
-      return out
-    end
-  end
-  if type(content.content) == 'function' then
-    local ok, value = pcall(content.content, content)
-    if ok then
-      return normalize(value, default_hl)
-    end
-  end
-  -- One `{ text, hl }` pair.
-  if type(content[1]) == 'string' and (content[2] == nil or type(content[2]) == 'string') then
-    return { { content[1], content[2] or default_hl } }
-  end
-  -- A list of `{ text, hl }` pairs.
-  if type(content[1]) == 'table' then
-    local out = {}
-    for _, entry in ipairs(content) do
-      if type(entry) == 'string' then
-        table.insert(out, { entry, default_hl })
-      elseif type(entry) == 'table' and type(entry[1]) == 'string' then
-        table.insert(out, { entry[1], entry[2] or default_hl })
-      else
-        append_nui_value(entry, out)
-      end
-    end
-    return out
-  end
-  return { { tostring(content), default_hl } }
-end
 
---- Width of a column's header/footer/data text.
----@param content any
----@return integer
-local function content_width(content)
-  return segments_width(normalize(content, nil))
+  local out = {}
+  for _, entry in ipairs(content) do
+    if type(entry) == 'string' then
+      table.insert(out, { sanitize(entry), default_hl })
+    elseif type(entry) == 'table' and type(entry[1]) == 'string' then
+      table.insert(out, { sanitize(entry[1]), entry[2] or default_hl })
+    end
+  end
+  if #out == 0 then
+    return { { sanitize(tostring(content)), default_hl } }
+  end
+  return out
 end
 
 ---@param internal table
@@ -224,16 +132,8 @@ local function prepare_columns(internal, columns, parent, depth)
     end
 
     if not col.id then
-      if col.accessor_key then
-        col.id = col.accessor_key
-      elseif type(col.header) == 'string' then
-        col.id = col.header --[[@as string]]
-      elseif type(col.header) == 'table' then
-        local ok, width = pcall(content_width, col.header)
-        if ok then
-          col.id = tostring(width)
-        end
-      end
+      local header = col.header
+      col.id = col.accessor_key or (type(header) == 'string' and header or nil)
     end
     if not col.id then
       error('sqmeow: table column is missing an id')
@@ -266,10 +166,7 @@ local function prepare_columns(internal, columns, parent, depth)
       internal.headers.depth = math.max(internal.headers.depth, col.depth + 1)
     end
 
-    if not col.align then
-      col.align = 'left'
-    end
-
+    col.align = col.align or 'left'
     col._fixed_width = col.width
     col.width = col.width or col.min_width or 0
   end
@@ -298,7 +195,6 @@ local function fit_col_width(column, width)
   column.width = next_width
 end
 
----@generic C: table
 ---@param idx integer
 ---@param grid table
 ---@param kind sqmeow.TableHeaderKind
@@ -323,12 +219,15 @@ local function prepare_header_grid(kind, columns, grid, max_depth)
     local row_idx = kind + kind * column.depth
     local row = get_header_row_at(row_idx, grid, kind)
 
-    local raw = kind == 1 and column.header or column.footer
+    -- A column with only a footer must not show it on the header line.
+    local raw = kind == 1 and column.header or nil
+    if kind == -1 then
+      raw = column.footer
+    end
     if type(raw) == 'function' then
       raw = raw({ column = column })
     end
-    local default_hl = kind == 1 and 'SqmeowHeader' or 'SqmeowHeader'
-    local segments = normalize(raw == nil and '' or raw, default_hl)
+    local segments = normalize(raw == nil and '' or raw, HEADER_HL)
     fit_col_width(column, segments_width(segments))
 
     local cell = {
@@ -360,15 +259,14 @@ end
 ---@param cell sqmeow.Table.Cell
 ---@return any
 local function prepare_cell_content(cell)
-  local column = cell.column
-  if column.cell then
-    return column.cell(cell)
+  if cell.column.cell then
+    return cell.column.cell(cell)
   end
   return cell.get_value()
 end
 
 --- Create a table bound to a buffer.
----@param options { bufnr: integer, ns_id?: integer|string, columns?: sqmeow.Table.ColumnDef[], data?: table[], show_header?: boolean }
+---@param options { bufnr: integer, ns_id?: integer|string, columns?: sqmeow.Table.ColumnDef[], data?: table[], show_header?: boolean, trim?: boolean }
 ---@return table
 function M.new(options)
   assert(options and options.bufnr, 'sqmeow: table needs a bufnr')
@@ -381,6 +279,8 @@ function M.new(options)
   local self = setmetatable({
     bufnr = options.bufnr,
     ns_id = ns or vim.api.nvim_create_namespace('sqmeow.table'),
+    trim = options.trim or false,
+    show_header = options.show_header ~= false,
     _ = {
       headers = { depth = 1 },
       columns = {},
@@ -392,7 +292,6 @@ function M.new(options)
       nav_linenrs = {},
       size = nil,
     },
-    show_header = options.show_header == nil and true or options.show_header,
   }, M)
 
   prepare_columns(self._, options.columns or {})
@@ -400,8 +299,21 @@ function M.new(options)
   return self
 end
 
+--- Draw into another buffer from the next render on.
+---@param bufnr integer
+---@return table self
+function M:set_buffer(bufnr)
+  assert(vim.api.nvim_buf_is_valid(bufnr), 'sqmeow: table bufnr is not valid')
+  self.bufnr = bufnr
+  self._.linenr = {}
+  self._.line_cells = {}
+  self._.nav_linenrs = {}
+  return self
+end
+
 --- Replace the columns and forget computed widths.
 ---@param columns sqmeow.Table.ColumnDef[]
+---@return table self
 function M:set_columns(columns)
   self._.headers = { depth = 1 }
   self._.columns = {}
@@ -443,9 +355,10 @@ function M:_separator_width()
   return strwidth(glyphs().vertical) + 2
 end
 
----@param cell table A header cell with `col_span`.
----@return integer span display width across its leaves
-function M:_span_width(cell)
+--- Display width a cell occupies: its column's, or its leaves' together.
+---@param cell table
+---@return integer
+function M:_cell_width(cell)
   local column = cell.column
   if not column.columns then
     return column.width
@@ -469,13 +382,11 @@ function M:_prepare_grid()
   end
 
   ---@type table
-  local data_grid = {}
-  local rows = self._.data
+  local data_grid = { len = #self._.data }
   local columns = self._.columns
-  for row_idx = 1, #rows do
-    local original = rows[row_idx]
+  for row_idx = 1, data_grid.len do
     data_grid[row_idx] = {}
-    local row = { id = tostring(row_idx), index = row_idx, original = original }
+    local row = { id = tostring(row_idx), index = row_idx, original = self._.data[row_idx] }
     for column_idx = 1, #columns do
       local column = columns[column_idx]
       local cell = {
@@ -483,26 +394,15 @@ function M:_prepare_grid()
         row = row,
         column = column,
         get_value = function()
-          if column.accessor_fn then
-            return column.accessor_fn(row.original, row.index)
-          end
-          return nil
+          return column.accessor_fn and column.accessor_fn(row.original, row.index) or nil
         end,
       }
-      local raw = prepare_cell_content(cell)
-      if type(raw) == 'table' and raw.sql then
-        raw = '= ' .. raw.sql
-      end
-      if type(raw) == 'string' then
-        raw = raw:gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
-      end
-      cell.content = raw
-      cell.segments = normalize(raw, column.hl)
+      cell.content = prepare_cell_content(cell)
+      cell.segments = normalize(cell.content, column.hl)
       fit_col_width(column, segments_width(cell.segments))
       data_grid[row_idx][column_idx] = cell
     end
   end
-  data_grid.len = #rows
 
   if self._.has_footer then
     prepare_header_grid(-1, self._.headers, header_grid, self._.headers.depth)
@@ -511,60 +411,9 @@ function M:_prepare_grid()
   return data_grid, header_grid
 end
 
----@class sqmeow.Table.BuiltLine
----@field text string
----@field hls { [1]: integer, [2]: integer, [3]: string }[] byte ranges with highlight
-
----@param built sqmeow.Table.BuiltLine
----@param segments sqmeow.TableSegment[]
----@param width integer
----@param align sqmeow.TableAlign
----@return integer display width appended
-function M:_append_padded(built, segments, width, align)
-  local marks = glyphs()
-  local fitted = {}
-  for i, segment in ipairs(segments) do
-    fitted[i] = { segment[1], segment[2] }
-  end
-  local room = width - segments_width(fitted)
-  if room < 0 and #fitted > 0 then
-    local last = fitted[#fitted]
-    last[1] = truncate(last[1], strwidth(last[1]) + room, marks.ellipsis)
-    room = width - segments_width(fitted)
-  end
-  room = math.max(room, 0)
-
-  local left, right = 0, 0
-  if align == 'right' then
-    left = room
-  elseif align == 'center' then
-    left = math.floor(room / 2)
-    right = room - left
-  else
-    right = room
-  end
-
-  local function push(text, hl)
-    if text == '' then
-      return
-    end
-    local from = #built.text
-    built.text = built.text .. text
-    if hl then
-      table.insert(built.hls, { from, #built.text, hl })
-    end
-  end
-
-  if left > 0 then
-    push((' '):rep(left))
-  end
-  for _, segment in ipairs(fitted) do
-    push(segment[1], segment[2])
-  end
-  if right > 0 then
-    push((' '):rep(right))
-  end
-  return width
+---@return sqmeow.Table.BuiltLine
+function M:_new_line()
+  return { text = '', hls = {} }
 end
 
 ---@param built sqmeow.Table.BuiltLine
@@ -581,62 +430,82 @@ function M:_append(built, text, hl)
   end
 end
 
----@return sqmeow.Table.BuiltLine
-function M:_new_line()
-  return { text = '', hls = {} }
+--- Append `segments` cut and padded to exactly `width` display columns.
+---@param built sqmeow.Table.BuiltLine
+---@param segments sqmeow.TableSegment[]
+---@param width integer
+---@param align sqmeow.TableAlign
+function M:_append_padded(built, segments, width, align)
+  local ellipsis = glyphs().ellipsis
+  local fitted, used = {}, 0
+  for _, segment in ipairs(segments) do
+    local room = width - used
+    if room <= 0 then
+      break
+    end
+    local text = utils.truncate(segment[1], room, ellipsis)
+    used = used + strwidth(text)
+    table.insert(fitted, { text, segment[2] })
+  end
+
+  local room = width - used
+  local left, right = 0, room
+  if align == 'right' then
+    left, right = room, 0
+  elseif align == 'center' then
+    left = math.floor(room / 2)
+    right = room - left
+  end
+
+  self:_append(built, (' '):rep(left))
+  for _, segment in ipairs(fitted) do
+    self:_append(built, segment[1], segment[2])
+  end
+  self:_append(built, (' '):rep(right))
 end
 
----@param row_cells table[] Cells on one visual line, each with `column`.
----@param get_segments fun(cell: table): sqmeow.TableSegment[]
----@param get_width fun(cell: table): integer
----@return sqmeow.Table.BuiltLine built
----@return integer[] displays Display offset after each cell, for ranges.
-function M:_build_cells_line(row_cells, get_segments, get_width)
-  local marks = glyphs()
+--- One visual line of cells, separated by the vertical glyph.
+---@param cells table[]
+---@return sqmeow.Table.BuiltLine
+function M:_build_cells_line(cells)
+  local vertical = glyphs().vertical
   local built = self:_new_line()
   self:_append(built, ' ')
-  local displays, at = {}, 1
-  for index, cell in ipairs(row_cells) do
+  for index, cell in ipairs(cells) do
     if index > 1 then
       self:_append(built, ' ')
-      self:_append(built, marks.vertical, 'SqmeowRule')
+      self:_append(built, vertical, RULE_HL)
       self:_append(built, ' ')
-      at = at + self:_separator_width()
     end
-    local width = get_width(cell)
-    local start = at
-    if cell.ridx == nil or cell.ridx == cell.row_span then
-      self:_append_padded(built, get_segments(cell), width, cell.column.align or 'left')
-    else
-      self:_append_padded(built, {}, width, 'left')
-    end
-    at = start + width
-    displays[index] = at
+    -- A tall cell only draws its text on the line its span ends at.
+    local drawn = (cell.ridx == nil or cell.ridx == cell.row_span) and cell.segments or {}
+    self:_append_padded(built, drawn, self:_cell_width(cell), cell.column.align)
   end
-  return built, displays
+  if self.trim then
+    built.text = built.text:gsub('%s+$', '')
+  end
+  return built
 end
 
+--- The `─┼─` rule under the header or over the footer.
 ---@param leaves sqmeow.Table.ColumnDef[]
 ---@return sqmeow.Table.BuiltLine
 function M:_build_rule(leaves)
   local marks = glyphs()
-  local built = self:_new_line()
   local joint = marks.horizontal .. marks.cross .. marks.horizontal
-  local text = marks.horizontal
-  for index, column in ipairs(leaves) do
-    if index > 1 then
-      text = text .. joint
-    end
-    text = text .. marks.horizontal:rep(column.width)
+  local parts = {}
+  for _, column in ipairs(leaves) do
+    table.insert(parts, marks.horizontal:rep(column.width))
   end
-  self:_append(built, text, 'SqmeowRule')
+  local built = self:_new_line()
+  self:_append(built, marks.horizontal .. table.concat(parts, joint), RULE_HL)
   return built
 end
 
 --- Draw the table into its buffer.
 ---@param linenr_start? integer First buffer line, 1-based.
 function M:render(linenr_start)
-  if #self._.columns == 0 then
+  if not vim.api.nvim_buf_is_valid(self.bufnr) or #self._.columns == 0 then
     return
   end
   linenr_start = math.max(1, linenr_start or self._.linenr[1] or 1)
@@ -650,51 +519,42 @@ function M:render(linenr_start)
   ---@type sqmeow.Table.BuiltLine[]
   local built_lines = {}
 
-  local function push_navigable(built, cells)
+  --- Draw one row of cells and remember where each cell landed.
+  local function emit(cells)
+    local built = self:_build_cells_line(cells)
     table.insert(built_lines, built)
     local lnum = linenr_start + #built_lines - 1
-    local at = 1
+    local at = 0
     for _, cell in ipairs(cells) do
-      local width = cell.column.columns and self:_span_width(cell) or cell.column.width
-      cell.range = { lnum, at, lnum, at + width }
+      cell.range = { lnum, at, lnum, at + self:_cell_width(cell) }
       at = cell.range[4] + self:_separator_width()
     end
     self._.line_cells[lnum] = cells
     table.insert(self._.nav_linenrs, lnum)
   end
 
-  if header_grid.len > 0 then
-    for row_idx = 1, header_grid.len do
-      local row = header_grid[row_idx]
-      if not row then
-        break
-      end
-      local cells = {}
-      for i = 1, row.len do
-        cells[i] = row[i]
-      end
-      local built = self:_build_cells_line(cells, function(cell)
-        return cell.segments
-      end, function(cell)
-        return self:_span_width(cell)
-      end)
-      push_navigable(built, cells)
+  --- The cells of one header or footer grid row, as a plain list.
+  local function cells_of(row)
+    local cells = {}
+    for i = 1, row.len do
+      cells[i] = row[i]
     end
+    return cells
+  end
+
+  for row_idx = 1, header_grid.len do
+    local row = header_grid[row_idx]
+    if not row then
+      break
+    end
+    emit(cells_of(row))
+  end
+  if #built_lines > 0 then
     table.insert(built_lines, self:_build_rule(leaves))
   end
 
   for row_idx = 1, data_grid.len do
-    local row = data_grid[row_idx]
-    local cells = {}
-    for i = 1, #leaves do
-      cells[i] = row[i]
-    end
-    local built = self:_build_cells_line(cells, function(cell)
-      return cell.segments
-    end, function(cell)
-      return cell.column.width
-    end)
-    push_navigable(built, cells)
+    emit(data_grid[row_idx])
   end
 
   if header_grid[-1] then
@@ -702,52 +562,36 @@ function M:render(linenr_start)
     for row_idx = -header_grid.len, -1 do
       local row = header_grid[row_idx]
       if row then
-        local cells = {}
-        for i = 1, row.len do
-          cells[i] = row[i]
-        end
-        local built = self:_build_cells_line(cells, function(cell)
-          return cell.segments
-        end, function(cell)
-          return self:_span_width(cell)
-        end)
-        push_navigable(built, cells)
+        emit(cells_of(row))
       end
     end
   end
 
-  local width = 0
-  for _, built in ipairs(built_lines) do
+  local texts, width = {}, 0
+  for i, built in ipairs(built_lines) do
+    texts[i] = built.text
     width = math.max(width, strwidth(built.text))
   end
   self._.size = { width = width, height = #built_lines }
 
-  local texts = {}
-  for i, built in ipairs(built_lines) do
-    texts[i] = built.text
-  end
-
   vim.bo[self.bufnr].modifiable = true
   vim.api.nvim_buf_clear_namespace(self.bufnr, self.ns_id, 0, -1)
 
-  if prev_first and linenr_start < prev_first then
-    vim.api.nvim_buf_set_lines(self.bufnr, linenr_start - 1, prev_first - 1, false, {})
+  local from = math.min(linenr_start, prev_first or linenr_start)
+  local to = prev_last or from - 1
+  -- An untouched buffer holds one empty line, which the first render replaces.
+  if not prev_first and from == 1 and vim.api.nvim_buf_line_count(self.bufnr) == 1 then
+    to = vim.api.nvim_buf_get_lines(self.bufnr, 0, 1, false)[1] == '' and 1 or 0
   end
-
-  if prev_first then
-    vim.api.nvim_buf_set_lines(self.bufnr, linenr_start - 1, prev_last, false, texts)
-  else
-    if vim.api.nvim_buf_line_count(self.bufnr) == 1 then
-      local first = vim.api.nvim_buf_get_lines(self.bufnr, 0, 1, false)[1]
-      if first == '' then
-        vim.api.nvim_buf_set_lines(self.bufnr, 0, 1, false, texts)
-      else
-        vim.api.nvim_buf_set_lines(self.bufnr, linenr_start - 1, linenr_start - 1, false, texts)
-      end
-    else
-      vim.api.nvim_buf_set_lines(self.bufnr, linenr_start - 1, linenr_start - 1, false, texts)
+  if linenr_start > from then
+    -- Rendering lower than before leaves the lines above it blank.
+    local padded = {}
+    for _ = 1, linenr_start - from do
+      table.insert(padded, '')
     end
+    texts = vim.list_extend(padded, texts)
   end
+  vim.api.nvim_buf_set_lines(self.bufnr, from - 1, to, false, texts)
 
   for index, built in ipairs(built_lines) do
     local lnum = linenr_start + index - 1
@@ -763,47 +607,20 @@ function M:render(linenr_start)
   self._.linenr[1], self._.linenr[2] = linenr_start, linenr_start + #built_lines - 1
 end
 
---- Byte offset of a display column on a line.
----@param line string
----@param display integer
----@return integer bytes
-function M.byte_at(line, display)
-  local at, bytes = 0, 0
-  for char in line:gmatch('[%z\1-\127\194-\244][\128-\191]*') do
-    if at >= display then
-      break
-    end
-    at = at + strwidth(char)
-    bytes = bytes + #char
-  end
-  return bytes
-end
-
---- Display column of a byte offset on a line.
----@param line string
----@param bytes integer 0-based byte column.
----@return integer display
-function M.display_at(line, bytes)
-  local prefix = line:sub(1, bytes)
-  return vim.fn.strdisplaywidth(prefix)
-end
-
---- The cell on `line` whose display range holds `display`.
+--- The cell on a line whose display range holds `display`.
 --- On a separator, bias to the cell on the right.
 ---@param cells table[]
 ---@param display integer
 ---@return table|nil
 local function resolve_cell_at(cells, display)
-  for i = 1, #cells do
-    local range = cells[i].range
-    if range and range[2] < display and display <= range[4] then
-      return cells[i]
+  for _, cell in ipairs(cells) do
+    if cell.range and cell.range[2] < display and display <= cell.range[4] then
+      return cell
     end
   end
-  for i = 1, #cells do
-    local range = cells[i].range
-    if range and range[2] >= display then
-      return cells[i]
+  for _, cell in ipairs(cells) do
+    if cell.range and cell.range[2] >= display then
+      return cell
     end
   end
   return nil
@@ -813,11 +630,9 @@ end
 ---@param win integer|nil
 ---@return integer|nil
 function M:_win(win)
-  if win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == self.bufnr then
-    return win
-  end
   if win then
-    return nil
+    local ok = vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == self.bufnr
+    return ok and win or nil
   end
   local current = vim.api.nvim_get_current_win()
   if vim.api.nvim_win_get_buf(current) == self.bufnr then
@@ -862,35 +677,37 @@ function M:_resolve_cell(line, display, position)
   end
 
   local cells = self._.line_cells[target_line]
-  if not cells then
-    return nil
-  end
-  local cell = resolve_cell_at(cells, display)
+  local cell = cells and resolve_cell_at(cells, display)
   if not cell then
     return nil
   end
 
-  local target_display
-  if col_delta ~= 0 then
-    local cell_index = nil
-    for i = 1, #cells do
-      if cells[i] == cell then
-        cell_index = i
-        break
-      end
-    end
-    cell = cell_index and cells[cell_index + col_delta] or nil
-    if not cell then
-      return nil
-    end
-    target_display = cell.range[2] + 1
-  elseif row_delta ~= 0 then
-    target_display = display
-  else
-    target_display = cell.range[2] + 1
+  if col_delta == 0 then
+    -- A vertical move keeps the display column; staying put snaps to the cell.
+    return cell, target_line, row_delta ~= 0 and display or cell.range[2] + 1
   end
 
-  return cell, target_line, target_display
+  local cell_index = nil
+  for i = 1, #cells do
+    if cells[i] == cell then
+      cell_index = i
+      break
+    end
+  end
+  cell = cell_index and cells[cell_index + col_delta] or nil
+  if not cell then
+    return nil
+  end
+  return cell, target_line, cell.range[2] + 1
+end
+
+---@param win integer
+---@return integer line
+---@return integer display
+function M:_cursor(win)
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  local text = vim.api.nvim_buf_get_lines(self.bufnr, cursor[1] - 1, cursor[1], false)[1] or ''
+  return cursor[1], utils.display_at(text, cursor[2])
 end
 
 --- The cell under the cursor, or relative to it.
@@ -902,11 +719,8 @@ function M:get_cell(position, win)
   if not win then
     return nil
   end
-  local cursor = vim.api.nvim_win_get_cursor(win)
-  local text = vim.api.nvim_buf_get_lines(self.bufnr, cursor[1] - 1, cursor[1], false)[1] or ''
-  local display = M.display_at(text, cursor[2])
-  local cell = self:_resolve_cell(cursor[1], display, position)
-  return cell
+  local line, display = self:_cursor(win)
+  return (self:_resolve_cell(line, display, position))
 end
 
 --- Move the cursor to the cell relative to the one under it.
@@ -919,17 +733,13 @@ function M:goto_cell(position, win)
   if not win then
     return nil
   end
-  local cursor = vim.api.nvim_win_get_cursor(win)
-  local text = vim.api.nvim_buf_get_lines(self.bufnr, cursor[1] - 1, cursor[1], false)[1] or ''
-  local display = M.display_at(text, cursor[2])
-  local cell, target_line, target_display = self:_resolve_cell(cursor[1], display, position)
+  local line, display = self:_cursor(win)
+  local cell, target_line, target_display = self:_resolve_cell(line, display, position)
   if not (cell and target_line and target_display) then
     return nil
   end
-  local target_text = vim.api.nvim_buf_get_lines(self.bufnr, target_line - 1, target_line, false)[1]
-    or ''
-  local byte = M.byte_at(target_text, target_display)
-  vim.api.nvim_win_set_cursor(win, { target_line, byte })
+  local text = vim.api.nvim_buf_get_lines(self.bufnr, target_line - 1, target_line, false)[1] or ''
+  vim.api.nvim_win_set_cursor(win, { target_line, utils.byte_at(text, target_display) })
   return cell
 end
 
@@ -939,61 +749,46 @@ end
 ---@return boolean moved
 function M:goto_column(index, win)
   win = self:_win(win)
-  if not (win and self._.columns[index]) then
+  local wanted = self._.columns[index]
+  if not (win and wanted) then
     return false
   end
-  local cursor = vim.api.nvim_win_get_cursor(win)
-  local cells = self._.line_cells[cursor[1]]
+  local line = vim.api.nvim_win_get_cursor(win)[1]
+  local cells = self._.line_cells[line]
   if not cells then
     return false
   end
-  local wanted = self._.columns[index].id
+
+  -- On a group header line the column to land on is the leaf's ancestor.
+  local family = { [wanted] = true }
+  local parent = wanted.parent
+  while parent do
+    family[parent] = true
+    parent = parent.parent
+  end
+
   for _, cell in ipairs(cells) do
-    local column = cell.column
-    local id = column.id
-    if column.columns then
-      -- A group line: jump to the group holding the leaf.
-      local leaves = {}
-      local function collect(col)
-        if col.columns then
-          for _, child in ipairs(col.columns) do
-            collect(child)
-          end
-        else
-          leaves[col.id] = true
-        end
-      end
-      collect(column)
-      if leaves[wanted] then
-        id = wanted
-      end
-    end
-    if id == wanted or column == self._.columns[index] then
-      local text = vim.api.nvim_buf_get_lines(self.bufnr, cursor[1] - 1, cursor[1], false)[1] or ''
-      vim.api.nvim_win_set_cursor(win, { cursor[1], M.byte_at(text, cell.range[2] + 1) })
+    if family[cell.column] then
+      local text = vim.api.nvim_buf_get_lines(self.bufnr, line - 1, line, false)[1] or ''
+      vim.api.nvim_win_set_cursor(win, { line, utils.byte_at(text, cell.range[2] + 1) })
       return true
     end
   end
   return false
 end
 
---- Redraw one data cell in place when its width still fits.
---- Falls back to a full render when the column must grow.
+--- Redraw one data cell in place, or the whole table when its column must grow.
 ---@param cell sqmeow.Table.Cell
 function M:refresh_cell(cell)
   assert(cell and cell.range, 'sqmeow: refresh_cell needs a rendered cell')
   local column = cell.column
-  local raw = prepare_cell_content(cell)
-  cell.content = raw
-  cell.segments = normalize(raw, column.hl)
+  cell.content = prepare_cell_content(cell)
+  cell.segments = normalize(cell.content, column.hl)
 
-  local needed = segments_width(cell.segments)
-  if needed > column.width and not column._fixed_width then
-    local capped = column.max_width and column.width >= column.max_width
-    if not capped then
-      self:render()
-      return
-    end
+  local capped = column._fixed_width or (column.max_width and column.width >= column.max_width)
+  if segments_width(cell.segments) > column.width and not capped then
+    self:render()
+    return
   end
 
   local lnum = cell.range[1]
@@ -1001,14 +796,7 @@ function M:refresh_cell(cell)
   if not cells then
     return
   end
-  local built = self:_build_cells_line(cells, function(entry)
-    return entry == cell and cell.segments or (entry.segments or {})
-  end, function(entry)
-    if entry.column.columns then
-      return self:_span_width(entry)
-    end
-    return entry.column.width
-  end)
+  local built = self:_build_cells_line(cells)
 
   vim.bo[self.bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(self.bufnr, lnum - 1, lnum, false, { built.text })

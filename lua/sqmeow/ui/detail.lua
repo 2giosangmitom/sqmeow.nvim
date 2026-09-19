@@ -15,7 +15,7 @@ local TYPE_WIDTH = 16
 ---@return NuiLine[]
 function M.lines(columns, width)
   local Line = require('nui.line')
-  local truncate = require('sqmeow.ui.result').truncate
+  local truncate = require('sqmeow.utils').truncate
   local config = require('sqmeow.config').get()
   local ellipsis = config.icons.grid.ellipsis
 
