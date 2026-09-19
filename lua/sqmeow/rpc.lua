@@ -3,7 +3,7 @@
 local M = {}
 
 --- Plugin version, sent at handshake.
-M.version = '2.1.0' -- x-release-please-version
+M.version = '2.2.0' -- x-release-please-version
 
 ---@class sqmeow.EngineInfo
 ---@field core_version string
