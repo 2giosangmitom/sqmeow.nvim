@@ -27,7 +27,7 @@
 - **🌲 Schema drawer** — browse schemas, tables, views, routines and columns with types and keys.
 - **📄 Scratchpads** — persistent query buffers; press `u` on a connection to make it active.
 - **✏️ In-grid editing** — edit cells, add or delete rows, review staged changes before applying.
-- **🔎 Filter and sort** — `WHERE` / `ORDER BY` bar runs on the database (or in-memory for Redis/ScyllaDB).
+- **🔎 Filter and sort** — `WHERE` / `ORDER BY` bar runs on the database (or in-memory for Redis/ScyllaDB/SurrealDB).
 - **▶️ Flexible execution** — run the statement under the cursor, a visual selection, or the whole buffer.
 - **🧭 EXPLAIN** — query plans and errors render in the result window.
 - **🕘 Query log** — reopen any past result, even after restart.
@@ -46,6 +46,7 @@
 | **Redis** / Valkey / Dragonfly | Keys grouped by type; `redis://`, `rediss://`, `redis+cluster://`, `redis+sentinel://` |
 | **MongoDB**                    | Extended JSON commands, `mongodb://` / `mongodb+srv://`                                |
 | **ScyllaDB** / Cassandra       | CQL via `scylla://` / `cassandra://`, `?ssl=true`                                      |
+| **SurrealDB**                  | SurrealQL via `surrealdb://` / `surrealdbs://`                                         |
 
 ## 🚀 Installation
 
@@ -91,6 +92,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 - **Redis** — one command per line, e.g. `GET key`. Drawer lists keys by type. Cluster: `redis+cluster://host:7000,host:7001`. Sentinel: `redis+sentinel://host:26379,host:26380/mymaster/0`.
 - **MongoDB** — database commands as Extended JSON, e.g. `{"find": "users"}`. `use db_name` switches database.
 - **ScyllaDB** — `?ssl=true` for TLS, `?sslrootcert=/path/ca.pem` for custom CA.
+- **SurrealDB** — `surrealdb://user:pass@host:8000/namespace/database`; leave out the database to list every one in the namespace. `surrealdbs://` for TLS, `?auth=namespace` or `?auth=database` for a non-root user, `?sslrootcert=/path/ca.pem` for custom CA. `USE DB name` switches database. Scratchpads ending in `.surql` get the `surql` filetype.
 
 ### SSH Tunnels
 
@@ -106,7 +108,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Safety
 
-- Tick **Read only** in the dialog or add `"read_only": true` to a connection (or `connections.json`) to allow only reads. PostgreSQL, MySQL, SQLite and DuckDB enforce it in the database session (a server that speaks the PostgreSQL protocol without read-only sessions falls back to the check below, with a warning); Redis, MongoDB and ScyllaDB only check commands against a list of reads, so use a read-only database user where it matters.
+- Tick **Read only** in the dialog or add `"read_only": true` to a connection (or `connections.json`) to allow only reads. PostgreSQL, MySQL, SQLite and DuckDB enforce it in the database session (a server that speaks the PostgreSQL protocol without read-only sessions falls back to the check below, with a warning); Redis, MongoDB, ScyllaDB and SurrealDB only check commands against a list of reads, so use a read-only database user where it matters.
 - Before `DELETE`/`UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, or emptying a Redis/MongoDB database, sqmeow asks first. Set `query.confirm_destructive = false` to disable.
 
 ## ⌨️ Commands
@@ -177,7 +179,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Filter Bar
 
-`gf`/`go` open a bar above the grid with `WHERE` and `ORDER BY`. The query reruns as a subquery; `=` adds cell value to `WHERE`, `s` fills `ORDER BY`. MongoDB takes filter/sort documents; Redis/ScyllaDB and closed connections filter in-memory with `AND`/`OR`/`NOT`, `IS NULL`, `LIKE`/`ILIKE`, `IN`, `BETWEEN`.
+`gf`/`go` open a bar above the grid with `WHERE` and `ORDER BY`. The query reruns as a subquery; `=` adds cell value to `WHERE`, `s` fills `ORDER BY`. MongoDB takes filter/sort documents; Redis/ScyllaDB/SurrealDB and closed connections filter in-memory with `AND`/`OR`/`NOT`, `IS NULL`, `LIKE`/`ILIKE`, `IN`, `BETWEEN`.
 
 | Key               | Action                       |
 | ----------------- | ---------------------------- |

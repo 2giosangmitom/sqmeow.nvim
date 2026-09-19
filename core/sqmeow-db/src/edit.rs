@@ -128,7 +128,8 @@ impl Source {
         };
         match self {
             Self::Tables(tables) => tables.iter().any(|table| table.column(column).is_some()),
-            Self::Collection { .. } => meta.name != "_id",
+            // `_id` for MongoDB, `id` for SurrealDB.
+            Self::Collection { .. } => meta.name != "_id" && meta.name != "id",
             Self::Redis { kind, .. } => match kind {
                 RedisKind::Hash | RedisKind::SortedSet => column < 2,
                 // An entry's id is the server's to give; its fields are what is written.

@@ -12,6 +12,7 @@ pub mod redis;
 pub mod scylla;
 pub mod sqlite;
 mod stream;
+pub mod surrealdb;
 
 use sqmeow_db::{
     Adapter, Changes, ColumnNode, Details, Dialect, Error, IndexNode, RelationNode, Result,
@@ -72,6 +73,8 @@ pub use postgres::PostgresAdapter;
 pub use self::redis::RedisAdapter;
 pub use self::scylla::ScyllaAdapter;
 pub use sqlite::SqliteAdapter;
+// `self::`, because a bare `surrealdb` would also name the driver crate.
+pub use self::surrealdb::SurrealAdapter;
 
 /// Turn a routine's name and the database's own word for what it is into a node.
 pub(crate) fn routine_node(name: String, kind: &str) -> RoutineNode {
@@ -94,6 +97,7 @@ macro_rules! dispatch {
             Backend::Redis($adapter) => $body,
             Backend::MongoDb($adapter) => $body,
             Backend::Scylla($adapter) => $body,
+            Backend::SurrealDb($adapter) => $body,
         }
     };
 }
@@ -108,6 +112,7 @@ pub enum Backend {
     Redis(RedisAdapter),
     MongoDb(MongoAdapter),
     Scylla(ScyllaAdapter),
+    SurrealDb(SurrealAdapter),
 }
 
 impl Backend {
@@ -134,6 +139,9 @@ impl Backend {
             Dialect::Redis => Ok(Self::Redis(RedisAdapter::connect(url).await?)),
             Dialect::MongoDb => Ok(Self::MongoDb(MongoAdapter::connect(url, database).await?)),
             Dialect::Scylla => Ok(Self::Scylla(ScyllaAdapter::connect(url).await?)),
+            Dialect::SurrealDb => Ok(Self::SurrealDb(
+                SurrealAdapter::connect(url, database).await?,
+            )),
         }
     }
 
@@ -182,28 +190,36 @@ impl Backend {
         dispatch!(self, adapter => adapter.apply(statements, cancel).await)
     }
 
-    /// The databases of a PostgreSQL cluster or a MongoDB server, when the URL named none, and
+    /// The databases of a PostgreSQL cluster, a MongoDB server or a SurrealDB namespace, when the
+    /// URL named none, and
     /// `None` otherwise.
     pub async fn databases(&self) -> Option<Result<Vec<String>>> {
         match self {
             Self::Postgres(adapter) => adapter.databases().await,
             Self::MongoDb(adapter) => adapter.databases().await,
+            Self::SurrealDb(adapter) => adapter.databases().await,
             _ => None,
         }
     }
 
-    /// The database MongoDB commands run on.
+    /// The database MongoDB commands or SurrealDB queries run on.
     pub fn database(&self) -> Option<String> {
         match self {
             Self::MongoDb(adapter) => Some(adapter.database()),
+            Self::SurrealDb(adapter) => Some(adapter.database()),
             _ => None,
         }
     }
 
-    /// Whether a read-only PostgreSQL-protocol server ignored the read-only session, so only the
-    /// engine's statement check applies.
+    /// Whether a read-only connection has only the engine's statement check: a PostgreSQL-protocol
+    /// server ignored the read-only session, or the server has none.
     pub fn read_only_unenforced(&self) -> bool {
-        matches!(self, Self::Postgres(adapter) if !adapter.read_only_session())
+        match self {
+            Self::Postgres(adapter) => !adapter.read_only_session(),
+            // SurrealDB has no read-only session at all.
+            Self::SurrealDb(_) => true,
+            _ => false,
+        }
     }
 
     /// The schemas, or for MySQL, Redis and MongoDB the databases, this connection can see.
@@ -266,6 +282,7 @@ pub fn supported() -> Vec<&'static str> {
         Dialect::Redis.name(),
         Dialect::MongoDb.name(),
         Dialect::Scylla.name(),
+        Dialect::SurrealDb.name(),
     ]
 }
 

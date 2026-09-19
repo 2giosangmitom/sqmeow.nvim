@@ -409,7 +409,7 @@ impl Adapter for ScyllaAdapter {
 }
 
 /// A TLS configuration trusting the machine's roots and the certificates in the `ca` file.
-fn tls_config(ca: Option<&str>) -> Result<Arc<rustls::ClientConfig>> {
+pub(crate) fn tls_config(ca: Option<&str>) -> Result<Arc<rustls::ClientConfig>> {
     let mut roots = rustls::RootCertStore::empty();
     for certificate in rustls_native_certs::load_native_certs().certs {
         // A root the machine holds that rustls cannot read is one fewer to trust, not a failure.

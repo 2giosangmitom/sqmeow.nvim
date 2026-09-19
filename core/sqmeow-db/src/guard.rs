@@ -9,6 +9,13 @@ const SQL_WRITES: &[&str] = &[
     "merge", "call", "copy",
 ];
 
+/// Words that write wherever they sit in a SurrealQL statement. `fn` is a user-defined function,
+/// which may write.
+const SURREAL_WRITES: &[&str] = &[
+    "create", "update", "upsert", "delete", "insert", "relate", "remove", "define", "alter",
+    "kill", "rebuild", "fn",
+];
+
 /// Redis commands that only read.
 const REDIS_READS: &[&str] = &[
     "get",
@@ -107,6 +114,7 @@ pub fn danger(dialect: Dialect, statement: &str) -> Option<String> {
             }
         }
         Dialect::MongoDb => mongo_danger(statement),
+        Dialect::SurrealDb => surreal_danger(statement),
         _ => {
             let words = words(dialect, statement);
             // The verb a CTE leads up to, or the first one.
@@ -156,6 +164,19 @@ pub fn writes(dialect: Dialect, statement: &str) -> bool {
             // An aggregation writes through these stages.
             !reads || statement.contains("\"$out\"") || statement.contains("\"$merge\"")
         }
+        Dialect::SurrealDb => {
+            let words = words(dialect, statement);
+            let reads = words.first().is_some_and(|(first, _)| {
+                matches!(
+                    first.as_str(),
+                    "select" | "info" | "show" | "use" | "return" | "let" | "explain"
+                )
+            });
+            !reads
+                || words
+                    .iter()
+                    .any(|(word, _)| SURREAL_WRITES.contains(&word.as_str()))
+        }
         _ => {
             let words = words(dialect, statement);
             let reads = words.first().is_some_and(|(first, _)| {
@@ -192,6 +213,34 @@ fn narrows(words: &[(String, usize)]) -> bool {
         .iter()
         .take_while(|(word, _)| !matches!(word.as_str(), "order" | "limit" | "returning"))
         .all(|(word, _)| word == "true" || word.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// What a SurrealQL statement destroys: a `REMOVE`, or a whole table's records changed.
+fn surreal_danger(statement: &str) -> Option<String> {
+    let words = words(Dialect::SurrealDb, statement);
+    let verb = words.iter().position(|(word, depth)| {
+        *depth == 0 && matches!(word.as_str(), "delete" | "update" | "upsert" | "remove")
+    })?;
+    let first = words[verb].0.as_str();
+    if first == "remove" {
+        return Some("REMOVE cannot be undone".to_owned());
+    }
+    if narrows(&words[verb..]) {
+        return None;
+    }
+    // `DELETE person:1` names one record, where `DELETE person` names every one.
+    let target = statement
+        .split_whitespace()
+        .skip_while(|word| !word.eq_ignore_ascii_case(first))
+        .skip(1)
+        .find(|word| !word.eq_ignore_ascii_case("only") && !word.eq_ignore_ascii_case("from"))?;
+    if target.contains(':') {
+        return None;
+    }
+    Some(format!(
+        "{} without WHERE changes every record",
+        first.to_uppercase()
+    ))
 }
 
 /// What a MongoDB command destroys: a drop, or a delete or multiple update with an empty filter.
@@ -259,14 +308,22 @@ pub(crate) fn words(dialect: Dialect, statement: &str) -> Vec<(String, usize)> {
             ')' => depth = depth.saturating_sub(1),
             // A doubled quote ends one run and starts the next, which reads the same.
             '\'' | '"' | '`' => {
-                for next in chars.by_ref() {
+                while let Some(next) = chars.next() {
+                    // SurrealQL escapes a quote with a backslash.
+                    if next == '\\' && dialect == Dialect::SurrealDb {
+                        chars.next();
+                        continue;
+                    }
                     if next == character {
                         break;
                     }
                 }
             }
             '-' if chars.peek() == Some(&'-') => skip_line(&mut chars),
-            '#' if dialect == Dialect::MySql => skip_line(&mut chars),
+            '#' if matches!(dialect, Dialect::MySql | Dialect::SurrealDb) => skip_line(&mut chars),
+            '/' if dialect == Dialect::SurrealDb && chars.peek() == Some(&'/') => {
+                skip_line(&mut chars);
+            }
             '/' if chars.peek() == Some(&'*') => {
                 chars.next();
                 let mut star = false;
@@ -311,6 +368,15 @@ mod tests {
         assert!(danger(Dialect::Redis, "FLUSHALL").is_some());
         assert!(danger(Dialect::MongoDb, r#"{"drop": "users"}"#).is_some());
         assert!(danger(Dialect::MongoDb, r#"{"find": "drop"}"#).is_none());
+
+        let surreal = Dialect::SurrealDb;
+        assert!(danger(surreal, "DELETE person").is_some());
+        assert!(danger(surreal, "UPDATE person SET a = 1").is_some());
+        assert!(danger(surreal, "REMOVE TABLE person").is_some());
+        assert!(danger(surreal, "DELETE person:alice").is_none());
+        assert!(danger(surreal, "UPDATE ONLY person:1 SET a = 1").is_none());
+        assert!(danger(surreal, "DELETE person WHERE age < 3").is_none());
+        assert!(danger(surreal, "SELECT * FROM person").is_none());
     }
 
     #[test]
@@ -394,5 +460,24 @@ mod tests {
             Dialect::MongoDb,
             r#"{"delete": "users", "deletes": []}"#
         ));
+
+        let surreal = Dialect::SurrealDb;
+        for sql in [
+            "SELECT * FROM person",
+            "INFO FOR DB",
+            "USE DB other",
+            "SELECT * FROM person WHERE note = 'it\\'s DELETE'",
+        ] {
+            assert!(!writes(surreal, sql), "{sql}");
+        }
+        for sql in [
+            "CREATE person",
+            "LET $x = (DELETE person:1)",
+            "SELECT fn::cleanup() FROM ONLY 1",
+            "RELATE person:1->knows->person:2",
+            "BEGIN TRANSACTION; SELECT * FROM a; COMMIT TRANSACTION",
+        ] {
+            assert!(writes(surreal, sql), "{sql}");
+        }
     }
 }

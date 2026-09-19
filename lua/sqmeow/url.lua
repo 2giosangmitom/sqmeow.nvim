@@ -152,6 +152,13 @@ function M.split(url)
     local secure = scheme:lower() == 'rediss' or scheme:lower() == 'valkeys'
     fields.tls = secure and 'yes' or 'no'
   end
+  -- SurrealDB's path is `/namespace/database`, and its TLS a scheme as for Redis.
+  if dialect == 'surrealdb' then
+    local namespace, database = fields.database:match('^([^/]*)/?(.*)$')
+    fields.namespace = vim.uri_decode(namespace)
+    fields.database = database
+    fields.tls = scheme:lower() == 'surrealdbs' and 'yes' or 'no'
+  end
   -- The same for MongoDB's SRV lookup, which an edited connection would otherwise lose.
   if dialect == 'mongodb' then
     fields.srv = scheme:lower() == 'mongodb+srv' and 'yes' or 'no'
@@ -228,7 +235,16 @@ function M.build(dialect, values)
     scheme = 'mongodb+srv'
   end
 
-  local url = ('%s://%s/%s'):format(scheme, authority, value('database'))
+  local path = value('database')
+  if dialect == 'surrealdb' then
+    scheme = value('tls') == 'yes' and 'surrealdbs' or scheme
+    -- The database comes second, so an empty namespace is written as the server's default.
+    local namespace = value('namespace') ~= '' and encode(value('namespace'))
+      or (path ~= '' and 'main' or '')
+    path = path ~= '' and ('%s/%s'):format(namespace, path) or namespace
+  end
+
+  local url = ('%s://%s/%s'):format(scheme, authority, path)
   if value('options') ~= '' then
     url = ('%s?%s'):format(url, (value('options'):gsub('^%?', '')))
   end

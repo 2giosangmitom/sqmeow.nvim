@@ -258,8 +258,8 @@ async fn group_nodes(
             group_node("sequences", "Sequences", "sequences", sequences),
         );
     }
-    // CQL has user-defined functions and aggregates, but no procedures.
-    if dialect != Dialect::Scylla {
+    // CQL and SurrealQL have functions, but no procedures.
+    if !matches!(dialect, Dialect::Scylla | Dialect::SurrealDb) {
         groups.push(group_node(
             "procedures",
             "Procedures",

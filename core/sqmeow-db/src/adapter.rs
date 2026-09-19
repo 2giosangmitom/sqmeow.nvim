@@ -25,6 +25,8 @@ pub enum Dialect {
     MongoDb,
     /// CQL, spoken by ScyllaDB and Apache Cassandra.
     Scylla,
+    /// SurrealQL, with namespaces and databases where others have schemas.
+    SurrealDb,
 }
 
 impl Dialect {
@@ -38,6 +40,7 @@ impl Dialect {
             Self::Redis => "redis",
             Self::MongoDb => "mongodb",
             Self::Scylla => "scylla",
+            Self::SurrealDb => "surrealdb",
         }
     }
 
@@ -45,6 +48,7 @@ impl Dialect {
     pub fn quote_ident(self, name: &str) -> String {
         match self {
             Self::MySql => format!("`{}`", name.replace('`', "``")),
+            Self::SurrealDb => format!("`{}`", name.replace('\\', "\\\\").replace('`', "\\`")),
             _ => format!("\"{}\"", name.replace('"', "\"\"")),
         }
     }
@@ -72,6 +76,7 @@ impl Dialect {
             // `+srv` finds the hosts through DNS, which is the driver's business too.
             "mongodb" | "mongodb+srv" => Some(Self::MongoDb),
             "scylla" | "cassandra" => Some(Self::Scylla),
+            "surrealdb" | "surrealdbs" => Some(Self::SurrealDb),
             _ => None,
         }
     }
@@ -212,6 +217,9 @@ mod tests {
         }
         for url in ["scylla://h/ks", "cassandra://h"] {
             assert_eq!(Dialect::from_url(url), Some(Dialect::Scylla), "{url}");
+        }
+        for url in ["surrealdb://h/ns/db", "surrealdbs://h"] {
+            assert_eq!(Dialect::from_url(url), Some(Dialect::SurrealDb), "{url}");
         }
     }
 

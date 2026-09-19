@@ -250,6 +250,21 @@ T['build']['refuses a port on a mongodb srv address'] = function()
   eq(err, 'a MongoDB SRV address takes no port')
 end
 
+T['build']['writes a surrealdb namespace and database as its path'] = function()
+  eq(
+    url.build('surrealdb', { host = 'h', namespace = 'shop', database = 'main', tls = 'yes' }),
+    'surrealdbs://h/shop/main'
+  )
+  eq(url.build('surrealdb', { host = 'h', namespace = 'shop' }), 'surrealdb://h/shop')
+  eq(url.build('surrealdb', { host = 'h', database = 'main' }), 'surrealdb://h/main/main')
+  local fields = assert(url.parse('surrealdbs://root:pw@h:8000/shop/main?auth=database'))
+  eq(
+    { fields.dialect, fields.namespace, fields.database, fields.tls, fields.options },
+    { 'surrealdb', 'shop', 'main', 'yes', 'auth=database' }
+  )
+  eq(url.parse('surrealdb://h/shop').database, '')
+end
+
 T['build']['writes a scylla keyspace where a database would be'] = function()
   eq(url.build('scylla', { host = 'h', database = 'shop' }), 'scylla://h/shop')
   eq(url.parse('cassandra://u:p@h:9042/shop').dialect, 'scylla')

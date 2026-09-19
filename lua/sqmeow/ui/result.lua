@@ -645,7 +645,7 @@ function M.queried(call)
   local connection = call and call.conn_id and require('sqmeow.state').connections[call.conn_id]
   return connection ~= nil
     and connection.dialect ~= nil
-    and not vim.tbl_contains({ 'redis', 'scylla' }, connection.dialect)
+    and not vim.tbl_contains({ 'redis', 'scylla', 'surrealdb' }, connection.dialect)
 end
 
 --- Whether the filter bar can narrow a result: in its query, or with the same SQL on the rows the
@@ -693,6 +693,9 @@ function M.quote(name)
   end
   if connection and connection.dialect == 'mongodb' then
     return vim.json.encode(name)
+  end
+  if connection and connection.dialect == 'surrealdb' then
+    return require('sqmeow.sql').quote('surrealdb', name)
   end
   return '"' .. (name:gsub('"', '""')) .. '"'
 end

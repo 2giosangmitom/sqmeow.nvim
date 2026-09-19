@@ -204,6 +204,7 @@ Default configuration.
       redis = '',
       mongodb = '',
       scylla = '󰆼',
+      surrealdb = '',
 
       -- What sits before a drawer row: whether its children are showing, or that it has none.
       markers = { open = '', closed = '', leaf = ' ' },
@@ -619,8 +620,8 @@ Show the statements the changes staged in the result plan into, to apply with `<
                                                            *sqmeow.api.filter()*
                           `sqmeow.api.filter`({view})
 Filter and order the current result with a WHERE condition and an ORDER BY list, which an open
-SQL or MongoDB connection runs in the query and Redis, ScyllaDB or a closed connection runs on the
-rows held. Empty strings clear them.
+SQL or MongoDB connection runs in the query and Redis, ScyllaDB, SurrealDB or a closed connection
+runs on the rows held. Empty strings clear them.
 Parameters ~
 {view} `({ where: string|nil, order_by: string|nil })`
 Return ~

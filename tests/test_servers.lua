@@ -484,4 +484,52 @@ for _, server in ipairs({ 'scylla', 'cassandra' }) do
   end
 end
 
+-- The URL names a namespace; each case works in its `lua` database.
+local surreal = vim.env.SQMEOW_TEST_SURREALDB_URL
+T['surrealdb'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      skip_unless(surreal, 'SQMEOW_TEST_SURREALDB_URL')
+      helpers.connect(surreal .. '/lua', nil, TIMEOUT)
+      run('DEFINE DATABASE IF NOT EXISTS lua')
+    end,
+    post_case = function()
+      api.disconnect()
+    end,
+  },
+})
+
+T['surrealdb']['connects and reports its dialect'] = function()
+  eq(state.current_connection().dialect, 'surrealdb')
+end
+
+T['surrealdb']['lists tables and previews one with its id first'] = function()
+  run('DELETE lua_preview')
+  run("CREATE lua_preview:1 SET colour = 'plum'")
+
+  local groups = introspect({ 'lua' })
+  eq(named(groups, 'tables').count >= 1, true)
+  eq(named(groups, 'procedures'), nil)
+
+  local summary = run(sql.select_from('surrealdb', { 'lua', 'lua_preview' }, 10))
+  eq(summary.state, 'done')
+  eq(summary.rows, 1)
+  eq(header()[1]:match('^ t id%s+│ t colour$') ~= nil, true)
+  helpers.contains(lines()[1], 'lua_preview:1')
+  helpers.contains(lines()[1], 'plum')
+end
+
+T['surrealdb']['lists every database when the url names none'] = function()
+  api.disconnect()
+  helpers.connect(surreal, nil, TIMEOUT)
+  eq(named(introspect({}), 'lua').kind, 'database')
+end
+
+T['surrealdb']['names the database it runs on, following use'] = function()
+  local connection = assert(state.current_connection())
+  eq(connection.current_database, 'lua')
+  run('USE DB lua_other')
+  eq(connection.current_database, 'lua_other')
+end
+
 return T

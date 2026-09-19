@@ -64,6 +64,9 @@ test-rust:
     if [ -n "$(docker compose ps --status running --quiet cassandra 2>/dev/null)" ]; then
         export SQMEOW_TEST_CASSANDRA_URL="cassandra://127.0.0.1:59043/"
     fi
+    if [ -n "$(docker compose ps --status running --quiet surrealdb 2>/dev/null)" ]; then
+        export SQMEOW_TEST_SURREALDB_URL="surrealdb://root:root@127.0.0.1:58000/sqmeow"
+    fi
     if [ -n "$(docker compose ps --status running --quiet cockroach 2>/dev/null)" ]; then
         export SQMEOW_TEST_COCKROACH_URL="postgres://root@127.0.0.1:56257/defaultdb"
     fi
@@ -72,7 +75,7 @@ test-rust:
     fi
     cargo test {{cargo_flags}}
 
-# Start the PostgreSQL, MySQL, Redis, Dragonfly, MongoDB, ScyllaDB and Cassandra servers the integration tests use.
+# Start the PostgreSQL, MySQL, Redis, Dragonfly, MongoDB, ScyllaDB, Cassandra and SurrealDB servers the integration tests use.
 db-up:
     docker compose up -d --wait
 
@@ -119,6 +122,9 @@ test-lua: build-debug
     fi
     if [ -n "$(docker compose ps --status running --quiet cassandra 2>/dev/null)" ]; then
         export SQMEOW_TEST_CASSANDRA_URL="cassandra://127.0.0.1:59043/"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet surrealdb 2>/dev/null)" ]; then
+        export SQMEOW_TEST_SURREALDB_URL="surrealdb://root:root@127.0.0.1:58000/sqmeow"
     fi
     nvim -l tests/minit.lua
 

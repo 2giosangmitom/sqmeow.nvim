@@ -268,8 +268,9 @@ local function schema_nodes(conn_id, path)
       -- it holds is that connection's tree.
       local opened = require('sqmeow.state').child_connection(conn_id, node.name)
       if opened and opened.state == 'connected' then
-        -- A MongoDB database is its own only schema.
-        children = schema_nodes(opened.id, opened.dialect == 'mongodb' and { node.name } or {})
+        -- A MongoDB or SurrealDB database is its own only schema.
+        local own = opened.dialect == 'mongodb' or opened.dialect == 'surrealdb'
+        children = schema_nodes(opened.id, own and { node.name } or {})
       elseif opened then
         children = {
           parts.Tree.Node({
@@ -535,8 +536,8 @@ local function toggle_database(node)
   -- Marked open, the way a connection someone expanded is, so a refresh reloads what it holds.
   if id then
     expanded[node_key(id, {})] = true
-    -- The level drawn in place of a MongoDB database's schema row, open for the same reason.
-    if parent.dialect == 'mongodb' then
+    -- The level drawn in place of a MongoDB or SurrealDB database's schema row, open for the same reason.
+    if parent.dialect == 'mongodb' or parent.dialect == 'surrealdb' then
       expanded[node_key(id, { node.name })] = true
     end
   end

@@ -59,6 +59,29 @@ impl TypeClass {
             return Self::Unknown;
         }
 
+        // SurrealQL's optional forms, `option<int>` and `none | int`, are their inner type.
+        if let Some(inner) = name
+            .strip_prefix("OPTION<")
+            .and_then(|rest| rest.strip_suffix('>'))
+        {
+            return Self::from_type_name(inner);
+        }
+        if name.contains(" | ") {
+            let mut kinds = name
+                .split(" | ")
+                .filter(|kind| !matches!(*kind, "NONE" | "NULL"));
+            return match (kinds.next(), kinds.next()) {
+                (Some(only), None) => Self::from_type_name(only),
+                _ => Self::Unknown,
+            };
+        }
+        if name == "RECORD" || name.starts_with("RECORD<") {
+            return Self::Text;
+        }
+        if name.starts_with("GEOMETRY") {
+            return Self::Unknown;
+        }
+
         let has = |needle: &str| name.contains(needle);
 
         // CQL collections, tuples and vectors, such as `frozen<list<int>>`.
@@ -73,7 +96,11 @@ impl TypeClass {
             Self::Uuid
         } else if has("BOOL") {
             Self::Boolean
-        } else if has("BLOB") || has("BYTEA") || has("BINARY") || name == "BINDATA" {
+        } else if has("BLOB")
+            || has("BYTEA")
+            || has("BINARY")
+            || matches!(name.as_str(), "BINDATA" | "BYTES")
+        {
             Self::Binary
         } else if has("TIMESTAMP")
             || has("DATETIME")
@@ -299,6 +326,19 @@ mod tests {
         assert_eq!(TypeClass::from_type_name("ascii"), TypeClass::Text);
         assert_eq!(TypeClass::from_type_name("counter"), TypeClass::Number);
         assert_eq!(TypeClass::from_type_name("duration"), TypeClass::Temporal);
+    }
+
+    #[test]
+    fn surrealql_names_classify() {
+        assert_class(
+            TypeClass::Number,
+            &["int", "float", "decimal", "option<int>", "none | int"],
+        );
+        assert_class(TypeClass::Text, &["string", "record", "record<person>"]);
+        assert_class(TypeClass::Temporal, &["datetime", "duration"]);
+        assert_class(TypeClass::Json, &["object", "array<string>", "set<int>"]);
+        assert_class(TypeClass::Binary, &["bytes"]);
+        assert_class(TypeClass::Unknown, &["geometry<point>", "int | string"]);
     }
 
     #[test]

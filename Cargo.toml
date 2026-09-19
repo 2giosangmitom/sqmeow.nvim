@@ -50,6 +50,8 @@ scylla = { version = "1.8", features = [
   "num-bigint-04",
   "rustls-023",
 ] }
+# The official SDK, over WebSocket only: no embedded storage engines.
+surrealdb = { version = "3.2", default-features = false, features = ["protocol-ws", "rustls"] }
 # TLS for ScyllaDB, with the same crypto provider and roots as sqlx.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"

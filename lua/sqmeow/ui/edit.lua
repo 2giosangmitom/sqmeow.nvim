@@ -416,6 +416,9 @@ local function filetype(call)
   if dialect == 'mongodb' then
     return 'json'
   end
+  if dialect == 'surrealdb' then
+    return 'surql'
+  end
   return dialect ~= 'redis' and 'sql' or ''
 end
 
