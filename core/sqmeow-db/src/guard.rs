@@ -319,6 +319,13 @@ pub(crate) fn words(dialect: Dialect, statement: &str) -> Vec<(String, usize)> {
                     }
                 }
             }
+            '⟨' if dialect == Dialect::SurrealDb => {
+                for next in chars.by_ref() {
+                    if next == '⟩' {
+                        break;
+                    }
+                }
+            }
             '-' if chars.peek() == Some(&'-') => skip_line(&mut chars),
             '#' if matches!(dialect, Dialect::MySql | Dialect::SurrealDb) => skip_line(&mut chars),
             '/' if dialect == Dialect::SurrealDb && chars.peek() == Some(&'/') => {
@@ -467,6 +474,7 @@ mod tests {
             "INFO FOR DB",
             "USE DB other",
             "SELECT * FROM person WHERE note = 'it\\'s DELETE'",
+            "SELECT * FROM ⟨delete⟩",
         ] {
             assert!(!writes(surreal, sql), "{sql}");
         }
