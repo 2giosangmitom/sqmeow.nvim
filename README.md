@@ -162,7 +162,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 | Key         | Action                                  |
 | ----------- | --------------------------------------- |
 | `L` / `H`   | Next / previous page                    |
-| `gg` / `G`  | First / last page                       |
+| `]H` / `[H` | Last / first page                       |
 | `K`         | Show row's details                      |
 | `gK`        | Show table's columns and indexes        |
 | `]r` / `[r` | Next / previous statement's result      |

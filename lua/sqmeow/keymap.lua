@@ -51,8 +51,8 @@ M.defaults = {
   result = {
     { action = 'next_page', lhs = 'L', desc = 'Next page' },
     { action = 'prev_page', lhs = 'H', desc = 'Previous page' },
-    { action = 'first_page', lhs = 'gg', desc = 'First page' },
-    { action = 'last_page', lhs = 'G', desc = 'Last page' },
+    { action = 'first_page', lhs = '[H', desc = 'First page' },
+    { action = 'last_page', lhs = ']H', desc = 'Last page' },
     { action = 'detail', lhs = 'K', desc = 'Show this row down the page' },
     {
       action = 'structure',
@@ -208,6 +208,18 @@ function M.resolve(surface)
       desc = entry.desc,
     }
   end, M.defaults[surface] or {})
+end
+
+--- The first key an action is mapped to on a surface, or nil when it is unmapped.
+---@param surface string
+---@param action string
+---@return string|nil
+function M.lhs(surface, action)
+  for _, entry in ipairs(M.resolve(surface)) do
+    if entry.action == action and entry.lhs[1] then
+      return entry.lhs[1]
+    end
+  end
 end
 
 --- Actions that were taken out, and what took their place.

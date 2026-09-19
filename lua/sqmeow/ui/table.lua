@@ -13,7 +13,7 @@
 ---@field accessor_fn? fun(row: table, index: integer): any
 ---@field header? string|table|fun(info: { column: table }): any
 ---@field footer? string|table|fun(info: { column: table }): any
----@field cell? fun(info: sqmeow.Table.Cell): any
+---@field cell? fun(info: sqmeow.Table.Cell): any A `fill` field on the result highlights the whole cell.
 ---@field align? sqmeow.TableAlign
 ---@field hl? string Default highlight for the column's cells.
 ---@field width? integer Fixed width; content is cut to it.
@@ -50,7 +50,10 @@
 
 ---@class sqmeow.Table.BuiltLine
 ---@field text string
----@field hls { [1]: integer, [2]: integer, [3]: string }[] Byte ranges with a highlight.
+---@field hls { [1]: integer, [2]: integer, [3]: string, [4]: integer|nil }[] Byte ranges with a highlight and priority.
+---@field line_hl string|nil Highlight for the whole line.
+
+---@alias sqmeow.Table.RowMark { mark: string, mark_hl: string|nil, line_hl: string|nil }
 
 local utils = require('sqmeow.utils')
 
@@ -58,6 +61,8 @@ local M = {}
 M.__index = M
 
 local HEADER_HL = 'SqmeowHeader'
+local LINE_PRIORITY = 100
+local FILL_PRIORITY = 150
 local RULE_HL = 'SqmeowRule'
 
 --- Characters the grid is drawn with.
@@ -266,7 +271,7 @@ local function prepare_cell_content(cell)
 end
 
 --- Create a table bound to a buffer.
----@param options { bufnr: integer, ns_id?: integer|string, columns?: sqmeow.Table.ColumnDef[], data?: table[], show_header?: boolean, trim?: boolean }
+---@param options { bufnr: integer, ns_id?: integer|string, columns?: sqmeow.Table.ColumnDef[], data?: table[], show_header?: boolean, trim?: boolean, row_mark?: fun(row: sqmeow.Table.Row): sqmeow.Table.RowMark|nil }
 ---@return table
 function M.new(options)
   assert(options and options.bufnr, 'sqmeow: table needs a bufnr')
@@ -280,6 +285,8 @@ function M.new(options)
     bufnr = options.bufnr,
     ns_id = ns or vim.api.nvim_create_namespace('sqmeow.table'),
     trim = options.trim or false,
+    --- A one-column marker before a data row, and a highlight for its line.
+    row_mark = options.row_mark,
     show_header = options.show_header ~= false,
     _ = {
       headers = { depth = 1 },
@@ -399,6 +406,7 @@ function M:_prepare_grid()
       }
       cell.content = prepare_cell_content(cell)
       cell.segments = normalize(cell.content, column.hl)
+      cell.fill = type(cell.content) == 'table' and cell.content.fill or nil
       fit_col_width(column, segments_width(cell.segments))
       data_grid[row_idx][column_idx] = cell
     end
@@ -419,14 +427,15 @@ end
 ---@param built sqmeow.Table.BuiltLine
 ---@param text string
 ---@param hl string|nil
-function M:_append(built, text, hl)
+---@param priority integer|nil
+function M:_append(built, text, hl, priority)
   if text == '' then
     return
   end
   local from = #built.text
   built.text = built.text .. text
   if hl then
-    table.insert(built.hls, { from, #built.text, hl })
+    table.insert(built.hls, { from, #built.text, hl, priority })
   end
 end
 
@@ -470,7 +479,14 @@ end
 function M:_build_cells_line(cells)
   local vertical = glyphs().vertical
   local built = self:_new_line()
-  self:_append(built, ' ')
+  local row = cells[1] and cells[1].type == 'data' and cells[1].row
+  local mark = row and self.row_mark and self.row_mark(row)
+  if mark then
+    self:_append(built, mark.mark, mark.mark_hl)
+    built.line_hl = mark.line_hl
+  else
+    self:_append(built, ' ')
+  end
   for index, cell in ipairs(cells) do
     if index > 1 then
       self:_append(built, ' ')
@@ -479,12 +495,41 @@ function M:_build_cells_line(cells)
     end
     -- A tall cell only draws its text on the line its span ends at.
     local drawn = (cell.ridx == nil or cell.ridx == cell.row_span) and cell.segments or {}
+    local from = #built.text
     self:_append_padded(built, drawn, self:_cell_width(cell), cell.column.align)
+    if cell.fill then
+      -- Under the text's own highlight, so it keeps its colour.
+      table.insert(built.hls, { from, #built.text, cell.fill, FILL_PRIORITY })
+    end
   end
   if self.trim then
     built.text = built.text:gsub('%s+$', '')
+    for _, hl in ipairs(built.hls) do
+      hl[2] = math.min(hl[2], #built.text)
+    end
   end
   return built
+end
+
+--- Place a built line's highlights on buffer line `lnum`.
+---@param lnum integer 1-based.
+---@param built sqmeow.Table.BuiltLine
+function M:_mark_line(lnum, built)
+  if built.line_hl then
+    vim.api.nvim_buf_set_extmark(self.bufnr, self.ns_id, lnum - 1, 0, {
+      line_hl_group = built.line_hl,
+      priority = LINE_PRIORITY,
+    })
+  end
+  for _, hl in ipairs(built.hls) do
+    if hl[2] > hl[1] then
+      vim.api.nvim_buf_set_extmark(self.bufnr, self.ns_id, lnum - 1, hl[1], {
+        end_col = hl[2],
+        hl_group = hl[3],
+        priority = hl[4],
+      })
+    end
+  end
 end
 
 --- The `─┼─` rule under the header or over the footer.
@@ -594,13 +639,7 @@ function M:render(linenr_start)
   vim.api.nvim_buf_set_lines(self.bufnr, from - 1, to, false, texts)
 
   for index, built in ipairs(built_lines) do
-    local lnum = linenr_start + index - 1
-    for _, hl in ipairs(built.hls) do
-      vim.api.nvim_buf_set_extmark(self.bufnr, self.ns_id, lnum - 1, hl[1], {
-        end_col = hl[2],
-        hl_group = hl[3],
-      })
-    end
+    self:_mark_line(linenr_start + index - 1, built)
   end
 
   vim.bo[self.bufnr].modifiable = false
@@ -801,12 +840,7 @@ function M:refresh_cell(cell)
   vim.bo[self.bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(self.bufnr, lnum - 1, lnum, false, { built.text })
   vim.api.nvim_buf_clear_namespace(self.bufnr, self.ns_id, lnum - 1, lnum)
-  for _, hl in ipairs(built.hls) do
-    vim.api.nvim_buf_set_extmark(self.bufnr, self.ns_id, lnum - 1, hl[1], {
-      end_col = hl[2],
-      hl_group = hl[3],
-    })
-  end
+  self:_mark_line(lnum, built)
   vim.bo[self.bufnr].modifiable = false
 end
 

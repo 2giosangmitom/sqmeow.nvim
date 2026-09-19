@@ -110,6 +110,9 @@ M.defaults = {
     -- What the result grid is drawn with.
     grid = { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' },
 
+    -- Before a result row with staged changes. Each is one column wide.
+    edit = { changed = '~', deleted = '-', added = '+' },
+
     -- Column type and key icons, in the grid header and the drawer.
     types = {
       text = '󰀬',

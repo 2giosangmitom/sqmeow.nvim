@@ -160,7 +160,12 @@ function M.describe(summary, highlight)
 
   local changes = require('sqmeow.ui.edit').count()
   if changes > 0 and summary.call_id == drawn then
-    table.insert(parts, ('%d change%s'):format(changes, changes == 1 and '' or 's'))
+    local text = ('%d change%s'):format(changes, changes == 1 and '' or 's')
+    local review = require('sqmeow.keymap').lhs('result', 'review')
+    if review then
+      text = ('%s (%s review)'):format(text, highlight and review:gsub('%%', '%%%%') or review)
+    end
+    table.insert(parts, highlight and ('%%#SqmeowWinbarChanges#%s%%*'):format(text) or text)
   end
 
   local current, total = M.pages(summary)
@@ -227,6 +232,23 @@ local function cell_text(value, null_text)
   end
   local text = tostring(value):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
   return text, false
+end
+
+--- The highlight a value's kind gives its text, if any.
+---@param value any
+---@param is_null boolean
+---@param numeric boolean|nil
+---@return string|nil
+local function type_group(value, is_null, numeric)
+  if is_null then
+    return 'SqmeowNull'
+  end
+  if type(value) == 'table' and value.sql then
+    return 'SqmeowExpression'
+  end
+  if numeric then
+    return 'SqmeowNumber'
+  end
 end
 
 --- The characters the grid is drawn with.
@@ -369,6 +391,44 @@ local function draw()
 
   local measured = measure(call.columns, M.spec().hidden)
   local null_text = require('sqmeow.config').get().ui.result.null_text
+  -- Read-only columns are dimmed only where others can be edited.
+  local editable = vim.iter(call.columns):any(function(column)
+    return column.editable
+  end)
+
+  local marks = require('sqmeow.config').get().icons.edit
+  --- A configured marker, or a blank one when it would not fit the grid's one-column gutter.
+  local function marker(name)
+    local text = marks[name] or ''
+    return vim.api.nvim_strwidth(text) == 1 and text or ' '
+  end
+
+  --- The marker and line highlight of a row with staged changes.
+  ---@param row sqmeow.Table.Row
+  ---@return sqmeow.Table.RowMark|nil
+  local function row_mark(row)
+    if row.index > #page.rows then
+      return { mark = marker('added'), mark_hl = 'SqmeowSignAdded', line_hl = 'SqmeowInserted' }
+    end
+    local absolute = page.indices[row.index]
+    if not absolute then
+      return nil
+    end
+    if edit.deleted(absolute) then
+      return {
+        mark = marker('deleted'),
+        mark_hl = 'SqmeowSignDeleted',
+        line_hl = 'SqmeowDeleted',
+      }
+    end
+    if edit.changed(absolute) then
+      return {
+        mark = marker('changed'),
+        mark_hl = 'SqmeowSignChanged',
+        line_hl = 'SqmeowChangedRow',
+      }
+    end
+  end
 
   --- Build column definitions for the table module.
   ---@return table[]
@@ -381,7 +441,12 @@ local function draw()
         table.insert(header_content, { column.icon, column.icon_group })
         table.insert(header_content, { ' ' })
       end
-      table.insert(header_content, { column.name, 'SqmeowHeader' })
+      local described = call.columns[column.index]
+      table.insert(header_content, {
+        column.name,
+        (editable and not (described and described.editable)) and 'SqmeowReadOnly'
+          or 'SqmeowHeader',
+      })
 
       -- Each column index is captured by the closures below.
       local col_index = column.index
@@ -411,25 +476,26 @@ local function draw()
             end
 
             local text, is_null = cell_text(value, null_text)
-            local deleted = absolute ~= nil and edit.deleted(absolute)
-            local group = 'SqmeowText'
-            if deleted then
-              group = 'SqmeowDeleted'
-            elseif staged then
-              group = 'SqmeowChanged'
-            elseif is_null then
-              group = 'SqmeowNull'
-            elseif column.numeric then
-              group = 'SqmeowNumber'
+            if absolute ~= nil and edit.deleted(absolute) then
+              return { text, 'SqmeowDeletedText' }
             end
-            return { text, group }
+            -- A marked row's line highlight shows through plain text.
+            local plain = absolute ~= nil and edit.changed(absolute) and nil or 'SqmeowText'
+            return {
+              text,
+              type_group(value, is_null, column.numeric) or plain,
+              fill = staged and 'SqmeowChanged' or nil,
+            }
           else
             -- Staged inserts sit below the page rows.
             local insert_pos = row_pos - #page.rows
             local values = edit.inserts()[insert_pos]
             local value = values and values[col_index - 1] or nil
-            local text = value == nil and '' or cell_text(value, null_text)
-            return { text, 'SqmeowInserted' }
+            if value == nil then
+              return ''
+            end
+            local text, is_null = cell_text(value, null_text)
+            return { text, type_group(value, is_null, column.numeric) }
           end
         end,
       })
@@ -461,9 +527,11 @@ local function draw()
       columns = build_columns(),
       data = build_data(),
       trim = true,
+      row_mark = row_mark,
     })
   else
     tbl.trim = true
+    tbl.row_mark = row_mark
     tbl:set_columns(build_columns())
     tbl:set_data(build_data())
   end

@@ -211,6 +211,9 @@ Default configuration.
       -- What the result grid is drawn with.
       grid = { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' },
 
+      -- Before a result row with staged changes. Each is one column wide.
+      edit = { changed = '~', deleted = '-', added = '+' },
+
       -- Column type and key icons, in the grid header and the drawer.
       types = {
         text = '󰀬',
@@ -324,8 +327,8 @@ drawer
 result
  L           Next page
  H           Previous page
- gg          First page
- G           Last page
+ [H          First page
+ ]H          Last page
  K           Show this row down the page
  gK          Show the columns and indexes of the table this column is from
  ]r          Show the next statement's result
@@ -384,6 +387,16 @@ Parameters ~
 {surface} `(string)` 'drawer' or 'result'.
 Return ~
 `(sqmeow.ResolvedKeymap[])` # In presentation order.
+
+------------------------------------------------------------------------------
+                                                           *sqmeow.keymap.lhs()*
+                    `sqmeow.keymap.lhs`({surface}, {action})
+The first key an action is mapped to on a surface, or nil when it is unmapped.
+Parameters ~
+{surface} `(string)`
+{action} `(string)`
+Return ~
+`(string|nil)`
 
 ------------------------------------------------------------------------------
                                                       *sqmeow.keymap.problems()*

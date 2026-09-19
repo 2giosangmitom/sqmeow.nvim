@@ -20,10 +20,17 @@ M.links = {
   SqmeowFormValue = 'Normal',
   SqmeowFormEdit = 'Visual',
 
-  -- Staged edits in the result float.
-  SqmeowChanged = 'DiffChange',
+  -- Staged edits, drawn like a diff: a changed row, its changed cells, and the marker before a row.
+  SqmeowChangedRow = 'DiffChange',
+  SqmeowChanged = 'DiffText',
   SqmeowDeleted = 'DiffDelete',
   SqmeowInserted = 'DiffAdd',
+  SqmeowSignChanged = 'Changed',
+  SqmeowSignDeleted = 'Removed',
+  SqmeowSignAdded = 'Added',
+  SqmeowExpression = 'Special',
+  SqmeowReadOnly = 'Comment',
+  SqmeowWinbarChanges = 'DiagnosticWarn',
 
   -- The row detail: a column's name, then its type.
   SqmeowDetailName = 'Identifier',
@@ -68,12 +75,20 @@ M.links = {
   SqmeowIconKey = 'Identifier',
 }
 
+--- Groups that carry an attribute rather than follow a colour.
+M.attributes = {
+  SqmeowDeletedText = { strikethrough = true },
+}
+
 --- Define the groups, leaving any the user has already defined alone.
 function M.setup()
   for group, target in pairs(M.links) do
     -- `default = true` is what makes a user's own definition win, whether it was set before or
     -- after this ran.
     vim.api.nvim_set_hl(0, group, { link = target, default = true })
+  end
+  for group, attributes in pairs(M.attributes) do
+    vim.api.nvim_set_hl(0, group, vim.tbl_extend('force', attributes, { default = true }))
   end
 end
 

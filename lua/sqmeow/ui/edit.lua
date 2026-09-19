@@ -87,6 +87,13 @@ function M.staged(row, column)
   return nil, false
 end
 
+--- Whether a row has a staged cell.
+---@param row integer
+---@return boolean
+function M.changed(row)
+  return updates[row] ~= nil and next(updates[row]) ~= nil
+end
+
 --- Whether a row is staged for deletion.
 ---@param row integer
 ---@return boolean
@@ -282,6 +289,12 @@ local function editor_size(lines)
   }
 end
 
+--- The cell editor's keys, by mode.
+local FOOTER = {
+  insert = ' <C-s> save   <Esc> normal   <C-c> cancel ',
+  normal = ' <CR> save   q cancel ',
+}
+
 --- Open a float to change one cell.
 ---@param target { row: integer|nil, insert: integer|nil, column: integer, name: string }
 ---@param sql boolean|nil Take a SQL expression, such as `now()`, rather than a value.
@@ -316,11 +329,12 @@ function M.edit_cell(target, sql)
     border = {
       style = require('sqmeow.config').border(),
       text = {
-        top = (' %s%s '):format(
+        top = (' %s%s%s '):format(
           target.name,
+          (described.type_name or '') ~= '' and ' · ' .. described.type_name or '',
           sql and ' (SQL expression)' or text == nil and ' (NULL)' or ''
         ),
-        bottom = ' <C-s> save   <Esc> then q cancel ',
+        bottom = FOOTER.insert,
         bottom_align = 'center',
       },
     },
@@ -357,7 +371,25 @@ function M.edit_cell(target, sql)
   popup:map('i', '<C-s>', save, { nowait = true })
   popup:map('n', 'q', close, { nowait = true })
   popup:map('n', '<Esc>', close, { nowait = true })
+  popup:map('i', '<C-c>', function()
+    vim.cmd.stopinsert()
+    close()
+  end, { nowait = true })
   popup:on('BufLeave', close, { once = true })
+
+  -- The footer names the keys of the mode being typed in.
+  local shown = popup
+  local function footer(keys)
+    if popup == shown then
+      shown.border:set_text('bottom', keys, 'center')
+    end
+  end
+  popup:on('InsertEnter', function()
+    footer(FOOTER.insert)
+  end)
+  popup:on('InsertLeave', function()
+    footer(FOOTER.normal)
+  end)
 
   -- Grown and shrunk with what is typed.
   local editor = popup

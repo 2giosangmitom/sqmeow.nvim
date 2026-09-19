@@ -194,6 +194,67 @@ T['querying']['leaves the buffer unmodifiable between paints'] = function()
   eq(vim.bo[result.buffer()].modifiable, false)
 end
 
+T['staged edits'] = MiniTest.new_set({
+  hooks = {
+    post_case = function()
+      require('sqmeow.ui.edit').reset()
+    end,
+  },
+})
+
+T['staged edits']['mark each row like a diff'] = function()
+  local edit = require('sqmeow.ui.edit')
+  run('select id, name from people order by id')
+  edit.set({ row = 0 }, 1, vim.NIL)
+  edit.toggle_delete({ { row = 1 } })
+  edit.add_row({ [1] = 'dora' })
+
+  local drawn = vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false)
+  eq({ drawn[3]:sub(1, 1), drawn[4]:sub(1, 1), drawn[5]:sub(1, 1), drawn[6]:sub(1, 1) }, {
+    '~',
+    '-',
+    ' ',
+    '+',
+  })
+
+  local function line_group(line)
+    local found = vim.api.nvim_buf_get_extmarks(
+      result.buffer(),
+      vim.api.nvim_create_namespace('sqmeow'),
+      { line - 1, 0 },
+      { line - 1, -1 },
+      { details = true }
+    )
+    for _, mark in ipairs(found) do
+      if mark[4].line_hl_group then
+        return mark[4].line_hl_group
+      end
+    end
+  end
+  setup({ icons = { edit = { changed = '*', deleted = 'wide' } } })
+  result.redraw()
+  drawn = vim.api.nvim_buf_get_lines(result.buffer(), 0, -1, false)
+  -- A marker wider than the gutter is left blank rather than shifting the row.
+  eq({ drawn[3]:sub(1, 1), drawn[4]:sub(1, 1) }, { '*', ' ' })
+  setup()
+  result.redraw()
+
+  eq({ line_group(3), line_group(4), line_group(5), line_group(6) }, {
+    'SqmeowChangedRow',
+    'SqmeowDeleted',
+    nil,
+    'SqmeowInserted',
+  })
+
+  -- The changed cell is filled, and its staged NULL still reads as a null.
+  local groups = {}
+  for _, span in ipairs(marks_on(3)) do
+    groups[span.group or ''] = true
+  end
+  eq(groups['SqmeowChanged'], true)
+  eq(groups['SqmeowNull'], true)
+end
+
 T['errors'] = MiniTest.new_set()
 
 T['errors']['report the database message'] = function()
