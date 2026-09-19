@@ -41,7 +41,7 @@ redis = { version = "1.7", default-features = false, features = [
 # The official driver. Its rustls trusts a bundled set of roots and has no native-roots feature, so a
 # server behind a private CA is reached with `tlsCAFile=` in the URL. DNS is on for `mongodb+srv`.
 mongodb = "3.9"
-# Links the machine's libduckdb (CI downloads a prebuilt one); release builds bundle it with `bundled-duckdb`.
+# Links the machine's libduckdb (CI installs DuckDB's prebuilt one); release builds bundle it with `bundled-duckdb`.
 duckdb = { version = "1.10505", features = ["chrono"] }
 # CQL, for ScyllaDB and Apache Cassandra alike.
 scylla = { version = "1.8", features = [
