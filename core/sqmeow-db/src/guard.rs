@@ -309,8 +309,8 @@ pub(crate) fn words(dialect: Dialect, statement: &str) -> Vec<(String, usize)> {
             // A doubled quote ends one run and starts the next, which reads the same.
             '\'' | '"' | '`' => {
                 while let Some(next) = chars.next() {
-                    // SurrealQL escapes a quote with a backslash.
-                    if next == '\\' && dialect == Dialect::SurrealDb {
+                    // SurrealQL and ClickHouse escape a quote with a backslash.
+                    if next == '\\' && matches!(dialect, Dialect::SurrealDb | Dialect::ClickHouse) {
                         chars.next();
                         continue;
                     }
@@ -478,6 +478,15 @@ mod tests {
             "BEGIN TRANSACTION; SELECT * FROM a; COMMIT TRANSACTION",
         ] {
             assert!(writes(surreal, sql), "{sql}");
+        }
+
+        let clickhouse = Dialect::ClickHouse;
+        for sql in [
+            "SELECT 'it\\'s DELETE'",
+            "SELECT \"a\\\" DROP TABLE users\"",
+            "SELECT `a\\` TRUNCATE TABLE users`",
+        ] {
+            assert!(!writes(clickhouse, sql), "{sql}");
         }
     }
 }

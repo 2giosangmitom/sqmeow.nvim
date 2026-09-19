@@ -721,6 +721,7 @@ fn to_result(statement: &str, value: Value, max_rows: usize) -> ResultSet {
             result.set_source(Some(Source::Collection {
                 db: String::new(),
                 name: table,
+                key: "id".into(),
             }));
         }
         result

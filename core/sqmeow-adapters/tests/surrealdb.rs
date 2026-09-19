@@ -87,7 +87,7 @@ async fn reads_records_with_id_first_and_edits_them_by_it() {
     assert_eq!(result.cell(1, 1), Some(&Cell::Null));
     assert!(matches!(
         result.source(),
-        Some(Source::Collection { name, .. }) if name == "person"
+        Some(Source::Collection { name, key, .. }) if name == "person" && key == "id"
     ));
 
     let changes = Changes {

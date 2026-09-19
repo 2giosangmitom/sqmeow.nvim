@@ -649,6 +649,7 @@ async fn run(
         result.set_source(Some(Source::Collection {
             db: database.name().to_owned(),
             name: collection,
+            key: "_id".into(),
         }));
     }
     Ok(result)
@@ -657,7 +658,7 @@ async fn run(
 /// Plan changes to a collection into `update`, `delete` and `insert` commands, one per line of
 /// Extended JSON, each naming its database.
 fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
-    let Some(source @ Source::Collection { db, name }) = result.source() else {
+    let Some(source @ Source::Collection { db, name, .. }) = result.source() else {
         return Err(edit::not_editable());
     };
     let line = |mut command: Document| {
@@ -902,6 +903,7 @@ mod tests {
         result.set_source(Some(Source::Collection {
             db: "app".into(),
             name: "people".into(),
+            key: "_id".into(),
         }));
         result
     }

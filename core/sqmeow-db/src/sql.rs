@@ -317,16 +317,22 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                 }
                 '\'' => {
                     mode = Mode::SingleQuote;
-                    escapes = matches!(dialect, Dialect::MySql | Dialect::SurrealDb)
-                        || (dialect == Dialect::Postgres && is_escape_string(&chars, index));
+                    escapes = matches!(
+                        dialect,
+                        Dialect::MySql | Dialect::SurrealDb | Dialect::ClickHouse
+                    ) || (dialect == Dialect::Postgres
+                        && is_escape_string(&chars, index));
                 }
                 '"' => {
                     mode = Mode::DoubleQuote;
-                    escapes = matches!(dialect, Dialect::MySql | Dialect::SurrealDb);
+                    escapes = matches!(
+                        dialect,
+                        Dialect::MySql | Dialect::SurrealDb | Dialect::ClickHouse
+                    );
                 }
                 '`' => {
                     mode = Mode::Backtick;
-                    escapes = dialect == Dialect::SurrealDb;
+                    escapes = matches!(dialect, Dialect::SurrealDb | Dialect::ClickHouse);
                 }
                 '⟨' if dialect == Dialect::SurrealDb => mode = Mode::Angle,
                 // A SurrealQL block, such as a function body, holds statements of its own.
@@ -840,6 +846,15 @@ mod tests {
         assert_eq!(
             sqls_as(input, Dialect::MySql),
             vec!["select 'it\\'s; fine', \"a\\\"; b\"", "select 2"]
+        );
+    }
+
+    #[test]
+    fn clickhouse_reads_backslashes_in_quoted_runs_as_escapes() {
+        let input = "select 'it\\'s; fine', \"a\\\"; b\", `c\\`; d`; select 2";
+        assert_eq!(
+            sqls_as(input, Dialect::ClickHouse),
+            vec!["select 'it\\'s; fine', \"a\\\"; b\", `c\\`; d`", "select 2"]
         );
     }
 
