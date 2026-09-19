@@ -100,7 +100,11 @@ impl MongoAdapter {
     }
 
     /// Commands one after another, stopping at the first that fails.
-    async fn apply_in_turn(&self, commands: &[(String, Document)]) -> Result<Vec<ResultSet>> {
+    async fn apply_in_turn(
+        &self,
+        commands: &[(String, Document)],
+        cancel: &CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
         for (done, (db, command)) in commands.iter().enumerate() {
             let failed = |error: String| {
                 Error::driver(format!(
@@ -108,12 +112,17 @@ impl MongoAdapter {
                     commands.len()
                 ))
             };
-            let reply = self
-                .client
-                .database(db)
-                .run_command(command.clone())
-                .await
-                .map_err(|error| failed(error.to_string()))?;
+            let (command, tag) = tagged(command.clone());
+            let database = self.client.database(db);
+            let reply = tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    self.kill(&tag).await;
+                    return Err(crate::cancelled_after(done, commands.len()));
+                }
+                reply = database.run_command(command) => reply,
+            }
+            .map_err(|error| failed(error.to_string()))?;
             written(&reply).map_err(failed)?;
         }
         Ok(Vec::new())
@@ -182,7 +191,11 @@ impl Adapter for MongoAdapter {
 
     /// The commands in one transaction where the deployment has transactions, and one after another
     /// where it has not, stopping at the first that fails.
-    async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
+    async fn apply(
+        &self,
+        statements: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
         let commands = statements
             .iter()
             .map(|statement| match parse(statement)? {
@@ -196,19 +209,27 @@ impl Adapter for MongoAdapter {
         let mut session = self.client.start_session().await.map_err(Error::driver)?;
         session.start_transaction().await.map_err(Error::driver)?;
         for (index, (db, command)) in commands.iter().enumerate() {
-            let reply = self
-                .client
-                .database(db)
-                .run_command(command.clone())
-                .session(&mut session)
-                .await;
-            let outcome = match reply {
-                // A standalone server has no transactions, and says so to the first command.
-                Err(error) if index == 0 && no_transactions(&error) => {
-                    let _ = session.abort_transaction().await;
-                    return self.apply_in_turn(&commands).await;
+            let (command, tag) = tagged(command.clone());
+            let database = self.client.database(db);
+            let reply = tokio::select! {
+                biased;
+                () = cancel.cancelled() => Err(None),
+                reply = database.run_command(command).session(&mut session) => {
+                    reply.map_err(Some)
                 }
-                Err(error) => Err(error.to_string()),
+            };
+            let outcome = match reply {
+                Err(None) => {
+                    self.kill(&tag).await;
+                    let _ = session.abort_transaction().await;
+                    return Err(Error::Cancelled);
+                }
+                // A standalone server has no transactions, and says so to the first command.
+                Err(Some(error)) if index == 0 && no_transactions(&error) => {
+                    let _ = session.abort_transaction().await;
+                    return self.apply_in_turn(&commands, &cancel).await;
+                }
+                Err(Some(error)) => Err(error.to_string()),
                 Ok(reply) => written(&reply),
             };
             if let Err(error) = outcome {
@@ -235,22 +256,9 @@ impl Adapter for MongoAdapter {
                 *self.db.write().unwrap_or_else(PoisonError::into_inner) = name;
                 result
             }
-            Statement::Command { db, mut command } => {
+            Statement::Command { db, command } => {
                 let database = self.client.database(&db.unwrap_or_else(|| self.database()));
-                // Tagged, so a cancel can find the operation, which may still be running on the
-                // server after the cursor here is dropped.
-                let tag = format!(
-                    "sqmeow-{}-{}",
-                    std::process::id(),
-                    TAGS.fetch_add(1, Ordering::Relaxed)
-                );
-                let tag = match command.get_str("comment") {
-                    Ok(comment) => comment.to_owned(),
-                    Err(_) => {
-                        command.insert("comment", tag.as_str());
-                        tag
-                    }
-                };
+                let (command, tag) = tagged(command);
                 tokio::select! {
                     biased;
                     () = cancel.cancelled() => {
@@ -545,6 +553,23 @@ fn parse(statement: &str) -> Result<Statement> {
         return Err(Error::driver("there is no command to run"));
     }
     Ok(Statement::Command { db, command })
+}
+
+/// The command with a `comment` that `kill` can find it by, and that comment.
+fn tagged(mut command: Document) -> (Document, String) {
+    let tag = match command.get_str("comment") {
+        Ok(comment) => comment.to_owned(),
+        Err(_) => {
+            let tag = format!(
+                "sqmeow-{}-{}",
+                std::process::id(),
+                TAGS.fetch_add(1, Ordering::Relaxed)
+            );
+            command.insert("comment", tag.as_str());
+            tag
+        }
+    };
+    (command, tag)
 }
 
 /// The command's name, which the server reads off the first key.

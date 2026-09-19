@@ -12,7 +12,7 @@ use sqmeow_db::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::stream::check_affected;
+use crate::stream::{check_affected, rolled_back};
 
 /// One DuckDB database, driven from blocking threads since the driver is synchronous.
 pub struct DuckDbAdapter {
@@ -71,6 +71,30 @@ impl DuckDbAdapter {
         Self::on(Arc::clone(&self.meta), work).await
     }
 
+    /// Await `work`, interrupting it once `cancel` trips: `Ok` with what it returned uncancelled,
+    /// `Err` with what it returned after the cancel.
+    async fn interrupting<T>(
+        &self,
+        work: impl Future<Output = Result<T>>,
+        cancel: &CancellationToken,
+    ) -> std::result::Result<Result<T>, Result<T>> {
+        tokio::pin!(work);
+        tokio::select! {
+            biased;
+
+            () = cancel.cancelled() => {}
+            outcome = &mut work => return Ok(outcome),
+        }
+        // An interrupt that lands before the query starts is lost, so repeat it until the query stops.
+        loop {
+            self.interrupt.interrupt();
+            tokio::select! {
+                outcome = &mut work => return Err(outcome),
+                () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+            }
+        }
+    }
+
     async fn on<T, F>(connection: Arc<Mutex<Connection>>, work: F) -> Result<T>
     where
         T: Send + 'static,
@@ -90,12 +114,16 @@ impl Adapter for DuckDbAdapter {
         Dialect::DuckDb
     }
 
-    async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
+    async fn apply(
+        &self,
+        statements: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
         let statements = statements.to_vec();
-        self.run(move |connection| {
+        let work = self.run(move |connection| {
             let transaction = connection.unchecked_transaction().map_err(Error::driver)?;
             let failed = |statement: &str, error: duckdb::Error| {
-                Error::driver(format!("{error}\nin: {statement}"))
+                rolled_back(format!("{error}\nin: {statement}"))
             };
             let mut returned = Vec::new();
             for statement in &statements {
@@ -103,7 +131,7 @@ impl Adapter for DuckDbAdapter {
                     let affected = transaction
                         .execute(statement, [])
                         .map_err(|error| failed(statement, error))?;
-                    check_affected(statement, affected as u64)?;
+                    check_affected(statement, affected as u64).map_err(rolled_back)?;
                     continue;
                 }
                 let mut prepared = transaction
@@ -130,8 +158,13 @@ impl Adapter for DuckDbAdapter {
             }
             transaction.commit().map_err(Error::driver)?;
             Ok(returned)
-        })
-        .await
+        });
+        match self.interrupting(work, &cancel).await {
+            Ok(outcome) => outcome,
+            // A commit the interrupt missed still counts.
+            Err(Ok(returned)) => Ok(returned),
+            Err(Err(_)) => Err(Error::Cancelled),
+        }
     }
 
     async fn execute(
@@ -153,21 +186,9 @@ impl Adapter for DuckDbAdapter {
     ) -> Result<ResultSet> {
         let (statement, origin) = (statement.to_owned(), origin.to_owned());
         let work = self.run(move |connection| read(connection, &statement, &origin, max_rows));
-        tokio::pin!(work);
-        tokio::select! {
-            biased;
-
-            () = cancel.cancelled() => {}
-            result = &mut work => return result,
-        }
-        // An interrupt that lands before the query starts is lost, so repeat it until the query stops.
-        loop {
-            self.interrupt.interrupt();
-            tokio::select! {
-                _ = &mut work => return Err(Error::Cancelled),
-                () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
-            }
-        }
+        self.interrupting(work, &cancel)
+            .await
+            .unwrap_or(Err(Error::Cancelled))
     }
 
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {

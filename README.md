@@ -199,6 +199,7 @@ A column is editable when it is a plain table column and its table's whole prima
 | `dd` / `d`    | Delete row / selected rows                       |
 | `u` / `U`     | Undo last change / discard all                   |
 | `gs`, `<C-s>` | Review staged changes; `<C-s>` in review applies |
+| `<C-c>`       | Stop changes being applied, or a running query   |
 
 ### Scratchpad
 

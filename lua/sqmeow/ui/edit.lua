@@ -419,22 +419,38 @@ local function filetype(call)
   return dialect ~= 'redis' and 'sql' or ''
 end
 
---- Ask the engine to run approved statements.
----@param conn_id integer
+--- The result whose changes are being applied, while they are.
+---@type integer|nil
+local applying = nil
+
+--- The call id of the result whose changes are being applied, if any.
+---@return integer|nil
+function M.applying()
+  return applying
+end
+
+--- Ask the engine to run approved statements, which a cancel of `call_id` stops.
+---@param call { conn_id: integer, call_id: integer }
 ---@param statements string[]
-function M.apply(conn_id, statements)
-  local _, err =
-    require('sqmeow.rpc').request('apply', { conn_id = conn_id, statements = statements })
+function M.apply(call, statements)
+  local _, err = require('sqmeow.rpc').request(
+    'apply',
+    { conn_id = call.conn_id, call_id = call.call_id, statements = statements }
+  )
   if err then
-    utils.notify(err, vim.log.levels.ERROR)
+    return utils.notify(err, vim.log.levels.ERROR)
   end
+  applying = call.call_id
+  redraw()
 end
 
 --- What happened to applied statements.
 ---@param payload { conn_id: integer, statements: integer, error: string|nil }
 function M.on_applied(payload)
+  applying = nil
   if payload.error then
-    return utils.notify('nothing was applied: ' .. payload.error, vim.log.levels.ERROR)
+    redraw()
+    return utils.notify(payload.error, vim.log.levels.ERROR)
   end
 
   M.reset()
@@ -508,7 +524,7 @@ function M.review()
 
   popup:map('n', '<C-s>', function()
     close()
-    M.apply(call.conn_id, statements)
+    M.apply(call, statements)
   end, { nowait = true })
   popup:map('n', 'q', close, { nowait = true })
   popup:map('n', '<Esc>', close, { nowait = true })

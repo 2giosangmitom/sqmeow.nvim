@@ -486,7 +486,10 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
     let plan = backend
         .plan(&result, &changes)
         .expect("the changes should plan");
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
 
     let after = run(&backend, "select id, name from people order by id").await;
     assert_eq!(
@@ -501,10 +504,13 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
 async fn a_failing_statement_rolls_back_the_ones_before_it() {
     let backend = seeded().await;
     let error = backend
-        .apply(&[
-            "update people set name = 'changed' where id = 1".into(),
-            "insert into nowhere values (1)".into(),
-        ])
+        .apply(
+            &[
+                "update people set name = 'changed' where id = 1".into(),
+                "insert into nowhere values (1)".into(),
+            ],
+            CancellationToken::new(),
+        )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("nowhere"), "{error}");
@@ -552,7 +558,10 @@ async fn each_side_of_a_self_join_is_written_through_its_own_key() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
     let names = run(&backend, "select name from nodes order by id").await;
     assert_eq!(names.column_cells(0), &[text("top"), text("leaf")]);
 
@@ -741,7 +750,10 @@ async fn rows_are_found_again_by_a_composite_or_binary_key() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
 
     let after = run(&backend, "select v from pair order by b").await;
     assert_eq!(after.cell(0, 0), Some(&text("one")));
@@ -769,7 +781,7 @@ async fn rows_are_found_again_by_a_real_key() {
     };
     let plan = backend.plan(&result, &changes).unwrap();
     backend
-        .apply(&plan)
+        .apply(&plan, CancellationToken::new())
         .await
         .expect("every row should be found");
 
@@ -791,7 +803,10 @@ async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    let error = backend.apply(&plan).await.unwrap_err();
+    let error = backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("no row"), "{error}");
     assert_eq!(
         run(&backend, "select name from people where id = 1")
@@ -806,7 +821,12 @@ async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    assert!(backend.apply(&plan).await.is_err());
+    assert!(
+        backend
+            .apply(&plan, CancellationToken::new())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -874,7 +894,10 @@ async fn a_join_writes_each_table_by_its_own_key() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
 
     let members = run(&backend, "select name from members order by id").await;
     assert_eq!(members.column_cells(0), &[text("bob"), text("cyd")]);
@@ -928,7 +951,10 @@ async fn a_filtered_result_stays_editable() {
         ..Changes::default()
     };
     backend
-        .apply(&backend.plan(&result, &changes).unwrap())
+        .apply(
+            &backend.plan(&result, &changes).unwrap(),
+            CancellationToken::new(),
+        )
         .await
         .expect("the plan should apply");
     let after = run(&backend, "select name from people where id = 2").await;
@@ -965,7 +991,10 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
 
     let after = run(&backend, "select label from tagged order by code").await;
     assert_eq!(
@@ -1022,7 +1051,10 @@ async fn an_insert_returns_its_row() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    let returned = backend.apply(&plan).await.expect("the plan should apply");
+    let returned = backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
 
     assert_eq!(returned.len(), 1);
     assert_eq!(returned[0].cell(0, 0), Some(&Cell::Int(2)));
@@ -1097,7 +1129,10 @@ async fn a_table_without_a_key_is_edited_by_every_column_one_row_at_a_time() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
 
     // Two identical rows cannot be told apart, so nothing is changed.
     let changes = Changes {
@@ -1105,7 +1140,10 @@ async fn a_table_without_a_key_is_edited_by_every_column_one_row_at_a_time() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    let error = backend.apply(&plan).await.unwrap_err();
+    let error = backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("2 rows matched"), "{error}");
 
     let after = run(&backend, "select label from loose order by rowid").await;
@@ -1132,7 +1170,10 @@ async fn a_long_binary_key_is_found_again_and_hex_is_written_as_bytes() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
 
     let after = run(&backend, "select v from blobs").await;
     assert_eq!(after.cell(0, 0), Some(&Cell::bytes(&[0xca, 0xfe])));

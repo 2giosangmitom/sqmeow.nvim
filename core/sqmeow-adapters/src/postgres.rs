@@ -491,9 +491,18 @@ impl Adapter for PostgresAdapter {
         Dialect::Postgres
     }
 
-    async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
+    async fn apply(
+        &self,
+        statements: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
         let affected = |outcome: &sqlx::postgres::PgQueryResult| outcome.rows_affected();
-        stream::transact(&self.pool, statements, affected, decode_cell).await
+        let outcome =
+            stream::transact(&self.pool, statements, &cancel, affected, decode_cell).await;
+        if matches!(outcome, Err(Error::Cancelled)) {
+            self.stop_query().await;
+        }
+        outcome
     }
 
     async fn execute(

@@ -203,6 +203,7 @@ where
 pub(crate) async fn transact<DB>(
     pool: &Pool<DB>,
     statements: &[String],
+    cancel: &CancellationToken,
     affected: impl Fn(&DB::QueryResult) -> u64,
     decode: impl Fn(&DB::Row, usize) -> Cell,
 ) -> Result<Vec<ResultSet>>
@@ -213,12 +214,19 @@ where
     let mut transaction = pool.begin().await.map_err(Error::driver)?;
     let mut returned = Vec::new();
     for statement in statements {
-        let failed = |error: sqlx::Error| Error::driver(format!("{error}\nin: {statement}"));
+        let failed = |error: sqlx::Error| rolled_back(format!("{error}\nin: {statement}"));
         let mut result = ResultSet::new(statement.as_str(), Vec::new());
         let mut changed = 0;
         let mut stream =
             sqlx::raw_sql(AssertSqlSafe(statement.clone())).fetch_many(&mut *transaction);
-        while let Some(item) = stream.next().await {
+        loop {
+            // Dropping the transaction on a cancel rolls it back.
+            let item = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Err(Error::Cancelled),
+                item = stream.next() => item,
+            };
+            let Some(item) = item else { break };
             match item.map_err(failed)? {
                 Either::Left(outcome) => changed += affected(&outcome),
                 Either::Right(row) => {
@@ -230,13 +238,18 @@ where
             }
         }
         drop(stream);
-        check_affected(statement, changed)?;
+        check_affected(statement, changed).map_err(rolled_back)?;
         if result.row_count() > 0 {
             returned.push(result);
         }
     }
     transaction.commit().await.map_err(Error::driver)?;
     Ok(returned)
+}
+
+/// A statement's failure, after its transaction was rolled back.
+pub(crate) fn rolled_back(error: impl std::fmt::Display) -> Error {
+    Error::driver(format!("nothing was applied: {error}"))
 }
 
 /// Refuse a planned `UPDATE` or `DELETE` that did not change exactly one row.

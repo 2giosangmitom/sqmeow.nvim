@@ -71,7 +71,10 @@ async fn a_hash_is_edited_in_place() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
 
     let after = run(&backend, "HGET redis_cluster:hash name").await;
     assert_eq!(after.cell(0, 0), Some(&Cell::Text("bo".into())));

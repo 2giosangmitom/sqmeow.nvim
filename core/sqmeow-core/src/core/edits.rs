@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 use rmpv::Value;
 
+use sqmeow_db::Error as DbError;
+
+use super::calls::Deadline;
 use super::{Core, Started, params};
 use crate::args::Args;
 use crate::value::{map, strings};
@@ -35,9 +38,11 @@ impl Core {
         Ok(strings(statements))
     }
 
-    /// Run the statements a review approved, together, and report through `apply:done`.
+    /// Run the statements a review approved, together, and report through `apply:done`. A cancel
+    /// of the result's call id, or `query.timeout_ms`, stops them.
     pub(super) fn apply(self: Arc<Self>, args: &Args) -> Started {
         let conn_id = args.conn_id("conn_id")?;
+        let call_id = args.call_id()?;
         let statements = args.opt_strings("statements")?.unwrap_or_default();
         if statements.is_empty() {
             return Err("there is nothing to apply".to_owned());
@@ -52,8 +57,23 @@ impl Core {
                 ("conn_id", Value::from(conn_id)),
                 ("statements", Value::from(statements.len() as u64)),
             ];
-            match connection.backend.apply(&statements).await {
+            let running = self.session.begin_call(call_id);
+            let timeout_ms = self.session.options().timeout_ms;
+            let deadline = Deadline::start(running.token(), timeout_ms);
+            let outcome = connection.backend.apply(&statements, running.token()).await;
+            drop(running);
+            match outcome {
                 Ok(returned) => self.session.stash_inserted(conn_id, returned),
+                Err(DbError::Cancelled) if deadline.passed() => payload.push((
+                    "error",
+                    Value::from(format!(
+                        "nothing was applied: it ran past the {timeout_ms} ms timeout, so it was cancelled"
+                    )),
+                )),
+                Err(DbError::Cancelled) => payload.push((
+                    "error",
+                    Value::from("nothing was applied: it was cancelled"),
+                )),
                 Err(error) => payload.push(("error", Value::from(error.to_string()))),
             }
             self.emit("apply:done", map(payload));

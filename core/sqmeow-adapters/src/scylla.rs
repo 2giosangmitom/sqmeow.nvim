@@ -176,7 +176,11 @@ impl Adapter for ScyllaAdapter {
     }
 
     /// One statement after another, since CQL has no transactions.
-    async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
+    async fn apply(
+        &self,
+        statements: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
         for (done, statement) in statements.iter().enumerate() {
             let failed = |error: String| {
                 Error::driver(format!(
@@ -184,11 +188,12 @@ impl Adapter for ScyllaAdapter {
                     statements.len()
                 ))
             };
-            let reply = self
-                .session
-                .query_unpaged(statement.as_str(), ())
-                .await
-                .map_err(|error| failed(error.to_string()))?;
+            let reply = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Err(crate::cancelled_after(done, statements.len())),
+                reply = self.session.query_unpaged(statement.as_str(), ()) => reply,
+            }
+            .map_err(|error| failed(error.to_string()))?;
             // `IF EXISTS` and `IF NOT EXISTS` answer `[applied]`, false when the row is gone or taken.
             if let Ok(rows) = reply.into_rows_result()
                 && let Ok(Some(row)) = rows.maybe_first_row::<Row>()

@@ -416,15 +416,20 @@ function M.execute_selection()
   return M.execute(table.concat(lines, '\n'), { source_buf = vim.api.nvim_get_current_buf() })
 end
 
---- Stop the running query.
----@return boolean stopped Whether there was a query to stop.
+--- Stop the running query, or the changes being applied.
+---@return boolean stopped Whether there was anything to stop.
 function M.cancel()
   local state = require('sqmeow.state')
-  if not state.call or state.call.state ~= 'executing' then
-    return false
+  -- Changes being applied are stopped by their result's call id.
+  local call_id = require('sqmeow.ui.edit').applying()
+  if not call_id then
+    if not state.call or state.call.state ~= 'executing' then
+      return false
+    end
+    call_id = state.call.call_id
   end
 
-  local stopped = engine().request('cancel', { call_id = state.call.call_id })
+  local stopped = engine().request('cancel', { call_id = call_id })
   return stopped == true
 end
 

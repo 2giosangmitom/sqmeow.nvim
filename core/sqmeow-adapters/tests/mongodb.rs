@@ -474,7 +474,10 @@ async fn documents_found_by_object_id_are_edited_added_and_removed() {
         .plan(&found, &changes)
         .expect("the changes should plan");
     assert_eq!(plan.len(), 3);
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
 
     let after = run(&backend, r#"{"find": "edited", "sort": {"n": 1}}"#).await;
     assert_eq!(after.row_count(), 2);
@@ -522,7 +525,10 @@ async fn a_write_the_server_refuses_fails_the_apply() {
         ..Changes::default()
     };
     let plan = backend.plan(&found, &changes).unwrap();
-    let error = backend.apply(&plan).await.unwrap_err();
+    let error = backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("E11000"), "{error}");
 }
 
@@ -538,7 +544,10 @@ async fn an_edit_to_a_document_deleted_since_is_reported() {
         ..Changes::default()
     };
     let plan = backend.plan(&found, &changes).unwrap();
-    let error = backend.apply(&plan).await.unwrap_err();
+    let error = backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .unwrap_err();
     assert!(
         error.to_string().contains("no document had that _id"),
         "{error}"
@@ -831,7 +840,10 @@ async fn a_standalone_server_applies_commands_in_turn() {
         .iter()
         .map(|command| command.replace("COLLECTION", "in_turn_docs"))
         .collect();
-    let error = backend.apply(&commands).await.unwrap_err();
+    let error = backend
+        .apply(&commands, CancellationToken::new())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("1 of 2"), "{error}");
     assert_eq!(count_of(&backend, "in_turn_docs").await, Some(Cell::Int(1)));
 }
@@ -850,7 +862,10 @@ async fn a_replica_set_applies_every_command_or_none() {
         .iter()
         .map(|command| command.replace("COLLECTION", "atomic_docs"))
         .collect();
-    let error = backend.apply(&commands).await.unwrap_err();
+    let error = backend
+        .apply(&commands, CancellationToken::new())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("nothing was applied"), "{error}");
     assert_eq!(count_of(&backend, "atomic_docs").await, Some(Cell::Int(0)));
 }

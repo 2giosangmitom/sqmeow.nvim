@@ -118,8 +118,13 @@ pub trait Adapter: Send + Sync {
 
     /// Applies planned statements transactionally where the dialect allows.
     ///
-    /// Returns rows produced by the statements that returned them.
-    fn apply(&self, statements: &[String]) -> impl Future<Output = Result<Vec<ResultSet>>> + Send;
+    /// Returns rows produced by the statements that returned them. A cancel never interrupts a
+    /// commit, so `Error::Cancelled` means nothing was committed.
+    fn apply(
+        &self,
+        statements: &[String],
+        cancel: CancellationToken,
+    ) -> impl Future<Output = Result<Vec<ResultSet>>> + Send;
 
     /// Lists schemas visible to this connection.
     fn schemas(&self) -> impl Future<Output = Result<Vec<SchemaNode>>> + Send;

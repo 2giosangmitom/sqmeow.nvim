@@ -303,7 +303,7 @@ async fn a_stream_entry_is_deleted_and_added_and_a_listed_key_renamed() {
         ..sqmeow_db::Changes::default()
     };
     backend
-        .apply(&backend.plan(&entries, &changes).unwrap())
+        .apply(&backend.plan(&entries, &changes).unwrap(), CancellationToken::new())
         .await
         .expect("the plan should apply");
     let after = run(&backend, "XLEN test:stream").await;
@@ -317,7 +317,7 @@ async fn a_stream_entry_is_deleted_and_added_and_a_listed_key_renamed() {
         ..sqmeow_db::Changes::default()
     };
     backend
-        .apply(&backend.plan(&keys, &changes).unwrap())
+        .apply(&backend.plan(&keys, &changes).unwrap(), CancellationToken::new())
         .await
         .expect("the rename should apply");
     let renamed = run(&backend, "GET test:renamed").await;
@@ -336,7 +336,7 @@ async fn an_edit_keeps_ttls_positions_and_existing_keys() {
         ..sqmeow_db::Changes::default()
     };
     backend
-        .apply(&backend.plan(&value, &changes).unwrap())
+        .apply(&backend.plan(&value, &changes).unwrap(), CancellationToken::new())
         .await
         .expect("the edit should apply");
     let ttl = run(&backend, "TTL test:ttl").await;
@@ -349,7 +349,7 @@ async fn an_edit_keeps_ttls_positions_and_existing_keys() {
         ..sqmeow_db::Changes::default()
     };
     backend
-        .apply(&backend.plan(&list, &changes).unwrap())
+        .apply(&backend.plan(&list, &changes).unwrap(), CancellationToken::new())
         .await
         .expect("the delete should apply");
     let after = run(&backend, "LRANGE test:dupes 0 -1").await;
@@ -370,7 +370,7 @@ async fn an_edit_keeps_ttls_positions_and_existing_keys() {
         ..sqmeow_db::Changes::default()
     };
     let error = backend
-        .apply(&backend.plan(&keys, &changes).unwrap())
+        .apply(&backend.plan(&keys, &changes).unwrap(), CancellationToken::new())
         .await
         .unwrap_err();
     assert!(error.to_string().contains("already exists"), "{error}");

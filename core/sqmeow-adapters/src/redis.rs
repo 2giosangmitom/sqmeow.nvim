@@ -406,8 +406,15 @@ impl Adapter for RedisAdapter {
         plan(result, changes)
     }
 
-    /// One `MULTI`/`EXEC`.
-    async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
+    /// One `MULTI`/`EXEC`, which can only be cancelled before it is sent.
+    async fn apply(
+        &self,
+        statements: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
         let mut pipeline = redis::pipe();
         pipeline.atomic();
         for line in statements {

@@ -159,7 +159,9 @@ function M.describe(summary, highlight)
   end
 
   local changes = require('sqmeow.ui.edit').count()
-  if changes > 0 and summary.call_id == drawn then
+  if summary.call_id and require('sqmeow.ui.edit').applying() == summary.call_id then
+    table.insert(parts, 'applying…')
+  elseif changes > 0 and summary.call_id == drawn then
     local text = ('%d change%s'):format(changes, changes == 1 and '' or 's')
     local review = require('sqmeow.keymap').lhs('result', 'review')
     if review then
@@ -1429,6 +1431,12 @@ function M.actions.delete_selection()
   local targets = selected()
   if editing() and #targets > 0 then
     require('sqmeow.ui.edit').toggle_delete(targets)
+  end
+end
+
+function M.actions.cancel()
+  if not require('sqmeow.api').cancel() then
+    utils.notify('there is nothing running to stop')
   end
 end
 

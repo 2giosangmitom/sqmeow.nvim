@@ -25,6 +25,16 @@ pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// How long to spend telling a server to stop a cancelled query before leaving it be.
 pub(crate) const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// A cancel that stopped an apply without transactions, which keeps what ran before it.
+pub(crate) fn cancelled_after(done: usize, total: usize) -> Error {
+    if done == 0 {
+        return Error::Cancelled;
+    }
+    Error::driver(format!(
+        "{done} of {total} changes were applied before the rest were cancelled"
+    ))
+}
+
 /// Open a pool, trying again while the server resets connections, until `CONNECT_TIMEOUT`.
 pub(crate) async fn connect_retrying<T, F, Fut>(mut open: F) -> sqlx::Result<T>
 where
@@ -164,8 +174,12 @@ impl Backend {
     }
 
     /// Run planned statements together.
-    pub async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
-        dispatch!(self, adapter => adapter.apply(statements).await)
+    pub async fn apply(
+        &self,
+        statements: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        dispatch!(self, adapter => adapter.apply(statements, cancel).await)
     }
 
     /// The databases of a PostgreSQL cluster or a MongoDB server, when the URL named none, and

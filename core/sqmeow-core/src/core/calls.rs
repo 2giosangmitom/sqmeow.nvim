@@ -14,13 +14,40 @@ use crate::archive;
 use crate::args::Args;
 use crate::session::{Call, CallId, ConnId, Connection};
 use crate::value::{map, optional, strings};
+use tokio_util::sync::CancellationToken;
 
-/// Stops a timer when the call it times ends first.
-struct Abort(tokio::task::JoinHandle<()>);
+/// Trips a call's token once `query.timeout_ms` passes, and stops when dropped.
+pub(super) struct Deadline {
+    timer: Option<tokio::task::JoinHandle<()>>,
+    passed: Arc<AtomicBool>,
+}
 
-impl Drop for Abort {
+impl Deadline {
+    /// No deadline when `timeout_ms` is 0.
+    pub(super) fn start(token: CancellationToken, timeout_ms: u64) -> Self {
+        let passed = Arc::new(AtomicBool::new(false));
+        let timer = (timeout_ms > 0).then(|| {
+            let passed = Arc::clone(&passed);
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
+                passed.store(true, Ordering::Relaxed);
+                token.cancel();
+            })
+        });
+        Self { timer, passed }
+    }
+
+    /// Whether the deadline, rather than a cancel, tripped the token.
+    pub(super) fn passed(&self) -> bool {
+        self.passed.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for Deadline {
     fn drop(&mut self) {
-        self.0.abort();
+        if let Some(timer) = &self.timer {
+            timer.abort();
+        }
     }
 }
 
@@ -112,18 +139,7 @@ impl Core {
         let options = self.session.options();
         let running = self.session.begin_call(call_id);
         let started = Instant::now();
-        // A timeout trips the token a cancel trips, and says so.
-        let timed_out = Arc::new(AtomicBool::new(false));
-        let _timer = (options.timeout_ms > 0).then(|| {
-            let token = running.token();
-            let timed_out = Arc::clone(&timed_out);
-            let limit = Duration::from_millis(options.timeout_ms);
-            Abort(tokio::spawn(async move {
-                tokio::time::sleep(limit).await;
-                timed_out.store(true, Ordering::Relaxed);
-                token.cancel();
-            }))
-        });
+        let deadline = Deadline::start(running.token(), options.timeout_ms);
 
         // The line range lets the editor show which statement is running.
         let span = statements.first().zip(statements.last());
@@ -172,7 +188,7 @@ impl Core {
                         earlier.push(map(summary));
                     }
                 }
-                Err(DbError::Cancelled) if timed_out.load(Ordering::Relaxed) => {
+                Err(DbError::Cancelled) if deadline.passed() => {
                     let mut payload = elapsed(started);
                     payload.push((
                         "error",

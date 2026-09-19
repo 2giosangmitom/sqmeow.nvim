@@ -219,9 +219,18 @@ impl Adapter for SqliteAdapter {
         Dialect::Sqlite
     }
 
-    async fn apply(&self, statements: &[String]) -> Result<Vec<ResultSet>> {
+    async fn apply(
+        &self,
+        statements: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
         let affected = |outcome: &sqlx::sqlite::SqliteQueryResult| outcome.rows_affected();
-        stream::transact(&self.pool, statements, affected, decode_cell).await
+        let outcome =
+            stream::transact(&self.pool, statements, &cancel, affected, decode_cell).await;
+        if matches!(outcome, Err(Error::Cancelled)) {
+            self.stop_running().await;
+        }
+        outcome
     }
 
     async fn execute(

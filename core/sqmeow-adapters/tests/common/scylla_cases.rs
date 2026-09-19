@@ -201,7 +201,7 @@ async fn edits_a_row_by_its_whole_primary_key() {
             r#"UPDATE "sqmeow"."edited" SET "n" = 42, "label" = 'it''s' WHERE "pk" = 1 AND "ck" = 1 IF EXISTS"#
         ]
     );
-    backend.apply(&plan).await.unwrap();
+    backend.apply(&plan, CancellationToken::new()).await.unwrap();
 
     // Adding a row with a stored key would replace it, so it is refused.
     let taken = Changes {
@@ -209,7 +209,7 @@ async fn edits_a_row_by_its_whole_primary_key() {
         ..Changes::default()
     };
     let error = backend
-        .apply(&backend.plan(&result, &taken).unwrap())
+        .apply(&backend.plan(&result, &taken).unwrap(), CancellationToken::new())
         .await
         .unwrap_err();
     assert!(error.to_string().contains("already exists"), "{error}");
@@ -219,9 +219,9 @@ async fn edits_a_row_by_its_whole_primary_key() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &delete).unwrap();
-    backend.apply(&plan).await.unwrap();
+    backend.apply(&plan, CancellationToken::new()).await.unwrap();
     // The row is gone, so deleting it again changes nothing and says so.
-    assert!(backend.apply(&plan).await.is_err());
+    assert!(backend.apply(&plan, CancellationToken::new()).await.is_err());
 
     let after = run(&backend, "SELECT n, label FROM sqmeow.edited").await;
     assert_eq!(after.row_count(), 1);

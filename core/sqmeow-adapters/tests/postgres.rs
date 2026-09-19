@@ -794,7 +794,10 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
     let plan = backend
         .plan(&result, &changes)
         .expect("the changes should plan");
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
 
     let after = run(
         &backend,
@@ -830,7 +833,10 @@ async fn a_composite_key_finds_its_row_by_every_part() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.unwrap();
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .unwrap();
 
     let after = run(&backend, "select v from pg_pair order by b").await;
     assert_eq!(after.cell(0, 0), Some(&text("one")));
@@ -872,7 +878,10 @@ async fn a_column_added_after_its_table_was_read_can_be_edited() {
     let plan = backend
         .plan(&result, &changes)
         .expect("the new column should be editable");
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
     let after = run(&backend, "select note, added from pg_altered").await;
     assert_eq!(after.cell(0, 1), Some(&text("new")));
 }
@@ -888,10 +897,13 @@ async fn a_failing_statement_rolls_back_the_ones_before_it() {
     .await;
 
     let error = backend
-        .apply(&[
-            "update pg_rollback set label = 'z' where id = 1".into(),
-            "insert into pg_rollback_nowhere values (1)".into(),
-        ])
+        .apply(
+            &[
+                "update pg_rollback set label = 'z' where id = 1".into(),
+                "insert into pg_rollback_nowhere values (1)".into(),
+            ],
+            CancellationToken::new(),
+        )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("pg_rollback_nowhere"), "{error}");
@@ -923,7 +935,10 @@ async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    let error = backend.apply(&plan).await.unwrap_err();
+    let error = backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("no row"), "{error}");
     assert_eq!(
         run(&backend, "select label from pg_vanished")
@@ -959,6 +974,63 @@ async fn a_cancelled_query_leaves_the_connection_ready_for_the_next() {
         matches!(next, Ok(Ok(_))),
         "the next query should not wait out the cancelled one: {:?}",
         started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_apply_stops_waiting_on_a_lock_and_rolls_back() {
+    let url = server!();
+    let backend = connect(&url).await;
+    fixture(&backend, "apply_locked").await;
+    run(
+        &backend,
+        "insert into apply_locked values (1, 'a', null), (2, 'b', null)",
+    )
+    .await;
+
+    // One implicit transaction, so the row stays locked while it sleeps.
+    let holder = connect(&url).await;
+    let held = CancellationToken::new();
+    let holding = {
+        let held = held.clone();
+        tokio::spawn(async move {
+            let _ = holder
+                .execute(
+                    "update apply_locked set optional = 'held' where id = 1; select pg_sleep(10)",
+                    NO_CAP,
+                    held,
+                )
+                .await;
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let cancel = CancellationToken::new();
+    let stopper = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        stopper.cancel();
+    });
+    let statements = [
+        "UPDATE apply_locked SET label = 'z' WHERE id = 2".to_owned(),
+        "UPDATE apply_locked SET label = 'z' WHERE id = 1".to_owned(),
+    ];
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.apply(&statements, cancel),
+    )
+    .await
+    .expect("the cancel should end the wait for the lock");
+    assert!(matches!(outcome, Err(Error::Cancelled)), "{outcome:?}");
+
+    held.cancel();
+    holding.await.unwrap();
+    // The first statement ran before the cancel, and was rolled back with the rest.
+    assert_eq!(
+        run(&backend, "select label from apply_locked where id = 2")
+            .await
+            .cell(0, 0),
+        Some(&text("b"))
     );
 }
 
@@ -1004,7 +1076,10 @@ async fn each_side_of_a_self_join_is_written_through_its_own_key() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
     let names = run(&backend, "select name from pg_nodes order by id").await;
     assert_eq!(names.column_cells(0), &[text("top"), text("leaf")]);
 }
@@ -1054,7 +1129,10 @@ async fn a_join_is_edited_through_each_table_key() {
         ..Changes::default()
     };
     backend
-        .apply(&backend.plan(&result, &changes).unwrap())
+        .apply(
+            &backend.plan(&result, &changes).unwrap(),
+            CancellationToken::new(),
+        )
         .await
         .expect("the plan should apply");
 
@@ -1111,7 +1189,10 @@ async fn a_filtered_result_stays_editable() {
         ..Changes::default()
     };
     backend
-        .apply(&backend.plan(&result, &changes).unwrap())
+        .apply(
+            &backend.plan(&result, &changes).unwrap(),
+            CancellationToken::new(),
+        )
         .await
         .expect("the plan should apply");
     let after = run(&backend, "select name from pg_filtered where id = 2").await;
@@ -1144,7 +1225,10 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
     let after = run(&backend, "select label, n from tagged_unique").await;
     assert_eq!(after.cell(0, 0), Some(&Cell::Text("uno".into())));
     assert_eq!(after.cell(0, 1), Some(&Cell::Int(42)));
@@ -1212,7 +1296,10 @@ async fn a_table_without_a_key_is_edited_by_every_column() {
         ..Changes::default()
     };
     backend
-        .apply(&backend.plan(&result, &changes).unwrap())
+        .apply(
+            &backend.plan(&result, &changes).unwrap(),
+            CancellationToken::new(),
+        )
         .await
         .expect("the plan should apply");
 
@@ -1221,7 +1308,10 @@ async fn a_table_without_a_key_is_edited_by_every_column() {
         ..Changes::default()
     };
     let error = backend
-        .apply(&backend.plan(&result, &twins).unwrap())
+        .apply(
+            &backend.plan(&result, &twins).unwrap(),
+            CancellationToken::new(),
+        )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("2 rows matched"), "{error}");

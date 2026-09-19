@@ -214,7 +214,10 @@ async fn a_plain_select_from_a_table_is_edited_by_its_key() {
         inserts: vec![vec![(0, "3".into()), (1, sqmeow_db::edit::Value::Null)]],
     };
     let statements = backend.plan(&result, &changes).unwrap();
-    backend.apply(&statements).await.unwrap();
+    backend
+        .apply(&statements, CancellationToken::new())
+        .await
+        .unwrap();
 
     let after = run(&backend, "select id, name from people order by id").await;
     assert_eq!(after.row_count(), 2);
@@ -289,7 +292,10 @@ async fn a_replaced_column_is_computed_and_an_attached_table_is_editable() {
         statements,
         [r#"UPDATE "other"."main"."pets" SET "name" = upper('fido') WHERE "id" = 1"#]
     );
-    backend.apply(&statements).await.unwrap();
+    backend
+        .apply(&statements, CancellationToken::new())
+        .await
+        .unwrap();
     let after = run(&backend, "select name from other.pets").await;
     assert_eq!(after.cell(0, 0), Some(&Cell::Text("FIDO".into())));
 }
@@ -333,7 +339,10 @@ async fn a_binary_key_finds_its_row() {
         ..Changes::default()
     };
     backend
-        .apply(&backend.plan(&result, &changes).unwrap())
+        .apply(
+            &backend.plan(&result, &changes).unwrap(),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -352,7 +361,10 @@ async fn a_row_gone_since_it_was_read_is_not_written() {
         ..Changes::default()
     };
     let error = backend
-        .apply(&backend.plan(&result, &changes).unwrap())
+        .apply(
+            &backend.plan(&result, &changes).unwrap(),
+            CancellationToken::new(),
+        )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("no row had that key"), "{error}");
@@ -391,7 +403,10 @@ async fn a_join_is_edited_through_each_table_key() {
         ..Changes::default()
     };
     backend
-        .apply(&backend.plan(&result, &changes).unwrap())
+        .apply(
+            &backend.plan(&result, &changes).unwrap(),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -433,7 +448,10 @@ async fn a_filtered_result_stays_editable() {
         ..Changes::default()
     };
     backend
-        .apply(&backend.plan(&result, &changes).unwrap())
+        .apply(
+            &backend.plan(&result, &changes).unwrap(),
+            CancellationToken::new(),
+        )
         .await
         .expect("the plan should apply");
     let after = run(&backend, "select name from filtered where id = 2").await;
@@ -465,7 +483,10 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
     let after = run(&backend, "select n from tagged order by code").await;
     assert_eq!(after.column_cells(0), &[Cell::Int(42), Cell::Int(2)]);
 
@@ -522,7 +543,10 @@ async fn a_table_without_a_key_is_edited_by_every_column() {
         ..Changes::default()
     };
     let plan = backend.plan(&result, &changes).unwrap();
-    backend.apply(&plan).await.expect("the plan should apply");
+    backend
+        .apply(&plan, CancellationToken::new())
+        .await
+        .expect("the plan should apply");
     let after = run(&backend, "select label from loose order by n nulls last").await;
     assert_eq!(
         after.column_cells(0),

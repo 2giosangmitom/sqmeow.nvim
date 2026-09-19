@@ -352,6 +352,7 @@ result
  dd          Delete this row, or keep it after all
  d (x)       Delete the selected rows
  u           Undo the last change
+ <C-c>       Stop the running query, or the changes being applied
  U           Discard every change
  gs, <C-s>   Review the changes; <C-s> there applies them
  ?           Show these mappings
@@ -580,9 +581,9 @@ Return ~
 ------------------------------------------------------------------------------
                                                            *sqmeow.api.cancel()*
                              `sqmeow.api.cancel`()
-Stop the running query.
+Stop the running query, or the changes being applied.
 Return ~
-`(boolean)` stopped Whether there was a query to stop.
+`(boolean)` stopped Whether there was anything to stop.
 
 ------------------------------------------------------------------------------
                                                         *sqmeow.api.next_page()*

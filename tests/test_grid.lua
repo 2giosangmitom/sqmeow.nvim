@@ -247,7 +247,7 @@ T['editing applies through a review'] = function()
   eq(statements[3]:match('^UPDATE') ~= nil, true)
 
   local before = state.call.call_id
-  edit.apply(state.call.conn_id, statements)
+  edit.apply(state.call, statements)
   wait('the result should be read again after applying', function()
     return state.call.call_id ~= before and state.call.state == 'done' and edit.count() == 0
   end)
@@ -313,7 +313,7 @@ T['a failed apply keeps what was staged'] = function()
     table.insert(messages, message)
   end)
 
-  edit.apply(state.call.conn_id, statements)
+  edit.apply(state.call, statements)
   wait('the failure should be reported', function()
     return #messages > 0
   end)
@@ -415,7 +415,7 @@ T['applying opens the new result at the same page and cursor'] = function()
   local statements = rpc.request('plan', { call_id = state.call.call_id, changes = edit.changes() })
 
   local before = state.call.call_id
-  edit.apply(state.call.conn_id, statements)
+  edit.apply(state.call, statements)
   wait('the result should be read again after applying', function()
     return state.call.call_id ~= before and state.call.state == 'done' and edit.count() == 0
   end)
@@ -480,7 +480,7 @@ T['a row added outside the query is still shown after applying'] = function()
   local statements = rpc.request('plan', { call_id = state.call.call_id, changes = edit.changes() })
 
   local before = state.call.call_id
-  edit.apply(state.call.conn_id, statements)
+  edit.apply(state.call, statements)
   wait('the result should be read again after applying', function()
     return state.call.call_id ~= before and state.call.state == 'done' and edit.count() == 0
   end)

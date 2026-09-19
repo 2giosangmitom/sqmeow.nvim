@@ -98,6 +98,11 @@ M.defaults = {
     { action = 'delete_row', lhs = 'dd', desc = 'Delete this row, or keep it after all' },
     { action = 'delete_selection', lhs = 'd', mode = 'x', desc = 'Delete the selected rows' },
     { action = 'undo', lhs = 'u', desc = 'Undo the last change' },
+    {
+      action = 'cancel',
+      lhs = '<C-c>',
+      desc = 'Stop the running query, or the changes being applied',
+    },
     { action = 'discard', lhs = 'U', desc = 'Discard every change' },
     {
       action = 'review',
