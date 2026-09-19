@@ -13,6 +13,8 @@ env:
   CARGO_TERM_COLOR: always
   # Link DuckDB's prebuilt libduckdb instead of compiling it from source.
   DUCKDB_DOWNLOAD_LIB: 1
+  # The build copies it into deps/, but only `cargo test` puts that on the library path.
+  LD_LIBRARY_PATH: ${{ github.workspace }}/target/debug/deps
   # No debug info: smaller cache, faster links.
   CARGO_PROFILE_DEV_DEBUG: 0
 
