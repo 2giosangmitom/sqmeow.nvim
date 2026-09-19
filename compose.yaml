@@ -53,6 +53,21 @@ services:
       timeout: 3s
       retries: 30
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    environment:
+      CLICKHOUSE_USER: sqmeow
+      CLICKHOUSE_PASSWORD: sqmeow
+      # Lets the tests create a function and read users and roles.
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "58123:8123"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   redis:
     image: redis:8-alpine
     ports:
@@ -145,3 +160,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 60
+
+  surrealdb:
+    image: surrealdb/surrealdb:v3
+    command: start --user root --pass root memory
+    ports:
+      - "58000:8000"
+    healthcheck:
+      test: ["CMD", "/surreal", "is-ready", "--endpoint", "http://localhost:8000"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

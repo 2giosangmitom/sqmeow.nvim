@@ -35,8 +35,9 @@ function M.on_connection(payload)
     vim.schedule(function()
       local drawer = require('sqmeow.ui.drawer')
       drawer.load(payload.id, {})
-      -- A MongoDB database is drawn with its groups where its only schema row would be.
-      if connection.dialect == 'mongodb' and connection.database then
+      -- A MongoDB or SurrealDB database is drawn with its groups where its only schema row would be.
+      local own = connection.dialect == 'mongodb' or connection.dialect == 'surrealdb'
+      if own and connection.database then
         drawer.load(payload.id, { connection.database })
       end
     end)

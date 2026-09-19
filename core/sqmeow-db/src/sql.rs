@@ -156,6 +156,8 @@ enum Mode {
     SingleQuote,
     DoubleQuote,
     Backtick,
+    /// A SurrealQL identifier in `⟨` and `⟩`.
+    Angle,
     LineComment,
     BlockComment,
 }
@@ -257,7 +259,7 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
     let mut creating: Option<bool> = None;
     let mut routine = false;
     let mut body_depth = 0usize;
-    // Inside a CQL `BEGIN BATCH`, which ends at `APPLY BATCH`.
+    // Inside a CQL `BEGIN BATCH` or a SurrealQL `BEGIN`, which end at `APPLY` or `COMMIT`/`CANCEL`.
     let mut batch = false;
 
     let mut start = 0usize;
@@ -301,26 +303,41 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                     index += 2;
                     continue;
                 }
-                '/' if dialect == Dialect::Scylla && peek!(1) == Some('/') => {
+                '/' if matches!(dialect, Dialect::Scylla | Dialect::SurrealDb)
+                    && peek!(1) == Some('/') =>
+                {
                     mode = Mode::LineComment;
                     index += 2;
                     continue;
                 }
-                '#' if dialect == Dialect::MySql => {
+                '#' if matches!(dialect, Dialect::MySql | Dialect::SurrealDb) => {
                     mode = Mode::LineComment;
                     index += 1;
                     continue;
                 }
                 '\'' => {
                     mode = Mode::SingleQuote;
-                    escapes = dialect == Dialect::MySql
-                        || (dialect == Dialect::Postgres && is_escape_string(&chars, index));
+                    escapes = matches!(
+                        dialect,
+                        Dialect::MySql | Dialect::SurrealDb | Dialect::ClickHouse
+                    ) || (dialect == Dialect::Postgres
+                        && is_escape_string(&chars, index));
                 }
                 '"' => {
                     mode = Mode::DoubleQuote;
-                    escapes = dialect == Dialect::MySql;
+                    escapes = matches!(
+                        dialect,
+                        Dialect::MySql | Dialect::SurrealDb | Dialect::ClickHouse
+                    );
                 }
-                '`' => mode = Mode::Backtick,
+                '`' => {
+                    mode = Mode::Backtick;
+                    escapes = matches!(dialect, Dialect::SurrealDb | Dialect::ClickHouse);
+                }
+                '⟨' if dialect == Dialect::SurrealDb => mode = Mode::Angle,
+                // A SurrealQL block, such as a function body, holds statements of its own.
+                '{' if dialect == Dialect::SurrealDb => body_depth += 1,
+                '}' if dialect == Dialect::SurrealDb => body_depth = body_depth.saturating_sub(1),
                 // A `$` inside a word is part of an identifier, such as `price$usd`, not a tag.
                 '$' if matches!(dialect, Dialect::Postgres | Dialect::Scylla)
                     && !index
@@ -360,9 +377,13 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                     match word.as_str() {
                         _ if creating.is_none() => {
                             creating = Some(word == "create");
-                            batch = dialect == Dialect::Scylla && word == "begin";
+                            batch = matches!(dialect, Dialect::Scylla | Dialect::SurrealDb)
+                                && word == "begin";
                         }
-                        "apply" if batch => batch = false,
+                        "apply" if batch && dialect == Dialect::Scylla => batch = false,
+                        "commit" | "cancel" if batch && dialect == Dialect::SurrealDb => {
+                            batch = false;
+                        }
                         "trigger" | "procedure" | "function" | "event"
                             if creating == Some(true) =>
                         {
@@ -391,7 +412,9 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
             },
 
             // An escaped character is taken as it is, even a quote or a line break.
-            Mode::SingleQuote | Mode::DoubleQuote if escapes && character == '\\' => {
+            Mode::SingleQuote | Mode::DoubleQuote | Mode::Backtick
+                if escapes && character == '\\' =>
+            {
                 if peek!(1) == Some('\n') {
                     line += 1;
                 }
@@ -415,6 +438,7 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                 mode = Mode::Code;
             }
             Mode::Backtick if character == '`' => mode = Mode::Code,
+            Mode::Angle if character == '⟩' => mode = Mode::Code,
 
             Mode::LineComment if character == '\n' => mode = Mode::Code,
 
@@ -506,10 +530,13 @@ fn split_comments_only(text: &str, dialect: Dialect) -> bool {
         }
         let line_comment = rest
             .strip_prefix("--")
-            .or_else(|| rest.strip_prefix('#').filter(|_| dialect == Dialect::MySql))
+            .or_else(|| {
+                rest.strip_prefix('#')
+                    .filter(|_| matches!(dialect, Dialect::MySql | Dialect::SurrealDb))
+            })
             .or_else(|| {
                 rest.strip_prefix("//")
-                    .filter(|_| dialect == Dialect::Scylla)
+                    .filter(|_| matches!(dialect, Dialect::Scylla | Dialect::SurrealDb))
             });
         if let Some(after) = line_comment {
             rest = after
@@ -823,6 +850,15 @@ mod tests {
     }
 
     #[test]
+    fn clickhouse_reads_backslashes_in_quoted_runs_as_escapes() {
+        let input = "select 'it\\'s; fine', \"a\\\"; b\", `c\\`; d`; select 2";
+        assert_eq!(
+            sqls_as(input, Dialect::ClickHouse),
+            vec!["select 'it\\'s; fine', \"a\\\"; b\", `c\\`; d`", "select 2"]
+        );
+    }
+
+    #[test]
     fn a_trailing_backslash_ends_a_standard_string() {
         // PostgreSQL and SQLite take a backslash literally, so this string is `C:\`.
         for dialect in [Dialect::Postgres, Dialect::Sqlite] {
@@ -997,6 +1033,18 @@ mod tests {
         assert!(statements[0].sql.ends_with("APPLY BATCH"));
         assert!(statements[1].sql.ends_with("$$ return x; $$"));
         assert!(statements[2].sql.ends_with("select * from t"));
+    }
+
+    #[test]
+    fn a_surrealql_block_and_transaction_are_one_statement_each() {
+        let input = "BEGIN TRANSACTION;\nCREATE a;\nCREATE b;\nCOMMIT TRANSACTION;\n\
+                     DEFINE FUNCTION fn::f($x: int) { LET $y = $x; RETURN $y; };\n\
+                     // a note\n# another\nSELECT * FROM `we;ird\\``, ⟨o;k⟩ WHERE s = 'it\\'s;';\n-- only a note";
+        let statements = split(input, Dialect::SurrealDb);
+        assert_eq!(statements.len(), 3, "{statements:?}");
+        assert!(statements[0].sql.ends_with("COMMIT TRANSACTION"));
+        assert!(statements[1].sql.ends_with("RETURN $y; }"));
+        assert!(statements[2].sql.ends_with(r"'it\'s;'"), "{statements:?}");
     }
 
     #[test]

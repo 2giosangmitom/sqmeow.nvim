@@ -3,7 +3,7 @@
 local M = {}
 
 --- The filetype for each extension a scratchpad can have.
-local filetypes = { sql = 'sql', redis = 'redis', json = 'json' }
+local filetypes = { sql = 'sql', redis = 'redis', json = 'json', surql = 'surql' }
 
 --- Where scratchpads are kept.
 ---@return string

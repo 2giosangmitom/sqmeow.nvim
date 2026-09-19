@@ -132,7 +132,10 @@ impl Core {
             sql.dialect = open
                 .or_else(|| Dialect::from_url(&format!("{}:", args.opt_string("dialect")?)))
                 .unwrap_or(Dialect::Postgres);
-            if matches!(sql.dialect, Dialect::Redis | Dialect::MongoDb) {
+            if matches!(
+                sql.dialect,
+                Dialect::Redis | Dialect::MongoDb | Dialect::SurrealDb
+            ) {
                 return Err(format!(
                     "{} results cannot be exported as SQL",
                     sql.dialect.name()

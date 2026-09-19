@@ -10,6 +10,9 @@ function M.quote(dialect, name)
   if dialect == 'mysql' then
     return '`' .. name:gsub('`', '``') .. '`'
   end
+  if dialect == 'surrealdb' then
+    return '`' .. name:gsub('[\\`]', '\\%0') .. '`'
+  end
   return '"' .. name:gsub('"', '""') .. '"'
 end
 
@@ -21,6 +24,10 @@ function M.qualify(dialect, parts)
   -- A Redis key is not qualified by its database.
   if dialect == 'redis' or dialect == 'mongodb' then
     return parts[#parts]
+  end
+  -- Nor is a SurrealDB table, which is quoted all the same.
+  if dialect == 'surrealdb' then
+    return M.quote(dialect, parts[#parts])
   end
   return table.concat(
     vim.tbl_map(function(part)

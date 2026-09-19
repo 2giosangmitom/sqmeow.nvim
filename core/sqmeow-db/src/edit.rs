@@ -16,8 +16,12 @@ use crate::value::Cell;
 pub enum Source {
     /// SQL tables, ordered by their first column in the result.
     Tables(Vec<Table>),
-    /// A MongoDB collection, whose documents are found again by `_id` in the first column.
-    Collection { db: String, name: String },
+    /// A collection, whose documents are found again by its adapter-specific key field.
+    Collection {
+        db: String,
+        name: String,
+        key: String,
+    },
     /// One Redis key, laid out by the command that read it.
     Redis { key: String, kind: RedisKind },
 }
@@ -116,7 +120,7 @@ impl Source {
                 .map(Table::qualified)
                 .collect::<Vec<_>>()
                 .join(", "),
-            Self::Collection { db, name } => format!("{db}.{name}"),
+            Self::Collection { db, name, .. } => format!("{db}.{name}"),
             Self::Redis { key, .. } => key.clone(),
         }
     }
@@ -128,7 +132,7 @@ impl Source {
         };
         match self {
             Self::Tables(tables) => tables.iter().any(|table| table.column(column).is_some()),
-            Self::Collection { .. } => meta.name != "_id",
+            Self::Collection { key, .. } => meta.name != *key,
             Self::Redis { kind, .. } => match kind {
                 RedisKind::Hash | RedisKind::SortedSet => column < 2,
                 // An entry's id is the server's to give; its fields are what is written.
@@ -311,5 +315,34 @@ mod tests {
         assert_eq!(result.row_count(), 2);
         assert_eq!(result.cell(1, 1), Some(&Cell::Text("b".into())));
         assert_eq!(result.cell(1, 2), Some(&Cell::Null));
+    }
+
+    #[test]
+    fn only_a_collection_key_is_not_editable() {
+        let result = ResultSet::new(
+            "find people",
+            vec![
+                Column::new("_id", "objectId"),
+                Column::new("id", "string"),
+                Column::new("name", "string"),
+            ],
+        );
+        let mongo = Source::Collection {
+            db: "app".into(),
+            name: "people".into(),
+            key: "_id".into(),
+        };
+        let surreal = Source::Collection {
+            db: String::new(),
+            name: "people".into(),
+            key: "id".into(),
+        };
+
+        assert!(!mongo.editable(&result, 0));
+        assert!(mongo.editable(&result, 1));
+        assert!(mongo.editable(&result, 2));
+        assert!(surreal.editable(&result, 0));
+        assert!(!surreal.editable(&result, 1));
+        assert!(surreal.editable(&result, 2));
     }
 }

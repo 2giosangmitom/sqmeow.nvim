@@ -459,7 +459,7 @@ async fn documents_found_by_object_id_are_edited_added_and_removed() {
     assert_eq!(names(&found), vec!["_id", "name", "n"]);
     assert_eq!(found.columns()[0].type_name, "objectId");
     assert!(
-        matches!(found.source(), Some(Source::Collection { db, name }) if db == "sqmeow" && name == "edited"),
+        matches!(found.source(), Some(Source::Collection { db, name, key }) if db == "sqmeow" && name == "edited" && key == "_id"),
         "{:?}",
         found.source()
     );

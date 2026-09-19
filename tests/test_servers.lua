@@ -484,4 +484,101 @@ for _, server in ipairs({ 'scylla', 'cassandra' }) do
   end
 end
 
+-- The URL names a namespace; each case works in its `lua` database.
+local surreal = vim.env.SQMEOW_TEST_SURREALDB_URL
+T['surrealdb'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      skip_unless(surreal, 'SQMEOW_TEST_SURREALDB_URL')
+      helpers.connect(surreal .. '/lua', nil, TIMEOUT)
+      run('DEFINE DATABASE IF NOT EXISTS lua')
+    end,
+    post_case = function()
+      api.disconnect()
+    end,
+  },
+})
+
+T['surrealdb']['connects and reports its dialect'] = function()
+  eq(state.current_connection().dialect, 'surrealdb')
+end
+
+T['surrealdb']['lists tables and previews one with its id first'] = function()
+  run('DELETE lua_preview')
+  run("CREATE lua_preview:1 SET colour = 'plum'")
+
+  local groups = introspect({ 'lua' })
+  eq(named(groups, 'tables').count >= 1, true)
+  eq(named(groups, 'procedures'), nil)
+
+  local summary = run(sql.select_from('surrealdb', { 'lua', 'lua_preview' }, 10))
+  eq(summary.state, 'done')
+  eq(summary.rows, 1)
+  eq(header()[1]:match('^ t id%s+│ t colour$') ~= nil, true)
+  helpers.contains(lines()[1], 'lua_preview:1')
+  helpers.contains(lines()[1], 'plum')
+end
+
+T['surrealdb']['lists every database when the url names none'] = function()
+  api.disconnect()
+  helpers.connect(surreal, nil, TIMEOUT)
+  eq(named(introspect({}), 'lua').kind, 'database')
+end
+
+T['surrealdb']['names the database it runs on, following use'] = function()
+  local connection = assert(state.current_connection())
+  eq(connection.current_database, 'lua')
+  run('USE DB lua_other')
+  eq(connection.current_database, 'lua_other')
+end
+
+T['clickhouse'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      skip_unless(vim.env.SQMEOW_TEST_CLICKHOUSE_URL, 'SQMEOW_TEST_CLICKHOUSE_URL')
+      helpers.connect(vim.env.SQMEOW_TEST_CLICKHOUSE_URL, nil, TIMEOUT)
+    end,
+    post_case = function()
+      api.disconnect()
+    end,
+  },
+})
+
+T['clickhouse']['connects and reports its dialect'] = function()
+  eq(state.current_connection().dialect, 'clickhouse')
+end
+
+T['clickhouse']['filters and sorts a table on the server'] = function()
+  run('drop table if exists lua_filtered')
+  run('create table lua_filtered (id Int32, n Int32) engine = MergeTree order by id')
+  run('insert into lua_filtered values (1, 1), (2, 5), (3, 9)')
+  run('select id, n from lua_filtered')
+  result.open()
+
+  local before = state.call.call_id
+  eq(result.filter('n >= 5', 'n desc'), true)
+  helpers.wait_for('the filtered query should arrive', function()
+    return state.call.call_id ~= before and state.call.state ~= 'executing'
+  end, TIMEOUT)
+  eq(state.call.state, 'done')
+  eq(state.call.rows, 2)
+  helpers.contains(lines()[1], '9')
+end
+
+T['clickhouse']['lists databases and previews a table'] = function()
+  run('drop table if exists lua_preview')
+  run('create table lua_preview (id Int32, colour String) engine = MergeTree order by id')
+  run("insert into lua_preview values (1, 'plum')")
+
+  eq(named(introspect({}), 'default') ~= nil, true)
+  local groups = introspect({ 'default' })
+  eq(named(groups, 'tables').count >= 1, true)
+  eq(named(groups, 'procedures'), nil)
+
+  local summary = run(sql.select_from('clickhouse', { 'default', 'lua_preview' }, 10))
+  eq(summary.state, 'done')
+  eq(summary.rows, 1)
+  helpers.contains(lines()[1], 'plum')
+end
+
 return T

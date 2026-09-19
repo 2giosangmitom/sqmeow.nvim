@@ -97,6 +97,38 @@ M.list = {
     },
   },
   {
+    id = 'surrealdb',
+    label = 'SurrealDB',
+    scheme = 'surrealdb',
+    port = 8000,
+    fields = {
+      { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
+      { key = 'port', label = 'Port', optional = true, hint = '8000' },
+      { key = 'namespace', label = 'Namespace', optional = true, hint = 'main' },
+      -- Left empty, the drawer lists every database in the namespace.
+      { key = 'database', label = 'Database', optional = true, hint = 'all' },
+      { key = 'user', label = 'User', optional = true, hint = 'root' },
+      { key = 'password', label = 'Password', mask = true, optional = true },
+      { key = 'options', label = 'Options', optional = true, hint = 'auth=database' },
+      { key = 'tls', label = 'TLS', checkbox = true },
+    },
+  },
+  {
+    id = 'clickhouse',
+    label = 'ClickHouse',
+    scheme = 'clickhouse',
+    port = 8123,
+    fields = {
+      { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
+      { key = 'port', label = 'Port', optional = true, hint = '8123' },
+      { key = 'database', label = 'Database', optional = true, hint = 'all' },
+      { key = 'user', label = 'User', optional = true, hint = 'default' },
+      { key = 'password', label = 'Password', mask = true, optional = true },
+      { key = 'options', label = 'Options', optional = true, hint = 'max_threads=4' },
+      { key = 'tls', label = 'TLS', checkbox = true },
+    },
+  },
+  {
     id = 'sqlite',
     label = 'SQLite',
     scheme = 'sqlite',
@@ -124,6 +156,8 @@ local aliases = {
   valkeys = 'redis',
   ['mongodb+srv'] = 'mongodb',
   cassandra = 'scylla',
+  surrealdbs = 'surrealdb',
+  clickhouses = 'clickhouse',
   sqlite3 = 'sqlite',
   file = 'sqlite',
 }

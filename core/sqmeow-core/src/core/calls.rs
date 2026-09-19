@@ -90,7 +90,10 @@ impl Core {
         let wrapped = if condition.trim().is_empty() && order.trim().is_empty() {
             None
         } else {
-            if matches!(dialect, Dialect::Redis | Dialect::Scylla) {
+            if matches!(
+                dialect,
+                Dialect::Redis | Dialect::Scylla | Dialect::SurrealDb
+            ) {
                 return Err("filtering in the query needs a SQL or MongoDB database".to_owned());
             }
             let [statement] = statements.as_slice() else {

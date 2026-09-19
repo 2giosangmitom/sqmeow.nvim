@@ -15,6 +15,11 @@ T['qualify']['names a redis key by itself'] = function()
   eq(sql.qualify('redis', { 'db0', 'user:1' }), 'user:1')
 end
 
+T['qualify']['names a surrealdb table by itself, in backticks'] = function()
+  eq(sql.qualify('surrealdb', { 'main', 'we`ird' }), '`we\\`ird`')
+  eq(sql.select_from('surrealdb', { 'main', 'person' }, 5), 'select * from `person` limit 5')
+end
+
 T['qualify']['names a mongodb collection by itself'] = function()
   eq(sql.qualify('mongodb', { 'shop', 'orders' }), 'orders')
 end

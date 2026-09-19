@@ -487,8 +487,8 @@ function M.review()
 end
 
 --- Filter and order the current result with a WHERE condition and an ORDER BY list, which an open
---- SQL or MongoDB connection runs in the query and Redis, ScyllaDB or a closed connection runs on the
---- rows held. Empty strings clear them.
+--- SQL or MongoDB connection runs in the query and Redis, ScyllaDB, SurrealDB or a closed connection
+--- runs on the rows held. Empty strings clear them.
 ---@param view { where: string|nil, order_by: string|nil }
 ---@return boolean started
 ---@usage >lua
@@ -648,8 +648,8 @@ function M.export(opts)
     return text
   end
 
-  -- Redis and MongoDB have no table to insert into.
-  local sql = dialect ~= 'redis' and dialect ~= 'mongodb'
+  -- Redis, MongoDB and SurrealDB have no SQL table to insert into.
+  local sql = not vim.tbl_contains({ 'redis', 'mongodb', 'surrealdb' }, dialect)
   local formats = sql and { 'CSV', 'JSON', 'SQL' } or { 'CSV', 'JSON' }
   local format = (opts.format or 'csv'):upper()
   if not vim.list_contains(formats, format) then
