@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.2.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.1.0...v2.2.0) (2026-09-19)
+
+
+### Features
+
+* **edit:** cancel and time out applying changes ([c80bfe2](https://github.com/2giosangmitom/sqmeow.nvim/commit/c80bfe22554426f6efb6c55cc5e882c9de77b8fe))
+* **result:** draw staged edits like a diff ([5f3f95a](https://github.com/2giosangmitom/sqmeow.nvim/commit/5f3f95a103d9814e27e29cfe5a5370bff737d44a))
+* support ClickHouse and SurrealDB ([#22](https://github.com/2giosangmitom/sqmeow.nvim/issues/22)) ([cf21810](https://github.com/2giosangmitom/sqmeow.nvim/commit/cf21810719be246e10c139f080380867994280a6))
+
+
+### Fixes
+
+* address bugs found in source-code review ([81b6995](https://github.com/2giosangmitom/sqmeow.nvim/commit/81b699587af19663e91121029cf51465a640690c))
+* **edit:** let undo take back a deleted row ([e680cdd](https://github.com/2giosangmitom/sqmeow.nvim/commit/e680cddfedef10518fd7a5e4a892f1505a8fbc67))
+* kill timed-out exec commands and read unclaimed values raw ([588ef75](https://github.com/2giosangmitom/sqmeow.nvim/commit/588ef759192e4c310e957cf29048ee0fff8cca7f))
+* **postgres:** fall back when a server has no read-only sessions ([ba02602](https://github.com/2giosangmitom/sqmeow.nvim/commit/ba0260259fd8dc395d51d853cff521c016283c73))
+
+
+### Refactoring
+
+* add reusable table component ([c1bc5a8](https://github.com/2giosangmitom/sqmeow.nvim/commit/c1bc5a89d684a6b9b28638203f6d6fc4ac0a765c))
+* **table:** simplify table component and fix cell bugs ([#21](https://github.com/2giosangmitom/sqmeow.nvim/issues/21)) ([6127c9f](https://github.com/2giosangmitom/sqmeow.nvim/commit/6127c9f9d97b8338c3009ea8ec3589b8851070e0))
+
 ## [2.1.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.0.0...v2.1.0) (2026-09-15)
 
 
