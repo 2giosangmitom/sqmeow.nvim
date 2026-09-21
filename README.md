@@ -51,7 +51,7 @@
 
 ## 👀 Preview
 
-![Overview](assets/overview.webp)
+![Overview](assets/overview.png)
 
 ### ✏️ In-grid editing
 
