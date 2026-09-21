@@ -49,6 +49,18 @@
 | **SurrealDB**                  | SurrealQL via `surrealdb://` / `surrealdbs://`                                         |
 | **ClickHouse**                 | HTTP via `clickhouse://`, HTTPS via `clickhouses://`; results are read-only            |
 
+## 👀 Preview
+
+![Overview](assets/overview.png)
+
+### ✏️ In-grid editing
+
+![In-grid editing](./assets/inline-edit.png)
+
+### 🔍 Table structure
+
+![Table structure](./assets/table-structure.png)
+
 ## 🚀 Installation
 
 **Requirements:** Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim).
