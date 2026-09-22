@@ -50,6 +50,20 @@ M.list = {
     fields = server_fields(3306),
   },
   {
+    id = 'oracle',
+    label = 'Oracle Database',
+    scheme = 'oracle',
+    port = 1521,
+    fields = {
+      { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
+      { key = 'port', label = 'Port', optional = true, hint = '1521' },
+      { key = 'database', label = 'Service', optional = true, hint = 'XEPDB1' },
+      { key = 'user', label = 'User' },
+      { key = 'password', label = 'Password', mask = true, optional = true },
+      { key = 'tls', label = 'TLS', checkbox = true },
+    },
+  },
+  {
     id = 'redis',
     -- Valkey and Dragonfly speak the same protocol over the same URLs, so they are one choice.
     label = 'Redis, Valkey or Dragonfly',
@@ -158,6 +172,8 @@ local aliases = {
   cassandra = 'scylla',
   surrealdbs = 'surrealdb',
   clickhouses = 'clickhouse',
+  oracledb = 'oracle',
+  oracletcps = 'oracle',
   sqlite3 = 'sqlite',
   file = 'sqlite',
 }

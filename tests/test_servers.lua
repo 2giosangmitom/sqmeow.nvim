@@ -581,4 +581,56 @@ T['clickhouse']['lists databases and previews a table'] = function()
   helpers.contains(lines()[1], 'plum')
 end
 
+T['oracle'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      skip_unless(vim.env.SQMEOW_TEST_ORACLE_URL, 'SQMEOW_TEST_ORACLE_URL')
+      helpers.connect(vim.env.SQMEOW_TEST_ORACLE_URL, nil, TIMEOUT)
+    end,
+    post_case = function()
+      api.disconnect()
+    end,
+  },
+})
+
+T['oracle']['connects and reports its dialect'] = function()
+  eq(state.current_connection().dialect, 'oracle')
+end
+
+T['oracle']['filters and sorts a table on the server'] = function()
+  run('drop table lua_filtered')
+  run('create table lua_filtered (id number(10), n number(10))')
+  run('insert into lua_filtered values (1, 1)')
+  run('insert into lua_filtered values (2, 5)')
+  run('insert into lua_filtered values (3, 9)')
+  run('select id, n from lua_filtered')
+  result.open()
+
+  local before = state.call.call_id
+  eq(result.filter('n >= 5', 'n desc'), true)
+  helpers.wait_for('the filtered query should arrive', function()
+    return state.call.call_id ~= before and state.call.state ~= 'executing'
+  end, TIMEOUT)
+  eq(state.call.state, 'done')
+  eq(state.call.rows, 2)
+  helpers.contains(lines()[1], '9')
+  run('drop table lua_filtered')
+end
+
+T['oracle']['lists schemas and previews a table'] = function()
+  run('drop table lua_preview')
+  run('create table lua_preview (id number(10), colour varchar2(20))')
+  run("insert into lua_preview values (1, 'plum')")
+
+  eq(named(introspect({}), 'SQMEOW') ~= nil, true)
+  local groups = introspect({ 'SQMEOW' })
+  eq(named(groups, 'tables').count >= 1, true)
+
+  local summary = run(sql.select_from('oracle', { 'SQMEOW', 'LUA_PREVIEW' }, 10))
+  eq(summary.state, 'done')
+  eq(summary.rows, 1)
+  helpers.contains(lines()[1], 'plum')
+  run('drop table lua_preview')
+end
+
 return T

@@ -99,7 +99,7 @@ impl TypeClass {
         } else if has("BLOB")
             || has("BYTEA")
             || has("BINARY")
-            || matches!(name.as_str(), "BINDATA" | "BYTES")
+            || matches!(name.as_str(), "BINDATA" | "BYTES" | "RAW" | "LONG RAW")
         {
             Self::Binary
         } else if has("TIMESTAMP")
@@ -137,6 +137,8 @@ impl TypeClass {
                     | "MACADDR8"
                     | "CITEXT"
                     | "ASCII"
+                    | "ROWID"
+                    | "UROWID"
             )
         {
             Self::Text

@@ -56,6 +56,7 @@ T['reports the engine, its adapters, the configuration and nui.nvim'] = function
     'duckdb',
     'postgres',
     'mysql',
+    'oracle',
     'redis',
     'mongodb',
     'scylla',
@@ -72,7 +73,7 @@ end
 T['flags a connection no adapter handles'] = function()
   vim.env.SQMEOW_CONNECTIONS = vim.json.encode({
     { name = 'fine', url = 'sqlite://fine.db' },
-    { name = 'odd', url = 'oracle://host/space' },
+    { name = 'odd', url = 'mssql://host/space' },
   })
   use_env()
 
@@ -80,7 +81,7 @@ T['flags a connection no adapter handles'] = function()
   eq(#connections, 2)
   eq(starts(connections[1], 'ok: fine  sqlite://fine.db'), true)
   eq(starts(connections[2], 'error: odd'), true)
-  helpers.contains(connections[2], 'no adapter handles the `oracle` scheme')
+  helpers.contains(connections[2], 'no adapter handles the `mssql` scheme')
 end
 
 T['warns about a source that cannot be read'] = function()
@@ -108,6 +109,9 @@ T['knows the dialect of every scheme the engine accepts'] = function()
     PostgreSQL = 'postgres',
     mysql = 'mysql',
     mariadb = 'mysql',
+    oracle = 'oracle',
+    oracledb = 'oracle',
+    oracletcps = 'oracle',
     redis = 'redis',
     rediss = 'redis',
     valkey = 'redis',
@@ -120,7 +124,7 @@ T['knows the dialect of every scheme the engine accepts'] = function()
   for scheme, dialect in pairs(schemes) do
     eq({ scheme, health.dialect_of(scheme) }, { scheme, dialect })
   end
-  eq(health.dialect_of('oracle'), nil)
+  eq(health.dialect_of('mssql'), nil)
 end
 
 return T

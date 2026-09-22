@@ -74,6 +74,7 @@ M.links = {
   SqmeowIconScylla = 'Constant',
   SqmeowIconSurrealdb = 'Constant',
   SqmeowIconClickhouse = 'Constant',
+  SqmeowIconOracle = 'Constant',
   SqmeowIconKey = 'Identifier',
 }
 

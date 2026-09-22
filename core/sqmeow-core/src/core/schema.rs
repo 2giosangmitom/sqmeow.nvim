@@ -120,7 +120,7 @@ async fn top_nodes(connection: &Connection) -> Result<Vec<Value>, DbError> {
     // Left out where the roles cannot be read, as by a user without the right to.
     if matches!(
         connection.backend.dialect(),
-        Dialect::Postgres | Dialect::MySql | Dialect::ClickHouse
+        Dialect::Postgres | Dialect::MySql | Dialect::ClickHouse | Dialect::Oracle
     ) && let Ok(roles) = connection.backend.roles().await
     {
         nodes.push(group_node(ROLES, "Roles", "roles", roles.len()));

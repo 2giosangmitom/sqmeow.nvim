@@ -111,6 +111,10 @@ pub fn filtered(
         Some(names) => {
             format!("WITH sqmeow_view ({names}) AS (\n{inner}\n)\nSELECT * FROM sqmeow_view")
         }
+        // Oracle names a derived table without `AS`.
+        None if dialect == Dialect::Oracle => {
+            format!("SELECT * FROM (\n{inner}\n) sqmeow_view")
+        }
         None => format!("SELECT * FROM (\n{inner}\n) AS sqmeow_view"),
     };
     if !condition.trim().is_empty() {
@@ -636,6 +640,23 @@ mod tests {
 
     fn sqls_as(input: &str, dialect: Dialect) -> Vec<String> {
         split(input, dialect).into_iter().map(|s| s.sql).collect()
+    }
+
+    #[test]
+    fn an_oracle_filter_names_its_derived_table_without_as() {
+        assert_eq!(
+            filtered(
+                Dialect::Oracle,
+                "select * from t order by a;",
+                "b > 1",
+                "a desc",
+                &[]
+            )
+            .as_deref(),
+            Some(
+                "SELECT * FROM (\nselect * from t order by a\n) sqmeow_view\nWHERE b > 1\nORDER BY a desc"
+            )
+        );
     }
 
     #[test]

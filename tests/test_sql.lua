@@ -61,4 +61,12 @@ T['select_from']['finds in a mongodb collection on its own database'] = function
   )
 end
 
+T['select_from']['reads the first rows of an oracle table with fetch first'] = function()
+  eq(
+    sql.select_from('oracle', { 'SQMEOW', 'PEOPLE' }, 10),
+    'select * from "SQMEOW"."PEOPLE" fetch first 10 rows only'
+  )
+  eq(sql.select_from('oracle', { 'SQMEOW', 'PEOPLE' }), 'select * from "SQMEOW"."PEOPLE"')
+end
+
 return T

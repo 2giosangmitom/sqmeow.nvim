@@ -205,9 +205,9 @@ T['build']['says what is missing rather than writing a url that cannot work'] = 
 end
 
 T['build']['refuses a database it does not know'] = function()
-  local built, err = url.build('oracle', {})
+  local built, err = url.build('mssql', {})
   eq(built, nil)
-  eq(err, 'there is no `oracle` database')
+  eq(err, 'there is no `mssql` database')
 end
 
 T['build']['round trips everything parse produces'] = function()
@@ -273,6 +273,23 @@ T['build']['writes clickhouse tls as the clickhouses scheme'] = function()
   eq(url.build('clickhouse', { host = 'h', tls = 'no' }), 'clickhouse://h/')
   eq(url.parse('clickhouses://u:p@h:8443/logs').tls, 'yes')
   eq(url.parse('clickhouses://u:p@h:8443/logs').dialect, 'clickhouse')
+end
+
+T['build']['writes oracle tls as the oracletcps scheme'] = function()
+  eq(
+    url.build('oracle', { host = 'h', database = 'XEPDB1', user = 'u', tls = 'yes' }),
+    'oracletcps://u@h/XEPDB1'
+  )
+  eq(
+    url.build('oracle', { host = 'h', user = 'scott', password = 'tiger', database = 'XE' }),
+    'oracle://scott:tiger@h/XE'
+  )
+  local fields = assert(url.parse('oracletcps://scott:tiger@h:2484/XE'))
+  eq(
+    { fields.dialect, fields.database, fields.user, fields.tls },
+    { 'oracle', 'XE', 'scott', 'yes' }
+  )
+  eq(url.parse('oracledb://scott:tiger@h/XE').dialect, 'oracle')
 end
 
 T['build']['writes a scylla keyspace where a database would be'] = function()

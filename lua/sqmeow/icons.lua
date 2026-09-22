@@ -50,6 +50,7 @@ M.highlights = {
   scylla = 'SqmeowIconScylla',
   surrealdb = 'SqmeowIconSurrealdb',
   clickhouse = 'SqmeowIconClickhouse',
+  oracle = 'SqmeowIconOracle',
 
   -- What a column holds, or the key it is.
   text = 'SqmeowIconTypeText',

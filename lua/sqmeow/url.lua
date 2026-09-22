@@ -166,6 +166,9 @@ function M.split(url)
   if dialect == 'clickhouse' then
     fields.tls = scheme:lower() == 'clickhouses' and 'yes' or 'no'
   end
+  if dialect == 'oracle' then
+    fields.tls = scheme:lower() == 'oracletcps' and 'yes' or 'no'
+  end
   return fields
 end
 
@@ -238,6 +241,8 @@ function M.build(dialect, values)
     scheme = 'mongodb+srv'
   elseif dialect == 'clickhouse' and value('tls') == 'yes' then
     scheme = 'clickhouses'
+  elseif dialect == 'oracle' and value('tls') == 'yes' then
+    scheme = 'oracletcps'
   end
 
   local path = value('database')
