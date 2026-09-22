@@ -9,7 +9,7 @@
     "globals": ["vim"]
   },
   "workspace": {
-    "library": [".tests/data/nvim/lazy/mini.nvim/lua", ".tests/data/nvim/lazy/nui.nvim/lua"],
+    "library": ["$VIMRUNTIME", "${3rd}/luv/library", ".tests/data/nvim/lazy/mini.nvim/lua", ".tests/data/nvim/lazy/nui.nvim/lua"],
     "checkThirdParty": false,
     "ignoreDir": [".tests", "target"]
   }
