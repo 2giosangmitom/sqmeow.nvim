@@ -292,6 +292,16 @@ T['build']['writes oracle tls as the oracletcps scheme'] = function()
   eq(url.parse('oracledb://scott:tiger@h/XE').dialect, 'oracle')
 end
 
+T['build']['round trips oracle aliases and descriptors without adding a host'] = function()
+  for _, original in ipairs({
+    'oracle://u:p@/MYDB?tns_admin=/opt/network&as=sysdba',
+    'oracle://u:p@/?tns=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=db)(PORT=1521))(CONNECT_DATA=(SID=ORCL)))',
+    'oracletcps://u:p@db/service?wallet=/opt/wallet&wallet_password=p%26s',
+  }) do
+    eq(url.build('oracle', assert(url.parse(original))), original)
+  end
+end
+
 T['build']['writes a scylla keyspace where a database would be'] = function()
   eq(url.build('scylla', { host = 'h', database = 'shop' }), 'scylla://h/shop')
   eq(url.parse('cassandra://u:p@h:9042/shop').dialect, 'scylla')

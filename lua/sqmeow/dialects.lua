@@ -57,10 +57,11 @@ M.list = {
     fields = {
       { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
       { key = 'port', label = 'Port', optional = true, hint = '1521' },
-      { key = 'database', label = 'Service', optional = true, hint = 'XEPDB1' },
+      { key = 'database', label = 'Service / alias', optional = true, hint = 'XEPDB1' },
       { key = 'user', label = 'User' },
       { key = 'password', label = 'Password', mask = true, optional = true },
       { key = 'tls', label = 'TLS', checkbox = true },
+      { key = 'options', label = 'Options', optional = true, hint = 'as=sysdba' },
     },
   },
   {

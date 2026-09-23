@@ -210,7 +210,16 @@ function M.build(dialect, values)
   end
 
   local host = value('host')
-  if host == '' then
+  local oracle_tns = false
+  if dialect == 'oracle' then
+    for option in value('options'):gsub('^%?', ''):gmatch('[^&]+') do
+      local key = option:match('^([^=]+)=')
+      if key and (key:lower() == 'tns' or key:lower() == 'tns_admin') then
+        oracle_tns = true
+      end
+    end
+  end
+  if host == '' and not oracle_tns then
     host = 'localhost'
   end
 

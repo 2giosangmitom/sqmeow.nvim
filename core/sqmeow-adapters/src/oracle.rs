@@ -49,24 +49,62 @@ impl std::fmt::Debug for OracleAdapter {
 struct Target {
     host: String,
     port: u16,
+    /// A service name, or a TNS alias when `tns_admin` is given.
     service: String,
     user: String,
     password: String,
     tls: bool,
+    auth: Auth,
+    wallet_dir: Option<String>,
+    wallet_password: Option<String>,
+    tns_admin: Option<String>,
+    /// A full `(DESCRIPTION=...)` connect descriptor from `?tns=`.
+    descriptor: Option<String>,
+}
+
+/// The privilege to connect with.
+#[derive(Debug, PartialEq)]
+enum Auth {
+    Default,
+    SysDba,
+    SysOper,
 }
 
 impl OracleAdapter {
     /// Open a session on the host and service the URL names, on `database`
-    /// when given and otherwise on the one the URL names.
+    /// when given and otherwise on the one the URL names. Switching names a
+    /// service or alias; a `?tns=` descriptor stands alone.
     pub async fn connect(url: &str, database: Option<&str>) -> Result<Self> {
         let mut target = parse_url(url)?;
         if let Some(service) = database {
+            if target.descriptor.is_some() {
+                return Err(Error::driver(
+                    "switching databases needs a service or alias url, not a `?tns=` descriptor",
+                ));
+            }
             target.service = service.to_owned();
         }
         let connect_string = connect_string(&target);
         let open = move || {
-            let config = oracledb::Config::default()
-                .set_credentials(&target.user, &target.password)
+            let mut config =
+                oracledb::Config::default().set_credentials(&target.user, &target.password);
+            match target.auth {
+                Auth::SysDba => config = config.set_auth_mode(oracledb::AUTH_MODE_SYSDBA),
+                Auth::SysOper => config = config.set_auth_mode(oracledb::AUTH_MODE_SYSOPER),
+                Auth::Default => {}
+            }
+            if let Some(dir) = &target.wallet_dir {
+                config = config.set_wallet_location(dir);
+                if let Some(password) = &target.wallet_password
+                    && !password.is_empty()
+                {
+                    config = config.set_wallet_password(password);
+                }
+            }
+            if let Some(dir) = &target.tns_admin {
+                config = config.set_config_dir(dir);
+            }
+            let config = config
                 .set_connect_string(&connect_string)
                 .map_err(Error::driver)?;
             // Two sessions of their own: queries never hold up the drawer.
@@ -1693,8 +1731,15 @@ fn unsupported(name: &str, row: &oracledb::Row, index: usize) -> Cell {
     }
 }
 
-/// The Easy Connect string a target names.
+/// The Easy Connect string a target names, a TNS alias, or a full
+/// descriptor: whatever the listener should be told.
 fn connect_string(target: &Target) -> String {
+    if let Some(descriptor) = &target.descriptor {
+        return descriptor.clone();
+    }
+    if target.tns_admin.is_some() {
+        return target.service.clone();
+    }
     if target.tls {
         format!("tcps://{}:{}/{}", target.host, target.port, target.service)
     } else {
@@ -1704,6 +1749,11 @@ fn connect_string(target: &Target) -> String {
 
 /// Read the host, port, service, login and TLS flag from
 /// `oracle://user:password@host:1521/service`, or `oracletcps://` for TLS.
+///
+/// Options after `?`, joined by `&`: `as=sysdba|sysoper` to connect with a
+/// privilege, `wallet=DIR` (and `wallet_password=...`) for a client wallet,
+/// `tns_admin=DIR` to read the path as a TNS alias, and `tns=(DESCRIPTION=…​)`
+/// for a full descriptor, which carries its own address.
 fn parse_url(url: &str) -> Result<Target> {
     let (scheme, rest) = url
         .split_once("://")
@@ -1714,10 +1764,74 @@ fn parse_url(url: &str) -> Result<Target> {
         _ => return Err(Error::UnsupportedUrl(url.to_owned())),
     };
     let (rest, options) = rest.split_once('?').unwrap_or((rest, ""));
+    let decode = |text: &str| {
+        percent_decode_str(text)
+            .decode_utf8()
+            .map(|text| text.into_owned())
+            .map_err(Error::driver)
+    };
+    let mut auth = Auth::Default;
+    let mut wallet_dir = None;
+    let mut wallet_password = None;
+    let mut tns_admin = None;
+    let mut descriptor = None;
     if !options.is_empty() {
-        return Err(Error::driver(format!(
-            "an OracleDB url takes no options, not `?{options}`"
-        )));
+        for option in options.split('&') {
+            let (key, value) = option.split_once('=').unwrap_or((option, ""));
+            match key.to_ascii_lowercase().as_str() {
+                "as" => match value.to_ascii_lowercase().as_str() {
+                    "sysdba" => auth = Auth::SysDba,
+                    "sysoper" => auth = Auth::SysOper,
+                    _ => {
+                        return Err(Error::driver("`as` takes sysdba or sysoper"));
+                    }
+                },
+                "wallet" => {
+                    let dir = decode(value)?;
+                    if dir.is_empty() {
+                        return Err(Error::driver(
+                            "`wallet` needs a directory, as in ?wallet=/opt/oracle/wallet",
+                        ));
+                    }
+                    wallet_dir = Some(dir);
+                }
+                "wallet_password" => wallet_password = Some(decode(value)?),
+                "tns_admin" => {
+                    let dir = decode(value)?;
+                    if dir.is_empty() {
+                        return Err(Error::driver(
+                            "`tns_admin` needs a directory holding a tnsnames.ora",
+                        ));
+                    }
+                    tns_admin = Some(dir);
+                }
+                "tns" => {
+                    let descriptor_text = decode(value)?;
+                    if descriptor_text.is_empty() {
+                        return Err(Error::driver(
+                            "`tns` needs a descriptor, as in ?tns=(DESCRIPTION=…)",
+                        ));
+                    }
+                    descriptor = Some(descriptor_text);
+                }
+                _ => {
+                    return Err(Error::driver(
+                        "unknown OracleDB option; supported: as, wallet, wallet_password, tns_admin, tns",
+                    ));
+                }
+            }
+        }
+    }
+    if wallet_password.is_some() && wallet_dir.is_none() {
+        return Err(Error::driver("`wallet_password` needs `wallet`"));
+    }
+    if wallet_dir.is_some() && !tls && descriptor.is_none() && tns_admin.is_none() {
+        return Err(Error::driver(
+            "`wallet` needs oracletcps:// or a TCPS TNS descriptor/alias",
+        ));
+    }
+    if descriptor.is_some() && tns_admin.is_some() {
+        return Err(Error::driver("`tns` and `tns_admin` exclude each other"));
     }
     let (authority, service) = rest.split_once('/').unwrap_or((rest, ""));
     let (login, host) = match authority.rsplit_once('@') {
@@ -1725,12 +1839,6 @@ fn parse_url(url: &str) -> Result<Target> {
         None => (None, authority),
     };
 
-    let decode = |text: &str| {
-        percent_decode_str(text)
-            .decode_utf8()
-            .map(|text| text.into_owned())
-            .map_err(Error::driver)
-    };
     let (user, password) = match login {
         Some(login) => {
             let (user, password) = login.split_once(':').unwrap_or((login, ""));
@@ -1744,11 +1852,6 @@ fn parse_url(url: &str) -> Result<Target> {
         ));
     }
     let service = decode(service)?;
-    if service.is_empty() {
-        return Err(Error::driver(
-            "an OracleDB url needs a service name, as in oracle://user:password@host:1521/XEPDB1",
-        ));
-    }
     // A second slash starts a path no Easy Connect string holds.
     if service.contains('/') {
         return Err(Error::driver(
@@ -1757,25 +1860,62 @@ fn parse_url(url: &str) -> Result<Target> {
     }
 
     let default_port = if tls { DEFAULT_TCPS_PORT } else { DEFAULT_PORT };
-    let (host, port) = if host.is_empty() {
-        ("localhost".to_owned(), default_port)
+    let (given_host, given_port): (String, Option<u16>) = if host.is_empty() {
+        (String::new(), None)
     } else if host.ends_with(']') || !host.contains(':') {
-        (host.to_owned(), default_port)
+        (host.to_owned(), None)
     } else {
         let (host, port) = host.rsplit_once(':').unwrap_or((host, ""));
         let port: u16 = port
             .parse()
             .map_err(|_| Error::driver(format!("`{port}` is not a port for host `{host}`")))?;
-        (host.to_owned(), port)
+        (host.to_owned(), Some(port))
+    };
+    // A descriptor carries its own address; an alias carries everything but
+    // credentials. Either way the authority stays empty.
+    if descriptor.is_some() {
+        if !given_host.is_empty() || given_port.is_some() {
+            return Err(Error::driver(
+                "a `tns` descriptor carries its own address: oracle://user:password@/?tns=(DESCRIPTION=…)",
+            ));
+        }
+        if !service.is_empty() {
+            return Err(Error::driver("a `tns` descriptor takes no service path"));
+        }
+    } else if tns_admin.is_some() {
+        if !given_host.is_empty() || given_port.is_some() {
+            return Err(Error::driver(
+                "a `tns_admin` alias takes no host: oracle://user:password@/MYDB?tns_admin=/dir",
+            ));
+        }
+        if service.is_empty() {
+            return Err(Error::driver(
+                "a `tns_admin` url names a TNS alias as its path",
+            ));
+        }
+    } else if service.is_empty() {
+        return Err(Error::driver(
+            "an OracleDB url needs a service name, as in oracle://user:password@host:1521/XEPDB1",
+        ));
+    }
+    let host = if given_host.is_empty() {
+        "localhost".to_owned()
+    } else {
+        given_host
     };
 
     Ok(Target {
         host,
-        port,
+        port: given_port.unwrap_or(default_port),
         service,
         user,
         password,
         tls,
+        auth,
+        wallet_dir,
+        wallet_password,
+        tns_admin,
+        descriptor,
     })
 }
 
@@ -1794,6 +1934,11 @@ mod tests {
                 user: "u@x".into(),
                 password: "p:ss".into(),
                 tls: false,
+                auth: Auth::Default,
+                wallet_dir: None,
+                wallet_password: None,
+                tns_admin: None,
+                descriptor: None,
             }
         );
         assert_eq!(
@@ -1805,8 +1950,62 @@ mod tests {
                 user: "scott".into(),
                 password: "tiger".into(),
                 tls: false,
+                auth: Auth::Default,
+                wallet_dir: None,
+                wallet_password: None,
+                tns_admin: None,
+                descriptor: None,
             }
         );
+    }
+
+    #[test]
+    fn options_name_a_privilege_a_wallet_or_tns() {
+        let target = parse_url("oracle://scott:tiger@db.example.com:1521/ORCL?as=sysdba").unwrap();
+        assert_eq!(target.auth, Auth::SysDba);
+        assert_eq!(connect_string(&target), "db.example.com:1521/ORCL");
+        let target = parse_url("oracle://scott:tiger@db.example.com/ORCL?as=sysoper").unwrap();
+        assert_eq!(target.auth, Auth::SysOper);
+        assert_eq!(target.port, DEFAULT_PORT);
+        let target = parse_url(
+            "oracletcps://scott:tiger@db.example.com/ORCL?wallet=/opt/oracle/wallet&wallet_password=s3cret",
+        )
+        .unwrap();
+        assert_eq!(target.wallet_dir.as_deref(), Some("/opt/oracle/wallet"));
+        assert_eq!(target.wallet_password.as_deref(), Some("s3cret"));
+        let target =
+            parse_url("oracle://scott:tiger@/FINPROD?tns_admin=/opt/oracle/network").unwrap();
+        assert_eq!(target.service, "FINPROD");
+        assert_eq!(target.tns_admin.as_deref(), Some("/opt/oracle/network"));
+        assert_eq!(connect_string(&target), "FINPROD");
+        let target = parse_url(
+            "oracle://scott:tiger@/?tns=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=db)(PORT=1521))(CONNECT_DATA=(SID=ORCL)))",
+        )
+        .unwrap();
+        assert_eq!(
+            target.descriptor.as_deref(),
+            Some(
+                "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=db)(PORT=1521))(CONNECT_DATA=(SID=ORCL)))"
+            )
+        );
+        assert_eq!(
+            connect_string(&target),
+            "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=db)(PORT=1521))(CONNECT_DATA=(SID=ORCL)))"
+        );
+    }
+
+    #[test]
+    fn bad_options_and_shapes_are_refused() {
+        assert!(parse_url("oracle://u:p@h/s?as=root").is_err());
+        assert!(parse_url("oracle://u:p@h/s?bogus=1").is_err());
+        assert!(parse_url("oracle://u:p@h/s?wallet=").is_err());
+        assert!(parse_url("oracle://u:p@h/s?wallet_password=x").is_err());
+        assert!(parse_url("oracle://u:p@h/s?tns=").is_err());
+        assert!(parse_url("oracle://u:p@h/s?tns=x&tns_admin=y").is_err());
+        assert!(parse_url("oracle://u:p@h/s?tns_admin=d").is_err());
+        assert!(parse_url("oracle://u:p@h:1521/s?tns_admin=d").is_err());
+        assert!(parse_url("oracle://u:p@h/?tns=(DESCRIPTION=x)").is_err());
+        assert!(parse_url("oracle://u:p@h/s?tns=(DESCRIPTION=x)").is_err());
     }
 
     #[test]

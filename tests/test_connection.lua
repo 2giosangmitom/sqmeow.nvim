@@ -178,10 +178,11 @@ T['edit']['asks an Oracle connection for a service and tls'] = function()
     'Name ora',
     'Host db.internal',
     'Port 2484',
-    'Service XEPDB1',
+    'Service / alias XEPDB1',
     'User scott',
     'Password *****',
     'TLS [x]',
+    'Options as=sysdba',
     'SSH user@bastion',
     'Read only [ ]',
   })

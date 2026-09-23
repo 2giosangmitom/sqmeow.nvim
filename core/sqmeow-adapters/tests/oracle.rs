@@ -638,6 +638,86 @@ async fn a_sequence_describes_itself() {
 }
 
 #[tokio::test]
+async fn connects_as_sysdba_and_by_tns_alias() {
+    let server = server!();
+    // Same server, SYS with the same password the container sets for both.
+    let (scheme, rest) = server.split_once("://").expect("a scheme");
+    let (login, host) = rest.split_once('@').expect("a login");
+    let (_, password) = login.split_once(':').unwrap_or((login, ""));
+    let (hostport, _) = host.split_once('/').unwrap_or((host, ""));
+    let sys = connect(&format!(
+        "{scheme}://sys:{password}@{hostport}/FREEPDB1?as=sysdba"
+    ))
+    .await;
+    let schema = run(
+        &sys,
+        "select sys_context('USERENV', 'CURRENT_SCHEMA') from dual",
+    )
+    .await;
+    assert_eq!(schema.cell(0, 0), Some(&Cell::Text("SYS".into())));
+
+    // A client-side tnsnames.ora: one alias by service, one by SID.
+    let dir = std::env::temp_dir().join(format!("sqmeow-ora-tns-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a temp dir");
+    let (host, port) = hostport.rsplit_once(':').unwrap_or((hostport, "1521"));
+    std::fs::write(
+        dir.join("tnsnames.ora"),
+        format!(
+            "SQMEOW_ALIAS = (DESCRIPTION = (ADDRESS = (PROTOCOL = TCP)(HOST = {host})(PORT = {port})) \
+             (CONNECT_DATA = (SERVICE_NAME = FREEPDB1)))\n\
+             SQMEOW_SID = (DESCRIPTION = (ADDRESS = (PROTOCOL = TCP)(HOST = {host})(PORT = {port})) \
+             (CONNECT_DATA = (SID = FREE)))\n"
+        ),
+    )
+    .expect("a tnsnames.ora");
+    let tns = connect(&format!(
+        "{scheme}://sqmeow:{password}@/SQMEOW_ALIAS?tns_admin={}",
+        dir.display()
+    ))
+    .await;
+    let schema = run(
+        &tns,
+        "select sys_context('USERENV', 'CURRENT_SCHEMA') from dual",
+    )
+    .await;
+    assert_eq!(schema.cell(0, 0), Some(&Cell::Text("SQMEOW".into())));
+    // The SID alias lands on the CDB: only SYS gets in.
+    let cdb = connect(&format!(
+        "{scheme}://sys:{password}@/SQMEOW_SID?tns_admin={}&as=sysdba",
+        dir.display()
+    ))
+    .await;
+    let schema = run(
+        &cdb,
+        "select sys_context('USERENV', 'CURRENT_SCHEMA') from dual",
+    )
+    .await;
+    assert_eq!(schema.cell(0, 0), Some(&Cell::Text("SYS".into())));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn a_bogus_wallet_and_a_descriptor_switch_fail_cleanly() {
+    let server = server!();
+    let (scheme, rest) = server.split_once("://").expect("a scheme");
+    let (login, host) = rest.split_once('@').expect("a login");
+    let (_, password) = login.split_once(':').unwrap_or((login, ""));
+    let wallet = Backend::connect(&format!(
+        "oracletcps://sqmeow:{password}@{host}?wallet=/nonexistent-sqmeow-wallet"
+    ))
+    .await;
+    assert!(wallet.is_err(), "a missing wallet should not connect");
+    let descriptor = format!(
+        "{scheme}://sqmeow:{password}@/?tns=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=127.0.0.1)(PORT=1))(CONNECT_DATA=(SERVICE_NAME=FREEPDB1)))"
+    );
+    let switched = Backend::connect_to(&descriptor, Some("OTHER"), false).await;
+    assert!(
+        switched.is_err(),
+        "switching databases on a descriptor should fail"
+    );
+}
+
+#[tokio::test]
 async fn explain_plan_reads_the_plan_back() {
     let backend = connect(&server!()).await;
     drop_table(&backend, "ora_exp").await;
