@@ -182,11 +182,7 @@ services:
     ports:
       - "51521:1521"
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "echo 'select 1 from dual;' | sqlplus -S sqmeow/sqmeow@localhost:1521/FREEPDB1",
-        ]
+      test: ["CMD", "healthcheck.sh"]
       interval: 10s
       timeout: 10s
       retries: 60

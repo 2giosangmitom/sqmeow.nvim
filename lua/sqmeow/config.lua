@@ -107,7 +107,7 @@ M.defaults = {
     scylla = '󰆼',
     surrealdb = '',
     clickhouse = '',
-    oracle = '',
+    oracle = '',
 
     -- What sits before a drawer row: whether its children are showing, or that it has none.
     markers = { open = '', closed = '', leaf = ' ' },

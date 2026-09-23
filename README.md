@@ -48,7 +48,7 @@
 | **ScyllaDB** / Cassandra       | CQL via `scylla://` / `cassandra://`, `?ssl=true`                                      |
 | **SurrealDB**                  | SurrealQL via `surrealdb://` / `surrealdbs://`                                         |
 | **ClickHouse**                 | HTTP via `clickhouse://`, HTTPS via `clickhouses://`; results are read-only            |
-| **Oracle Database**            | `oracle://`, `oracletcps://` for TLS                                                   |
+| **Oracle Database**            | `oracle://`, `oracledb://`, `oracletcps://` for TLS                                |
 
 ## 👀 Preview
 
@@ -108,7 +108,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 - **MongoDB** — database commands as Extended JSON, e.g. `{"find": "users"}`. `use db_name` switches database.
 - **ScyllaDB** — `?ssl=true` for TLS, `?sslrootcert=/path/ca.pem` for custom CA.
 - **SurrealDB** — `surrealdb://user:pass@host:8000/namespace/database`; leave out the database to list every one in the namespace. `surrealdbs://` for TLS, `?auth=namespace` or `?auth=database` for a non-root user, `?sslrootcert=/path/ca.pem` for custom CA. `USE DB name` switches database. Scratchpads ending in `.surql` get the `surql` filetype.
-- **Oracle Database** — `oracle://user:pass@host:1521/XEPDB1`; `oracletcps://` (port 2484) for TLS. Cancelling a query returns at once, but the next query waits for the cancelled one, since the driver cannot stop it on the server.
+- **Oracle Database** — `oracle://user:pass@host:1521/XEPDB1` (`oracledb://` also works); `oracletcps://` (port 2484) for TLS. Cancelling a query returns at once, but the next query waits for the cancelled one, since the driver cannot stop it on the server.
 
 ### SSH Tunnels
 

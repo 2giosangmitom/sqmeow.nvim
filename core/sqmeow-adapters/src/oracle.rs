@@ -1440,7 +1440,7 @@ fn parse_url(url: &str) -> Result<Target> {
         let (host, port) = host.rsplit_once(':').unwrap_or((host, ""));
         let port: u16 = port
             .parse()
-            .map_err(|_| Error::driver(format!("`{port}` is not a port in `{url}`")))?;
+            .map_err(|_| Error::driver(format!("`{port}` is not a port for host `{host}`")))?;
         (host.to_owned(), port)
     };
 
