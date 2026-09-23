@@ -169,6 +169,30 @@ impl OracleAdapter {
         Ok(rows)
     }
 
+    /// Run a metadata query that answers a `LONG` column, such as
+    /// `data_default` or `search_condition`. The driver's cached statements
+    /// misread those on re-execute and desynchronize the session with
+    /// `unknown TTC message type` errors, so these queries skip the cache.
+    fn query_long<T>(
+        meta: &oracledb::Connection,
+        sql: &str,
+        binds: &[String],
+        mut read: impl FnMut(&oracledb::Row) -> Result<T>,
+    ) -> Result<Vec<T>> {
+        let params: Vec<&dyn oracledb::ToDbValue> = binds
+            .iter()
+            .map(|bind| bind as &dyn oracledb::ToDbValue)
+            .collect();
+        let mut statement = meta.statement(sql).map_err(Error::driver)?;
+        statement.exclude_from_cache();
+        let cursor = statement.query(&params).map_err(Error::driver)?;
+        let mut rows = Vec::new();
+        for row in cursor {
+            rows.push(read(&row.map_err(Error::driver)?)?);
+        }
+        Ok(rows)
+    }
+
     /// Where a plain single-table result's rows are stored, with its key
     /// columns marked, or `None` when the statement is not one.
     fn source(
@@ -700,7 +724,7 @@ impl Adapter for OracleAdapter {
         self.run_meta(move |meta| {
             let (schema, relation) = resolve_table(meta, &schema, &relation)?;
             let binds = [schema.clone(), relation.clone()];
-            let rows: Vec<ColumnRow> = Self::query_bound(
+            let rows: Vec<ColumnRow> = Self::query_long(
                 meta,
                 "select c.column_name, c.data_type, c.data_length, c.data_precision, c.data_scale,
                         c.nullable, c.data_default, c.char_used, c.char_length
@@ -760,37 +784,50 @@ impl Adapter for OracleAdapter {
         self.run_meta(move |meta| {
             let (schema, relation) = resolve_table(meta, &schema, &relation)?;
             let binds = [schema, relation];
-            let rows: Vec<(String, String, String, bool)> = Self::query_bound(
+            let rows: Vec<IndexRow> = Self::query_long(
                 meta,
                 "select i.index_name, c.column_name, i.uniqueness,
-                        case when p.constraint_name is null then 0 else 1 end
+                        case when p.constraint_name is null then 0 else 1 end,
+                        c.descend, e.column_expression
                  from all_indexes i
                  join all_ind_columns c
                    on c.index_owner = i.owner and c.index_name = i.index_name
                  left join all_constraints p
                    on p.owner = i.owner and p.constraint_name = i.index_name
                   and p.constraint_type = 'P'
+                 left join all_ind_expressions e
+                   on e.index_owner = c.index_owner and e.index_name = c.index_name
+                  and e.column_position = c.column_position
                  where i.table_owner = :1 and i.table_name = :2
                  order by i.index_name, c.column_position",
                 &binds,
                 |row| {
-                    Ok((
-                        row.get::<String>(0).map_err(Error::driver)?,
-                        row.get::<String>(1).map_err(Error::driver)?,
-                        row.get::<String>(2).map_err(Error::driver)?,
-                        row.get::<u8>(3).map_err(Error::driver)? != 0,
-                    ))
+                    Ok(IndexRow {
+                        name: row.get::<String>(0).map_err(Error::driver)?,
+                        column: row.get::<String>(1).map_err(Error::driver)?,
+                        uniqueness: row.get::<String>(2).map_err(Error::driver)?,
+                        primary: row.get::<u8>(3).map_err(Error::driver)? != 0,
+                        descend: row.get::<Option<String>>(4).map_err(Error::driver)?,
+                        expression: row.get::<Option<String>>(5).map_err(Error::driver)?,
+                    })
                 },
             )?;
             let mut indexes: Vec<IndexNode> = Vec::new();
-            for (name, column, uniqueness, primary) in rows {
+            for row in rows {
+                // A descending or function-based key reads back as an
+                // expression (`\"SALARY\"`, `UPPER(\"EMAIL\")`); plain
+                // ascending columns stay bare names.
+                let mut column = row.expression.unwrap_or(row.column);
+                if row.descend.is_some_and(|descend| descend == "DESC") {
+                    column.push_str(" DESC");
+                }
                 match indexes.last_mut() {
-                    Some(index) if index.name == name => index.columns.push(column),
+                    Some(index) if index.name == row.name => index.columns.push(column),
                     _ => indexes.push(IndexNode {
-                        unique: uniqueness == "UNIQUE",
-                        primary,
+                        unique: row.uniqueness == "UNIQUE",
+                        primary: row.primary,
                         columns: vec![column],
-                        name,
+                        name: row.name,
                     }),
                 }
             }
@@ -853,7 +890,7 @@ impl Adapter for OracleAdapter {
                     ))
                 },
             )?;
-            let checks: Vec<(String, String)> = Self::query_bound(
+            let checks: Vec<(String, String)> = Self::query_long(
                 meta,
                 "select constraint_name, search_condition from all_constraints
                  where owner = :1 and table_name = :2 and constraint_type = 'C'
@@ -951,6 +988,17 @@ fn resolve_table(
         return resolve_table(meta, &upper.0, &upper.1);
     }
     Ok((schema.to_owned(), relation.to_owned()))
+}
+
+/// One key of `all_ind_columns`, with its sort direction and, for a
+/// function-based key, the expression from `all_ind_expressions`.
+struct IndexRow {
+    name: String,
+    column: String,
+    uniqueness: String,
+    primary: bool,
+    descend: Option<String>,
+    expression: Option<String>,
 }
 
 /// One column of `all_tab_columns`, as selected above.

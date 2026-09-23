@@ -612,6 +612,87 @@ async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
 }
 
 #[tokio::test]
+async fn indexes_name_their_direction_and_expressions() {
+    let backend = connect(&server!()).await;
+    drop_table(&backend, "ora_idx").await;
+    run(
+        &backend,
+        "create table ora_idx (
+            id number primary key, email varchar2(80), salary number(10, 2)
+        )",
+    )
+    .await;
+    run(
+        &backend,
+        "create index ora_idx_desc on ora_idx (salary desc)",
+    )
+    .await;
+    run(
+        &backend,
+        "create index ora_idx_expr on ora_idx (upper(email))",
+    )
+    .await;
+
+    let indexes = backend.indexes(SCHEMA, "ORA_IDX").await.unwrap();
+    let columns = |name: &str| {
+        indexes
+            .iter()
+            .find(|index| index.name == name)
+            .unwrap_or_else(|| panic!("{name} should be listed: {indexes:?}"))
+            .columns
+            .clone()
+    };
+    assert_eq!(columns("ORA_IDX_DESC"), vec!["\"SALARY\" DESC".to_owned()]);
+    assert_eq!(columns("ORA_IDX_EXPR"), vec!["UPPER(\"EMAIL\")".to_owned()]);
+
+    run(&backend, "drop index ora_idx_desc").await;
+    run(&backend, "drop index ora_idx_expr").await;
+    drop_table(&backend, "ora_idx").await;
+}
+
+#[tokio::test]
+async fn columns_survive_a_default_ending_in_a_newline() {
+    let backend = connect(&server!()).await;
+    drop_table(&backend, "ora_nl").await;
+    drop_table(&backend, "ora_next").await;
+    // A `CURRENT_TIMESTAMP` default followed by a newline lands in
+    // DATA_DEFAULT, a LONG column the driver's cached statements misread,
+    // desynchronizing the session with `unknown TTC message type` errors on
+    // the *next* table read. Both tables must read here: the failure
+    // surfaces on the second one.
+    run(
+        &backend,
+        "CREATE TABLE ora_nl (
+            id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            full_name VARCHAR2(100) NOT NULL,
+            email VARCHAR2(100) UNIQUE NOT NULL,
+            phone VARCHAR2(20),
+            ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)",
+    )
+    .await;
+    run(
+        &backend,
+        "CREATE TABLE ora_next (
+            id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            user_id NUMBER NOT NULL,
+            status VARCHAR2(20) DEFAULT 'pending',
+            total NUMBER(12, 2) DEFAULT 0,
+            odate TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)",
+    )
+    .await;
+
+    let columns = backend.columns(SCHEMA, "ORA_NL").await.unwrap();
+    assert_eq!(columns.len(), 5);
+    let columns = backend.columns(SCHEMA, "ORA_NEXT").await.unwrap();
+    assert_eq!(columns.len(), 5);
+
+    drop_table(&backend, "ora_nl").await;
+    drop_table(&backend, "ora_next").await;
+}
+
+#[tokio::test]
 async fn a_materialized_view_describes_its_definition() {
     let backend = connect(&server!()).await;
     drop_table(&backend, "ora_mv").await;
