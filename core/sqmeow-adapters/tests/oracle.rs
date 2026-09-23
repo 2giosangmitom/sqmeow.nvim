@@ -350,6 +350,71 @@ async fn lists_functions_and_procedures_apart() {
 }
 
 #[tokio::test]
+async fn creates_a_trigger_naming_new_and_old() {
+    let backend = connect(&server!()).await;
+    // Start clean: an earlier aborted run may have left objects behind.
+    for sql in [
+        "drop trigger ora_audit_probe_trg",
+        "drop table ora_audit_log",
+        "drop table ora_audit_probe",
+    ] {
+        let _ = backend.execute(sql, NO_CAP, CancellationToken::new()).await;
+    }
+    run(
+        &backend,
+        "create table ora_audit_probe (id number(10) primary key, n number(10))",
+    )
+    .await;
+    run(
+        &backend,
+        "create table ora_audit_log (id number(10), action varchar2(10))",
+    )
+    .await;
+    // `:NEW` and `:OLD` are part of the stored source, never evaluated: the
+    // driver is handed NULLs instead of erroring on missing binds.
+    run(
+        &backend,
+        "create or replace trigger ora_audit_probe_trg
+         after insert or update or delete on ora_audit_probe
+         for each row
+         begin
+           if inserting then
+             insert into ora_audit_log values (:new.id, 'INSERT');
+           elsif updating then
+             insert into ora_audit_log values (:new.id, 'UPDATE');
+           else
+             insert into ora_audit_log values (:old.id, 'DELETE');
+           end if;
+         end;",
+    )
+    .await;
+    run(&backend, "insert into ora_audit_probe values (1, 10)").await;
+    run(&backend, "update ora_audit_probe set n = 11 where id = 1").await;
+    run(&backend, "delete from ora_audit_probe where id = 1").await;
+    let logged = run(&backend, "select action from ora_audit_log order by 1").await;
+    let actions: Vec<&str> = (0..logged.row_count())
+        .filter_map(|row| match logged.cell(row, 0) {
+            Some(Cell::Text(action)) => Some(action.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(actions, vec!["DELETE", "INSERT", "UPDATE"]);
+    // A placeholder in a real query still errors honestly, not as NULL.
+    let error = backend
+        .execute(
+            "select * from ora_audit_probe where id = :1",
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("a bound query without binds should fail");
+    assert!(error.to_string().contains("bind"), "{error}");
+    run(&backend, "drop trigger ora_audit_probe_trg").await;
+    run(&backend, "drop table ora_audit_log").await;
+    run(&backend, "drop table ora_audit_probe").await;
+}
+
+#[tokio::test]
 async fn lists_columns_in_their_declared_order() {
     let backend = connect(&server!()).await;
     fixture(&backend, "ora_described").await;

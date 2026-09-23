@@ -69,6 +69,18 @@ impl OracleAdapter {
             // Two sessions of their own: queries never hold up the drawer.
             let work = oracledb::connect(config.clone()).map_err(Error::driver)?;
             let meta = oracledb::connect(config).map_err(Error::driver)?;
+            // Table DDL reads as logic, not storage: no `TABLESPACE ...`,
+            // `STORAGE (...)` or `SEGMENT ...` clauses.
+            meta.execute(
+                "begin
+                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'PRETTY', true);
+                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'SEGMENT_ATTRIBUTES', false);
+                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'STORAGE', false);
+                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'TABLESPACE', false);
+                 end;",
+                &[],
+            )
+            .map_err(Error::driver)?;
             Ok::<_, Error>((work, meta))
         };
         let (connection, meta) =
@@ -1123,11 +1135,11 @@ fn run_statement(
             }
             // Anything the query refused may still execute, such as
             // `EXPLAIN PLAN`.
-            Err(query_error) => match connection.execute(statement, &[]) {
-                Ok(outcome) => {
+            Err(query_error) => match execute_update(connection, statement) {
+                Ok(affected) => {
                     connection.commit().map_err(Error::driver)?;
                     let mut result = ResultSet::new(statement, Vec::new());
-                    result.set_affected(outcome.rows_affected());
+                    result.set_affected(affected);
                     result.set_elapsed(started.elapsed());
                     return Ok(result);
                 }
@@ -1135,10 +1147,7 @@ fn run_statement(
             },
         }
     }
-    let affected = connection
-        .execute(statement, &[])
-        .map_err(Error::driver)?
-        .rows_affected();
+    let affected = execute_update(connection, statement)?;
     // Like the other adapters, one statement commits what it changed: only
     // `apply` holds a transaction open across statements.
     connection.commit().map_err(Error::driver)?;
@@ -1146,6 +1155,52 @@ fn run_statement(
     result.set_affected(affected);
     result.set_elapsed(started.elapsed());
     Ok(result)
+}
+
+/// Whether the statement stores PL/SQL without running it: `CREATE TRIGGER`,
+/// `PROCEDURE`, `FUNCTION` or `PACKAGE`. Its `:NEW`-style placeholders are
+/// part of the stored source and never evaluated.
+fn stores_plsql(statement: &str) -> bool {
+    let words = sqmeow_db::guard::words(Dialect::Oracle, statement);
+    let mut top = words
+        .iter()
+        .filter(|(_, depth)| *depth == 0)
+        .map(|(word, _)| word.as_str());
+    if top.next() != Some("create") {
+        return false;
+    }
+    let mut top =
+        top.skip_while(|word| matches!(*word, "or" | "replace" | "editionable" | "noneditionable"));
+    matches!(
+        top.next(),
+        Some("trigger" | "procedure" | "function" | "package")
+    )
+}
+
+/// Run stored PL/SQL as dynamic SQL, so its placeholders stay inside the
+/// string literal and the driver sees no binds at all. Handing the driver
+/// NULLs does not work: the server reads `:NEW` as a correlation name with
+/// no bind slot, and extra binds fail the execute.
+fn immediate_block(statement: &str) -> String {
+    format!(
+        "BEGIN EXECUTE IMMEDIATE '{}'; END;",
+        statement.replace('\'', "''")
+    )
+}
+
+/// Run a statement that answers no rows: plain `execute`, except stored
+/// PL/SQL, which runs as dynamic SQL (see `immediate_block`).
+fn execute_update(connection: &oracledb::Connection, statement: &str) -> Result<u64> {
+    if !stores_plsql(statement) {
+        return Ok(connection
+            .execute(statement, &[])
+            .map_err(Error::driver)?
+            .rows_affected());
+    }
+    Ok(connection
+        .execute(immediate_block(statement).as_str(), &[])
+        .map_err(Error::driver)?
+        .rows_affected())
 }
 
 /// Whether the statement answers with rows.
@@ -1516,6 +1571,34 @@ mod tests {
         assert_eq!(bare_transaction("rollback to savepoint sp"), None);
         assert_eq!(bare_transaction("committed"), None);
         assert_eq!(bare_transaction("select 1 from dual"), None);
+    }
+
+    #[test]
+    fn only_stored_plsql_takes_the_dynamic_sql_path() {
+        assert!(stores_plsql(
+            "create or replace trigger t before insert on e begin null; end;"
+        ));
+        assert!(stores_plsql("CREATE PROCEDURE p AS BEGIN NULL; END;"));
+        assert!(stores_plsql(
+            "-- a comment\ncreate or replace editionable package p as procedure q; end;"
+        ));
+        assert!(!stores_plsql(
+            "create table t as select * from e where id = :1"
+        ));
+        assert!(!stores_plsql("select * from e where id = :1"));
+        assert!(!stores_plsql("begin null; end;"));
+    }
+
+    #[test]
+    fn dynamic_sql_hides_placeholders_and_doubles_quotes() {
+        assert_eq!(
+            immediate_block("create trigger t begin null; end;"),
+            "BEGIN EXECUTE IMMEDIATE 'create trigger t begin null; end;'; END;"
+        );
+        assert_eq!(
+            immediate_block("insert into t values ('it''s :x')"),
+            "BEGIN EXECUTE IMMEDIATE 'insert into t values (''it''''s :x'')'; END;"
+        );
     }
 
     #[test]
