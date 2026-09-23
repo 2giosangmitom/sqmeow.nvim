@@ -323,6 +323,11 @@ async fn lists_functions_and_procedures_apart() {
         "create or replace procedure ora_proc as begin null; end;",
     )
     .await;
+    run(
+        &backend,
+        "create or replace package ora_pack as procedure p; function f(x number) return number; end;",
+    )
+    .await;
 
     let routines = backend
         .routines(SCHEMA)
@@ -338,8 +343,10 @@ async fn lists_functions_and_procedures_apart() {
 
     assert_eq!(kinds("ORA_FN"), vec![sqmeow_db::RoutineKind::Function]);
     assert_eq!(kinds("ORA_PROC"), vec![sqmeow_db::RoutineKind::Procedure]);
+    assert_eq!(kinds("ORA_PACK"), vec![sqmeow_db::RoutineKind::Package]);
     run(&backend, "drop function ora_fn").await;
     run(&backend, "drop procedure ora_proc").await;
+    run(&backend, "drop package ora_pack").await;
 }
 
 #[tokio::test]

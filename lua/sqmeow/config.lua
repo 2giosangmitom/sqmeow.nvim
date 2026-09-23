@@ -81,6 +81,7 @@ M.defaults = {
     disconnected = '●',
     ['function'] = '󰊕',
     procedure = '󰡱',
+    package = '󰏓',
     key = '',
     sequence = '󰎠',
     role = '󰀄',
@@ -90,6 +91,7 @@ M.defaults = {
     views = '󰈈',
     functions = '󰊕',
     procedures = '󰡱',
+    packages = '󰏓',
     sequences = '󰎠',
     roles = '󰀄',
     -- A Redis database's groups, one per type of value, all drawn with the same glyph.

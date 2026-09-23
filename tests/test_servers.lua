@@ -617,6 +617,16 @@ T['oracle']['filters and sorts a table on the server'] = function()
   run('drop table lua_filtered')
 end
 
+T['oracle']['lists packages as their own group'] = function()
+  run('create or replace package lua_pack as procedure p; end;')
+
+  local groups = introspect({ 'SQMEOW' })
+  eq(named(groups, 'packages').count >= 1, true)
+  eq(named(introspect({ 'SQMEOW', 'packages' }), 'LUA_PACK').kind, 'package')
+
+  run('drop package lua_pack')
+end
+
 T['oracle']['lists schemas and previews a table'] = function()
   run('drop table lua_preview')
   run('create table lua_preview (id number(10), colour varchar2(20))')

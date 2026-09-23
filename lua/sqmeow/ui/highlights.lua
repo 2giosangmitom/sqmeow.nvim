@@ -53,6 +53,7 @@ M.links = {
   SqmeowDisconnected = 'Normal',
   SqmeowIconFunction = 'Function',
   SqmeowIconProcedure = 'Macro',
+  SqmeowIconPackage = 'Macro',
 
   -- The glyph before each column name in the result grid, and beside each column in the drawer.
   SqmeowIconTypeText = 'String',

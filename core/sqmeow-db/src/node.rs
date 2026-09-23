@@ -88,6 +88,8 @@ impl KeyType {
 pub enum RoutineKind {
     Function,
     Procedure,
+    /// A packaged unit: Oracle packages, holding procedures and functions.
+    Package,
 }
 
 impl RoutineKind {
@@ -96,6 +98,7 @@ impl RoutineKind {
         match self {
             Self::Function => "function",
             Self::Procedure => "procedure",
+            Self::Package => "package",
         }
     }
 }
@@ -245,6 +248,13 @@ mod tests {
         assert_eq!(RelationKind::MaterializedView.name(), "materialized view");
         assert_eq!(RelationKind::Other.name(), "relation");
         assert_eq!(RelationKind::Key(KeyType::Hash).name(), "key");
+    }
+
+    #[test]
+    fn routine_kinds_have_names_for_the_interface() {
+        assert_eq!(RoutineKind::Function.name(), "function");
+        assert_eq!(RoutineKind::Procedure.name(), "procedure");
+        assert_eq!(RoutineKind::Package.name(), "package");
     }
 
     #[test]

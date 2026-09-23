@@ -665,7 +665,7 @@ impl Adapter for OracleAdapter {
             let rows: Vec<(String, String)> = Self::query_bound(
                 meta,
                 "select object_name, object_type from all_objects
-                 where owner = :1 and object_type in ('FUNCTION', 'PROCEDURE')
+                 where owner = :1 and object_type in ('FUNCTION', 'PROCEDURE', 'PACKAGE')
                  order by 1",
                 &binds,
                 |row| {

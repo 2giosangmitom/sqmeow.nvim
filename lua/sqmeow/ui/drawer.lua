@@ -142,6 +142,7 @@ local implied = {
   view = true,
   ['function'] = true,
   procedure = true,
+  package = true,
   key = true,
   sequence = true,
   role = true,

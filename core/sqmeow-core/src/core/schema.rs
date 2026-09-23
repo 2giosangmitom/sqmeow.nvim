@@ -245,7 +245,11 @@ async fn group_nodes(
         .iter()
         .filter(|r| r.kind == RoutineKind::Procedure)
         .count();
-    let functions = routines.len() - procedures;
+    let packages = routines
+        .iter()
+        .filter(|r| r.kind == RoutineKind::Package)
+        .count();
+    let functions = routines.len() - procedures - packages;
 
     let mut groups = vec![
         group_node("tables", "Tables", "tables", tables),
@@ -269,6 +273,10 @@ async fn group_nodes(
             "procedures",
             procedures,
         ));
+    }
+    // Only Oracle reports packages, and only where there is at least one.
+    if packages > 0 {
+        groups.push(group_node("packages", "Packages", "packages", packages));
     }
     Ok(groups)
 }
@@ -305,9 +313,11 @@ async fn members(
                     .collect(),
             ))
         }
-        "functions" | "procedures" => {
+        "functions" | "procedures" | "packages" => {
             let want = if group == "procedures" {
                 RoutineKind::Procedure
+            } else if group == "packages" {
+                RoutineKind::Package
             } else {
                 RoutineKind::Function
             };

@@ -84,6 +84,8 @@ pub use self::surrealdb::SurrealAdapter;
 pub(crate) fn routine_node(name: String, kind: &str) -> RoutineNode {
     let kind = if kind.eq_ignore_ascii_case("procedure") {
         RoutineKind::Procedure
+    } else if kind.eq_ignore_ascii_case("package") {
+        RoutineKind::Package
     } else {
         RoutineKind::Function
     };
