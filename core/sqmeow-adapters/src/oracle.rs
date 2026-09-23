@@ -867,6 +867,60 @@ impl Adapter for OracleAdapter {
         self.run_meta(move |meta| {
             let (schema, relation) = resolve_table(meta, &schema, &relation)?;
             let binds = [schema.clone(), relation.clone()];
+            // Sequences read as relations but own no columns: describe the
+            // sequence itself instead of an empty table.
+            let sequence: Vec<SequenceRow> = Self::query_bound(
+                meta,
+                "select to_char(min_value), to_char(max_value),
+                        to_char(increment_by), cycle_flag, order_flag,
+                        to_char(cache_size), to_char(last_number)
+                 from all_sequences
+                 where sequence_owner = :1 and sequence_name = :2",
+                &binds,
+                |row| {
+                    Ok(SequenceRow {
+                        min: row.get::<String>(0).map_err(Error::driver)?,
+                        max: row.get::<String>(1).map_err(Error::driver)?,
+                        increment: row.get::<String>(2).map_err(Error::driver)?,
+                        cycle: row.get::<String>(3).map_err(Error::driver)?,
+                        order: row.get::<String>(4).map_err(Error::driver)?,
+                        cache: row.get::<String>(5).map_err(Error::driver)?,
+                        last: row.get::<String>(6).map_err(Error::driver)?,
+                    })
+                },
+            )?;
+            if let Some(sequence) = sequence.into_iter().next() {
+                let yes_no = |flag: &str| {
+                    if flag == "Y" {
+                        "yes".to_owned()
+                    } else {
+                        "no".to_owned()
+                    }
+                };
+                let ddl_binds = [relation.clone(), schema.clone()];
+                let definition = Self::query_bound(
+                    meta,
+                    "select dbms_metadata.get_ddl('SEQUENCE', :1, :2) from dual",
+                    &ddl_binds,
+                    |row| row.get::<Option<String>>(0).map_err(Error::driver),
+                )?
+                .into_iter()
+                .next()
+                .flatten();
+                return Ok(Details {
+                    properties: vec![
+                        ("increment by".to_owned(), sequence.increment),
+                        ("min value".to_owned(), sequence.min),
+                        ("max value".to_owned(), sequence.max),
+                        ("cache size".to_owned(), sequence.cache),
+                        ("cycle".to_owned(), yes_no(&sequence.cycle)),
+                        ("order".to_owned(), yes_no(&sequence.order)),
+                        ("last number".to_owned(), sequence.last),
+                    ],
+                    definition,
+                    ..Details::default()
+                });
+            }
             let comment: Option<String> = Self::query_bound(
                 meta,
                 "select comments from all_tab_comments
@@ -905,19 +959,29 @@ impl Adapter for OracleAdapter {
                     ))
                 },
             )?;
-            let triggers: Vec<(String, String)> = Self::query_bound(
+            let triggers: Vec<(String, String)> = Self::query_long(
                 meta,
-                "select trigger_name, triggering_event || ' ' || trigger_type from all_triggers
+                "select trigger_name, triggering_event || ' ' || trigger_type,
+                        status, when_clause
+                 from all_triggers
                  where table_owner = :1 and table_name = :2
                  order by trigger_name",
                 &binds,
                 |row| {
-                    Ok((
-                        row.get::<String>(0).map_err(Error::driver)?,
-                        row.get::<Option<String>>(1)
-                            .map_err(Error::driver)?
-                            .unwrap_or_default(),
-                    ))
+                    let event = row
+                        .get::<Option<String>>(1)
+                        .map_err(Error::driver)?
+                        .unwrap_or_default();
+                    let status: Option<String> = row.get(2).map_err(Error::driver)?;
+                    let when: Option<String> = row.get(3).map_err(Error::driver)?;
+                    let mut info = event;
+                    if let Some(when) = when {
+                        info = format!("{info} WHEN ({})", when.trim());
+                    }
+                    if status.is_some_and(|status| status != "ENABLED") {
+                        info = format!("{info} DISABLED");
+                    }
+                    Ok((row.get::<String>(0).map_err(Error::driver)?, info))
                 },
             )?;
             let foreign_keys = foreign_keys(meta, &schema, &relation).unwrap_or_default();
@@ -988,6 +1052,17 @@ fn resolve_table(
         return resolve_table(meta, &upper.0, &upper.1);
     }
     Ok((schema.to_owned(), relation.to_owned()))
+}
+
+/// One row of `all_sequences`, numbers as text: ranges reach 10^27.
+struct SequenceRow {
+    min: String,
+    max: String,
+    increment: String,
+    cycle: String,
+    order: String,
+    cache: String,
+    last: String,
 }
 
 /// One key of `all_ind_columns`, with its sort direction and, for a
@@ -1245,8 +1320,13 @@ fn execute_update(connection: &oracledb::Connection, statement: &str) -> Result<
             .map_err(Error::driver)?
             .rows_affected());
     }
+    // Oracle only compiles the stored source with its closing `;`.
+    let mut body = statement.trim_end().to_owned();
+    if !body.ends_with(';') {
+        body.push(';');
+    }
     Ok(connection
-        .execute(immediate_block(statement).as_str(), &[])
+        .execute(immediate_block(body.as_str()).as_str(), &[])
         .map_err(Error::driver)?
         .rows_affected())
 }

@@ -559,6 +559,85 @@ async fn a_failing_statement_rolls_back_the_ones_before_it() {
 }
 
 #[tokio::test]
+async fn a_table_describes_its_triggers_when_clauses_and_status() {
+    let backend = connect(&server!()).await;
+    drop_table(&backend, "ora_trg").await;
+    run(
+        &backend,
+        "create table ora_trg (id number primary key, n number)",
+    )
+    .await;
+    run(
+        &backend,
+        "create or replace trigger ora_trg_when before update on ora_trg
+         for each row when (new.n > 0) begin :new.n := :new.n; end;",
+    )
+    .await;
+    run(
+        &backend,
+        // No closing `;`: the adapter supplies it, since Oracle only
+        // compiles stored PL/SQL with one.
+        "create or replace trigger ora_trg_off after delete on ora_trg
+         begin null; end",
+    )
+    .await;
+    run(&backend, "alter trigger ora_trg_off disable").await;
+
+    let details = backend.details(SCHEMA, "ORA_TRG").await.unwrap();
+    let info = |name: &str| {
+        details
+            .triggers
+            .iter()
+            .find(|trigger| trigger.0 == name)
+            .unwrap_or_else(|| panic!("{name} should be listed: {details:?}"))
+            .1
+            .clone()
+    };
+    assert_eq!(
+        info("ORA_TRG_WHEN"),
+        "UPDATE BEFORE EACH ROW WHEN (new.n > 0)"
+    );
+    assert_eq!(info("ORA_TRG_OFF"), "DELETE AFTER STATEMENT DISABLED");
+
+    run(&backend, "drop trigger ora_trg_when").await;
+    run(&backend, "drop trigger ora_trg_off").await;
+    drop_table(&backend, "ora_trg").await;
+}
+
+#[tokio::test]
+async fn a_sequence_describes_itself() {
+    let backend = connect(&server!()).await;
+    drop_table(&backend, "ora_seq").await;
+    run(
+        &backend,
+        "create sequence ora_seq start with 5 increment by 5
+         maxvalue 1000 nocycle cache 10 order",
+    )
+    .await;
+
+    let details = backend.details(SCHEMA, "ORA_SEQ").await.unwrap();
+    for property in [
+        ("increment by", "5"),
+        ("min value", "1"),
+        ("max value", "1000"),
+        ("cache size", "10"),
+        ("cycle", "no"),
+        ("order", "yes"),
+    ] {
+        assert!(
+            details
+                .properties
+                .contains(&(property.0.into(), property.1.into())),
+            "{property:?} should be listed: {details:?}"
+        );
+    }
+    let definition = details.definition.expect("a sequence has a definition");
+    assert!(definition.contains("ORA_SEQ"), "{definition}");
+
+    drop_table(&backend, "ora_seq").await;
+}
+
+#[tokio::test]
 async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
     let backend = connect(&server!()).await;
     drop_table(&backend, "ora_det_child").await;
