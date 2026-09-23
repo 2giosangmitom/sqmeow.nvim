@@ -8,8 +8,11 @@
 //! cancel returns at once while the query runs on in the background. The next
 //! query waits for it, since they share one session.
 
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use percent_encoding::percent_decode_str;
 use sqmeow_db::{
@@ -1169,11 +1172,9 @@ fn foreign_keys(
     Ok(keys)
 }
 
-/// `Some(true)` for a bare `COMMIT`, `Some(false)` for a bare `ROLLBACK`,
-/// and `None` for anything else.
-fn bare_transaction(statement: &str) -> Option<bool> {
-    let mut rest = statement.trim_start();
-    // Past leading comments, the way `first_word` reads them.
+/// Past whitespace and comments, the way `first_word` reads them.
+fn skip_trivia(text: &str) -> &str {
+    let mut rest = text.trim_start();
     loop {
         if let Some(after) = rest.strip_prefix("--") {
             rest = after
@@ -1189,6 +1190,29 @@ fn bare_transaction(statement: &str) -> Option<bool> {
             break;
         }
     }
+    rest
+}
+
+/// The text after `keyword` where it opens the text (case-insensitively),
+/// or `None`. A word boundary follows the keyword.
+fn strip_keyword<'a>(text: &'a str, keyword: &str) -> Option<&'a str> {
+    if text.len() >= keyword.len()
+        && text[..keyword.len()].eq_ignore_ascii_case(keyword)
+        && text[keyword.len()..]
+            .chars()
+            .next()
+            .is_none_or(|next| !next.is_ascii_alphanumeric() && !matches!(next, '_' | '$' | '#'))
+    {
+        Some(&text[keyword.len()..])
+    } else {
+        None
+    }
+}
+
+/// `Some(true)` for a bare `COMMIT`, `Some(false)` for a bare `ROLLBACK`,
+/// and `None` for anything else.
+fn bare_transaction(statement: &str) -> Option<bool> {
+    let rest = skip_trivia(statement);
     let end = rest
         .char_indices()
         .find(|(_, c)| !c.is_alphabetic())
@@ -1204,15 +1228,7 @@ fn bare_transaction(statement: &str) -> Option<bool> {
     if let Some(stripped) = tail.strip_prefix(';') {
         tail = stripped.trim_start();
     }
-    loop {
-        if let Some(after) = tail.strip_prefix("--") {
-            tail = after.split_once('\n').map_or("", |(_, t)| t).trim_start();
-        } else if let Some(after) = tail.strip_prefix("/*") {
-            tail = after.split_once("*/").map_or("", |(_, t)| t).trim_start();
-        } else {
-            break;
-        }
-    }
+    tail = skip_trivia(tail);
     tail.is_empty().then_some(commit)
 }
 
@@ -1243,6 +1259,19 @@ fn run_statement(
         // meaning through `execute`.
         None => {}
     }
+    // A plan reads back through `DBMS_XPLAN`: Oracle stores it in a table
+    // and answers no rows itself.
+    if let Some(inner) = explain_inner(statement) {
+        return explain_plan(
+            connection,
+            default_schema,
+            inner,
+            statement,
+            origin,
+            max_rows,
+            started,
+        );
+    }
     if is_query(statement) {
         match connection.query(statement, &[]) {
             Ok(cursor) => {
@@ -1256,8 +1285,7 @@ fn run_statement(
                     started,
                 );
             }
-            // Anything the query refused may still execute, such as
-            // `EXPLAIN PLAN`.
+            // Anything the query refused may still execute.
             Err(query_error) => match execute_update(connection, statement) {
                 Ok(affected) => {
                     connection.commit().map_err(Error::driver)?;
@@ -1278,6 +1306,120 @@ fn run_statement(
     result.set_affected(affected);
     result.set_elapsed(started.elapsed());
     Ok(result)
+}
+
+/// The inner statement of a plain `EXPLAIN PLAN FOR <statement>`, or `None`
+/// for anything else — including `SET STATEMENT_ID` and `INTO` variants,
+/// which execute as written without reading the plan back.
+fn explain_inner(statement: &str) -> Option<&str> {
+    let rest = skip_trivia(statement);
+    let rest = strip_keyword(rest, "explain")?;
+    let rest = skip_trivia(rest);
+    let rest = strip_keyword(rest, "plan")?;
+    let rest = skip_trivia(rest);
+    let rest = strip_keyword(rest, "for")?;
+    Some(skip_trivia(rest))
+}
+
+/// The conventional plan table, as `rdbms/admin/utlxplan.sql` shapes it,
+/// without `sharing=none`, which older servers reject.
+const CREATE_PLAN_TABLE: &str = "create table plan_table (
+    statement_id varchar2(30), plan_id number, timestamp date,
+    remarks varchar2(4000), operation varchar2(30), options varchar2(255),
+    object_node varchar2(128), object_owner varchar2(128),
+    object_name varchar2(128), object_alias varchar2(261),
+    object_instance numeric, object_type varchar2(30), optimizer varchar2(255),
+    search_columns number, id numeric, parent_id numeric, depth numeric,
+    position numeric, cost numeric, cardinality numeric, bytes numeric,
+    other_tag varchar2(255), partition_start varchar2(255),
+    partition_stop varchar2(255), partition_id numeric, other long,
+    distribution varchar2(30), cpu_cost numeric, io_cost numeric,
+    temp_space numeric, access_predicates varchar2(4000),
+    filter_predicates varchar2(4000), projection varchar2(4000),
+    time numeric, qblock_name varchar2(128), other_xml clob
+) nocompress";
+
+/// The guidance when no plan table can be had.
+fn plan_table_guidance(error: impl std::fmt::Display) -> Error {
+    Error::driver(format!(
+        "explain plan needs a PLAN_TABLE, which is missing and could not be created ({error}); \
+         ask your DBA to create it from rdbms/admin/utlxplan.sql or grant CREATE TABLE"
+    ))
+}
+
+/// A plan table the session can see, creating the conventional one when
+/// none is visible.
+fn ensure_plan_table(connection: &oracledb::Connection) -> Result<()> {
+    let visible: Vec<String> = OracleAdapter::query_bound(
+        connection,
+        "select table_name from all_tables
+         where table_name = 'PLAN_TABLE' and rownum = 1",
+        &[],
+        |row| row.get::<String>(0).map_err(Error::driver),
+    )?;
+    if !visible.is_empty() {
+        return Ok(());
+    }
+    match connection.execute(CREATE_PLAN_TABLE, &[]) {
+        Ok(_) => {
+            connection.commit().map_err(Error::driver)?;
+            Ok(())
+        }
+        // Already there: a DBA-managed one, or a racing session made it.
+        Err(error) if error.to_string().contains("ORA-00955") => Ok(()),
+        Err(error) => Err(plan_table_guidance(error)),
+    }
+}
+
+/// Run `EXPLAIN PLAN FOR <inner>` and read the plan back through
+/// `DBMS_XPLAN`.
+fn explain_plan(
+    connection: &oracledb::Connection,
+    default_schema: &str,
+    inner: &str,
+    statement: &str,
+    origin: &str,
+    max_rows: usize,
+    started: Instant,
+) -> Result<ResultSet> {
+    ensure_plan_table(connection)?;
+    // A shared PLAN_TABLE serves every session: tag this plan so the
+    // read-back cannot catch another session's.
+    static PLAN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |time| time.as_millis() % 10_000_000_000_000);
+    let id = format!(
+        "SQM{millis:013}_{:04}",
+        PLAN_SEQUENCE.fetch_add(1, Ordering::Relaxed) % 10_000
+    );
+    let inner = inner.trim_end().trim_end_matches(';').trim_end();
+    let planned = format!("explain plan set statement_id = '{id}' for {inner}");
+    if let Err(error) = connection.execute(planned.as_str(), &[]) {
+        if error.to_string().contains("ORA-02404") {
+            return Err(plan_table_guidance(error));
+        }
+        return Err(Error::driver(error));
+    }
+    connection.commit().map_err(Error::driver)?;
+    let display = format!("select * from table(dbms_xplan.display('PLAN_TABLE', '{id}'))");
+    let outcome = match connection.query(display.as_str(), &[]) {
+        Ok(cursor) => read_cursor(
+            connection,
+            default_schema,
+            cursor,
+            statement,
+            origin,
+            max_rows,
+            started,
+        ),
+        Err(error) => Err(Error::driver(error)),
+    };
+    // Best effort: leave no rows behind in a table others share.
+    let cleanup = format!("delete from plan_table where statement_id = '{id}'");
+    let _ = connection.execute(cleanup.as_str(), &[]);
+    let _ = connection.commit();
+    outcome
 }
 
 /// Whether the statement stores PL/SQL without running it: `CREATE TRIGGER`,
@@ -1686,6 +1828,31 @@ mod tests {
         assert!(parse_url("oracle://u@h/a/b").is_err());
         assert!(parse_url("oracle://u@h/s?ssl=true").is_err());
         assert!(parse_url("postgres://u@h/s").is_err());
+    }
+
+    #[test]
+    fn only_a_plain_explain_plan_reads_its_plan_back() {
+        assert_eq!(
+            explain_inner("explain plan for select 1 from dual"),
+            Some("select 1 from dual")
+        );
+        assert_eq!(
+            explain_inner("-- look\nEXPLAIN PLAN FOR select 1 from dual"),
+            Some("select 1 from dual")
+        );
+        assert_eq!(explain_inner("explain plan for"), Some(""));
+        assert_eq!(explain_inner("select 1 from dual"), None);
+        assert_eq!(explain_inner("explain"), None);
+        assert_eq!(explain_inner("explain plan"), None);
+        assert_eq!(
+            explain_inner("explain plan set statement_id = 'x' for select 1 from dual"),
+            None
+        );
+        assert_eq!(
+            explain_inner("explain plan into other for select 1 from dual"),
+            None
+        );
+        assert_eq!(explain_inner("explain plans for select 1 from dual"), None);
     }
 
     #[test]

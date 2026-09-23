@@ -638,6 +638,34 @@ async fn a_sequence_describes_itself() {
 }
 
 #[tokio::test]
+async fn explain_plan_reads_the_plan_back() {
+    let backend = connect(&server!()).await;
+    drop_table(&backend, "ora_exp").await;
+    run(
+        &backend,
+        "create table ora_exp (id number primary key, n number)",
+    )
+    .await;
+
+    let plan = run(
+        &backend,
+        "explain plan for select * from ora_exp where id = 1",
+    )
+    .await;
+    assert!(plan.row_count() > 0, "{plan:?}");
+    assert_eq!(plan.columns()[0].name, "PLAN_TABLE_OUTPUT");
+    let text: String = (0..plan.row_count())
+        .filter_map(|row| match plan.cell(row, 0) {
+            Some(Cell::Text(line)) => Some(line.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("SELECT STATEMENT"), "{text}");
+    drop_table(&backend, "ora_exp").await;
+}
+
+#[tokio::test]
 async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
     let backend = connect(&server!()).await;
     drop_table(&backend, "ora_det_child").await;
