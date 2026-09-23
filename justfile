@@ -70,7 +70,7 @@ test-rust:
     if [ -n "$(docker compose ps --status running --quiet surrealdb 2>/dev/null)" ]; then
         export SQMEOW_TEST_SURREALDB_URL="surrealdb://root:root@127.0.0.1:58000/sqmeow"
     fi
-    if [ "$(docker inspect --format '{{.State.Health.Status}}' $(docker compose ps -q oracle 2>/dev/null) 2>/dev/null)" = "healthy" ]; then
+    if docker compose ps oracle 2>/dev/null | grep -q "(healthy)"; then
         export SQMEOW_TEST_ORACLE_URL="oracle://sqmeow:sqmeow@127.0.0.1:51521/FREEPDB1"
     fi
     if [ -n "$(docker compose ps --status running --quiet cockroach 2>/dev/null)" ]; then
@@ -135,7 +135,7 @@ test-lua: build-debug
     if [ -n "$(docker compose ps --status running --quiet surrealdb 2>/dev/null)" ]; then
         export SQMEOW_TEST_SURREALDB_URL="surrealdb://root:root@127.0.0.1:58000/sqmeow"
     fi
-    if [ "$(docker inspect --format '{{.State.Health.Status}}' $(docker compose ps -q oracle 2>/dev/null) 2>/dev/null)" = "healthy" ]; then
+    if docker compose ps oracle 2>/dev/null | grep -q "(healthy)"; then
         export SQMEOW_TEST_ORACLE_URL="oracle://sqmeow:sqmeow@127.0.0.1:51521/FREEPDB1"
     fi
     nvim -l tests/minit.lua
