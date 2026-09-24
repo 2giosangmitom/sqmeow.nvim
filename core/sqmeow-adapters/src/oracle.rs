@@ -1431,9 +1431,12 @@ struct PlsqlResults<'a> {
 impl PlsqlResults<'_> {
     fn close(&mut self) -> Result<()> {
         if let Some(id) = self.id.take() {
+            // `binary_integer`, not `integer`: the driver's number encoding
+            // keeps a trailing zero pair (e.g. in cursor ids ending in `00`),
+            // which the strict `integer` conversion rejects with ORA-06502.
             self.connection
                 .execute(
-                    "declare c integer := :1; begin dbms_sql.close_cursor(c); end;",
+                    "declare c binary_integer := :1; begin dbms_sql.close_cursor(c); end;",
                     &[&id],
                 )
                 .map_err(Error::driver)?;
