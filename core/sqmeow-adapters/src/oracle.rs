@@ -673,13 +673,35 @@ impl Adapter for OracleAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
+        Ok(self
+            .execute_results(statement, origin, max_rows, cancel)
+            .await?
+            .pop()
+            .unwrap_or_else(|| ResultSet::new(statement, Vec::new())))
+    }
+
+    async fn execute_results(
+        &self,
+        statement: &str,
+        origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
         let (statement, origin, default_schema) = (
             statement.to_owned(),
             origin.to_owned(),
             self.default_schema.clone(),
         );
         self.run(&cancel, move |connection| {
-            run_statement(connection, &default_schema, &statement, &origin, max_rows)
+            if matches!(
+                sqmeow_db::sql::first_word(&statement).as_str(),
+                "begin" | "declare" | "call"
+            ) {
+                run_plsql(connection, &default_schema, &statement, max_rows)
+            } else {
+                run_statement(connection, &default_schema, &statement, &origin, max_rows)
+                    .map(|result| vec![result])
+            }
         })
         .await
     }
@@ -1396,6 +1418,113 @@ fn run_statement(
     result.set_affected(affected);
     result.set_elapsed(started.elapsed());
     Ok(result)
+}
+
+/// The driver exposes OUT cursors but not implicit results. Oracle's
+/// DBMS_SQL client cursor lets us receive RETURN_RESULT without rewriting
+/// user SQL or exposing any special bind names to the user.
+struct PlsqlResults<'a> {
+    connection: &'a oracledb::Connection,
+    id: Option<i64>,
+}
+
+impl PlsqlResults<'_> {
+    fn close(&mut self) -> Result<()> {
+        if let Some(id) = self.id.take() {
+            self.connection
+                .execute(
+                    "declare c integer := :1; begin dbms_sql.close_cursor(c); end;",
+                    &[&id],
+                )
+                .map_err(Error::driver)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PlsqlResults<'_> {
+    fn drop(&mut self) {
+        // Also closes implicit results not yet retrieved, including after a
+        // decode/fetch error. Retrieved cursors are owned by the driver.
+        let _ = self.close();
+    }
+}
+
+fn run_plsql(
+    connection: &oracledb::Connection,
+    default_schema: &str,
+    statement: &str,
+    max_rows: usize,
+) -> Result<Vec<ResultSet>> {
+    let started = Instant::now();
+    let mut sql = statement.trim_end().to_owned();
+    if sqmeow_db::sql::first_word(statement) == "call" {
+        sql = sql.trim_end_matches(';').to_owned();
+    } else if !sql.ends_with(';') {
+        sql.push_str("\n;");
+    }
+    // Cached OUT-cursor statements can leave this driver stuck after a
+    // returned result followed by a PL/SQL exception. Keep these uncached.
+    let mut opened = connection
+        .statement(
+            "declare
+           c integer;
+           n integer;
+         begin
+           c := dbms_sql.open_cursor(treat_as_client_for_results => true);
+           dbms_sql.parse(c, :source, dbms_sql.native);
+           n := dbms_sql.execute(c);
+           :parent := c;
+         exception when others then
+           if dbms_sql.is_open(c) then dbms_sql.close_cursor(c); end if;
+           raise;
+         end;",
+        )
+        .map_err(Error::driver)?
+        .exclude_from_cache()
+        .execute_named(&[("source", &sql), ("parent", &&oracledb::DB_TYPE_NUMBER)])
+        .map_err(Error::driver)?;
+    let id: i64 = opened.out_bind_data().get(0).map_err(Error::driver)?;
+    let mut parent = PlsqlResults {
+        connection,
+        id: Some(id),
+    };
+    let mut results = Vec::new();
+    loop {
+        let next = connection
+            .statement("begin dbms_sql.get_next_result(:parent, :result); end;")
+            .map_err(Error::driver)?
+            .exclude_from_cache()
+            .execute_named(&[("parent", &id), ("result", &&oracledb::DB_TYPE_CURSOR)]);
+        let mut next = match next {
+            Ok(next) => next,
+            // This API raises NO_DATA_FOUND when all results are retrieved.
+            Err(error) if error.to_string().contains("ORA-01403:") => break,
+            Err(error) => return Err(Error::driver(error)),
+        };
+        let cursor = next
+            .out_bind_data()
+            .take::<oracledb::Cursor>(0)
+            .map_err(Error::driver)?;
+        results.push(read_cursor(
+            connection,
+            default_schema,
+            cursor,
+            statement,
+            "",
+            max_rows,
+            started,
+        )?);
+    }
+    parent.close()?;
+    connection.commit().map_err(Error::driver)?;
+    if results.is_empty() {
+        results.push(ResultSet::new(statement, Vec::new()));
+    }
+    for result in &mut results {
+        result.set_elapsed(started.elapsed());
+    }
+    Ok(results)
 }
 
 /// The inner statement of a plain `EXPLAIN PLAN FOR <statement>`, or `None`

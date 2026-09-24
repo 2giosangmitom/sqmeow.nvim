@@ -190,6 +190,17 @@ impl Backend {
         dispatch!(self, adapter => adapter.execute_wrapped(statement, origin, max_rows, cancel).await)
     }
 
+    /// Execute one statement and retain all of its result sets.
+    pub async fn execute_results(
+        &self,
+        statement: &str,
+        origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        dispatch!(self, adapter => adapter.execute_results(statement, origin, max_rows, cancel).await)
+    }
+
     /// Plan staged changes to a result into the statements that make them.
     pub fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         dispatch!(self, adapter => adapter.plan(result, changes))

@@ -746,6 +746,176 @@ async fn explain_plan_reads_the_plan_back() {
 }
 
 #[tokio::test]
+async fn a_native_ref_cursor_block_returns_typed_rows_and_honors_the_cap() {
+    let backend = connect(&server!()).await;
+    run(
+        &backend,
+        "create or replace procedure ora_cursor_rows(n number, result out sys_refcursor) as
+        begin
+            open result for select level as id, cast(null as varchar2(10)) as optional_text
+                from dual where n > 0 connect by level <= n order by id;
+        end;",
+    )
+    .await;
+    let sql =
+        "declare c sys_refcursor; begin ora_cursor_rows(3, c); dbms_sql.return_result(c); end;";
+    let result = run(&backend, sql).await;
+    assert_eq!(result.row_count(), 3);
+    assert_eq!(result.columns()[0].name, "ID");
+    assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
+    assert_eq!(result.cell(2, 0), Some(&Cell::Int(3)));
+    assert_eq!(result.cell(0, 1), Some(&Cell::Null));
+    assert!(result.source().is_none(), "procedure rows are read-only");
+    let capped = backend
+        .execute(sql, 2, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(capped.row_count(), 2);
+    assert!(capped.is_truncated());
+    let empty = run(
+        &backend,
+        "declare c sys_refcursor; begin ora_cursor_rows(0, c); dbms_sql.return_result(c); end;",
+    )
+    .await;
+    assert_eq!(empty.row_count(), 0);
+    assert_eq!(empty.columns()[0].name, "ID");
+    run(&backend, "drop procedure ora_cursor_rows").await;
+}
+
+#[tokio::test]
+async fn native_implicit_results_keep_their_order_and_execute_once() {
+    let backend = connect(&server!()).await;
+    drop_table(&backend, "ora_implicit").await;
+    run(&backend, "create table ora_implicit (n number)").await;
+    run(
+        &backend,
+        "create or replace procedure ora_native_results as
+        c sys_refcursor;
+    begin
+        insert into ora_implicit values (1);
+        open c for select level as n from dual connect by level <= 3;
+        dbms_sql.return_result(c);
+        open c for select 'second' as label from dual;
+        dbms_sql.return_result(c);
+        open c for select 1 as empty_value from dual where 1 = 0;
+        dbms_sql.return_result(c);
+    end;",
+    )
+    .await;
+    for _ in 0..5 {
+        let sql = "begin ora_native_results(); end;";
+        let results = backend
+            .execute_results(sql, sql, 1, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].cell(0, 0), Some(&Cell::Int(1)));
+        assert!(results[0].is_truncated());
+        assert_eq!(results[1].cell(0, 0), Some(&Cell::Text("second".into())));
+        assert_eq!(results[2].row_count(), 0);
+        assert_eq!(results[2].columns()[0].name, "EMPTY_VALUE");
+        assert!(results.iter().all(|result| result.source().is_none()));
+    }
+    // A new session proves per-statement commit as well as no replay.
+    let other = connect(&server!()).await;
+    assert_eq!(
+        run(&other, "select count(*) from ora_implicit")
+            .await
+            .cell(0, 0),
+        Some(&Cell::Int(5))
+    );
+    run(&backend, "begin null; end;").await;
+    for sql in [
+        "begin raise no_data_found; end;",
+        "declare c sys_refcursor; begin open c for select 1 from dual; dbms_sql.return_result(c); raise_application_error(-20001, 'test failure'); end;",
+        "declare c sys_refcursor; begin open c for select level / (500 - level) from dual connect by level <= 600; dbms_sql.return_result(c); end;",
+    ] {
+        assert!(
+            backend
+                .execute_results(sql, sql, NO_CAP, CancellationToken::new())
+                .await
+                .is_err()
+        );
+        let sql = "declare n number := 42; c sys_refcursor; begin open c for select n as answer from dual; dbms_sql.return_result(c); end;";
+        let results = backend
+            .execute_results(sql, sql, NO_CAP, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "old results must not leak into a later request"
+        );
+        assert_eq!(results[0].cell(0, 0), Some(&Cell::Int(42)));
+    }
+    run(&backend, "drop procedure ora_native_results").await;
+    drop_table(&backend, "ora_implicit").await;
+}
+
+/// The directory must hold sqmeow-bfile.bin containing bytes 00 41 ff, and
+/// the test user needs READ on the directory object.
+#[tokio::test]
+async fn a_bfile_can_be_read_server_side_through_a_ref_cursor() {
+    let server = server!();
+    let Ok(directory) = std::env::var("SQMEOW_TEST_ORACLE_BFILE_DIRECTORY") else {
+        eprintln!("skipped: set SQMEOW_TEST_ORACLE_BFILE_DIRECTORY with a BFILE fixture");
+        return;
+    };
+    let backend = connect(&server).await;
+    let directory = directory.replace('\'', "''");
+    let native = backend
+        .execute(
+            &format!("select bfilename('{directory}', 'sqmeow-bfile.bin') from dual"),
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        native.unwrap_err().to_string().contains("BFILE"),
+        "the pinned driver cannot fetch BFILE locators"
+    );
+    run(
+        &backend,
+        "create or replace procedure ora_bfile_preview(
+        dir_name varchar2, file_name varchar2, result out sys_refcursor) as
+        f bfile;
+        data raw(2000);
+    begin
+        f := bfilename(dir_name, file_name);
+        dbms_lob.fileopen(f, dbms_lob.file_readonly);
+        data := dbms_lob.substr(f, 2000, 1);
+        dbms_lob.fileclose(f);
+        open result for select data as file_bytes from dual;
+    exception when others then
+        if dbms_lob.fileisopen(f) = 1 then dbms_lob.fileclose(f); end if;
+        raise;
+    end;",
+    )
+    .await;
+    let result = run(
+        &backend,
+        &format!("declare c sys_refcursor; begin ora_bfile_preview('{directory}', 'sqmeow-bfile.bin', c); dbms_sql.return_result(c); end;"),
+    )
+    .await;
+    assert_eq!(result.cell(0, 0), Some(&Cell::bytes(&[0, 65, 255])));
+    let missing = backend
+        .execute(
+            &format!(
+                "declare c sys_refcursor; begin ora_bfile_preview('{directory}', 'missing-sqmeow-file.bin', c); dbms_sql.return_result(c); end;"
+            ),
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(missing.is_err());
+    assert_eq!(
+        run(&backend, "select 1 from dual").await.cell(0, 0),
+        Some(&Cell::Int(1))
+    );
+    run(&backend, "drop procedure ora_bfile_preview").await;
+}
+
+#[tokio::test]
 async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
     let backend = connect(&server!()).await;
     drop_table(&backend, "ora_det_child").await;

@@ -597,6 +597,39 @@ T['oracle']['connects and reports its dialect'] = function()
   eq(state.current_connection().dialect, 'oracle')
 end
 
+T['oracle']['displays native ref cursor blocks and multiple results'] = function()
+  run([[
+    create or replace procedure lua_cursor(result out sys_refcursor) as
+    begin
+      open result for select 7 as id, 'cursor row' as label from dual;
+    end;
+  ]])
+  local summary = run([[
+    declare
+      c sys_refcursor;
+      n number := 42;
+    begin
+      lua_cursor(c);
+      dbms_sql.return_result(c);
+      open c for select n as answer from dual;
+      dbms_sql.return_result(c);
+    end;
+  ]])
+  eq(summary.state, 'done')
+  eq(summary.rows, 1)
+  helpers.contains(lines()[1], '42')
+  eq(#summary.results, 2)
+  result.actions.prev_result()
+  helpers.wait_for('the earlier cursor should render', function()
+    return (lines()[1] or ''):find('cursor row', 1, true) ~= nil
+  end, TIMEOUT)
+  result.actions.next_result()
+  helpers.wait_for('the scalar cursor should render again', function()
+    return (lines()[1] or ''):find('42', 1, true) ~= nil
+  end, TIMEOUT)
+  run('drop procedure lua_cursor')
+end
+
 T['oracle']['filters and sorts a table on the server'] = function()
   run('drop table lua_filtered')
   run('create table lua_filtered (id number(10), n number(10))')

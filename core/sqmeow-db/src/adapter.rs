@@ -122,6 +122,21 @@ pub trait Adapter: Send + Sync {
         self.execute(statement, max_rows, cancel)
     }
 
+    /// Executes one statement, keeping every result set it returns in order.
+    fn execute_results(
+        &self,
+        statement: &str,
+        origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> impl Future<Output = Result<Vec<ResultSet>>> + Send {
+        async move {
+            self.execute_wrapped(statement, origin, max_rows, cancel)
+                .await
+                .map(|result| vec![result])
+        }
+    }
+
     /// Plans staged changes to a result into the SQL statements that make them.
     fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         crate::edit::sql_plan(self.dialect(), result, changes)

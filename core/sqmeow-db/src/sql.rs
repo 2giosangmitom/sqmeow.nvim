@@ -263,6 +263,10 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
     let mut creating: Option<bool> = None;
     let mut routine = false;
     let mut body_depth = 0usize;
+    // Oracle declarations hold semicolons before their BEGIN. Each depth
+    // here reserves a block whose first BEGIN must not count it twice.
+    let mut oracle_declarations = Vec::new();
+    let mut oracle_quote = None;
     // Inside a CQL `BEGIN BATCH` or a SurrealQL `BEGIN`, which end at `APPLY` or `COMMIT`/`CANCEL`.
     let mut batch = false;
 
@@ -280,6 +284,19 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
     while index < chars.len() {
         let character = chars[index];
 
+        if let Some(close) = oracle_quote {
+            if character == close && peek!(1) == Some('\'') {
+                oracle_quote = None;
+                index += 2;
+                continue;
+            }
+            if character == '\n' {
+                line += 1;
+            }
+            index += 1;
+            continue;
+        }
+
         if let Some(tag) = &dollar_tag {
             // Inside a dollar-quoted body nothing matters but the closing tag.
             if character == '$' && starts_with(&chars, index, tag) {
@@ -296,6 +313,24 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
 
         match mode {
             Mode::Code => match character {
+                'q' | 'Q'
+                    if dialect == Dialect::Oracle
+                        && peek!(1) == Some('\'')
+                        && peek!(2).is_some()
+                        && !index
+                            .checked_sub(1)
+                            .is_some_and(|before| is_word(chars[before])) =>
+                {
+                    oracle_quote = peek!(2).map(|open| match open {
+                        '[' => ']',
+                        '(' => ')',
+                        '{' => '}',
+                        '<' => '>',
+                        other => other,
+                    });
+                    index += 3;
+                    continue;
+                }
                 '-' if peek!(1) == Some('-') => {
                     mode = Mode::LineComment;
                     index += 2;
@@ -366,6 +401,7 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                     );
                     creating = None;
                     routine = false;
+                    oracle_declarations.clear();
                     index += 1;
                     start = index;
                     start_line = line;
@@ -383,15 +419,56 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                             creating = Some(word == "create");
                             batch = matches!(dialect, Dialect::Scylla | Dialect::SurrealDb)
                                 && word == "begin";
+                            if dialect == Dialect::Oracle
+                                && matches!(word.as_str(), "declare" | "begin")
+                            {
+                                routine = true;
+                                body_depth = 1;
+                                if word == "declare" {
+                                    oracle_declarations.push(body_depth);
+                                }
+                            }
                         }
                         "apply" if batch && dialect == Dialect::Scylla => batch = false,
                         "commit" | "cancel" if batch && dialect == Dialect::SurrealDb => {
                             batch = false;
                         }
                         "trigger" | "procedure" | "function" | "event"
-                            if creating == Some(true) =>
+                            if (creating == Some(true)
+                                && (dialect != Dialect::Oracle || !routine))
+                                || (dialect == Dialect::Oracle
+                                    && routine
+                                    && matches!(word.as_str(), "procedure" | "function")
+                                    && oracle_declarations.last() == Some(&body_depth)) =>
                         {
                             routine = true;
+                            if dialect == Dialect::Oracle {
+                                body_depth += 1;
+                                oracle_declarations.push(body_depth);
+                            }
+                        }
+                        _ if dialect == Dialect::Oracle
+                            && creating == Some(true)
+                            && !routine
+                            && !matches!(
+                                word.as_str(),
+                                "or" | "replace" | "editionable" | "noneditionable"
+                            ) =>
+                        {
+                            creating = Some(false);
+                        }
+                        "declare" if dialect == Dialect::Oracle && routine => {
+                            if oracle_declarations.last() != Some(&body_depth) {
+                                body_depth += 1;
+                                oracle_declarations.push(body_depth);
+                            }
+                        }
+                        "begin"
+                            if dialect == Dialect::Oracle
+                                && routine
+                                && oracle_declarations.last() == Some(&body_depth) =>
+                        {
+                            oracle_declarations.pop();
                         }
                         "begin" | "case" if routine => body_depth += 1,
                         "end" if routine => {
@@ -999,6 +1076,73 @@ mod tests {
         assert_eq!(
             sqls("create table t (id int); create index i on t (id); select 3").len(),
             3
+        );
+    }
+
+    #[test]
+    fn oracle_declarations_and_nested_blocks_stay_together() {
+        let block = "declare
+  n number := 1;
+  c sys_refcursor;
+begin
+  declare label varchar2(40) := q'[it's a ; begin end;]';
+  begin
+    if n = 1 then n := case when n > 0 then 2 else 0 end; end if;
+    for i in 1..2 loop n := n + i; end loop;
+  end;
+  open c for select n from dual;
+  dbms_sql.return_result(c);
+end";
+        let statements = split(&format!("{block};\nselect 1 from dual;"), Dialect::Oracle);
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[0].sql, block);
+        assert_eq!(statements[0].start_line, 0);
+        assert_eq!(statements[0].end_line, 11);
+        assert_eq!(statements[1].sql, "select 1 from dual");
+        assert_eq!(statement_at(&statements, 2), Some(&statements[0]));
+    }
+
+    #[test]
+    fn oracle_local_subprograms_do_not_end_the_outer_declaration() {
+        let block = "declare
+  function twice(n number) return number is
+    v number := n * 2;
+  begin return v; end;
+  c sys_refcursor;
+begin
+  open c for select twice(2) from dual;
+  dbms_sql.return_result(c);
+end";
+        let statements = split(&format!("{block}; begin null; end;"), Dialect::Oracle);
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[0].sql, block);
+        assert_eq!(statements[1].sql, "begin null; end");
+    }
+
+    #[test]
+    fn oracle_stored_routine_declarations_are_not_separate_statements() {
+        let procedure = "create or replace procedure p as
+  n number := 1;
+  c sys_refcursor;
+begin
+  open c for select n from dual;
+  dbms_sql.return_result(c);
+end";
+        let statements = split(&format!("{procedure}; call p();"), Dialect::Oracle);
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[0].sql, procedure);
+        assert_eq!(statements[1].sql, "call p()");
+        let trigger = "create trigger t before insert on demo for each row declare n number := 1; begin :new.id := n; end";
+        let statements = split(&format!("{trigger}; select 1 from dual;"), Dialect::Oracle);
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[0].sql, trigger);
+        assert_eq!(
+            split(
+                "create table t (event number); select 1 from dual;",
+                Dialect::Oracle
+            )
+            .len(),
+            2
         );
     }
 
