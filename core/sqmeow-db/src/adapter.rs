@@ -28,6 +28,7 @@ pub enum Dialect {
     /// SurrealQL, with namespaces and databases where others have schemas.
     SurrealDb,
     ClickHouse,
+    Oracle,
 }
 
 impl Dialect {
@@ -43,6 +44,7 @@ impl Dialect {
             Self::Scylla => "scylla",
             Self::SurrealDb => "surrealdb",
             Self::ClickHouse => "clickhouse",
+            Self::Oracle => "oracle",
         }
     }
 
@@ -80,6 +82,7 @@ impl Dialect {
             "scylla" | "cassandra" => Some(Self::Scylla),
             "surrealdb" | "surrealdbs" => Some(Self::SurrealDb),
             "clickhouse" | "clickhouses" => Some(Self::ClickHouse),
+            "oracle" | "oracledb" | "oracletcps" => Some(Self::Oracle),
             _ => None,
         }
     }
@@ -117,6 +120,21 @@ pub trait Adapter: Send + Sync {
         cancel: CancellationToken,
     ) -> impl Future<Output = Result<ResultSet>> + Send {
         self.execute(statement, max_rows, cancel)
+    }
+
+    /// Executes one statement, keeping every result set it returns in order.
+    fn execute_results(
+        &self,
+        statement: &str,
+        origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> impl Future<Output = Result<Vec<ResultSet>>> + Send {
+        async move {
+            self.execute_wrapped(statement, origin, max_rows, cancel)
+                .await
+                .map(|result| vec![result])
+        }
     }
 
     /// Plans staged changes to a result into the SQL statements that make them.
@@ -227,6 +245,13 @@ mod tests {
         for url in ["clickhouse://h/db", "clickhouses://h:8443"] {
             assert_eq!(Dialect::from_url(url), Some(Dialect::ClickHouse), "{url}");
         }
+        for url in [
+            "oracle://h/XEPDB1",
+            "oracledb://h/XEPDB1",
+            "oracletcps://h:2484/XEPDB1",
+        ] {
+            assert_eq!(Dialect::from_url(url), Some(Dialect::Oracle), "{url}");
+        }
     }
 
     #[test]
@@ -239,7 +264,7 @@ mod tests {
 
     #[test]
     fn an_unknown_scheme_is_rejected() {
-        assert_eq!(Dialect::from_url("oracle://localhost"), None);
+        assert_eq!(Dialect::from_url("mssql://localhost"), None);
         assert_eq!(Dialect::from_url("not a url"), None);
         assert_eq!(Dialect::from_url(""), None);
     }

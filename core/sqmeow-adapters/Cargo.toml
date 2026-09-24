@@ -20,6 +20,7 @@ duckdb.workspace = true
 futures-util.workspace = true
 libsqlite3-sys.workspace = true
 mongodb.workspace = true
+oracledb.workspace = true
 percent-encoding.workspace = true
 redis.workspace = true
 rustls.workspace = true

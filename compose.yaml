@@ -171,3 +171,18 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # Oracle Database Free. Takes minutes to create its database on first start.
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    environment:
+      ORACLE_PASSWORD: sqmeow
+      APP_USER: sqmeow
+      APP_USER_PASSWORD: sqmeow
+    ports:
+      - "51521:1521"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 60

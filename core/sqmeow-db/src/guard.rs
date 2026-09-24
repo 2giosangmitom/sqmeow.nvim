@@ -289,7 +289,7 @@ fn mongo_keys(statement: &str) -> Option<Vec<String>> {
 
 /// The words of a statement outside quotes and comments, in lower case, each with how deep in
 /// parentheses it sits.
-pub(crate) fn words(dialect: Dialect, statement: &str) -> Vec<(String, usize)> {
+pub fn words(dialect: Dialect, statement: &str) -> Vec<(String, usize)> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut depth = 0usize;

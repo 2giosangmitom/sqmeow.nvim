@@ -70,6 +70,9 @@ test-rust:
     if [ -n "$(docker compose ps --status running --quiet surrealdb 2>/dev/null)" ]; then
         export SQMEOW_TEST_SURREALDB_URL="surrealdb://root:root@127.0.0.1:58000/sqmeow"
     fi
+    if docker compose ps oracle 2>/dev/null | grep -q "(healthy)"; then
+        export SQMEOW_TEST_ORACLE_URL="oracle://sqmeow:sqmeow@127.0.0.1:51521/FREEPDB1"
+    fi
     if [ -n "$(docker compose ps --status running --quiet cockroach 2>/dev/null)" ]; then
         export SQMEOW_TEST_COCKROACH_URL="postgres://root@127.0.0.1:56257/defaultdb"
     fi
@@ -78,7 +81,7 @@ test-rust:
     fi
     cargo test {{cargo_flags}}
 
-# Start the PostgreSQL, MySQL, ClickHouse, Redis, Dragonfly, MongoDB, ScyllaDB, Cassandra and SurrealDB servers the integration tests use.
+# Start the PostgreSQL, MySQL, ClickHouse, Redis, Dragonfly, MongoDB, ScyllaDB, Cassandra, SurrealDB and Oracle servers the integration tests use.
 db-up:
     docker compose up -d --wait
 
@@ -131,6 +134,9 @@ test-lua: build-debug
     fi
     if [ -n "$(docker compose ps --status running --quiet surrealdb 2>/dev/null)" ]; then
         export SQMEOW_TEST_SURREALDB_URL="surrealdb://root:root@127.0.0.1:58000/sqmeow"
+    fi
+    if docker compose ps oracle 2>/dev/null | grep -q "(healthy)"; then
+        export SQMEOW_TEST_ORACLE_URL="oracle://sqmeow:sqmeow@127.0.0.1:51521/FREEPDB1"
     fi
     nvim -l tests/minit.lua
 

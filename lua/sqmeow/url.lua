@@ -166,6 +166,9 @@ function M.split(url)
   if dialect == 'clickhouse' then
     fields.tls = scheme:lower() == 'clickhouses' and 'yes' or 'no'
   end
+  if dialect == 'oracle' then
+    fields.tls = scheme:lower() == 'oracletcps' and 'yes' or 'no'
+  end
   return fields
 end
 
@@ -207,12 +210,21 @@ function M.build(dialect, values)
   end
 
   local host = value('host')
-  if host == '' then
+  local oracle_tns = false
+  if dialect == 'oracle' then
+    for option in value('options'):gsub('^%?', ''):gmatch('[^&]+') do
+      local key = option:match('^([^=]+)=')
+      if key and (key:lower() == 'tns' or key:lower() == 'tns_admin') then
+        oracle_tns = true
+      end
+    end
+  end
+  if host == '' and not oracle_tns then
     host = 'localhost'
   end
 
   local authority = host
-  if value('port') ~= '' then
+  if value('port') ~= '' and host ~= '' then
     authority = ('%s:%s'):format(host, value('port'))
   end
 
@@ -238,6 +250,8 @@ function M.build(dialect, values)
     scheme = 'mongodb+srv'
   elseif dialect == 'clickhouse' and value('tls') == 'yes' then
     scheme = 'clickhouses'
+  elseif dialect == 'oracle' and value('tls') == 'yes' then
+    scheme = 'oracletcps'
   end
 
   local path = value('database')

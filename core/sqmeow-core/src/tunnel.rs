@@ -29,6 +29,8 @@ pub async fn open(program: &str, url: &str, via: &str) -> Result<(String, Tunnel
         Dialect::SurrealDb => 8000,
         Dialect::ClickHouse if scheme.eq_ignore_ascii_case("clickhouses") => 8443,
         Dialect::ClickHouse => 8123,
+        Dialect::Oracle if scheme.eq_ignore_ascii_case("oracletcps") => 2484,
+        Dialect::Oracle => 1521,
         Dialect::Sqlite | Dialect::DuckDb => {
             return Err("a database in a file is not reached through a tunnel".to_owned());
         }

@@ -48,6 +48,7 @@
 | **ScyllaDB** / Cassandra       | CQL via `scylla://` / `cassandra://`, `?ssl=true`                                      |
 | **SurrealDB**                  | SurrealQL via `surrealdb://` / `surrealdbs://`                                         |
 | **ClickHouse**                 | HTTP via `clickhouse://`, HTTPS via `clickhouses://`; results are read-only            |
+| **Oracle Database**            | `oracle://`, `oracledb://`, `oracletcps://` for TLS                                |
 
 ## 👀 Preview
 
@@ -107,6 +108,12 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 - **MongoDB** — database commands as Extended JSON, e.g. `{"find": "users"}`. `use db_name` switches database.
 - **ScyllaDB** — `?ssl=true` for TLS, `?sslrootcert=/path/ca.pem` for custom CA.
 - **SurrealDB** — `surrealdb://user:pass@host:8000/namespace/database`; leave out the database to list every one in the namespace. `surrealdbs://` for TLS, `?auth=namespace` or `?auth=database` for a non-root user, `?sslrootcert=/path/ca.pem` for custom CA. `USE DB name` switches database. Scratchpads ending in `.surql` get the `surql` filetype.
+- **Oracle Database** — `oracle://user:pass@host:1521/XEPDB1` (`oracledb://` also works); `oracletcps://` (port 2484) for TLS. Cancelling a query returns at once, but the next query waits for the cancelled one, since the driver cannot stop it on the server.
+  - Privileged login: append `?as=sysdba` or `?as=sysoper`.
+  - TNS alias: `oracle://user:pass@/MYDB?tns_admin=/opt/oracle/network` reads `MYDB` from that directory's `tnsnames.ora`. Leave Host and Port empty in the connection editor.
+  - SID or full descriptor: `oracle://user:pass@/?tns=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=db)(PORT=1521))(CONNECT_DATA=(SID=ORCL)))`. Leave Host, Port and Service empty. Database switching is unavailable for full descriptors.
+  - Client TLS wallet: `oracletcps://user:pass@db/service?wallet=/opt/oracle/wallet&wallet_password=secret`. The directory must contain the driver's `ewallet.pem`; username/password are still required. TNS aliases and descriptors select their own TCP/TCPS protocol, so wallet connections through TNS must specify `PROTOCOL=TCPS` there.
+  - Set these in the connection editor's Options field; join options with `&` and percent-encode reserved characters in values (especially passwords). Unknown options are rejected.
 
 ### SSH Tunnels
 
@@ -122,7 +129,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Safety
 
-- Tick **Read only** in the dialog or add `"read_only": true` to a connection (or `connections.json`) to allow only reads. PostgreSQL, MySQL, ClickHouse, SQLite and DuckDB enforce it in the database session (a server that speaks the PostgreSQL protocol without read-only sessions falls back to the check below, with a warning); Redis, MongoDB, ScyllaDB and SurrealDB only check commands against a list of reads, so use a read-only database user where it matters.
+- Tick **Read only** in the dialog or add `"read_only": true` to a connection (or `connections.json`) to allow only reads. PostgreSQL, MySQL, ClickHouse, SQLite and DuckDB enforce it in the database session (a server that speaks the PostgreSQL protocol without read-only sessions falls back to the check below, with a warning); Redis, MongoDB, ScyllaDB, SurrealDB and OracleDB only check commands against a list of reads, so use a read-only database user where it matters.
 - Before `DELETE`/`UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, or emptying a Redis/MongoDB database, sqmeow asks first. Set `query.confirm_destructive = false` to disable.
 
 ## ⌨️ Commands

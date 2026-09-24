@@ -8,6 +8,7 @@ pub mod clickhouse;
 pub mod duckdb;
 pub mod mongodb;
 pub mod mysql;
+pub mod oracle;
 pub mod postgres;
 pub mod redis;
 pub mod scylla;
@@ -70,6 +71,7 @@ pub use self::clickhouse::ClickHouseAdapter;
 pub use self::duckdb::DuckDbAdapter;
 pub use self::mongodb::MongoAdapter;
 pub use mysql::MySqlAdapter;
+pub use oracle::OracleAdapter;
 pub use postgres::PostgresAdapter;
 // `self::`, because a bare `redis` here would also name the driver crate.
 pub use self::redis::RedisAdapter;
@@ -82,6 +84,8 @@ pub use self::surrealdb::SurrealAdapter;
 pub(crate) fn routine_node(name: String, kind: &str) -> RoutineNode {
     let kind = if kind.eq_ignore_ascii_case("procedure") {
         RoutineKind::Procedure
+    } else if kind.eq_ignore_ascii_case("package") {
+        RoutineKind::Package
     } else {
         RoutineKind::Function
     };
@@ -101,6 +105,7 @@ macro_rules! dispatch {
             Backend::Scylla($adapter) => $body,
             Backend::SurrealDb($adapter) => $body,
             Backend::ClickHouse($adapter) => $body,
+            Backend::Oracle($adapter) => $body,
         }
     };
 }
@@ -117,6 +122,7 @@ pub enum Backend {
     Scylla(ScyllaAdapter),
     SurrealDb(SurrealAdapter),
     ClickHouse(ClickHouseAdapter),
+    Oracle(OracleAdapter),
 }
 
 impl Backend {
@@ -149,6 +155,7 @@ impl Backend {
             Dialect::ClickHouse => Ok(Self::ClickHouse(
                 ClickHouseAdapter::connect(url, read_only).await?,
             )),
+            Dialect::Oracle => Ok(Self::Oracle(OracleAdapter::connect(url, database).await?)),
         }
     }
 
@@ -181,6 +188,17 @@ impl Backend {
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
         dispatch!(self, adapter => adapter.execute_wrapped(statement, origin, max_rows, cancel).await)
+    }
+
+    /// Execute one statement and retain all of its result sets.
+    pub async fn execute_results(
+        &self,
+        statement: &str,
+        origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        dispatch!(self, adapter => adapter.execute_results(statement, origin, max_rows, cancel).await)
     }
 
     /// Plan staged changes to a result into the statements that make them.
@@ -223,8 +241,8 @@ impl Backend {
     pub fn read_only_unenforced(&self) -> bool {
         match self {
             Self::Postgres(adapter) => !adapter.read_only_session(),
-            // SurrealDB has no read-only session at all.
-            Self::SurrealDb(_) => true,
+            // SurrealDB and OracleDB have no read-only session at all.
+            Self::SurrealDb(_) | Self::Oracle(_) => true,
             _ => false,
         }
     }
@@ -291,6 +309,7 @@ pub fn supported() -> Vec<&'static str> {
         Dialect::Scylla.name(),
         Dialect::SurrealDb.name(),
         Dialect::ClickHouse.name(),
+        Dialect::Oracle.name(),
     ]
 }
 

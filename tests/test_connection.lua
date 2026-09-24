@@ -49,17 +49,18 @@ T['create']['asks which database first'] = function()
   connection.create()
 
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  eq(#lines, 10)
+  eq(#lines, 11)
   helpers.contains(lines[1], 'PostgreSQL')
   helpers.contains(lines[2], 'MySQL')
-  helpers.contains(lines[3], 'Redis')
-  helpers.contains(lines[4], 'MongoDB')
-  helpers.contains(lines[5], 'ScyllaDB')
-  helpers.contains(lines[6], 'SurrealDB')
-  helpers.contains(lines[7], 'ClickHouse')
-  helpers.contains(lines[8], 'SQLite')
-  helpers.contains(lines[9], 'DuckDB')
-  helpers.contains(lines[10], 'Connection string')
+  helpers.contains(lines[3], 'Oracle Database')
+  helpers.contains(lines[4], 'Redis')
+  helpers.contains(lines[5], 'MongoDB')
+  helpers.contains(lines[6], 'ScyllaDB')
+  helpers.contains(lines[7], 'SurrealDB')
+  helpers.contains(lines[8], 'ClickHouse')
+  helpers.contains(lines[9], 'SQLite')
+  helpers.contains(lines[10], 'DuckDB')
+  helpers.contains(lines[11], 'Connection string')
 end
 
 T['create']['asks for a name and offers none'] = function()
@@ -120,7 +121,7 @@ T['from a url']['saves the SSH host a connection goes through'] = function()
 end
 
 T['from a url']['refuses a url for a database the plugin does not speak'] = function()
-  connection.from_url({ name = 'warehouse', url = 'oracle://host/db' })
+  connection.from_url({ name = 'warehouse', url = 'mssql://host/db' })
   press('<C-s>')
   vim.wait(50)
 
@@ -168,7 +169,23 @@ T['edit']['keeps a template whole through the form'] = function()
 end
 
 T['edit']['refuses a url for a database the plugin does not have'] = function()
-  eq(connection.edit({ name = 'warehouse', url = 'oracle://host/db' }), false)
+  eq(connection.edit({ name = 'warehouse', url = 'mssql://host/db' }), false)
+end
+
+T['edit']['asks an Oracle connection for a service and tls'] = function()
+  connection.edit({ name = 'ora', url = 'oracletcps://scott:tiger@db.internal:2484/XEPDB1' })
+  eq(rows(), {
+    'Name ora',
+    'Host db.internal',
+    'Port 2484',
+    'Service / alias XEPDB1',
+    'User scott',
+    'Password *****',
+    'TLS [x]',
+    'Options as=sysdba',
+    'SSH user@bastion',
+    'Read only [ ]',
+  })
 end
 
 T['edit']['writes the connection back when the form is saved'] = function()

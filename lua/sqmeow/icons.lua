@@ -31,10 +31,12 @@ M.highlights = {
   disconnected = 'SqmeowDisconnected',
   ['function'] = 'SqmeowIconFunction',
   procedure = 'SqmeowIconProcedure',
+  package = 'SqmeowIconPackage',
   tables = 'SqmeowIconTable',
   views = 'SqmeowIconView',
   functions = 'SqmeowIconFunction',
   procedures = 'SqmeowIconProcedure',
+  packages = 'SqmeowIconPackage',
   keys = 'SqmeowIconKey',
   key = 'SqmeowIconKey',
   sequences = 'SqmeowIconTable',
@@ -50,6 +52,7 @@ M.highlights = {
   scylla = 'SqmeowIconScylla',
   surrealdb = 'SqmeowIconSurrealdb',
   clickhouse = 'SqmeowIconClickhouse',
+  oracle = 'SqmeowIconOracle',
 
   -- What a column holds, or the key it is.
   text = 'SqmeowIconTypeText',

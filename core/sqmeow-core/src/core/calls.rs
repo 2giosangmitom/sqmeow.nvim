@@ -173,22 +173,24 @@ impl Core {
             let run = wrapped.as_deref().unwrap_or(&statement.sql);
             let outcome = connection
                 .backend
-                .execute_wrapped(run, &statement.sql, options.max_rows, running.token())
+                .execute_results(run, &statement.sql, options.max_rows, running.token())
                 .await;
             match outcome {
-                Ok(result) => {
-                    if let Some(previous) = last.replace(result) {
-                        let (call, mut summary) = self.keep(conn_id, previous);
-                        if let Some(path) = archive
-                            .as_deref()
-                            .filter(|_| !call.result.columns().is_empty())
-                        {
-                            let path = sibling(path, kept.len());
-                            summary.push(("archive", Value::from(path.display().to_string())));
-                            saves.push((kept.len(), path));
+                Ok(results) => {
+                    for result in results {
+                        if let Some(previous) = last.replace(result) {
+                            let (call, mut summary) = self.keep(conn_id, previous);
+                            if let Some(path) = archive
+                                .as_deref()
+                                .filter(|_| !call.result.columns().is_empty())
+                            {
+                                let path = sibling(path, kept.len());
+                                summary.push(("archive", Value::from(path.display().to_string())));
+                                saves.push((kept.len(), path));
+                            }
+                            kept.push(call);
+                            earlier.push(map(summary));
                         }
-                        kept.push(call);
-                        earlier.push(map(summary));
                     }
                 }
                 Err(DbError::Cancelled) if deadline.passed() => {

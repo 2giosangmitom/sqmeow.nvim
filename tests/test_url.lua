@@ -205,9 +205,9 @@ T['build']['says what is missing rather than writing a url that cannot work'] = 
 end
 
 T['build']['refuses a database it does not know'] = function()
-  local built, err = url.build('oracle', {})
+  local built, err = url.build('mssql', {})
   eq(built, nil)
-  eq(err, 'there is no `oracle` database')
+  eq(err, 'there is no `mssql` database')
 end
 
 T['build']['round trips everything parse produces'] = function()
@@ -273,6 +273,58 @@ T['build']['writes clickhouse tls as the clickhouses scheme'] = function()
   eq(url.build('clickhouse', { host = 'h', tls = 'no' }), 'clickhouse://h/')
   eq(url.parse('clickhouses://u:p@h:8443/logs').tls, 'yes')
   eq(url.parse('clickhouses://u:p@h:8443/logs').dialect, 'clickhouse')
+end
+
+T['build']['writes oracle tls as the oracletcps scheme'] = function()
+  eq(
+    url.build('oracle', { host = 'h', database = 'XEPDB1', user = 'u', tls = 'yes' }),
+    'oracletcps://u@h/XEPDB1'
+  )
+  eq(
+    url.build('oracle', { host = 'h', user = 'scott', password = 'tiger', database = 'XE' }),
+    'oracle://scott:tiger@h/XE'
+  )
+  local fields = assert(url.parse('oracletcps://scott:tiger@h:2484/XE'))
+  eq(
+    { fields.dialect, fields.database, fields.user, fields.tls },
+    { 'oracle', 'XE', 'scott', 'yes' }
+  )
+  eq(url.parse('oracledb://scott:tiger@h/XE').dialect, 'oracle')
+end
+
+T['build']['round trips oracle aliases and descriptors without adding a host'] = function()
+  for _, original in ipairs({
+    'oracle://u:p@/MYDB?tns_admin=/opt/network&as=sysdba',
+    'oracle://u:p@/?tns=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=db)(PORT=1521))(CONNECT_DATA=(SID=ORCL)))',
+    'oracletcps://u:p@db/service?wallet=/opt/wallet&wallet_password=p%26s',
+  }) do
+    eq(url.build('oracle', assert(url.parse(original))), original)
+  end
+end
+
+T['build']['omits a port for a hostless oracle TNS address'] = function()
+  eq(
+    url.build('oracle', { port = '1521', database = 'MYDB', options = 'tns_admin=/opt/network' }),
+    'oracle:///MYDB?tns_admin=/opt/network'
+  )
+  eq(
+    url.build(
+      'oracle',
+      { host = 'db', port = '1521', database = 'MYDB', options = 'tns_admin=/opt/network' }
+    ),
+    'oracle://db:1521/MYDB?tns_admin=/opt/network'
+  )
+  eq(url.build('oracle', { port = '1521', database = 'MYDB' }), 'oracle://localhost:1521/MYDB')
+end
+
+T['build']['masks oracle options in the connection form'] = function()
+  for _, field in ipairs(require('sqmeow.dialects').fields('oracle')) do
+    if field.key == 'options' then
+      eq(field.mask, true)
+      return
+    end
+  end
+  error('Oracle options field is missing')
 end
 
 T['build']['writes a scylla keyspace where a database would be'] = function()

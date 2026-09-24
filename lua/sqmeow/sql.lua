@@ -52,6 +52,10 @@ function M.select_from(dialect, parts, limit)
     )
   end
   local sql = ('select * from %s'):format(M.qualify(dialect, parts))
+  if dialect == 'oracle' then
+    -- Oracle reads the first rows with `FETCH FIRST`, not `LIMIT`.
+    return limit and ('%s fetch first %d rows only'):format(sql, limit) or sql
+  end
   return limit and ('%s limit %d'):format(sql, limit) or sql
 end
 

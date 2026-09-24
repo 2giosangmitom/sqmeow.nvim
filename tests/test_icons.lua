@@ -139,6 +139,7 @@ T['connections']['use the glyph of the dialect they speak'] = function()
   for _, dialect in ipairs({
     'postgres',
     'mysql',
+    'oracle',
     'sqlite',
     'duckdb',
     'redis',
@@ -153,7 +154,7 @@ T['connections']['use the glyph of the dialect they speak'] = function()
 end
 
 T['connections']['fall back to a plain database for one nobody has heard of'] = function()
-  eq(icons.connection_kind('oracle'), 'connection')
+  eq(icons.connection_kind('mssql'), 'connection')
   eq(icons.connection_kind(nil), 'connection')
 end
 
