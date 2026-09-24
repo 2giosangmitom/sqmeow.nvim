@@ -30,10 +30,74 @@ const DEFAULT_TCPS_PORT: u16 = 2484;
 
 /// One session with an Oracle database, plus one for the drawer.
 pub struct OracleAdapter {
-    connection: Arc<Mutex<oracledb::Connection>>,
-    meta: Arc<Mutex<oracledb::Connection>>,
+    connection: Arc<Mutex<Session>>,
+    meta: Arc<Mutex<Session>>,
     /// The user queries run as, in upper case, which unqualified names resolve to.
     default_schema: String,
+}
+
+/// Retain the login settings so a dead session can be replaced on the next
+/// request. Failed operations are never replayed: a write may have committed
+/// before the connection was lost.
+struct Session {
+    connection: Option<oracledb::Connection>,
+    config: oracledb::Config,
+    metadata: bool,
+}
+
+impl Session {
+    fn open(config: oracledb::Config, metadata: bool) -> Result<Self> {
+        let mut session = Self {
+            connection: None,
+            config,
+            metadata,
+        };
+        session.reconnect()?;
+        Ok(session)
+    }
+
+    fn reconnect(&mut self) -> Result<()> {
+        let connection = oracledb::connect(self.config.clone()).map_err(Error::driver)?;
+        if self.metadata {
+            // Reapply these session-local transforms on every connection.
+            connection.execute(
+                "begin
+                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'PRETTY', true);
+                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'SEGMENT_ATTRIBUTES', false);
+                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'STORAGE', false);
+                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'TABLESPACE', false);
+                 end;",
+                &[],
+            ).map_err(Error::driver)?;
+        }
+        self.connection = Some(connection);
+        Ok(())
+    }
+
+    fn run<T>(&mut self, work: impl FnOnce(&oracledb::Connection) -> Result<T>) -> Result<T> {
+        if self.connection.is_none() {
+            self.reconnect().map_err(|error| {
+                Error::driver(format!(
+                    "could not reconnect Oracle session: {error}; request was not executed"
+                ))
+            })?;
+        }
+        let connection = self.connection.as_ref().expect("connected session");
+        let result = work(connection);
+        // A syntax, constraint or permission error leaves the session usable.
+        // Probe only on failure, avoiding a round trip on every successful call.
+        if let Err(error) = &result
+            && connection.ping().is_err()
+        {
+            self.connection = None;
+            return Err(Error::driver(format!(
+                "{error}; Oracle session lost; the next request will reconnect. \
+                 Transaction and session state are lost; this operation was not replayed \
+                 and its commit outcome may be unknown"
+            )));
+        }
+        result
+    }
 }
 
 impl std::fmt::Debug for OracleAdapter {
@@ -108,20 +172,8 @@ impl OracleAdapter {
                 .set_connect_string(&connect_string)
                 .map_err(Error::driver)?;
             // Two sessions of their own: queries never hold up the drawer.
-            let work = oracledb::connect(config.clone()).map_err(Error::driver)?;
-            let meta = oracledb::connect(config).map_err(Error::driver)?;
-            // Table DDL reads as logic, not storage: no `TABLESPACE ...`,
-            // `STORAGE (...)` or `SEGMENT ...` clauses.
-            meta.execute(
-                "begin
-                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'PRETTY', true);
-                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'SEGMENT_ATTRIBUTES', false);
-                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'STORAGE', false);
-                   dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'TABLESPACE', false);
-                 end;",
-                &[],
-            )
-            .map_err(Error::driver)?;
+            let work = Session::open(config.clone(), false)?;
+            let meta = Session::open(config, true)?;
             Ok::<_, Error>((work, meta))
         };
         let (connection, meta) =
@@ -154,8 +206,8 @@ impl OracleAdapter {
     {
         let connection = Arc::clone(&self.connection);
         let task = tokio::task::spawn_blocking(move || {
-            let connection = connection.lock().map_err(Error::driver)?;
-            work(&connection)
+            let mut connection = connection.lock().map_err(Error::driver)?;
+            connection.run(work)
         });
         tokio::select! {
             biased;
@@ -172,8 +224,8 @@ impl OracleAdapter {
     {
         let meta = Arc::clone(&self.meta);
         tokio::task::spawn_blocking(move || {
-            let meta = meta.lock().map_err(Error::driver)?;
-            work(&meta)
+            let mut meta = meta.lock().map_err(Error::driver)?;
+            meta.run(work)
         })
         .await
         .map_err(Error::driver)?
@@ -1922,6 +1974,185 @@ fn parse_url(url: &str) -> Result<Target> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn killed_sessions_recover_independently_without_replaying_work() {
+        let (Ok(url), Ok(admin_url)) = (
+            std::env::var("SQMEOW_TEST_ORACLE_URL"),
+            std::env::var("SQMEOW_TEST_ORACLE_ADMIN_URL"),
+        ) else {
+            eprintln!("skipped: set SQMEOW_TEST_ORACLE_URL and SQMEOW_TEST_ORACLE_ADMIN_URL");
+            return;
+        };
+        let adapter = OracleAdapter::connect(&url, None).await.unwrap();
+        let admin = OracleAdapter::connect(&admin_url, None).await.unwrap();
+        fn sid(connection: &oracledb::Connection) -> Result<String> {
+            connection
+                .query_row("select sys_context('USERENV', 'SID') from dual", &[])
+                .and_then(|row| row.get(0))
+                .map_err(Error::driver)
+        }
+        let cancel = CancellationToken::new();
+        adapter
+            .run(&cancel, |connection| {
+                connection
+                    .execute("create table ora_recovery (id number)", &[])
+                    .map_err(Error::driver)?;
+                connection
+                    .execute("savepoint before_disconnect", &[])
+                    .map_err(Error::driver)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        for metadata in [false, true] {
+            let work_sid = adapter.run(&cancel, sid).await.unwrap();
+            let meta_sid = adapter.run_meta(sid).await.unwrap();
+            let killed_sid = if metadata {
+                meta_sid.clone()
+            } else {
+                work_sid.clone()
+            };
+            admin
+                .run(&cancel, move |connection| {
+                    let serial: String = connection
+                        .query_row(
+                            "select to_char(serial#) from v$session where sid = to_number(:1)",
+                            &[&killed_sid],
+                        )
+                        .and_then(|row| row.get(0))
+                        .map_err(Error::driver)?;
+                    connection
+                        .execute(
+                            &format!("alter system kill session '{killed_sid},{serial}' immediate"),
+                            &[],
+                        )
+                        .map_err(Error::driver)?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            let attempts = Arc::new(AtomicU64::new(0));
+            let count = Arc::clone(&attempts);
+            let failed = move |connection: &oracledb::Connection| {
+                count.fetch_add(1, Ordering::Relaxed);
+                sid(connection)
+            };
+            let result = if metadata {
+                adapter.run_meta(failed).await
+            } else {
+                adapter.run(&cancel, failed).await
+            };
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Oracle session lost")
+            );
+            assert_eq!(attempts.load(Ordering::Relaxed), 1, "never replay work");
+            // A failed reconnect must keep the session eligible for another
+            // attempt, and must not execute the queued operation.
+            let session = if metadata {
+                &adapter.meta
+            } else {
+                &adapter.connection
+            };
+            let config = {
+                let mut session = session.lock().unwrap();
+                let config = session.config.clone();
+                session.config = config
+                    .clone()
+                    .set_connect_string("127.0.0.1:1/missing")
+                    .unwrap();
+                config
+            };
+            let count = Arc::clone(&attempts);
+            let request = move |connection: &oracledb::Connection| {
+                count.fetch_add(1, Ordering::Relaxed);
+                sid(connection)
+            };
+            let reconnect = if metadata {
+                adapter.run_meta(request).await
+            } else {
+                adapter.run(&cancel, request).await
+            };
+            assert!(
+                reconnect
+                    .unwrap_err()
+                    .to_string()
+                    .contains("request was not executed")
+            );
+            assert_eq!(attempts.load(Ordering::Relaxed), 1);
+            session.lock().unwrap().config = config;
+            let new_work = adapter
+                .run(&cancel, sid)
+                .await
+                .expect("work session recovers");
+            let new_meta = adapter
+                .run_meta(sid)
+                .await
+                .expect("metadata session recovers");
+            if metadata {
+                assert_eq!(new_work, work_sid, "work session stays open");
+            } else {
+                assert_eq!(new_meta, meta_sid, "metadata session stays open");
+                let rollback = adapter
+                    .run(&cancel, |connection| {
+                        connection
+                            .execute("rollback to before_disconnect", &[])
+                            .map_err(Error::driver)?;
+                        Ok(())
+                    })
+                    .await;
+                assert!(
+                    rollback.unwrap_err().to_string().contains("ORA-01086"),
+                    "the old transaction is not recreated"
+                );
+            }
+        }
+        let ddl = adapter
+            .run_meta(|connection| {
+                connection
+                    .query_row(
+                        "select dbms_metadata.get_ddl('TABLE', 'ORA_RECOVERY') from dual",
+                        &[],
+                    )
+                    .and_then(|row| row.get::<String>(0))
+                    .map_err(Error::driver)
+            })
+            .await
+            .unwrap();
+        assert!(
+            !ddl.contains("TABLESPACE"),
+            "metadata transforms restored: {ddl}"
+        );
+        adapter
+            .run(&cancel, |connection| {
+                connection
+                    .execute("drop table ora_recovery purge", &[])
+                    .map_err(Error::driver)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let before = adapter.run(&cancel, sid).await.unwrap();
+        assert!(
+            adapter
+                .run(&cancel, |connection| {
+                    connection
+                        .execute("select from", &[])
+                        .map_err(Error::driver)?;
+                    Ok(())
+                })
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            adapter.run(&cancel, sid).await.unwrap(),
+            before,
+            "ordinary SQL errors preserve the session"
+        );
+    }
 
     #[test]
     fn reads_the_host_port_service_and_login_from_the_url() {
