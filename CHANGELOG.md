@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.3.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.2.0...v2.3.0) (2026-09-24)
+
+
+### Features
+
+* **oracle:** add Oracle Database support ([#29](https://github.com/2giosangmitom/sqmeow.nvim/issues/29)) ([2d7ef9d](https://github.com/2giosangmitom/sqmeow.nvim/commit/2d7ef9d2a2ce10a89a2338a7a963f050a33d9d22))
+
+
+### Fixes
+
+* **oracle:** tolerate non-canonical NUMBER on close ([38621ed](https://github.com/2giosangmitom/sqmeow.nvim/commit/38621ed03833f416e9081012ccc3e8f483b7315a))
+
+
+### Documentation
+
+* update lazy install snippet ([7ea1bfb](https://github.com/2giosangmitom/sqmeow.nvim/commit/7ea1bfb6cdb0d68903b765c245a3ce140d7dfdfe))
+
 ## [2.2.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.1.0...v2.2.0) (2026-09-19)
 
 
