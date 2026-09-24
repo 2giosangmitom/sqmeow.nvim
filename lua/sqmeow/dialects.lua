@@ -61,7 +61,7 @@ M.list = {
       { key = 'user', label = 'User' },
       { key = 'password', label = 'Password', mask = true, optional = true },
       { key = 'tls', label = 'TLS', checkbox = true },
-      { key = 'options', label = 'Options', optional = true, hint = 'as=sysdba' },
+      { key = 'options', label = 'Options', mask = true, optional = true, hint = 'as=sysdba' },
     },
   },
   {

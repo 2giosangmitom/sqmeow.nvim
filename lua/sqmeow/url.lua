@@ -224,7 +224,7 @@ function M.build(dialect, values)
   end
 
   local authority = host
-  if value('port') ~= '' then
+  if value('port') ~= '' and host ~= '' then
     authority = ('%s:%s'):format(host, value('port'))
   end
 

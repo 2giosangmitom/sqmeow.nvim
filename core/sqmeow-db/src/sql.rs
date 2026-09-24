@@ -266,6 +266,9 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
     // Oracle declarations hold semicolons before their BEGIN. Each depth
     // here reserves a block whose first BEGIN must not count it twice.
     let mut oracle_declarations = Vec::new();
+    // A declaration may end with `;` instead of opening an IS/AS body.
+    let mut oracle_routine_header = false;
+    let mut oracle_header_parens = 0usize;
     let mut oracle_quote = None;
     // Inside a CQL `BEGIN BATCH` or a SurrealQL `BEGIN`, which end at `APPLY` or `COMMIT`/`CANCEL`.
     let mut batch = false;
@@ -373,6 +376,10 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                     mode = Mode::Backtick;
                     escapes = matches!(dialect, Dialect::SurrealDb | Dialect::ClickHouse);
                 }
+                '(' if oracle_routine_header => oracle_header_parens += 1,
+                ')' if oracle_routine_header => {
+                    oracle_header_parens = oracle_header_parens.saturating_sub(1);
+                }
                 '⟨' if dialect == Dialect::SurrealDb => mode = Mode::Angle,
                 // A SurrealQL block, such as a function body, holds statements of its own.
                 '{' if dialect == Dialect::SurrealDb => body_depth += 1,
@@ -402,11 +409,13 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                     creating = None;
                     routine = false;
                     oracle_declarations.clear();
+                    oracle_routine_header = false;
                     index += 1;
                     start = index;
                     start_line = line;
                     continue;
                 }
+                ';' if oracle_routine_header => oracle_routine_header = false,
                 _ if character.is_alphabetic()
                     && !index
                         .checked_sub(1)
@@ -433,6 +442,11 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                         "commit" | "cancel" if batch && dialect == Dialect::SurrealDb => {
                             batch = false;
                         }
+                        "package" if dialect == Dialect::Oracle && creating == Some(true) => {
+                            routine = true;
+                            body_depth += 1;
+                            oracle_declarations.push(body_depth);
+                        }
                         "trigger" | "procedure" | "function" | "event"
                             if (creating == Some(true)
                                 && (dialect != Dialect::Oracle || !routine))
@@ -443,9 +457,24 @@ pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
                         {
                             routine = true;
                             if dialect == Dialect::Oracle {
-                                body_depth += 1;
-                                oracle_declarations.push(body_depth);
+                                if oracle_declarations.last() == Some(&body_depth) && body_depth > 0
+                                {
+                                    oracle_routine_header = true;
+                                    oracle_header_parens = 0;
+                                } else {
+                                    body_depth += 1;
+                                    oracle_declarations.push(body_depth);
+                                }
                             }
+                        }
+                        "is" | "as"
+                            if dialect == Dialect::Oracle
+                                && oracle_routine_header
+                                && oracle_header_parens == 0 =>
+                        {
+                            oracle_routine_header = false;
+                            body_depth += 1;
+                            oracle_declarations.push(body_depth);
                         }
                         _ if dialect == Dialect::Oracle
                             && creating == Some(true)
@@ -1144,6 +1173,35 @@ end";
             .len(),
             2
         );
+    }
+
+    #[test]
+    fn oracle_packages_keep_forward_declarations_and_bodies_together() {
+        let spec = "create or replace package p as
+  procedure fwd(n number default cast(1 as number));
+  function twice(n number) return number;
+end";
+        let body = "create or replace package body p as
+  procedure fwd(n number);
+  function twice(n number) return number is
+  begin
+    return n * 2;
+  end;
+  procedure fwd(n number) as
+  begin
+    null;
+  end;
+begin
+  null;
+end";
+        let statements = split(
+            &format!("{spec};\n{body};\nselect 1 from dual;"),
+            Dialect::Oracle,
+        );
+        assert_eq!(statements.len(), 3);
+        assert_eq!(statements[0].sql, spec);
+        assert_eq!(statements[1].sql, body);
+        assert_eq!(statements[2].sql, "select 1 from dual");
     }
 
     #[test]

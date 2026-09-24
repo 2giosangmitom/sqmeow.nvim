@@ -1569,15 +1569,10 @@ fn plan_table_guidance(error: impl std::fmt::Display) -> Error {
 /// A plan table the session can see, creating the conventional one when
 /// none is visible.
 fn ensure_plan_table(connection: &oracledb::Connection) -> Result<()> {
-    let visible: Vec<String> = OracleAdapter::query_bound(
-        connection,
-        "select table_name from all_tables
-         where table_name = 'PLAN_TABLE' and rownum = 1",
-        &[],
-        |row| row.get::<String>(0).map_err(Error::driver),
-    )?;
-    if !visible.is_empty() {
-        return Ok(());
+    match connection.query("select 1 from plan_table where 1 = 0", &[]) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.to_string().contains("ORA-00942") => {}
+        Err(error) => return Err(Error::driver(error)),
     }
     match connection.execute(CREATE_PLAN_TABLE, &[]) {
         Ok(_) => {

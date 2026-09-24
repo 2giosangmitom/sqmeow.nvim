@@ -302,6 +302,31 @@ T['build']['round trips oracle aliases and descriptors without adding a host'] =
   end
 end
 
+T['build']['omits a port for a hostless oracle TNS address'] = function()
+  eq(
+    url.build('oracle', { port = '1521', database = 'MYDB', options = 'tns_admin=/opt/network' }),
+    'oracle:///MYDB?tns_admin=/opt/network'
+  )
+  eq(
+    url.build(
+      'oracle',
+      { host = 'db', port = '1521', database = 'MYDB', options = 'tns_admin=/opt/network' }
+    ),
+    'oracle://db:1521/MYDB?tns_admin=/opt/network'
+  )
+  eq(url.build('oracle', { port = '1521', database = 'MYDB' }), 'oracle://localhost:1521/MYDB')
+end
+
+T['build']['masks oracle options in the connection form'] = function()
+  for _, field in ipairs(require('sqmeow.dialects').fields('oracle')) do
+    if field.key == 'options' then
+      eq(field.mask, true)
+      return
+    end
+  end
+  error('Oracle options field is missing')
+end
+
 T['build']['writes a scylla keyspace where a database would be'] = function()
   eq(url.build('scylla', { host = 'h', database = 'shop' }), 'scylla://h/shop')
   eq(url.parse('cassandra://u:p@h:9042/shop').dialect, 'scylla')
