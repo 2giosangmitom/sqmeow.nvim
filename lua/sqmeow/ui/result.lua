@@ -35,6 +35,9 @@ local NAMESPACE = vim.api.nvim_create_namespace('sqmeow')
 --- The table grid, lazily created on the first draw.
 local tbl = nil
 
+--- Whether the last draw rendered a table grid with column headers.
+local has_grid = false
+
 --- Close and wipe the sticky header window and buffer.
 local function close_sticky()
   if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
@@ -55,7 +58,7 @@ local function update_sticky()
     return
   end
 
-  if not (win and utils.shows(win, buf)) then
+  if not (has_grid and win and utils.shows(win, buf)) then
     close_sticky()
     return
   end
@@ -90,7 +93,13 @@ local function update_sticky()
       -- Transfer extmarks / highlights from original header rows
       local hns = vim.api.nvim_create_namespace('sqmeow_sticky')
       vim.api.nvim_buf_clear_namespace(sticky_buf, hns, 0, -1)
-      local marks = vim.api.nvim_buf_get_extmarks(buf, NAMESPACE, { 0, 0 }, { 1, -1 }, { details = true })
+      local marks = vim.api.nvim_buf_get_extmarks(
+        buf,
+        NAMESPACE,
+        { 0, 0 },
+        { 1, -1 },
+        { details = true }
+      )
       for _, m in ipairs(marks) do
         local row, col, details = m[2], m[3], m[4]
         if details and details.hl_group then
@@ -171,6 +180,7 @@ end
 --- Forget everything kept by call id, for an engine that numbers its calls from one again.
 function M.forget()
   specs, drawn, carried, pending, resume = {}, nil, nil, nil, nil
+  has_grid = false
   close_sticky()
 end
 
@@ -511,6 +521,7 @@ local function draw()
 
   -- A failed query's error is shown here, where its rows would have been, and nowhere else.
   if call and call.state == 'error' then
+    has_grid = false
     local lines = vim.split(call.error or 'the query failed', '\n')
     vim.api.nvim_buf_set_lines(handle, 0, -1, false, lines)
     for row, text in ipairs(lines) do
@@ -524,6 +535,7 @@ local function draw()
   end
 
   if not (call and call.columns and #call.columns > 0) then
+    has_grid = false
     vim.api.nvim_buf_set_lines(handle, 0, -1, false, {})
     vim.bo[handle].modifiable = false
     return
@@ -531,6 +543,7 @@ local function draw()
 
   local plan = plan_lines(call)
   if plan then
+    has_grid = false
     vim.api.nvim_buf_set_lines(handle, 0, -1, false, plan)
     vim.bo[handle].modifiable = false
     return
@@ -684,6 +697,7 @@ local function draw()
   end
 
   tbl:render()
+  has_grid = true
   vim.bo[handle].modifiable = false
 end
 
@@ -1734,7 +1748,11 @@ function M.update_winbar(summary)
     if cell and cell.name and cell.name ~= '' then
       local call = summary or state.call
       local total = call and call.columns and #call.columns or 0
-      local col_type = call and call.columns and call.columns[cell.column + 1] and call.columns[cell.column + 1].type_name or ''
+      local col_type = call
+          and call.columns
+          and call.columns[cell.column + 1]
+          and call.columns[cell.column + 1].type_name
+        or ''
       local icon = require('sqmeow.icons').get('column')
       local icon_str = (icon and icon ~= '') and (icon .. ' ') or '󰠵 '
       local name_escaped = cell.name:gsub('%%', '%%%%')
@@ -1749,7 +1767,11 @@ function M.update_winbar(summary)
     end
   end
 
-  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s%s'):format(label, M.describe(summary, true), col_info)
+  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s%s'):format(
+    label,
+    M.describe(summary, true),
+    col_info
+  )
 end
 
 return M
