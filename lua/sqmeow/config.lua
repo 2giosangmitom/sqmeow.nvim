@@ -35,6 +35,10 @@ M.defaults = {
       column_icons = true,
       -- What a SQL `NULL` reads as. Distinct from an empty string, which is drawn as nothing.
       null_text = 'NULL',
+      -- Pin column header when scrolling down past the first visible lines.
+      sticky_header = true,
+      -- Display active column name and type in the winbar.
+      winbar_column_info = true,
     },
     -- The border of every dialog.
     border = 'default',
