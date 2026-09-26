@@ -874,4 +874,21 @@ T['window']['maps its keys buffer-locally with descriptions'] = function()
   end
 end
 
+T['window']['opens on the left by default'] = function()
+  local win = drawer.open()
+  local pos = vim.api.nvim_win_get_position(win)
+  eq(pos[2], 0)
+end
+
+T['window']['opens on the right when configured'] = function()
+  drawer.close()
+  require('sqmeow.config').apply({ ui = { drawer = { position = 'right' } } })
+  local win = drawer.open()
+  local pos = vim.api.nvim_win_get_position(win)
+  eq(pos[2] > 0, true)
+  drawer.close()
+  require('sqmeow.config').apply({ ui = { drawer = { position = 'left' } } })
+  drawer.open()
+end
+
 return T

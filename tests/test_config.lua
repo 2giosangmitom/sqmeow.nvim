@@ -14,6 +14,7 @@ T['defaults'] = MiniTest.new_set()
 
 T['defaults']['are applied when setup is not called'] = function()
   eq(config.get().ui.drawer.width, config.defaults.ui.drawer.width)
+  eq(config.get().ui.drawer.position, 'left')
 end
 
 T['defaults']['survive a partial override'] = function()
@@ -69,6 +70,14 @@ end
 T['validation']['takes a directory for core.path'] = function()
   eq(config.validate({ core = { path = '~/.local/share/sqmeow' } }), {})
   eq(config.validate({ core = { path = 7 } }), { '`core.path` must be a string, got number' })
+end
+
+T['validation']['accepts left or right for ui.drawer.position'] = function()
+  eq(config.validate({ ui = { drawer = { position = 'right' } } }), {})
+  eq(config.validate({ ui = { drawer = { position = 'left' } } }), {})
+  eq(config.validate({ ui = { drawer = { position = 'top' } } }), {
+    "`ui.drawer.position` must be 'left' or 'right'",
+  })
 end
 
 T['border'] = MiniTest.new_set()

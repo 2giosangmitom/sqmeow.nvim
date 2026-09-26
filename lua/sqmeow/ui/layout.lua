@@ -104,7 +104,9 @@ function M.editing_window()
   -- Every window in this tab belongs to the plugin.
   if vim.bo.filetype == 'sqmeow-drawer' then
     -- Beside the sidebar, which is where an editor sits in the layout the sidebar is part of.
-    vim.cmd('rightbelow vnew')
+    local drawer_cfg = require('sqmeow.config').get().ui.drawer
+    local vnew_cmd = drawer_cfg.position == 'right' and 'leftabove vnew' or 'rightbelow vnew'
+    vim.cmd(vnew_cmd)
   else
     vim.cmd('topleft new')
   end

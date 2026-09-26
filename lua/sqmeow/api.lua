@@ -837,10 +837,12 @@ local function resume()
 end
 
 --- Show the schema drawer.
+---@return integer win
 function M.open_drawer()
   require('sqmeow.events').ensure()
-  require('sqmeow.ui.drawer').open()
+  local win = require('sqmeow.ui.drawer').open()
   resume()
+  return win
 end
 
 --- Hide the schema drawer.
