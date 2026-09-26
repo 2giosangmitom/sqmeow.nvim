@@ -15,6 +15,7 @@ local T = MiniTest.new_set({
       config.apply({})
       vim.env.SQMEOW_CONNECTIONS = nil
       pcall(vim.fn.delete, scratch)
+      state.reset()
     end,
   },
 })
@@ -362,6 +363,41 @@ T['combining']['finds one connection by name'] = function()
 
   eq(sources.find('dev').url, 'sqlite://dev.db')
   eq(sources.find('nope'), nil)
+end
+
+T['connecting'] = MiniTest.new_set()
+
+T['connecting']['reuses an open connection of the same name'] = function()
+  save('dev', 'sqlite://dev.db')
+  only_file()
+
+  local id = state.next_connection_id()
+  state.add_connection({ id = id, name = 'dev', url = 'sqlite://dev.db', state = 'connected' })
+
+  local connect_called = false
+  helpers.stub(api, 'connect', function()
+    connect_called = true
+  end)
+
+  local returned_id = api.connect_named('dev')
+  eq(returned_id, id)
+  eq(state.current, id)
+  eq(connect_called, false)
+end
+
+T['connecting']['opens a new connection when not already open'] = function()
+  save('dev', 'sqlite://dev.db')
+  only_file()
+
+  local connected
+  helpers.stub(api, 'connect', function(url, opts)
+    connected = { url = url, name = opts.name }
+    return 42
+  end)
+
+  local returned_id = api.connect_named('dev')
+  eq(returned_id, 42)
+  eq(connected, { url = 'sqlite://dev.db', name = 'dev' })
 end
 
 T['a command source reads what the command prints, in the background'] = function()
