@@ -569,11 +569,11 @@ local function written(path)
     if stat == nil or (stat.size or 0) == 0 then
       return false
     end
-    local ok, lines = pcall(vim.fn.readfile, path, 'b')
-    if not ok or #lines == 0 then
+    local ok, file_lines = pcall(vim.fn.readfile, path, 'b')
+    if not ok or #file_lines == 0 then
       return false
     end
-    content = table.concat(lines, '\n')
+    content = table.concat(file_lines, '\n')
     return content ~= ''
   end, TIMEOUT)
   return content

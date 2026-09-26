@@ -148,8 +148,22 @@ T['window']['pins sticky header when scrolled past line 2'] = function()
     state = 'done',
     rows = 30,
     columns = {
-      { name = 'id', type_name = 'integer', widest = 2 },
-      { name = 'name', type_name = 'text', widest = 4 },
+      {
+        name = 'id',
+        type_name = 'integer',
+        class = 'number',
+        widest = 2,
+        nulls = false,
+        numeric = true,
+      },
+      {
+        name = 'name',
+        type_name = 'text',
+        class = 'text',
+        widest = 4,
+        nulls = false,
+        numeric = false,
+      },
     },
   }
   result.redraw()
@@ -198,8 +212,22 @@ T['window']['sticky header closes when result window closes'] = function()
     state = 'done',
     rows = 30,
     columns = {
-      { name = 'id', type_name = 'integer', widest = 2 },
-      { name = 'name', type_name = 'text', widest = 4 },
+      {
+        name = 'id',
+        type_name = 'integer',
+        class = 'number',
+        widest = 2,
+        nulls = false,
+        numeric = true,
+      },
+      {
+        name = 'name',
+        type_name = 'text',
+        class = 'text',
+        widest = 4,
+        nulls = false,
+        numeric = false,
+      },
     },
   }
   result.redraw()
