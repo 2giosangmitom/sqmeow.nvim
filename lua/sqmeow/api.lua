@@ -62,6 +62,13 @@ end
 ---@return integer|nil id
 ---@return string|nil error
 function M.connect_named(name)
+  local state = require('sqmeow.state')
+  local existing = state.connection_by_name(name)
+  if existing and existing.state ~= 'closed' then
+    M.use(existing.id)
+    return existing.id
+  end
+
   local spec = require('sqmeow.sources').find(name)
   if not spec then
     local message = ('there is no configured connection named `%s`'):format(name)
