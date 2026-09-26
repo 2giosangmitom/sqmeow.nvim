@@ -9,6 +9,9 @@ local buf = nil
 local win = nil
 --- The float the grid is in, when it is not in its split.
 local popup = nil
+--- The sticky header float and buffer when scrolling down.
+local sticky_buf = nil
+local sticky_win = nil
 
 --- The rows on screen, their offset in the view, and their result indices.
 local page = { offset = 0, rows = {}, indices = {} }
@@ -31,6 +34,124 @@ local NAMESPACE = vim.api.nvim_create_namespace('sqmeow')
 
 --- The table grid, lazily created on the first draw.
 local tbl = nil
+
+--- Whether the last draw rendered a table grid with column headers.
+local has_grid = false
+
+--- Close and wipe the sticky header window and buffer.
+local function close_sticky()
+  if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
+    pcall(vim.api.nvim_win_close, sticky_win, true)
+  end
+  sticky_win = nil
+  if sticky_buf and vim.api.nvim_buf_is_valid(sticky_buf) then
+    pcall(vim.api.nvim_buf_delete, sticky_buf, { force = true })
+  end
+  sticky_buf = nil
+end
+
+--- Update or create the sticky header float when scrolling down past the first 2 rows.
+local function update_sticky()
+  local config = require('sqmeow.config').get()
+  if not (config.ui and config.ui.result and config.ui.result.sticky_header) then
+    close_sticky()
+    return
+  end
+
+  if not (has_grid and win and utils.shows(win, buf)) then
+    close_sticky()
+    return
+  end
+
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  if line_count < 3 then
+    if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
+      pcall(vim.api.nvim_win_close, sticky_win, true)
+      sticky_win = nil
+    end
+    return
+  end
+
+  local w0 = vim.api.nvim_win_call(win, function()
+    return vim.fn.line('w0')
+  end)
+
+  if w0 > 2 then
+    if not sticky_buf or not vim.api.nvim_buf_is_valid(sticky_buf) then
+      sticky_buf = vim.api.nvim_create_buf(false, true)
+      vim.bo[sticky_buf].buftype = 'nofile'
+      vim.bo[sticky_buf].bufhidden = 'hide'
+      vim.bo[sticky_buf].swapfile = false
+    end
+
+    local header_lines = vim.api.nvim_buf_get_lines(buf, 0, 2, false)
+    if #header_lines == 2 then
+      vim.bo[sticky_buf].modifiable = true
+      vim.api.nvim_buf_set_lines(sticky_buf, 0, -1, false, header_lines)
+      vim.bo[sticky_buf].modifiable = false
+
+      -- Transfer extmarks / highlights from original header rows
+      local hns = vim.api.nvim_create_namespace('sqmeow_sticky')
+      vim.api.nvim_buf_clear_namespace(sticky_buf, hns, 0, -1)
+      local marks = vim.api.nvim_buf_get_extmarks(
+        buf,
+        NAMESPACE,
+        { 0, 0 },
+        { 1, -1 },
+        { details = true }
+      )
+      for _, m in ipairs(marks) do
+        local row, col, details = m[2], m[3], m[4]
+        if details and details.hl_group then
+          pcall(vim.api.nvim_buf_set_extmark, sticky_buf, hns, row, col, {
+            end_col = details.end_col,
+            hl_group = details.hl_group,
+            priority = details.priority,
+          })
+        end
+      end
+
+      local win_w = vim.api.nvim_win_get_width(win)
+      local view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
+
+      if not sticky_win or not vim.api.nvim_win_is_valid(sticky_win) then
+        sticky_win = vim.api.nvim_open_win(sticky_buf, false, {
+          relative = 'win',
+          win = win,
+          row = 0,
+          col = 0,
+          width = win_w,
+          height = 2,
+          focusable = false,
+          style = 'minimal',
+          zindex = 45,
+        })
+        if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
+          vim.wo[sticky_win].wrap = false
+          vim.wo[sticky_win].spell = false
+        end
+      else
+        vim.api.nvim_win_set_config(sticky_win, {
+          win = win,
+          width = win_w,
+          height = 2,
+        })
+      end
+
+      -- Synchronize horizontal scrolling 1:1 with parent window
+      if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
+        vim.api.nvim_win_call(sticky_win, function()
+          vim.fn.winrestview({ leftcol = view.leftcol, topline = 1 })
+        end)
+      end
+    end
+  else
+    if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
+      pcall(vim.api.nvim_win_close, sticky_win, true)
+      sticky_win = nil
+    end
+  end
+end
 
 --- How many rows fit in one page.
 ---@return integer
@@ -59,6 +180,8 @@ end
 --- Forget everything kept by call id, for an engine that numbers its calls from one again.
 function M.forget()
   specs, drawn, carried, pending, resume = {}, nil, nil, nil, nil
+  has_grid = false
+  close_sticky()
 end
 
 --- Round a duration for display, keeping it short without lying about the magnitude.
@@ -212,6 +335,38 @@ function M.buffer()
   end
   buf = scratch('sqmeow://result', 'sqmeow-result')
   require('sqmeow.keymap').apply('result', buf, M.actions)
+
+  local group = vim.api.nvim_create_augroup('sqmeow_result_' .. buf, { clear = true })
+  vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter' }, {
+    group = group,
+    buffer = buf,
+    callback = function()
+      M.update_winbar(require('sqmeow.state').call)
+      update_sticky()
+    end,
+  })
+  vim.api.nvim_create_autocmd({ 'WinScrolled', 'VimResized' }, {
+    group = group,
+    callback = function()
+      if win and utils.shows(win, buf) then
+        update_sticky()
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd('WinClosed', {
+    group = group,
+    callback = function(args)
+      if win and (tonumber(args.match) == win or args.match == tostring(win)) then
+        close_sticky()
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd({ 'BufHidden', 'BufDelete', 'BufUnload' }, {
+    group = group,
+    buffer = buf,
+    callback = close_sticky,
+  })
+
   return buf
 end
 
@@ -366,6 +521,7 @@ local function draw()
 
   -- A failed query's error is shown here, where its rows would have been, and nowhere else.
   if call and call.state == 'error' then
+    has_grid = false
     local lines = vim.split(call.error or 'the query failed', '\n')
     vim.api.nvim_buf_set_lines(handle, 0, -1, false, lines)
     for row, text in ipairs(lines) do
@@ -379,6 +535,7 @@ local function draw()
   end
 
   if not (call and call.columns and #call.columns > 0) then
+    has_grid = false
     vim.api.nvim_buf_set_lines(handle, 0, -1, false, {})
     vim.bo[handle].modifiable = false
     return
@@ -386,6 +543,7 @@ local function draw()
 
   local plan = plan_lines(call)
   if plan then
+    has_grid = false
     vim.api.nvim_buf_set_lines(handle, 0, -1, false, plan)
     vim.bo[handle].modifiable = false
     return
@@ -539,6 +697,7 @@ local function draw()
   end
 
   tbl:render()
+  has_grid = true
   vim.bo[handle].modifiable = false
 end
 
@@ -546,6 +705,7 @@ end
 function M.redraw()
   draw()
   M.update_winbar(require('sqmeow.state').call)
+  update_sticky()
 end
 
 --- Ask the engine for a slice of the current result and draw it.
@@ -597,6 +757,7 @@ function M.show_page(offset)
   page = { offset = offset, rows = reply.rows or {}, indices = reply.indices or {} }
   draw()
   M.update_winbar(call)
+  update_sticky()
   return true
 end
 
@@ -802,6 +963,7 @@ function M.render(summary)
   if not (summary and summary.call_id and summary.state == 'done') then
     draw()
     M.update_winbar(summary)
+    update_sticky()
     return
   end
 
@@ -851,9 +1013,10 @@ end
 -- -- where the cursor is ---------------------------------------------------------------------
 
 --- Which result column the cursor is in, wherever it is in the grid, header included.
+---@param call? table Summary or state call.
 ---@return { column: integer, name: string, line: integer }|nil # `column` zero-based.
-local function cursor_column()
-  local call = require('sqmeow.state').call
+local function cursor_column(call)
+  call = call or require('sqmeow.state').call
   if not (win and utils.shows(win, buf) and call and call.columns and tbl) then
     return nil
   end
@@ -997,6 +1160,7 @@ function M.open_float()
     pcall(vim.api.nvim_win_set_cursor, win, cursor)
   end
   M.update_winbar(require('sqmeow.state').call)
+  update_sticky()
   return win
 end
 
@@ -1519,6 +1683,7 @@ function M.open()
     vim.api.nvim_set_current_win(previous)
   end
   M.update_winbar(require('sqmeow.state').call)
+  update_sticky()
   return win
 end
 
@@ -1528,8 +1693,15 @@ function M.window()
   return utils.shows(win, buf) and win or nil
 end
 
+--- The sticky header window when pinned, or nil.
+---@return integer|nil
+function M.sticky_window()
+  return (sticky_win and vim.api.nvim_win_is_valid(sticky_win)) and sticky_win or nil
+end
+
 --- Hide the result window, keeping what it holds.
 function M.close()
+  close_sticky()
   require('sqmeow.ui.filter').close()
   if popup then
     local closing = popup
@@ -1568,7 +1740,38 @@ function M.update_winbar(summary)
   connection = connection or state.current_connection()
   local label = connection and state.label(connection) or 'not connected'
 
-  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s'):format(label, M.describe(summary, true))
+  -- Dynamic active column information
+  local col_info = ''
+  local config = require('sqmeow.config').get()
+  if config.ui.result.winbar_column_info then
+    local cell = cursor_column(summary)
+    if cell and cell.name and cell.name ~= '' then
+      local call = summary or state.call
+      local total = call and call.columns and #call.columns or 0
+      local col_type = call
+          and call.columns
+          and call.columns[cell.column + 1]
+          and call.columns[cell.column + 1].type_name
+        or ''
+      local icon = require('sqmeow.icons').get('column')
+      local icon_str = (icon and icon ~= '') and (icon .. ' ') or '󰠵 '
+      local name_escaped = cell.name:gsub('%%', '%%%%')
+      col_info = ('  %%#SqmeowSignAdded#%s%s%%*'):format(icon_str, name_escaped)
+      if col_type ~= '' then
+        local type_escaped = col_type:gsub('%%', '%%%%')
+        col_info = col_info .. (' %%#SqmeowNull#(%s)%%*'):format(type_escaped)
+      end
+      if total > 0 then
+        col_info = col_info .. (' %%#SqmeowNull#[%d/%d]%%*'):format(cell.column + 1, total)
+      end
+    end
+  end
+
+  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s%s'):format(
+    label,
+    M.describe(summary, true),
+    col_info
+  )
 end
 
 return M

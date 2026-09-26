@@ -128,6 +128,125 @@ T['window']['keeps the buffer across open and close'] = function()
   eq(result.buffer(), buf)
 end
 
+T['window']['has no sticky window when not scrolled'] = function()
+  result.open()
+  eq(result.sticky_window(), nil)
+end
+
+T['window']['pins sticky header when scrolled past line 2'] = function()
+  local win = result.open()
+  local buf = result.buffer()
+  vim.bo[buf].modifiable = true
+  local lines = { 'id  │ name', '────┼─────' }
+  for i = 1, 30 do
+    table.insert(lines, ('%d   │ user_%d'):format(i, i))
+  end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+
+  vim.api.nvim_set_current_win(win)
+  vim.api.nvim_win_set_cursor(win, { 10, 0 })
+  vim.cmd('normal! zt')
+  vim.api.nvim_exec_autocmds('CursorMoved', { buffer = buf })
+
+  local sw = result.sticky_window()
+  eq(type(sw), 'number')
+  eq(vim.api.nvim_win_is_valid(sw), true)
+
+  local sbuf = vim.api.nvim_win_get_buf(sw)
+  eq(
+    vim.api.nvim_buf_get_lines(sbuf, 0, 2, false),
+    { 'id  │ name', '────┼─────' }
+  )
+
+  -- Scroll back to top
+  vim.api.nvim_win_set_cursor(win, { 1, 0 })
+  vim.cmd('normal! zt')
+  vim.api.nvim_exec_autocmds('CursorMoved', { buffer = buf })
+  eq(result.sticky_window(), nil)
+end
+
+T['window']['sticky header closes when result window closes'] = function()
+  local win = result.open()
+  local buf = result.buffer()
+  vim.bo[buf].modifiable = true
+  local lines = { 'id  │ name', '────┼─────' }
+  for i = 1, 30 do
+    table.insert(lines, ('%d   │ user_%d'):format(i, i))
+  end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+
+  vim.api.nvim_set_current_win(win)
+  vim.api.nvim_win_set_cursor(win, { 10, 0 })
+  vim.cmd('normal! zt')
+  vim.api.nvim_exec_autocmds('CursorMoved', { buffer = buf })
+  eq(type(result.sticky_window()), 'number')
+
+  result.close()
+  eq(result.sticky_window(), nil)
+end
+
+T['window']['does not pin sticky header for errors'] = function()
+  local state = require('sqmeow.state')
+  local previous = state.call
+  MiniTest.finally(function()
+    state.call = previous
+  end)
+  state.call = {
+    call_id = 998,
+    state = 'error',
+    error = 'syntax error at line 1\nsomething went wrong\nmore details\neven more details\nline 5',
+  }
+  local win = result.open()
+  local buf = result.buffer()
+  result.redraw()
+
+  vim.api.nvim_set_current_win(win)
+  vim.api.nvim_win_set_cursor(win, { 4, 0 })
+  vim.cmd('normal! zt')
+  vim.api.nvim_exec_autocmds('CursorMoved', { buffer = buf })
+
+  eq(result.sticky_window(), nil)
+end
+
+T['winbar'] = MiniTest.new_set({
+  hooks = {
+    post_case = function()
+      result.close()
+      sqmeow.setup({})
+    end,
+  },
+})
+
+T['winbar']['renders winbar on open window'] = function()
+  local state = require('sqmeow.state')
+  local summary = {
+    call_id = 999,
+    state = 'done',
+    rows = 5,
+    elapsed_ms = 2,
+    connection = 'main',
+    columns = {
+      { name = 'id', type_name = 'integer', widest = 2 },
+      { name = 'name', type_name = 'text', widest = 4 },
+    },
+  }
+  local previous = state.call
+  MiniTest.finally(function()
+    state.call = previous
+  end)
+  local win = result.open()
+  state.call = summary
+  vim.api.nvim_set_current_win(win)
+  vim.api.nvim_win_set_cursor(win, { 1, 0 })
+  result.redraw()
+  helpers.contains(vim.wo[win].winbar, 'main')
+  helpers.contains(vim.wo[win].winbar, 'id')
+  helpers.contains(vim.wo[win].winbar, '(integer)')
+  helpers.contains(vim.wo[win].winbar, '[1/2]')
+end
+
 T['buffer'] = MiniTest.new_set()
 
 T['buffer']['is a scratch buffer nobody can type into'] = function()

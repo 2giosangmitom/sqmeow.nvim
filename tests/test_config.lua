@@ -15,6 +15,8 @@ T['defaults'] = MiniTest.new_set()
 T['defaults']['are applied when setup is not called'] = function()
   eq(config.get().ui.drawer.width, config.defaults.ui.drawer.width)
   eq(config.get().ui.drawer.position, 'left')
+  eq(config.get().ui.result.sticky_header, true)
+  eq(config.get().ui.result.winbar_column_info, true)
 end
 
 T['defaults']['survive a partial override'] = function()
@@ -78,6 +80,20 @@ T['validation']['accepts left or right for ui.drawer.position'] = function()
   eq(config.validate({ ui = { drawer = { position = 'top' } } }), {
     "`ui.drawer.position` must be 'left' or 'right'",
   })
+end
+
+T['validation']['checks boolean type for ui.result.sticky_header'] = function()
+  eq(config.validate({ ui = { result = { sticky_header = 'yes' } } }), {
+    '`ui.result.sticky_header` must be a boolean, got string',
+  })
+  eq(config.validate({ ui = { result = { sticky_header = false } } }), {})
+end
+
+T['validation']['checks boolean type for ui.result.winbar_column_info'] = function()
+  eq(config.validate({ ui = { result = { winbar_column_info = 123 } } }), {
+    '`ui.result.winbar_column_info` must be a boolean, got number',
+  })
+  eq(config.validate({ ui = { result = { winbar_column_info = false } } }), {})
 end
 
 T['border'] = MiniTest.new_set()
