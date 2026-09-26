@@ -3,7 +3,7 @@ resolver = "3"
 members = ["core/sqmeow-rpc", "core/sqmeow-db", "core/sqmeow-adapters", "core/sqmeow-core"]
 
 [workspace.package]
-version = "2.3.0" # x-release-please-version
+version = "2.4.0" # x-release-please-version
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"

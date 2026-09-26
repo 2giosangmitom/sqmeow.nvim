@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.4.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.3.0...v2.4.0) (2026-09-26)
+
+
+### Features
+
+* **drawer:** allow configuring drawer placement on the right ([#39](https://github.com/2giosangmitom/sqmeow.nvim/issues/39)) ([97ed6ab](https://github.com/2giosangmitom/sqmeow.nvim/commit/97ed6abf11dd119c865cdb673a79a4f634720946))
+* **result:** pin column headers when scrolling (sticky header) & active column in winbar ([#44](https://github.com/2giosangmitom/sqmeow.nvim/issues/44)) ([e2a9d5e](https://github.com/2giosangmitom/sqmeow.nvim/commit/e2a9d5ee2da8a43f1690c0439670d3a06ec711eb))
+* **table:** add actions and keymaps to navigate horizontally between columns ([#38](https://github.com/2giosangmitom/sqmeow.nvim/issues/38)) ([c6197ec](https://github.com/2giosangmitom/sqmeow.nvim/commit/c6197ec5f74e46b8225ef9dac1d87fc695072611))
+
+
+### Fixes
+
+* **api:** reuse open connection in connect_named ([#36](https://github.com/2giosangmitom/sqmeow.nvim/issues/36)) ([a6e0f8c](https://github.com/2giosangmitom/sqmeow.nvim/commit/a6e0f8c8e39323bd0b1ee901a92abd24a3eb3c43))
+* lint ([7787aec](https://github.com/2giosangmitom/sqmeow.nvim/commit/7787aec9f207f4f8913b53af3de1e7b03d0751d4))
+
 ## [2.3.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.2.0...v2.3.0) (2026-09-24)
 
 
