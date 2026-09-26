@@ -330,38 +330,40 @@ drawer
  q         Close the drawer
 
 result
- L           Next page
- H           Previous page
- [H          First page
- ]H          Last page
- K           Show this row down the page
- gK          Show the columns and indexes of the table this column is from
- ]r          Show the next statement's result
- [r          Show the previous statement's result
- x           Export the result to a file
- x (x)       Export the selected rows
- =           Show only rows holding this value in this column
- gf          Filter the rows with a WHERE condition
- go          Order the rows with an ORDER BY list
- s           Sort by this column: ascending, descending, off
- S           Add this column to the sort
- -           Hide this column
- g-          Show every hidden column
- R           Clear filters, sort and hidden columns
- Z           Show the result in a float, or back in its split
- i, <CR>     Change this cell
- X           Set this cell to NULL
- g=          Set this cell to a SQL expression, such as now()
- o           Add a row
- D           Add a copy of this row
- dd          Delete this row, or keep it after all
- d (x)       Delete the selected rows
- u           Undo the last change
- <C-c>       Stop the running query, or the changes being applied
- U           Discard every change
- gs, <C-s>   Review the changes; <C-s> there applies them
- ?           Show these mappings
- q           Close the result window
+ L             Next page
+ H             Previous page
+ [H            First page
+ ]H            Last page
+ <Tab>, ]c     Next column
+ <S-Tab>, [c   Previous column
+ K             Show this row down the page
+ gK            Show the columns and indexes of the table this column is from
+ ]r            Show the next statement's result
+ [r            Show the previous statement's result
+ x             Export the result to a file
+ x (x)         Export the selected rows
+ =             Show only rows holding this value in this column
+ gf            Filter the rows with a WHERE condition
+ go            Order the rows with an ORDER BY list
+ s             Sort by this column: ascending, descending, off
+ S             Add this column to the sort
+ -             Hide this column
+ g-            Show every hidden column
+ R             Clear filters, sort and hidden columns
+ Z             Show the result in a float, or back in its split
+ i, <CR>       Change this cell
+ X             Set this cell to NULL
+ g=            Set this cell to a SQL expression, such as now()
+ o             Add a row
+ D             Add a copy of this row
+ dd            Delete this row, or keep it after all
+ d (x)         Delete the selected rows
+ u             Undo the last change
+ <C-c>         Stop the running query, or the changes being applied
+ U             Discard every change
+ gs, <C-s>     Review the changes; <C-s> there applies them
+ ?             Show these mappings
+ q             Close the result window
 
 filter
  <CR>       Filter the result with what the bar holds

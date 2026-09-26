@@ -53,6 +53,8 @@ M.defaults = {
     { action = 'prev_page', lhs = 'H', desc = 'Previous page' },
     { action = 'first_page', lhs = '[H', desc = 'First page' },
     { action = 'last_page', lhs = ']H', desc = 'Last page' },
+    { action = 'next_column', lhs = { '<Tab>', ']c' }, desc = 'Next column' },
+    { action = 'prev_column', lhs = { '<S-Tab>', '[c' }, desc = 'Previous column' },
     { action = 'detail', lhs = 'K', desc = 'Show this row down the page' },
     {
       action = 'structure',

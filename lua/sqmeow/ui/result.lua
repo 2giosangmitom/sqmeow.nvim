@@ -1120,6 +1120,18 @@ function M.actions.last_page()
   require('sqmeow.api').last_page()
 end
 
+function M.actions.next_column()
+  if tbl and win and utils.shows(win, buf) then
+    tbl:next_column(win)
+  end
+end
+
+function M.actions.prev_column()
+  if tbl and win and utils.shows(win, buf) then
+    tbl:prev_column(win)
+  end
+end
+
 --- Write the whole result to a file.
 function M.actions.export()
   require('sqmeow.api').export()

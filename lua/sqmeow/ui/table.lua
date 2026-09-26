@@ -816,6 +816,48 @@ function M:goto_column(index, win)
   return false
 end
 
+--- Move one column right, wrapping to the first column past the last one.
+---@param win? integer Window showing the table.
+---@return table|nil cell The cell moved to, or nil off the grid.
+function M:next_column(win)
+  win = self:_win(win)
+  if not win then
+    return nil
+  end
+  local cell = self:goto_cell({ 0, 1 }, win)
+  if cell then
+    return cell
+  end
+  if #self._.columns == 0 then
+    return nil
+  end
+  if self:goto_column(1, win) then
+    return self:get_cell(nil, win)
+  end
+  return nil
+end
+
+--- Move one column left, wrapping to the last column past the first one.
+---@param win? integer Window showing the table.
+---@return table|nil cell The cell moved to, or nil off the grid.
+function M:prev_column(win)
+  win = self:_win(win)
+  if not win then
+    return nil
+  end
+  local cell = self:goto_cell({ 0, -1 }, win)
+  if cell then
+    return cell
+  end
+  if #self._.columns == 0 then
+    return nil
+  end
+  if self:goto_column(#self._.columns, win) then
+    return self:get_cell(nil, win)
+  end
+  return nil
+end
+
 --- Redraw one data cell in place, or the whole table when its column must grow.
 ---@param cell sqmeow.Table.Cell
 function M:refresh_cell(cell)
