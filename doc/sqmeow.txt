@@ -123,7 +123,11 @@ Default configuration.
     },
 
     ui = {
-      drawer = { width = 36 },
+      drawer = {
+        -- Where the drawer is anchored: 'left' or 'right'.
+        position = 'left',
+        width = 36,
+      },
       result = {
         height = 16,
         page_size = 100,
@@ -692,6 +696,8 @@ Parameters ~
                                                       *sqmeow.api.open_drawer()*
                            `sqmeow.api.open_drawer`()
 Show the schema drawer.
+Return ~
+`(integer)` win
 
 ------------------------------------------------------------------------------
                                                      *sqmeow.api.close_drawer()*

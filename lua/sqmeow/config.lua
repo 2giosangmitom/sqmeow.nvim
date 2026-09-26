@@ -22,7 +22,11 @@ M.defaults = {
   },
 
   ui = {
-    drawer = { width = 36 },
+    drawer = {
+      -- Where the drawer is anchored: 'left' or 'right'.
+      position = 'left',
+      width = 36,
+    },
     result = {
       height = 16,
       page_size = 100,
@@ -179,6 +183,8 @@ local function validate(user, defaults, path, errors)
       validate(value, default, where, errors)
     elseif type(value) ~= type(default) then
       table.insert(errors, ('`%s` must be a %s, got %s'):format(where, type(default), type(value)))
+    elseif where == 'ui.drawer.position' and value ~= 'left' and value ~= 'right' then
+      table.insert(errors, "`ui.drawer.position` must be 'left' or 'right'")
     end
   end
 end
