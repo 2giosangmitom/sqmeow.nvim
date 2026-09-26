@@ -561,10 +561,22 @@ T['exporting'] = MiniTest.new_set({
 
 --- Wait for the engine to write a file and hand back what it holds.
 local function written(path)
+  local content = ''
   helpers.wait_for('the file should be written', function()
-    return vim.uv.fs_stat(path) ~= nil
+    local stat = vim.uv.fs_stat(path)
+    -- The file appears as soon as the engine creates it, before its bytes land.
+    -- Reading then would hand back an empty string for a file that is about to hold rows.
+    if stat == nil or (stat.size or 0) == 0 then
+      return false
+    end
+    local ok, lines = pcall(vim.fn.readfile, path, 'b')
+    if not ok or #lines == 0 then
+      return false
+    end
+    content = table.concat(lines, '\n')
+    return content ~= ''
   end, TIMEOUT)
-  return table.concat(vim.fn.readfile(path, 'b'), '\n')
+  return content
 end
 
 T['exporting']['writes only the rows asked for, without a header'] = function()

@@ -134,8 +134,25 @@ T['window']['has no sticky window when not scrolled'] = function()
 end
 
 T['window']['pins sticky header when scrolled past line 2'] = function()
+  local state = require('sqmeow.state')
+  local previous = state.call
+  MiniTest.finally(function()
+    state.call = previous
+  end)
   local win = result.open()
   local buf = result.buffer()
+  -- A real grid draw first: the sticky guard only pins over a drawn grid,
+  -- and writing lines straight into the buffer leaves that guard off.
+  state.call = {
+    call_id = 997,
+    state = 'done',
+    rows = 30,
+    columns = {
+      { name = 'id', type_name = 'integer', widest = 2 },
+      { name = 'name', type_name = 'text', widest = 4 },
+    },
+  }
+  result.redraw()
   vim.bo[buf].modifiable = true
   local lines = { 'id  │ name', '────┼─────' }
   for i = 1, 30 do
@@ -167,8 +184,25 @@ T['window']['pins sticky header when scrolled past line 2'] = function()
 end
 
 T['window']['sticky header closes when result window closes'] = function()
+  local state = require('sqmeow.state')
+  local previous = state.call
+  MiniTest.finally(function()
+    state.call = previous
+  end)
   local win = result.open()
   local buf = result.buffer()
+  -- A real grid draw first: the sticky guard only pins over a drawn grid,
+  -- and writing lines straight into the buffer leaves that guard off.
+  state.call = {
+    call_id = 996,
+    state = 'done',
+    rows = 30,
+    columns = {
+      { name = 'id', type_name = 'integer', widest = 2 },
+      { name = 'name', type_name = 'text', widest = 4 },
+    },
+  }
+  result.redraw()
   vim.bo[buf].modifiable = true
   local lines = { 'id  │ name', '────┼─────' }
   for i = 1, 30 do
