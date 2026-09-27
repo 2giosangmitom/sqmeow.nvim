@@ -301,6 +301,30 @@ T['postgres cluster']['opens a database from the drawer as its own connection'] 
   local child = assert(state.child_connection(cluster.id, database))
   eq(child.name, 'cluster/' .. database)
   eq(child.state, 'connected')
+  -- Exploring by expanding does not retarget the active connection.
+  eq(state.current, cluster.id)
+
+  -- Pressing `u` on a descendant row switches to the child connection.
+  vim.api.nvim_win_set_cursor(drawer.open(), { helpers.drawer_line(' public$', TIMEOUT), 0 })
+  drawer.actions.use()
+  eq(state.current, child.id)
+
+  -- Collapsing and re-expanding does not change the active connection.
+  toggle(' ' .. database .. '$')
+  eq(state.current, child.id)
+  toggle(' ' .. database .. '$')
+  eq(state.current, child.id)
+
+  -- Pressing `u` on the database row also switches to the child connection.
+  api.use(cluster.id)
+  eq(state.current, cluster.id)
+  vim.api.nvim_win_set_cursor(
+    drawer.open(),
+    { helpers.drawer_line(' ' .. database .. '$', TIMEOUT), 0 }
+  )
+  drawer.actions.use()
+  eq(state.current, child.id)
+
   for _, line in ipairs(helpers.drawer_lines()) do
     helpers.absent(line, 'cluster/')
   end
@@ -379,11 +403,13 @@ end
 
 T['mongodb']['refreshing the server reloads the databases opened under it'] = function()
   api.disconnect()
-  helpers.connect((vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')), nil, TIMEOUT)
+  local url = vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')
+  local cluster_id = helpers.connect(url, nil, TIMEOUT)
   run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
   run('{"insert": "first", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}')
   MiniTest.finally(function()
     run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
+    api.disconnect(cluster_id)
   end)
 
   local function press(pattern, action)

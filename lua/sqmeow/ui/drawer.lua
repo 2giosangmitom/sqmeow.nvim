@@ -520,7 +520,8 @@ end
 --- Expand or collapse one database of a cluster, opening a connection for it the first time.
 local function toggle_database(node)
   local key = node_key(node.conn_id, node.path)
-  if opened_database(node) then
+  local opened = opened_database(node)
+  if opened then
     expanded[key] = not expanded[key] or nil
     return M.render()
   end
@@ -817,6 +818,10 @@ function M.actions.use()
   if node and node.kind == 'database' then
     local opened = opened_database(node)
     node = { kind = 'connection', name = node.name, conn_id = opened and opened.id }
+  elseif node and node.conn_id then
+    local state = require('sqmeow.state')
+    local conn = state.connections[node.conn_id]
+    node = { kind = 'connection', name = conn and conn.name or node.name, conn_id = node.conn_id }
   end
   if not node or node.kind ~= 'connection' then
     return
