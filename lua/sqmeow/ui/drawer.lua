@@ -520,8 +520,12 @@ end
 --- Expand or collapse one database of a cluster, opening a connection for it the first time.
 local function toggle_database(node)
   local key = node_key(node.conn_id, node.path)
-  if opened_database(node) then
+  local opened = opened_database(node)
+  if opened then
     expanded[key] = not expanded[key] or nil
+    if expanded[key] then
+      require('sqmeow.api').use(opened.id)
+    end
     return M.render()
   end
 

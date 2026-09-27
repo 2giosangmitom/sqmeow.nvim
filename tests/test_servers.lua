@@ -309,6 +309,14 @@ T['postgres cluster']['opens a database from the drawer as its own connection'] 
   drawer.actions.use()
   eq(state.current, child.id)
 
+  -- Collapsing does not change active connection, but re-expanding activates the child again.
+  toggle(' ' .. database .. '$')
+  api.use(cluster.id)
+  eq(state.current, cluster.id)
+
+  toggle(' ' .. database .. '$')
+  eq(state.current, child.id)
+
   for _, line in ipairs(helpers.drawer_lines()) do
     helpers.absent(line, 'cluster/')
   end
