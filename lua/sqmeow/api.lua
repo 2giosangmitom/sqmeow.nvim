@@ -802,9 +802,10 @@ function M.export(opts)
   end
 end
 
---- Create a scratchpad, asking what to call it.
----@param name string|nil Raw filename with extension (e.g. `report.sql`, `cache.redis`). If given, it is created directly; otherwise the user is prompted.
-function M.scratchpad(name)
+--- Create a scratchpad, asking what to call it. `/` in the name makes folders.
+---@param name string|nil Raw name with extension (e.g. `report.sql`, `cache.redis`, `reports/monthly.sql`). If given, it is created directly; otherwise the user is prompted.
+---@param default string|nil Prefilled prompt when asking, such as a folder followed by `/`.
+function M.scratchpad(name, default)
   require('sqmeow.events').ensure()
 
   -- ` :Sqmeow scratch <name>` passes the desired name directly.
@@ -817,7 +818,7 @@ function M.scratchpad(name)
     return
   end
 
-  vim.ui.input({ prompt = 'New scratchpad: ' }, function(input)
+  vim.ui.input({ prompt = 'New scratchpad: ', default = default }, function(input)
     if not input or vim.trim(input) == '' then
       return
     end

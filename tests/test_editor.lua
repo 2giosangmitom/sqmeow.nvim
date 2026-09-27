@@ -109,6 +109,59 @@ T['scratchpad']['lives under core.path'] = function()
   eq(vim.fs.dirname(editor.path('x.sql')), paths.scratch())
 end
 
+T['scratchpad']['keeps folders from the name'] = function()
+  eq(
+    editor.path('reports/monthly report.sql'),
+    vim.fs.joinpath(editor.directory(), 'reports', 'monthly-report.sql')
+  )
+end
+
+T['scratchpad']['never escapes the scratch directory'] = function()
+  eq(editor.path('../../evil.sql'), vim.fs.joinpath(editor.directory(), 'evil.sql'))
+  eq(editor.path('a/../../evil.sql'), vim.fs.joinpath(editor.directory(), 'a', 'evil.sql'))
+end
+
+T['scratchpad']['creates and lists nested scratchpads by relative path'] = function()
+  use_connection('shop', 'sqlite://x.db')
+
+  local buf = assert(editor.create('reports/monthly.sql'))
+  eq(vim.bo[buf].filetype, 'sql')
+
+  local pads = editor.list()
+  eq(#pads, 1)
+  eq(pads[1].name, 'reports/monthly.sql')
+end
+
+T['scratchpad']['lists nested files written directly'] = function()
+  helpers.writefile(vim.fs.joinpath(editor.directory(), 'reports', 'monthly.sql'), { 'select 1' })
+  helpers.writefile(vim.fs.joinpath(editor.directory(), 'top.sql'), { 'select 2' })
+
+  local names = vim.tbl_map(function(pad)
+    return pad.name
+  end, editor.list())
+  table.sort(names)
+
+  eq(names, { 'reports/monthly.sql', 'top.sql' })
+end
+
+T['scratchpad']['lists folders, including empty ones'] = function()
+  helpers.writefile(vim.fs.joinpath(editor.directory(), 'reports', 'monthly.sql'), { 'select 1' })
+  vim.fn.mkdir(vim.fs.joinpath(editor.directory(), 'empty'), 'p')
+
+  eq(editor.folders(), { 'empty', 'reports' })
+end
+
+T['scratchpad']['makes just the folder for a trailing slash'] = function()
+  use_connection('shop', 'sqlite://x.db')
+
+  local buf, err = editor.create('reports/')
+  eq(err, nil)
+  eq(buf, nil)
+  eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'reports')) ~= nil, true)
+  eq(editor.list(), {})
+  eq(editor.folders(), { 'reports' })
+end
+
 T['scratchpad']['marks the buffers it attaches to'] = function()
   local buf = helpers.temp_buf()
   eq(editor.is_scratchpad(buf), false)
@@ -538,6 +591,30 @@ T['rename']['moves the file'] = function()
   eq(vim.fn.readfile(renamed), { 'select 1' })
 end
 
+T['rename']['moves the file across folders'] = function()
+  local path = scratchpad('before')
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'reports'), 'rf')
+  end)
+
+  local renamed = assert(editor.rename(path, 'reports/after.sql'))
+  eq(renamed, vim.fs.normalize(vim.fs.joinpath(editor.directory(), 'reports', 'after.sql')))
+  eq(vim.uv.fs_stat(path), nil)
+  eq(
+    vim.tbl_map(function(pad)
+      return pad.name
+    end, editor.list()),
+    { 'reports/after.sql' }
+  )
+end
+
+T['rename']['cannot move outside the scratchpad directory'] = function()
+  local path = scratchpad('before')
+
+  local renamed = assert(editor.rename(path, '../../escaped.sql'))
+  eq(vim.fs.dirname(renamed), vim.fs.normalize(editor.directory()))
+end
+
 T['rename']['slugs a name that would not make a file'] = function()
   local path = scratchpad('before')
   MiniTest.finally(function()
@@ -621,6 +698,16 @@ T['remove']['deletes the file'] = function()
   eq(vim.uv.fs_stat(path), nil)
 end
 
+T['remove']['deletes a nested file'] = function()
+  local dir = vim.fs.joinpath(editor.directory(), 'reports')
+  vim.fn.mkdir(dir, 'p')
+  local path = vim.fs.joinpath(dir, 'doomed.sql')
+  helpers.writefile(path, { 'select 1' })
+
+  eq(editor.remove(path), true)
+  eq(vim.uv.fs_stat(path), nil)
+end
+
 T['remove']['unloads the buffer, so a later write cannot bring it back'] = function()
   local path = scratchpad('loaded')
 
@@ -656,6 +743,106 @@ T['list']['names the saved files with extension, newest first'] = function()
 
   eq(vim.tbl_contains(names, 'older.sql'), true)
   eq(vim.tbl_contains(names, 'newer.sql'), true)
+end
+
+T['rename_dir'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      vim.fn.mkdir(editor.directory(), 'p')
+    end,
+  },
+})
+
+T['rename_dir']['moves the folder with its files'] = function()
+  local dir = vim.fs.joinpath(editor.directory(), 'reports')
+  vim.fn.mkdir(dir, 'p')
+  helpers.writefile(vim.fs.joinpath(dir, 'monthly.sql'), { 'select 1' })
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'archive'), 'rf')
+  end)
+
+  local renamed = assert(editor.rename_dir(dir, 'archive/2026'))
+  eq(renamed, vim.fs.normalize(vim.fs.joinpath(editor.directory(), 'archive', '2026')))
+  eq(
+    vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'archive', '2026', 'monthly.sql')) ~= nil,
+    true
+  )
+  eq(vim.uv.fs_stat(dir), nil)
+end
+
+T['rename_dir']['carries open buffers over to the new folder'] = function()
+  local dir = vim.fs.joinpath(editor.directory(), 'reports')
+  vim.fn.mkdir(dir, 'p')
+  local path = vim.fs.joinpath(dir, 'opened.sql')
+  helpers.writefile(path, { 'select 1' })
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'archive'), 'rf')
+  end)
+
+  local buf = editor.open_path(path)
+  local renamed = assert(editor.rename_dir(dir, 'archive'))
+
+  eq(
+    vim.fs.normalize(vim.api.nvim_buf_get_name(buf)),
+    vim.fs.normalize(vim.fs.joinpath(editor.directory(), 'archive', 'opened.sql'))
+  )
+  eq(renamed, vim.fs.normalize(vim.fs.joinpath(editor.directory(), 'archive')))
+  eq(#editor.buffers_for(vim.fs.normalize(path)), 0)
+end
+
+T['rename_dir']['refuses the scratch directory itself'] = function()
+  local renamed, err = editor.rename_dir(editor.directory(), 'archive')
+  eq(renamed, nil)
+  helpers.contains(assert(err, 'there should be an error'), 'is not a scratchpad folder')
+end
+
+T['rename_dir']['says so when there is nothing there'] = function()
+  local renamed, err = editor.rename_dir(vim.fs.joinpath(editor.directory(), 'absent'), 'archive')
+  eq(renamed, nil)
+  helpers.contains(assert(err, 'there should be an error'), 'there is no scratchpad folder')
+end
+
+T['remove_dir'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      vim.fn.mkdir(editor.directory(), 'p')
+    end,
+  },
+})
+
+T['remove_dir']['deletes the folder and everything under it'] = function()
+  local dir = vim.fs.joinpath(editor.directory(), 'reports')
+  vim.fn.mkdir(vim.fs.joinpath(dir, 'nested'), 'p')
+  helpers.writefile(vim.fs.joinpath(dir, 'monthly.sql'), { 'select 1' })
+  helpers.writefile(vim.fs.joinpath(dir, 'nested', 'deep.sql'), { 'select 2' })
+
+  eq(editor.remove_dir(dir), true)
+  eq(vim.uv.fs_stat(dir), nil)
+end
+
+T['remove_dir']['unloads buffers under it'] = function()
+  local dir = vim.fs.joinpath(editor.directory(), 'reports')
+  vim.fn.mkdir(dir, 'p')
+  local path = vim.fs.joinpath(dir, 'loaded.sql')
+  helpers.writefile(path, { 'select 1' })
+
+  local buf = editor.open_path(path)
+  eq(editor.remove_dir(dir), true)
+  eq(vim.api.nvim_buf_is_valid(buf), false)
+end
+
+T['remove_dir']['refuses the scratch directory itself'] = function()
+  local removed, err = editor.remove_dir(editor.directory())
+  eq(removed, false)
+  helpers.contains(assert(err, 'there should be an error'), 'is not a scratchpad folder')
+end
+
+T['remove_dir']['refuses a path outside the scratchpad directory'] = function()
+  local elsewhere = helpers.temp_file({ 'important' })
+
+  local removed, err = editor.remove_dir(vim.fs.dirname(elsewhere))
+  eq(removed, false)
+  helpers.contains(assert(err, 'there should be an error'), 'is not a scratchpad folder')
 end
 
 return T
