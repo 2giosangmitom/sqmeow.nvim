@@ -600,6 +600,11 @@ T['rename'] = MiniTest.new_set({
     pre_case = function()
       vim.fn.mkdir(editor.directory(), 'p')
     end,
+    post_case = function()
+      -- Buffers a rename carries over stay open, and a later file would see an
+      -- already-bound `sql` buffer it never made.
+      vim.cmd('silent! %bwipeout!')
+    end,
   },
 })
 
@@ -805,6 +810,11 @@ T['rename_dir'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
       vim.fn.mkdir(editor.directory(), 'p')
+    end,
+    post_case = function()
+      -- Buffers a folder rename carries over stay open, and a later file would
+      -- see an already-bound `sql` buffer it never made.
+      vim.cmd('silent! %bwipeout!')
     end,
   },
 })
