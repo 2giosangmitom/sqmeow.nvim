@@ -442,7 +442,9 @@ T['the active connection']['re-binds non-sql dialect editor buffers'] = function
     drawer.actions.use()
 
     eq(vim.b[buf].sqmeow_connection, 'other')
+  end
 end
+
 T['the active connection']['moves when a descendant row is chosen'] = function()
   open_relation('Tables', 'people')
   api.use(state.connection_by_name('other').id)
