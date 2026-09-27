@@ -9,6 +9,9 @@ local win = nil
 
 -- Which nodes the user has opened, and what each one's children turned out to be.
 local expanded = {}
+-- Scratchpad folders drawn at least once. A folder opens on first sight, so a new folder
+-- does not hide what was just created, but stays as the user left it afterwards.
+local seen_pads = {}
 local cache = {}
 --- The glob each Redis connection lists its keys by, by connection id.
 local patterns = {}
@@ -310,21 +313,101 @@ end
 -- The scratchpad section is keyed on this rather than a connection id.
 local SCRATCHPADS = 'scratchpads'
 
---- The saved scratchpads, under a heading of their own.
+--- The saved scratchpads, grouped by folder like a directory tree, under a heading of
+--- their own. A `reports/monthly.sql` scratchpad is drawn inside a `reports` folder.
 local function scratchpad_node()
   local parts = assert(nui())
-  local pads = require('sqmeow.ui.editor').list()
+  local editor = require('sqmeow.ui.editor')
+  local pads = editor.list()
   local open = expanded[SCRATCHPADS] == true
 
-  local children = {}
-  for index, pad in ipairs(pads) do
-    children[index] = parts.Tree.Node({
+  -- Folders by relative dir, each holding the scratchpads directly inside it. Seeded
+  -- from the filesystem, so empty folders show too.
+  local folders = {}
+  local folder_order = {}
+  local function ensure_folder(dir)
+    local folder = folders[dir]
+    if not folder then
+      folder = { dir = dir, pads = {} }
+      folders[dir] = folder
+      table.insert(folder_order, dir)
+    end
+    return folder
+  end
+  for _, dir in ipairs(editor.folders()) do
+    ensure_folder(dir)
+  end
+  local roots = {}
+  for _, pad in ipairs(pads) do
+    local dir = vim.fn.fnamemodify(pad.name, ':h')
+    if dir == '.' then
+      table.insert(roots, pad)
+    else
+      table.insert(ensure_folder(dir).pads, pad)
+    end
+  end
+  table.sort(folder_order)
+
+  local function leaf(pad)
+    return parts.Tree.Node({
       id = 'pad:' .. pad.path,
       kind = 'scratchpad',
-      name = pad.name,
+      name = vim.fn.fnamemodify(pad.name, ':t'),
+      rel = pad.name,
       file = pad.path,
       expandable = false,
     })
+  end
+
+  -- Folders open on first sight, so a new folder does not hide what was just created.
+  local function folder_node(dir)
+    local id = 'pads:' .. dir
+    if not seen_pads[id] then
+      seen_pads[id] = true
+      if expanded[id] == nil then
+        expanded[id] = true
+      end
+    end
+
+    local children = {}
+    for _, sub in ipairs(folder_order) do
+      local rest = sub:sub(#dir + 2)
+      if vim.startswith(sub, dir .. '/') and not rest:find('/', 1, true) then
+        table.insert(children, folder_node(sub))
+      end
+    end
+    for _, pad in ipairs(folders[dir].pads) do
+      table.insert(children, leaf(pad))
+    end
+
+    local built = parts.Tree.Node({
+      id = id,
+      -- Its own kind, so toggling a folder never toggles the section the way
+      -- matching on `kind == 'scratchpads'` once did.
+      kind = 'scratchpad_group',
+      icon_kind = 'scratchpads',
+      name = vim.fn.fnamemodify(dir, ':t'),
+      rel = dir,
+      file = vim.fs.joinpath(editor.directory(), dir),
+      note = tostring(#children),
+      expandable = true,
+    }, children)
+
+    if expanded[id] then
+      built:expand()
+    end
+    return built
+  end
+
+  local children = {}
+  for _, dir in ipairs(folder_order) do
+    -- Only top-level folders; nested ones are drawn inside their parent.
+    if not dir:find('/', 1, true) then
+      table.insert(children, folder_node(dir))
+    end
+  end
+  for _, pad in ipairs(roots) do
+    table.insert(children, leaf(pad))
   end
 
   local node = parts.Tree.Node({
@@ -615,12 +698,18 @@ function M.actions.toggle()
     return
   end
 
-  if node.kind == 'scratchpads' then
+  -- Matched on identity: any other node that happens to share the section's kind must
+  -- toggle itself rather than the section.
+  if node.id == SCRATCHPADS then
     expanded[SCRATCHPADS] = not expanded[SCRATCHPADS] or nil
     return M.render()
   end
-  if node.kind == 'history' then
+  if node.id == HISTORY then
     expanded[HISTORY] = not expanded[HISTORY] or nil
+    return M.render()
+  end
+  if node.kind == 'scratchpad_group' then
+    expanded[node.id] = not expanded[node.id] or nil
     return M.render()
   end
   if node.kind == 'database' then
@@ -844,12 +933,31 @@ function M.actions.rename()
     end)
   end
 
+  if node and node.kind == 'scratchpad_group' then
+    return vim.ui.input({ prompt = 'Move the folder to: ', default = node.rel }, function(name)
+      if not name or name == '' or name == node.rel then
+        return
+      end
+
+      local renamed, err = require('sqmeow.ui.editor').rename_dir(node.file, name)
+      if not renamed then
+        return utils.notify(err or 'the folder could not be renamed', vim.log.levels.ERROR)
+      end
+
+      utils.notify(
+        ('renamed %s to %s'):format(node.rel, require('sqmeow.ui.editor').relative(renamed))
+      )
+      M.render()
+    end)
+  end
+
   if not node or node.kind ~= 'scratchpad' then
     return
   end
 
-  vim.ui.input({ prompt = 'Rename the scratchpad to: ', default = node.name }, function(name)
-    if not name or name == '' or name == node.name then
+  local current = node.rel or node.name
+  vim.ui.input({ prompt = 'Rename the scratchpad to: ', default = current }, function(name)
+    if not name or name == '' or name == current then
       return
     end
 
@@ -858,7 +966,8 @@ function M.actions.rename()
       return utils.notify(err or 'the scratchpad could not be renamed', vim.log.levels.ERROR)
     end
 
-    utils.notify(('renamed %s to %s'):format(node.name, vim.fn.fnamemodify(renamed, ':t:r')))
+    local editor = require('sqmeow.ui.editor')
+    utils.notify(('renamed %s to %s'):format(current, editor.relative(renamed)))
     M.render()
   end)
 end
@@ -924,9 +1033,18 @@ function M.actions.add()
   require('sqmeow.ui.connection').create()
 end
 
---- Create a scratchpad.
+--- Create a scratchpad, prefilling the folder under the cursor so the file lands there
+--- unless the name says otherwise.
 function M.actions.new_scratchpad()
-  require('sqmeow.api').scratchpad()
+  local node = M.current_node()
+  local prefix = nil
+  if node and (node.kind == 'scratchpad_group' or node.kind == 'scratchpad') and node.rel then
+    local dir = node.kind == 'scratchpad_group' and node.rel or vim.fn.fnamemodify(node.rel, ':h')
+    if dir ~= '' and dir ~= '.' then
+      prefix = dir .. '/'
+    end
+  end
+  require('sqmeow.api').scratchpad(nil, prefix)
 end
 
 --- Edit the connection under the cursor.
@@ -1019,12 +1137,30 @@ function M.actions.delete()
     return delete_connection({ kind = 'connection', name = opened.name, conn_id = opened.id })
   end
 
+  if node and node.kind == 'scratchpad_group' then
+    return vim.ui.select({ 'no', 'yes' }, {
+      prompt = ('Delete the folder `%s` and everything in it?'):format(node.rel),
+    }, function(answer)
+      if answer ~= 'yes' then
+        return
+      end
+
+      local removed, err = require('sqmeow.ui.editor').remove_dir(node.file)
+      if not removed then
+        return utils.notify(err or 'the folder could not be deleted', vim.log.levels.ERROR)
+      end
+
+      utils.notify('deleted the folder ' .. node.rel)
+      M.render()
+    end)
+  end
+
   if not node or node.kind ~= 'scratchpad' then
     return
   end
 
   vim.ui.select({ 'no', 'yes' }, {
-    prompt = ('Delete the scratchpad `%s`?'):format(node.name),
+    prompt = ('Delete the scratchpad `%s`?'):format(node.rel or node.name),
   }, function(answer)
     if answer ~= 'yes' then
       return
@@ -1035,7 +1171,7 @@ function M.actions.delete()
       return utils.notify(err or 'the scratchpad could not be deleted', vim.log.levels.ERROR)
     end
 
-    utils.notify('deleted the scratchpad ' .. node.name)
+    utils.notify('deleted the scratchpad ' .. (node.rel or node.name))
     M.render()
   end)
 end
@@ -1136,6 +1272,7 @@ function M.reset()
   local pads = expanded[SCRATCHPADS]
 
   expanded = { [SCRATCHPADS] = pads }
+  seen_pads = {}
   cache = {}
   tree = nil
   preview_buf = nil

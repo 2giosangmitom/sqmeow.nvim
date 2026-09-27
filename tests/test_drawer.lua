@@ -937,6 +937,161 @@ T['scratchpads']['say so when there are none'] = function()
   eq(lines()[line_matching('scratchpads')]:find('none saved') ~= nil, true)
 end
 
+--- Whether any drawer line matches `pattern`.
+local function has_line(pattern, plain)
+  for _, line in ipairs(lines()) do
+    if line:find(pattern, 1, plain) then
+      return true
+    end
+  end
+  return false
+end
+
+T['scratchpads']['groups nested files under folders'] = function()
+  helpers.writefile(vim.fs.joinpath(editor.directory(), 'reports', 'monthly.sql'), { 'select 1' })
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'reports'), 'rf')
+  end)
+  drawer.render()
+
+  expand('scratchpads')
+  -- Folders open on first sight, so one expand shows the nested file.
+  eq(has_line('reports'), true)
+  eq(has_line('monthly.sql'), true)
+end
+
+T['scratchpads']['shows empty folders'] = function()
+  vim.fn.mkdir(vim.fs.joinpath(editor.directory(), 'empty'), 'p')
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'empty'), 'rf')
+  end)
+  drawer.render()
+
+  expand('scratchpads')
+  eq(has_line('empty'), true)
+end
+
+T['scratchpads']['opens a nested file when chosen'] = function()
+  helpers.writefile(vim.fs.joinpath(editor.directory(), 'reports', 'monthly.sql'), { 'select 1' })
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'reports'), 'rf')
+  end)
+  drawer.render()
+
+  expand('scratchpads')
+  goto_line('monthly.sql')
+  drawer.actions.toggle()
+
+  eq(vim.fs.basename(vim.api.nvim_buf_get_name(0)), 'monthly.sql')
+  eq(vim.bo.filetype, 'sql')
+
+  vim.cmd.bwipeout()
+  drawer.open()
+end
+
+T['scratchpads']['toggles a folder without collapsing the section'] = function()
+  helpers.writefile(vim.fs.joinpath(editor.directory(), 'reports', 'monthly.sql'), { 'select 1' })
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'reports'), 'rf')
+  end)
+  drawer.render()
+
+  expand('scratchpads')
+  goto_line('reports')
+  drawer.actions.toggle()
+
+  -- The folder collapsed, but the section stayed open.
+  eq(has_line('monthly.sql'), false)
+  eq(has_line('scratchpads'), true)
+
+  goto_line('reports')
+  drawer.actions.toggle()
+  eq(has_line('monthly.sql'), true)
+end
+
+T['scratchpads']['renames a folder once a new path is given'] = function()
+  helpers.writefile(vim.fs.joinpath(editor.directory(), 'reports', 'monthly.sql'), { 'select 1' })
+  helpers.stub(vim.ui, 'input', function(_, on_confirm)
+    on_confirm('archive')
+  end)
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'reports'), 'rf')
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'archive'), 'rf')
+  end)
+  drawer.render()
+
+  expand('scratchpads')
+  goto_line('reports')
+  drawer.actions.rename()
+
+  eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'reports')), nil)
+  eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'archive', 'monthly.sql')) ~= nil, true)
+end
+
+T['scratchpads']['deletes a folder once the question is answered'] = function()
+  helpers.stub(vim.ui, 'select', function(_, _, on_choice)
+    on_choice('yes')
+  end)
+  helpers.writefile(vim.fs.joinpath(editor.directory(), 'reports', 'monthly.sql'), { 'select 1' })
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'reports'), 'rf')
+  end)
+  drawer.render()
+
+  expand('scratchpads')
+  goto_line('reports')
+  drawer.actions.delete()
+
+  eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'reports')), nil)
+  eq(has_line('monthly.sql'), false)
+end
+
+T['scratchpads']['prefills the folder under the cursor when creating'] = function()
+  helpers.writefile(vim.fs.joinpath(editor.directory(), 'reports', 'monthly.sql'), { 'select 1' })
+  local default = 'unset'
+  helpers.stub(vim.ui, 'input', function(opts, on_confirm)
+    default = opts.default
+    on_confirm('reports/new.sql')
+  end)
+  MiniTest.finally(function()
+    vim.cmd('silent! bwipeout!')
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'reports', 'new.sql'))
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'reports'), 'rf')
+    drawer.open()
+    drawer.render()
+  end)
+  drawer.render()
+
+  expand('scratchpads')
+  goto_line('reports')
+  drawer.actions.new_scratchpad()
+
+  eq(default, 'reports/')
+  eq(vim.uv.fs_stat(vim.fs.joinpath(editor.directory(), 'reports', 'new.sql')) ~= nil, true)
+end
+
+T['scratchpads']['prefills the parent folder from a nested file, and nothing at the top'] = function()
+  helpers.writefile(vim.fs.joinpath(editor.directory(), 'reports', 'monthly.sql'), { 'select 1' })
+  local default = 'unset'
+  helpers.stub(vim.ui, 'input', function(opts, on_confirm)
+    default = opts.default
+    on_confirm(nil)
+  end)
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'reports'), 'rf')
+  end)
+  drawer.render()
+
+  expand('scratchpads')
+  goto_line('monthly.sql')
+  drawer.actions.new_scratchpad()
+  eq(default, 'reports/')
+
+  goto_line('scratchpads')
+  drawer.actions.new_scratchpad()
+  eq(default, nil)
+end
+
 T['window'] = MiniTest.new_set()
 
 T['window']['is open, and its buffer cannot be typed into'] = function()
