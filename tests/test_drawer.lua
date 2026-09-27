@@ -320,6 +320,8 @@ T['actions']['show the columns and indexes of a table'] = function()
 end
 
 T['actions']['preview a relation into the result window'] = function()
+  local ed_win = require('sqmeow.ui.layout').editing_window()
+  local prev_buf = vim.api.nvim_win_get_buf(ed_win)
   open_relation('Tables', 'people')
   goto_line('people')
   drawer.actions.preview()
@@ -331,9 +333,13 @@ T['actions']['preview a relation into the result window'] = function()
   -- ASCII rules and ASCII icons.
   eq(helpers.result_lines()[1], ' K id | t name | n score')
   local buf = assert(drawer.preview_buffer(), 'preview buffer should be open')
+  MiniTest.finally(function()
+    pcall(vim.api.nvim_win_set_buf, ed_win, prev_buf)
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end)
   eq(vim.bo[buf].buftype, 'nofile')
   eq(vim.bo[buf].filetype, 'sql')
-  helpers.contains(vim.api.nvim_buf_get_lines(buf, 0, -1, false)[1], 'select * from "people"')
+  helpers.contains(vim.api.nvim_buf_get_lines(buf, 0, -1, false)[1], '"main"."people"')
   eq(vim.b[buf].sqmeow_editor, true)
 end
 
