@@ -395,11 +395,12 @@ end
 
 T['mongodb']['refreshing the server reloads the databases opened under it'] = function()
   api.disconnect()
-  helpers.connect((vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')), nil, TIMEOUT)
+  local cluster_id = helpers.connect((vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')), nil, TIMEOUT)
   run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
   run('{"insert": "first", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}')
   MiniTest.finally(function()
     run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
+    api.disconnect(cluster_id)
   end)
 
   local function press(pattern, action)
