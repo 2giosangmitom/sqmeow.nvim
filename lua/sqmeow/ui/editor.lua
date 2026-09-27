@@ -221,6 +221,18 @@ function M.attach(target, connection)
   M.update_winbar()
 end
 
+--- Re-bind a buffer to a connection and update the winbar.
+---@param target integer
+---@param connection string|nil The database this buffer runs against.
+function M.rebind(target, connection)
+  if not target or not vim.api.nvim_buf_is_valid(target) then
+    return false
+  end
+  vim.b[target].sqmeow_connection = connection
+  M.update_winbar()
+  return true
+end
+
 --- Say which database the buffer under the cursor will run against.
 function M.update_winbar()
   if not require('sqmeow.config').get().ui.winbar then
