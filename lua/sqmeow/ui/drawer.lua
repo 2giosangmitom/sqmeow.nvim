@@ -536,6 +536,7 @@ local function toggle_database(node)
   })
   -- Marked open, the way a connection someone expanded is, so a refresh reloads what it holds.
   if id then
+    require('sqmeow.api').use(id)
     expanded[node_key(id, {})] = true
     -- The level drawn in place of a MongoDB or SurrealDB database's schema row, open for the same reason.
     if parent.dialect == 'mongodb' or parent.dialect == 'surrealdb' then
@@ -817,6 +818,10 @@ function M.actions.use()
   if node and node.kind == 'database' then
     local opened = opened_database(node)
     node = { kind = 'connection', name = node.name, conn_id = opened and opened.id }
+  elseif node and node.conn_id then
+    local state = require('sqmeow.state')
+    local conn = state.connections[node.conn_id]
+    node = { kind = 'connection', name = conn and conn.name or node.name, conn_id = node.conn_id }
   end
   if not node or node.kind ~= 'connection' then
     return

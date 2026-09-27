@@ -301,6 +301,14 @@ T['postgres cluster']['opens a database from the drawer as its own connection'] 
   local child = assert(state.child_connection(cluster.id, database))
   eq(child.name, 'cluster/' .. database)
   eq(child.state, 'connected')
+  eq(state.current, child.id)
+
+  api.use(cluster.id)
+  eq(state.current, cluster.id)
+  vim.api.nvim_win_set_cursor(drawer.open(), { helpers.drawer_line(' public$', TIMEOUT), 0 })
+  drawer.actions.use()
+  eq(state.current, child.id)
+
   for _, line in ipairs(helpers.drawer_lines()) do
     helpers.absent(line, 'cluster/')
   end

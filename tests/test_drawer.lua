@@ -377,6 +377,17 @@ T['the active connection']['is left alone from a row that is not a connection'] 
   eq(state.current, before)
 end
 
+T['the active connection']['moves when a descendant row is chosen'] = function()
+  open_relation('Tables', 'people')
+  api.use(state.connection_by_name('other').id)
+  eq(state.current, state.connection_by_name('other').id)
+
+  goto_line('people')
+  drawer.actions.use()
+
+  eq(state.current, state.connection_by_name('scratch').id)
+end
+
 T['saved connections'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
