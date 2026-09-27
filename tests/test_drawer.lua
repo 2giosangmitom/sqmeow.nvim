@@ -379,7 +379,12 @@ end
 
 T['the active connection']['re-binds the visible editor buffer when chosen'] = function()
   local ed_win = require('sqmeow.ui.layout').editing_window()
+  local prev_buf = vim.api.nvim_win_get_buf(ed_win)
   local buf = vim.api.nvim_create_buf(false, true)
+  MiniTest.finally(function()
+    pcall(vim.api.nvim_win_set_buf, ed_win, prev_buf)
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end)
   vim.bo[buf].filetype = 'sql'
   vim.api.nvim_win_set_buf(ed_win, buf)
   vim.b[buf].sqmeow_connection = 'scratch'
@@ -393,8 +398,17 @@ end
 
 T['the active connection']['re-binds non-sql dialect editor buffers'] = function()
   local ed_win = require('sqmeow.ui.layout').editing_window()
+  local prev_buf = vim.api.nvim_win_get_buf(ed_win)
+  local buffers = {}
+  MiniTest.finally(function()
+    pcall(vim.api.nvim_win_set_buf, ed_win, prev_buf)
+    for _, b in ipairs(buffers) do
+      pcall(vim.api.nvim_buf_delete, b, { force = true })
+    end
+  end)
   for _, ft in ipairs({ 'redis', 'json', 'surql' }) do
     local buf = vim.api.nvim_create_buf(false, true)
+    table.insert(buffers, buf)
     vim.bo[buf].filetype = ft
     vim.api.nvim_win_set_buf(ed_win, buf)
     vim.b[buf].sqmeow_connection = 'scratch'
