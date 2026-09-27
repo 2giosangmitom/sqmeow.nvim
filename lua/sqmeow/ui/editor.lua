@@ -71,12 +71,59 @@ local function is_pad_path(path)
   return path == directory or path:sub(1, #directory + 1) == directory .. '/'
 end
 
+--- Whether any component of `path` under the scratch directory is a symlink,
+--- checked without following links.
+---@param path string Already normalised, and under the scratch directory.
+---@return boolean
+local function has_symlink_component(path)
+  local directory = vim.fs.normalize(M.directory())
+  local current = directory
+  for segment in path:sub(#directory + 2):gmatch('[^/]+') do
+    current = vim.fs.joinpath(current, segment)
+    local stat = vim.uv.fs_lstat(current)
+    if stat and stat.type == 'link' then
+      return true
+    end
+  end
+  return false
+end
+
+--- Whether `path` stays inside the scratch directory once symlinks in existing
+--- components are resolved. A name that does not exist yet is judged at its
+--- nearest existing parent, since what does not exist yet cannot be a link.
+---@param path string
+---@return boolean
+local function is_real_pad_path(path)
+  local directory = vim.uv.fs_realpath(M.directory())
+  if not directory then
+    return false
+  end
+
+  local existing = path
+  while not vim.uv.fs_lstat(existing) do
+    local parent = vim.fs.dirname(existing)
+    if parent == existing then
+      return false
+    end
+    existing = parent
+  end
+
+  local resolved = vim.uv.fs_realpath(existing)
+  return resolved == directory
+    or (resolved ~= nil and resolved:sub(1, #directory + 1) == directory .. '/')
+end
+
 --- Whether a path is a scratchpad folder: somewhere under the scratch directory,
---- but not the directory itself.
+--- but not the directory itself, and with no symlink on the way there, so
+--- folder moves and deletions cannot reach outside the scratch directory
+--- through a caller-supplied path.
 ---@param path string Already normalised.
 ---@return boolean
 local function is_pad_dir(path)
-  return is_pad_path(path) and path ~= vim.fs.normalize(M.directory())
+  if not is_pad_path(path) or path == vim.fs.normalize(M.directory()) then
+    return false
+  end
+  return not has_symlink_component(path)
 end
 
 --- Every loaded buffer holding one file.
@@ -175,16 +222,22 @@ function M.create(name)
     return nil, 'a scratchpad needs a name'
   end
 
+  vim.fn.mkdir(M.directory(), 'p')
+  local path = M.path(name)
+  -- `M.path` only filters `.` and `..` lexically, so a symlink planted under
+  -- the scratch directory could still point the write outside of it.
+  if not is_real_pad_path(path) then
+    return nil, ('could not create %s'):format(path)
+  end
+
   if vim.trim(name):sub(-1) == '/' then
-    local dir = M.path(name)
-    vim.fn.mkdir(dir, 'p')
-    if not vim.uv.fs_stat(dir) then
-      return nil, ('could not create %s'):format(dir)
+    vim.fn.mkdir(path, 'p')
+    if not vim.uv.fs_stat(path) then
+      return nil, ('could not create %s'):format(path)
     end
     return nil, nil
   end
 
-  local path = M.path(name)
   vim.fn.mkdir(vim.fs.dirname(path), 'p')
   if not vim.uv.fs_stat(path) and vim.fn.writefile({}, path) ~= 0 then
     return nil, ('could not create %s'):format(path)
@@ -200,7 +253,7 @@ end
 function M.rename(path, name)
   path = vim.fs.normalize(path)
 
-  if not is_pad_path(path) then
+  if not is_pad_path(path) or has_symlink_component(path) then
     return nil, ('%s is not a scratchpad'):format(path)
   end
   if not vim.uv.fs_stat(path) then
@@ -213,6 +266,9 @@ function M.rename(path, name)
     return target
   end
   if not is_pad_path(target) or target == vim.fs.normalize(M.directory()) then
+    return nil, ('`%s` is not a usable scratchpad name'):format(name)
+  end
+  if not is_real_pad_path(target) then
     return nil, ('`%s` is not a usable scratchpad name'):format(name)
   end
   if vim.uv.fs_stat(target) then
@@ -248,7 +304,7 @@ end
 function M.remove(path)
   path = vim.fs.normalize(path)
 
-  if not is_pad_path(path) then
+  if not is_pad_path(path) or has_symlink_component(path) then
     return false, ('%s is not a scratchpad'):format(path)
   end
   if not vim.uv.fs_stat(path) then

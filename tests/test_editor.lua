@@ -162,6 +162,40 @@ T['scratchpad']['makes just the folder for a trailing slash'] = function()
   eq(editor.folders(), { 'reports' })
 end
 
+T['scratchpad']['refuses to create through a symlink pointing outside'] = function()
+  use_connection('shop', 'sqlite://x.db')
+  vim.fn.mkdir(editor.directory(), 'p')
+
+  local outside = vim.fn.tempname()
+  vim.fn.mkdir(outside, 'p')
+  MiniTest.finally(function()
+    vim.fn.delete(outside, 'rf')
+  end)
+  assert(vim.uv.fs_symlink(outside, vim.fs.joinpath(editor.directory(), 'link')))
+
+  local buf, err = editor.create('link/report.sql')
+  eq(buf, nil)
+  helpers.contains(assert(err, 'there should be an error'), 'could not create')
+  eq(vim.uv.fs_stat(vim.fs.joinpath(outside, 'report.sql')), nil)
+end
+
+T['scratchpad']['refuses to make a folder through a symlink pointing outside'] = function()
+  use_connection('shop', 'sqlite://x.db')
+  vim.fn.mkdir(editor.directory(), 'p')
+
+  local outside = vim.fn.tempname()
+  vim.fn.mkdir(outside, 'p')
+  MiniTest.finally(function()
+    vim.fn.delete(outside, 'rf')
+  end)
+  assert(vim.uv.fs_symlink(outside, vim.fs.joinpath(editor.directory(), 'link')))
+
+  local buf, err = editor.create('link/inner/')
+  eq(buf, nil)
+  helpers.contains(assert(err, 'there should be an error'), 'could not create')
+  eq(vim.uv.fs_stat(vim.fs.joinpath(outside, 'inner')), nil)
+end
+
 T['scratchpad']['marks the buffers it attaches to'] = function()
   local buf = helpers.temp_buf()
   eq(editor.is_scratchpad(buf), false)
@@ -662,6 +696,28 @@ T['rename']['refuses a path outside the scratchpad directory'] = function()
   eq(vim.uv.fs_stat(elsewhere) ~= nil, true)
 end
 
+T['rename']['refuses a target through a symlink pointing outside'] = function()
+  local path = scratchpad('before')
+
+  local outside = vim.fn.tempname()
+  vim.fn.mkdir(outside, 'p')
+  MiniTest.finally(function()
+    vim.fn.delete(outside, 'rf')
+  end)
+  local link = vim.fs.joinpath(editor.directory(), 'link')
+  vim.fn.delete(link)
+  assert(vim.uv.fs_symlink(outside, link))
+  MiniTest.finally(function()
+    vim.fn.delete(link)
+  end)
+
+  local renamed, err = editor.rename(path, 'link/moved.sql')
+  eq(renamed, nil)
+  helpers.contains(assert(err, 'there should be an error'), 'not a usable scratchpad name')
+  eq(vim.uv.fs_stat(path) ~= nil, true)
+  eq(vim.uv.fs_stat(vim.fs.joinpath(outside, 'moved.sql')), nil)
+end
+
 T['rename']['says so when there is nothing there'] = function()
   local renamed, err = editor.rename(vim.fs.joinpath(editor.directory(), 'absent.sql'), 'other.sql')
   eq(renamed, nil)
@@ -796,6 +852,29 @@ T['rename_dir']['refuses the scratch directory itself'] = function()
   helpers.contains(assert(err, 'there should be an error'), 'is not a scratchpad folder')
 end
 
+T['rename_dir']['refuses a folder reached through a symlink'] = function()
+  local outside = vim.fn.tempname()
+  vim.fn.mkdir(vim.fs.joinpath(outside, 'child'), 'p')
+  helpers.writefile(vim.fs.joinpath(outside, 'child', 'kept.sql'), { 'select 1' })
+  MiniTest.finally(function()
+    vim.fn.delete(outside, 'rf')
+  end)
+  local link = vim.fs.joinpath(editor.directory(), 'link')
+  vim.fn.delete(link)
+  assert(vim.uv.fs_symlink(vim.fs.joinpath(outside, 'child'), link))
+  MiniTest.finally(function()
+    vim.fn.delete(link)
+  end)
+  MiniTest.finally(function()
+    vim.fn.delete(vim.fs.joinpath(editor.directory(), 'archive'), 'rf')
+  end)
+
+  local renamed, err = editor.rename_dir(link, 'archive')
+  eq(renamed, nil)
+  helpers.contains(assert(err, 'there should be an error'), 'is not a scratchpad folder')
+  eq(vim.uv.fs_stat(vim.fs.joinpath(outside, 'child', 'kept.sql')) ~= nil, true)
+end
+
 T['rename_dir']['says so when there is nothing there'] = function()
   local renamed, err = editor.rename_dir(vim.fs.joinpath(editor.directory(), 'absent'), 'archive')
   eq(renamed, nil)
@@ -835,6 +914,26 @@ T['remove_dir']['refuses the scratch directory itself'] = function()
   local removed, err = editor.remove_dir(editor.directory())
   eq(removed, false)
   helpers.contains(assert(err, 'there should be an error'), 'is not a scratchpad folder')
+end
+
+T['remove_dir']['refuses a folder reached through a symlink'] = function()
+  local outside = vim.fn.tempname()
+  vim.fn.mkdir(vim.fs.joinpath(outside, 'child'), 'p')
+  helpers.writefile(vim.fs.joinpath(outside, 'child', 'kept.sql'), { 'select 1' })
+  MiniTest.finally(function()
+    vim.fn.delete(outside, 'rf')
+  end)
+  local link = vim.fs.joinpath(editor.directory(), 'link')
+  vim.fn.delete(link)
+  assert(vim.uv.fs_symlink(vim.fs.joinpath(outside, 'child'), link))
+  MiniTest.finally(function()
+    vim.fn.delete(link)
+  end)
+
+  local removed, err = editor.remove_dir(link)
+  eq(removed, false)
+  helpers.contains(assert(err, 'there should be an error'), 'is not a scratchpad folder')
+  eq(vim.uv.fs_stat(vim.fs.joinpath(outside, 'child', 'kept.sql')) ~= nil, true)
 end
 
 T['remove_dir']['refuses a path outside the scratchpad directory'] = function()
