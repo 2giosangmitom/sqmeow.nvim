@@ -301,20 +301,28 @@ T['postgres cluster']['opens a database from the drawer as its own connection'] 
   local child = assert(state.child_connection(cluster.id, database))
   eq(child.name, 'cluster/' .. database)
   eq(child.state, 'connected')
-  eq(state.current, child.id)
-
-  api.use(cluster.id)
+  -- Exploring by expanding does not retarget the active connection.
   eq(state.current, cluster.id)
+
+  -- Pressing `u` on a descendant row switches to the child connection.
   vim.api.nvim_win_set_cursor(drawer.open(), { helpers.drawer_line(' public$', TIMEOUT), 0 })
   drawer.actions.use()
   eq(state.current, child.id)
 
-  -- Collapsing does not change active connection, but re-expanding activates the child again.
+  -- Collapsing and re-expanding does not change the active connection.
   toggle(' ' .. database .. '$')
+  eq(state.current, child.id)
+  toggle(' ' .. database .. '$')
+  eq(state.current, child.id)
+
+  -- Pressing `u` on the database row also switches to the child connection.
   api.use(cluster.id)
   eq(state.current, cluster.id)
-
-  toggle(' ' .. database .. '$')
+  vim.api.nvim_win_set_cursor(
+    drawer.open(),
+    { helpers.drawer_line(' ' .. database .. '$', TIMEOUT), 0 }
+  )
+  drawer.actions.use()
   eq(state.current, child.id)
 
   for _, line in ipairs(helpers.drawer_lines()) do
