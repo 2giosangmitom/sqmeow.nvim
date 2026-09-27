@@ -827,7 +827,39 @@ function M.actions.use()
 
   local connection = require('sqmeow.api').use(node.conn_id)
   if connection then
-    utils.notify(('queries now run on %s'):format(connection.name))
+    local editor = require('sqmeow.ui.editor')
+    local ed_buf = nil
+
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_config(w).relative == '' then
+        local b = vim.api.nvim_win_get_buf(w)
+        if vim.api.nvim_buf_is_valid(b) then
+          local ft = vim.bo[b].filetype
+          if
+            ft:sub(1, 7) ~= 'sqmeow-'
+            and (
+              editor.is_scratchpad(b)
+              or vim.b[b].sqmeow_connection ~= nil
+              or ft == 'sql'
+              or ft == 'redis'
+              or ft == 'json'
+              or ft == 'surql'
+            )
+          then
+            ed_buf = b
+            break
+          end
+        end
+      end
+    end
+
+    if ed_buf then
+      editor.rebind(ed_buf, connection.name)
+      local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(ed_buf), ':t')
+      utils.notify(('Bound `%s` to %s'):format(name ~= '' and name or 'buffer', connection.name))
+    else
+      utils.notify(('queries now run on %s'):format(connection.name))
+    end
   end
 end
 
