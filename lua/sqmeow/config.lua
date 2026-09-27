@@ -26,6 +26,8 @@ M.defaults = {
       -- Where the drawer is anchored: 'left' or 'right'.
       position = 'left',
       width = 36,
+      -- Open relation preview in an in-memory editor buffer.
+      preview_in_editor = true,
     },
     result = {
       height = 16,

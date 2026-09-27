@@ -15,6 +15,7 @@ local patterns = {}
 
 -- The nui tree the drawer was last drawn with, kept so the cursor can be turned into a node.
 local tree = nil
+local preview_buf = nil
 
 local function node_key(conn_id, path)
   return conn_id .. '\0' .. table.concat(path, '\0')
@@ -567,6 +568,18 @@ local function is_relation(kind)
     or kind == 'key'
 end
 
+--- The filetype for each dialect.
+local function dialect_filetype(dialect)
+  if dialect == 'mongodb' then
+    return 'json'
+  elseif dialect == 'surrealdb' then
+    return 'surql'
+  elseif dialect == 'redis' then
+    return 'redis'
+  end
+  return 'sql'
+end
+
 --- The statement that shows what a relation holds.
 ---@param limit integer|nil The most rows it may read, or nil for every row.
 local function preview_statement(node, limit)
@@ -729,12 +742,50 @@ function M.actions.preview()
     return
   end
 
+  local config = require('sqmeow.config').get()
+  local preview_in_editor = config.ui.drawer.preview_in_editor ~= false
+  local source_buf = nil
+
+  if preview_in_editor then
+    local dialect = dialect_of(node.conn_id)
+    local ft = dialect_filetype(dialect)
+    local text = (ft == 'sql' or ft == 'surql') and (statement .. ';') or statement
+
+    if not preview_buf or not vim.api.nvim_buf_is_valid(preview_buf) then
+      preview_buf = vim.api.nvim_create_buf(false, true)
+    end
+
+    local rel_name = node.name or (node.path and node.path[#node.path]) or 'preview'
+    pcall(vim.api.nvim_buf_set_name, preview_buf, ('[Preview: %s]'):format(rel_name))
+
+    vim.bo[preview_buf].buftype = 'nofile'
+    vim.bo[preview_buf].bufhidden = 'hide'
+    vim.bo[preview_buf].swapfile = false
+    vim.bo[preview_buf].filetype = ft
+    vim.api.nvim_buf_set_lines(preview_buf, 0, -1, false, vim.split(text, '\n'))
+    vim.bo[preview_buf].modified = false
+
+    local state = require('sqmeow.state')
+    local conn = state.connections[node.conn_id]
+    local conn_name = conn and conn.name
+
+    local editor = require('sqmeow.ui.editor')
+    editor.attach(preview_buf, conn_name)
+
+    local ed_win = require('sqmeow.ui.layout').editing_window()
+    vim.api.nvim_win_set_buf(ed_win, preview_buf)
+    vim.api.nvim_set_current_win(ed_win)
+    local first_line = vim.split(text, '\n')[1] or ''
+    vim.api.nvim_win_set_cursor(ed_win, { 1, #first_line })
+    source_buf = preview_buf
+  end
+
   local api = require('sqmeow.api')
   api.use(node.conn_id)
   api.execute(
     statement,
     -- Written by the plugin, not by anyone at the keyboard, so it stays out of the query log.
-    { history = false }
+    { history = false, source_buf = source_buf }
   )
 end
 
@@ -1050,7 +1101,14 @@ function M.reset()
   expanded = { [SCRATCHPADS] = pads }
   cache = {}
   tree = nil
+  preview_buf = nil
   M.render()
+end
+
+--- The buffer holding the relation preview, if open.
+---@return integer|nil
+function M.preview_buffer()
+  return (preview_buf and vim.api.nvim_buf_is_valid(preview_buf)) and preview_buf or nil
 end
 
 return M

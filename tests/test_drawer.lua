@@ -330,6 +330,25 @@ T['actions']['preview a relation into the result window'] = function()
 
   -- ASCII rules and ASCII icons.
   eq(helpers.result_lines()[1], ' K id | t name | n score')
+  local buf = assert(drawer.preview_buffer(), 'preview buffer should be open')
+  eq(vim.bo[buf].buftype, 'nofile')
+  eq(vim.bo[buf].filetype, 'sql')
+  helpers.contains(vim.api.nvim_buf_get_lines(buf, 0, -1, false)[1], 'select * from "people"')
+  eq(vim.b[buf].sqmeow_editor, true)
+end
+
+T['actions']['preview without editor buffer executes directly when disabled'] = function()
+  helpers.stub(require('sqmeow.config').get().ui.drawer, 'preview_in_editor', false)
+  open_relation('Tables', 'people')
+  goto_line('people')
+  drawer.actions.preview()
+
+  helpers.wait_for('the preview should finish', function()
+    return state.call ~= nil and state.call.state == 'done'
+  end, TIMEOUT)
+
+  eq(drawer.preview_buffer(), nil)
+  eq(helpers.result_lines()[1], ' K id | t name | n score')
 end
 
 T['the active connection'] = MiniTest.new_set({
