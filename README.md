@@ -48,7 +48,7 @@
 | **ScyllaDB** / Cassandra       | CQL via `scylla://` / `cassandra://`, `?ssl=true`                                      |
 | **SurrealDB**                  | SurrealQL via `surrealdb://` / `surrealdbs://`                                         |
 | **ClickHouse**                 | HTTP via `clickhouse://`, HTTPS via `clickhouses://`; results are read-only            |
-| **Oracle Database**            | `oracle://`, `oracledb://`, `oracletcps://` for TLS                                |
+| **Oracle Database**            | `oracle://`, `oracledb://`, `oracletcps://` for TLS                                    |
 
 ## 👀 Preview
 
@@ -117,7 +117,22 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ### SSH Tunnels
 
-Fill **SSH** in the connection dialog or add `"ssh": "user@bastion"` (or `user@bastion:2222`) to a saved connection. Uses your own `ssh`, so keys, agent and `~/.ssh/config` all apply, and the URL host is resolved from the bastion.
+sqmeow uses your system `ssh` to forward a local port to the database through an SSH host. If you already have a host in `~/.ssh/config`, use its **Host alias** in the connection dialog's **SSH** field:
+
+```sshconfig
+Host hostname
+  HostName yourip
+  User user
+  IdentityFile ~/.ssh/id_ed25519
+  IdentitiesOnly yes
+```
+
+1. Run `ssh hostname` in a terminal to check that the SSH connection works.
+2. In sqmeow, add a connection with **SSH** set to `hostname` (not `yourip`). For a PostgreSQL server running on the SSH host, set the database URL to `postgres://dbuser@localhost:5432/mydb`. Here `localhost` is resolved **on the SSH host**, and `dbuser` is the database user, not the SSH user.
+
+For a saved connection, the same settings are `{"name": "mydb", "url": "postgres://dbuser@localhost:5432/mydb", "ssh": "hostname"}`. If the database is on another machine reachable from the SSH host, use that machine's hostname in the URL instead of `localhost`.
+
+You can also use `user@bastion` or `user@bastion:2222` in **SSH** without a config alias. OpenSSH honors your keys, agent and `~/.ssh/config`, including `ProxyCommand`. If your proxy needs credentials (for example, AWS SSO), authenticate before starting Neovim so `ssh` inherits the required environment.
 
 ### Environment Connections
 
