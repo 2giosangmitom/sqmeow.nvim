@@ -257,6 +257,41 @@ T['use connects and activates a child connection of an open cluster'] = function
   eq(messages(), { 'sqmeow: queries now run on cluster/testdb' })
 end
 
+T['use reuses an existing child connection that is connecting'] = function()
+  local state = require('sqmeow.state')
+  local cluster_id = state.next_connection_id()
+  state.add_connection({
+    id = cluster_id,
+    name = 'cluster',
+    url = 'postgres://cluster/',
+    state = 'connected',
+  })
+  local child_id = state.next_connection_id()
+  state.add_connection({
+    id = child_id,
+    name = 'cluster/testdb',
+    parent = cluster_id,
+    database = 'testdb',
+    url = 'postgres://cluster/',
+    state = 'connecting',
+  })
+
+  local connected_called = false
+  helpers.stub(api, 'connect', function()
+    connected_called = true
+  end)
+
+  MiniTest.finally(function()
+    state.remove_connection(cluster_id)
+    state.remove_connection(child_id)
+  end)
+
+  vim.cmd('Sqmeow use cluster/testdb')
+  eq(state.current, child_id)
+  eq(connected_called, false)
+  eq(messages(), { 'sqmeow: queries now run on cluster/testdb' })
+end
+
 T['use on cluster prompts for database and activates selection'] = function()
   local state = require('sqmeow.state')
   local cluster_id = state.next_connection_id()

@@ -175,7 +175,7 @@ M.subcommands = {
 
       local function activate_child(parent, database)
         local child = state.child_connection(parent.id, database)
-        if child and child.state == 'connected' then
+        if child and (child.state == 'connected' or child.state == 'connecting') then
           return activate(child.id)
         end
 
