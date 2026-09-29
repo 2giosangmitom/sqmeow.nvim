@@ -207,4 +207,130 @@ T['a notice from connecting is shown as a warning'] = function()
   state.remove_connection(id)
 end
 
+T['use activates an open connection'] = function()
+  local state = require('sqmeow.state')
+  local id = state.next_connection_id()
+  state.add_connection({ id = id, name = 'first', url = 'sqlite://first.db', state = 'connected' })
+  MiniTest.finally(function()
+    state.remove_connection(id)
+  end)
+
+  vim.cmd('Sqmeow use first')
+  eq(state.current, id)
+  eq(messages(), { 'sqmeow: queries now run on first' })
+end
+
+T['use connects and activates a child connection of an open cluster'] = function()
+  local state = require('sqmeow.state')
+  local cluster_id = state.next_connection_id()
+  state.add_connection({
+    id = cluster_id,
+    name = 'cluster',
+    url = 'postgres://cluster/',
+    state = 'connected',
+  })
+  local child_id = state.next_connection_id()
+
+  helpers.stub(api, 'connect', function(url, opts)
+    eq(url, 'postgres://cluster/')
+    eq(opts.name, 'cluster/testdb')
+    eq(opts.parent, cluster_id)
+    eq(opts.database, 'testdb')
+    state.add_connection({
+      id = child_id,
+      name = opts.name,
+      parent = opts.parent,
+      database = opts.database,
+      url = url,
+      state = 'connected',
+    })
+    return child_id
+  end)
+
+  MiniTest.finally(function()
+    state.remove_connection(cluster_id)
+    state.remove_connection(child_id)
+  end)
+
+  vim.cmd('Sqmeow use cluster/testdb')
+  eq(state.current, child_id)
+  eq(messages(), { 'sqmeow: queries now run on cluster/testdb' })
+end
+
+T['use on cluster prompts for database and activates selection'] = function()
+  local state = require('sqmeow.state')
+  local cluster_id = state.next_connection_id()
+  state.add_connection({
+    id = cluster_id,
+    name = 'cluster',
+    url = 'postgres://cluster/',
+    state = 'connected',
+  })
+  local child_id = state.next_connection_id()
+
+  helpers.stub(api, 'databases', function(conn_id, cb)
+    eq(conn_id, cluster_id)
+    cb({ 'analytics', 'testdb' })
+  end)
+
+  local menu_opened = false
+  helpers.stub(require('sqmeow.ui.form'), 'menu', function(opts)
+    menu_opened = true
+    eq(opts.title, 'cluster')
+    eq(#opts.items, 2)
+    eq(opts.items[1].value, 'analytics')
+    eq(opts.items[2].value, 'testdb')
+    opts.on_choice('testdb')
+    return true
+  end)
+
+  helpers.stub(api, 'connect', function(url, opts)
+    state.add_connection({
+      id = child_id,
+      name = opts.name,
+      parent = opts.parent,
+      database = opts.database,
+      url = url,
+      state = 'connected',
+    })
+    return child_id
+  end)
+
+  MiniTest.finally(function()
+    state.remove_connection(cluster_id)
+    state.remove_connection(child_id)
+  end)
+
+  vim.cmd('Sqmeow use cluster')
+  eq(menu_opened, true)
+  eq(state.current, child_id)
+  eq(messages(), { 'sqmeow: queries now run on cluster/testdb' })
+end
+
+T['completes child databases when cluster has databases'] = function()
+  local state = require('sqmeow.state')
+  local cluster_id = state.next_connection_id()
+  state.add_connection({
+    id = cluster_id,
+    name = 'cluster',
+    url = 'postgres://cluster/',
+    state = 'connected',
+  })
+
+  helpers.stub(require('sqmeow.ui.drawer'), 'databases', function(conn_id)
+    if conn_id == cluster_id then
+      return { 'analytics', 'testdb' }
+    end
+    return nil
+  end)
+
+  MiniTest.finally(function()
+    state.remove_connection(cluster_id)
+  end)
+
+  local offered = complete('Sqmeow use cluster/')
+  eq(vim.tbl_contains(offered, 'cluster/analytics'), true)
+  eq(vim.tbl_contains(offered, 'cluster/testdb'), true)
+end
+
 return T

@@ -1285,4 +1285,22 @@ function M.preview_buffer()
   return (preview_buf and vim.api.nvim_buf_is_valid(preview_buf)) and preview_buf or nil
 end
 
+--- Databases discovered at the root of a cluster connection, if cached.
+---@param conn_id integer
+---@return string[]|nil
+function M.databases(conn_id)
+  local entry = cache[node_key(conn_id, {})]
+  if not entry or not entry.nodes then
+    return nil
+  end
+  local dbs = {}
+  for _, node in ipairs(entry.nodes) do
+    if node.kind == 'database' then
+      table.insert(dbs, node.name)
+    end
+  end
+  table.sort(dbs)
+  return dbs
+end
+
 return M

@@ -877,4 +877,73 @@ function M.connections()
   return require('sqmeow.state').connection_list()
 end
 
+--- Discovered databases of a connection, if it is a cluster. Uses cached schema nodes
+--- if already introspected, or queries the engine otherwise.
+---@param conn_id integer
+---@param callback fun(databases: string[]|nil, error: string|nil)
+function M.databases(conn_id, callback)
+  local state = require('sqmeow.state')
+  local connection = state.connections[conn_id]
+  if not connection then
+    return callback(nil, ('there is no connection %d'):format(conn_id))
+  end
+
+  if connection.database then
+    return callback({ connection.database })
+  end
+
+  local drawer = require('sqmeow.ui.drawer')
+  local cached = drawer.databases(conn_id)
+  if cached then
+    return callback(cached)
+  end
+
+  local rpc = engine()
+  local done = false
+  local timer
+  local unsub
+
+  local function finish(dbs, err)
+    if done then
+      return
+    end
+    done = true
+    if unsub then
+      unsub()
+    end
+    if timer and not timer:is_closing() then
+      timer:stop()
+      timer:close()
+    end
+    vim.schedule(function()
+      callback(dbs, err)
+    end)
+  end
+
+  unsub = rpc.on('schema:nodes', function(payload)
+    if payload.conn_id == conn_id and #(payload.path or {}) == 0 then
+      if payload.error then
+        return finish(nil, payload.error)
+      end
+      local dbs = {}
+      for _, node in ipairs(payload.nodes or {}) do
+        if node.kind == 'database' then
+          table.insert(dbs, node.name)
+        end
+      end
+      table.sort(dbs)
+      finish(dbs)
+    end
+  end)
+
+  timer = vim.defer_fn(function()
+    finish(nil, 'timed out waiting for database list')
+  end, 5000)
+
+  local _, err = rpc.request('introspect', { conn_id = conn_id, path = {} })
+  if err then
+    finish(nil, err)
+  end
+end
+
 return M
