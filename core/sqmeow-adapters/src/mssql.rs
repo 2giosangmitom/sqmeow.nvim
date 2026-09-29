@@ -596,7 +596,11 @@ impl Adapter for MsSqlAdapter {
         if slot.is_none() {
             *slot = Some(open(&self.config).await?);
         }
-        index_rows(slot.as_mut().expect("connected"), schema, relation).await
+        let result = index_rows(slot.as_mut().expect("connected"), schema, relation).await;
+        if result.is_err() {
+            *slot = None;
+        }
+        result
     }
 
     async fn roles(&self) -> Result<Vec<RoleNode>> {
