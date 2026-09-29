@@ -1,6 +1,20 @@
 # Databases for the integration tests. Ports are deliberately non-standard so this never collides
 # with a server the developer already runs.
 services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Sqmeow_Test123!"
+      MSSQL_PID: Developer
+    ports:
+      - "51433:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
   postgres:
     image: postgres:17-alpine
     environment:

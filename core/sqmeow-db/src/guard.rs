@@ -115,6 +115,39 @@ pub fn danger(dialect: Dialect, statement: &str) -> Option<String> {
         }
         Dialect::MongoDb => mongo_danger(statement),
         Dialect::SurrealDb => surreal_danger(statement),
+        Dialect::MsSql => {
+            let tokens = words(dialect, statement);
+            for (at, (word, depth)) in tokens.iter().enumerate() {
+                if matches!(word.as_str(), "drop" | "truncate") {
+                    return Some(format!("{} cannot be undone", word.to_uppercase()));
+                }
+                if matches!(word.as_str(), "update" | "delete") {
+                    let end = tokens[at + 1..]
+                        .iter()
+                        .position(|(w, d)| {
+                            d <= depth
+                                && matches!(
+                                    w.as_str(),
+                                    "select"
+                                        | "insert"
+                                        | "update"
+                                        | "delete"
+                                        | "merge"
+                                        | "exec"
+                                        | "execute"
+                                )
+                        })
+                        .map_or(tokens.len(), |i| at + 1 + i);
+                    if !narrows(&tokens[at..end]) {
+                        return Some(format!(
+                            "{} without WHERE changes every row",
+                            word.to_uppercase()
+                        ));
+                    }
+                }
+            }
+            None
+        }
         _ => {
             let words = words(dialect, statement);
             // The verb a CTE leads up to, or the first one.
@@ -176,6 +209,28 @@ pub fn writes(dialect: Dialect, statement: &str) -> bool {
                 || words
                     .iter()
                     .any(|(word, _)| SURREAL_WRITES.contains(&word.as_str()))
+        }
+        Dialect::MsSql => {
+            let tokens = words(dialect, statement);
+            !tokens
+                .first()
+                .is_some_and(|(word, _)| matches!(word.as_str(), "select" | "with"))
+                || tokens.iter().any(|(word, _)| {
+                    SQL_WRITES.contains(&word.as_str())
+                        || matches!(
+                            word.as_str(),
+                            "into"
+                                | "exec"
+                                | "execute"
+                                | "set"
+                                | "use"
+                                | "dbcc"
+                                | "backup"
+                                | "restore"
+                                | "bulk"
+                                | "reconfigure"
+                        )
+                })
         }
         _ => {
             let words = words(dialect, statement);
@@ -306,6 +361,17 @@ pub fn words(dialect: Dialect, statement: &str) -> Vec<(String, usize)> {
         match character {
             '(' => depth += 1,
             ')' => depth = depth.saturating_sub(1),
+            '[' if dialect == Dialect::MsSql => {
+                while let Some(next) = chars.next() {
+                    if next == ']' {
+                        if chars.peek() == Some(&']') {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
             // A doubled quote ends one run and starts the next, which reads the same.
             '\'' | '"' | '`' => {
                 while let Some(next) = chars.next() {
@@ -361,6 +427,22 @@ fn skip_line(chars: &mut impl Iterator<Item = char>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mssql_checks_every_statement_in_a_batch() {
+        let dialect = Dialect::MsSql;
+        assert!(!writes(
+            dialect,
+            "SELECT [drop], N'EXEC delete' FROM [odd]]name]"
+        ));
+        assert!(writes(dialect, "SELECT * INTO new_table FROM old_table"));
+        assert!(writes(dialect, "SELECT 1; EXEC sp_test"));
+        assert!(writes(dialect, "SELECT 1; DELETE FROM t"));
+        assert!(danger(dialect, "SELECT 1; DELETE FROM t").is_some());
+        assert!(danger(dialect, "SELECT 1; DROP TABLE t").is_some());
+        assert!(danger(dialect, "DELETE FROM t; SELECT 1 WHERE 1=2").is_some());
+        assert!(danger(dialect, "UPDATE t SET n=2 WHERE id=1").is_none());
+    }
 
     #[test]
     fn a_whole_table_change_or_a_drop_is_dangerous() {

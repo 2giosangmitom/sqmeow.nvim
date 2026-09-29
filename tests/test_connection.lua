@@ -49,18 +49,19 @@ T['create']['asks which database first'] = function()
   connection.create()
 
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  eq(#lines, 11)
+  eq(#lines, 12)
   helpers.contains(lines[1], 'PostgreSQL')
-  helpers.contains(lines[2], 'MySQL')
-  helpers.contains(lines[3], 'Oracle Database')
-  helpers.contains(lines[4], 'Redis')
-  helpers.contains(lines[5], 'MongoDB')
-  helpers.contains(lines[6], 'ScyllaDB')
-  helpers.contains(lines[7], 'SurrealDB')
-  helpers.contains(lines[8], 'ClickHouse')
-  helpers.contains(lines[9], 'SQLite')
-  helpers.contains(lines[10], 'DuckDB')
-  helpers.contains(lines[11], 'Connection string')
+  helpers.contains(lines[2], 'Microsoft SQL Server')
+  helpers.contains(lines[3], 'MySQL')
+  helpers.contains(lines[4], 'Oracle Database')
+  helpers.contains(lines[5], 'Redis')
+  helpers.contains(lines[6], 'MongoDB')
+  helpers.contains(lines[7], 'ScyllaDB')
+  helpers.contains(lines[8], 'SurrealDB')
+  helpers.contains(lines[9], 'ClickHouse')
+  helpers.contains(lines[10], 'SQLite')
+  helpers.contains(lines[11], 'DuckDB')
+  helpers.contains(lines[12], 'Connection string')
 end
 
 T['create']['asks for a name and offers none'] = function()
@@ -121,7 +122,7 @@ T['from a url']['saves the SSH host a connection goes through'] = function()
 end
 
 T['from a url']['refuses a url for a database the plugin does not speak'] = function()
-  connection.from_url({ name = 'warehouse', url = 'mssql://host/db' })
+  connection.from_url({ name = 'warehouse', url = 'unknown://host/db' })
   press('<C-s>')
   vim.wait(50)
 
@@ -169,7 +170,7 @@ T['edit']['keeps a template whole through the form'] = function()
 end
 
 T['edit']['refuses a url for a database the plugin does not have'] = function()
-  eq(connection.edit({ name = 'warehouse', url = 'mssql://host/db' }), false)
+  eq(connection.edit({ name = 'warehouse', url = 'unknown://host/db' }), false)
 end
 
 T['edit']['asks an Oracle connection for a service and tls'] = function()

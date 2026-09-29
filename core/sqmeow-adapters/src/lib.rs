@@ -7,6 +7,7 @@
 pub mod clickhouse;
 pub mod duckdb;
 pub mod mongodb;
+pub mod mssql;
 pub mod mysql;
 pub mod oracle;
 pub mod postgres;
@@ -70,6 +71,7 @@ where
 pub use self::clickhouse::ClickHouseAdapter;
 pub use self::duckdb::DuckDbAdapter;
 pub use self::mongodb::MongoAdapter;
+pub use mssql::MsSqlAdapter;
 pub use mysql::MySqlAdapter;
 pub use oracle::OracleAdapter;
 pub use postgres::PostgresAdapter;
@@ -106,6 +108,7 @@ macro_rules! dispatch {
             Backend::SurrealDb($adapter) => $body,
             Backend::ClickHouse($adapter) => $body,
             Backend::Oracle($adapter) => $body,
+            Backend::MsSql($adapter) => $body,
         }
     };
 }
@@ -123,6 +126,7 @@ pub enum Backend {
     SurrealDb(SurrealAdapter),
     ClickHouse(ClickHouseAdapter),
     Oracle(OracleAdapter),
+    MsSql(Box<MsSqlAdapter>),
 }
 
 impl Backend {
@@ -156,6 +160,9 @@ impl Backend {
                 ClickHouseAdapter::connect(url, read_only).await?,
             )),
             Dialect::Oracle => Ok(Self::Oracle(OracleAdapter::connect(url, database).await?)),
+            Dialect::MsSql => Ok(Self::MsSql(Box::new(
+                MsSqlAdapter::connect(url, database).await?,
+            ))),
         }
     }
 
@@ -223,6 +230,7 @@ impl Backend {
             Self::Postgres(adapter) => adapter.databases().await,
             Self::MongoDb(adapter) => adapter.databases().await,
             Self::SurrealDb(adapter) => adapter.databases().await,
+            Self::MsSql(adapter) => adapter.databases().await,
             _ => None,
         }
     }
@@ -242,7 +250,7 @@ impl Backend {
         match self {
             Self::Postgres(adapter) => !adapter.read_only_session(),
             // SurrealDB and OracleDB have no read-only session at all.
-            Self::SurrealDb(_) | Self::Oracle(_) => true,
+            Self::SurrealDb(_) | Self::Oracle(_) | Self::MsSql(_) => true,
             _ => false,
         }
     }
@@ -310,6 +318,7 @@ pub fn supported() -> Vec<&'static str> {
         Dialect::SurrealDb.name(),
         Dialect::ClickHouse.name(),
         Dialect::Oracle.name(),
+        Dialect::MsSql.name(),
     ]
 }
 

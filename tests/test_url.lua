@@ -205,13 +205,14 @@ T['build']['says what is missing rather than writing a url that cannot work'] = 
 end
 
 T['build']['refuses a database it does not know'] = function()
-  local built, err = url.build('mssql', {})
+  local built, err = url.build('unknown', {})
   eq(built, nil)
-  eq(err, 'there is no `mssql` database')
+  eq(err, 'there is no `unknown` database')
 end
 
 T['build']['round trips everything parse produces'] = function()
   for _, original in ipairs({
+    'mssql://sa:p%40ss@localhost:1433/app?encrypt=true&sslrootcert=%2Ftmp%2Fca.pem',
     'postgres://app:hunter2@db.internal:5432/shop?sslmode=require',
     'mysql://root@127.0.0.1/sqmeow',
     'postgres://[::1]:5433/app',

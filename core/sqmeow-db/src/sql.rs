@@ -1,8 +1,14 @@
 //! Splits SQL buffers into statements.
 
+mod mssql;
 mod sides;
 
 pub use sides::{Side, Sides};
+
+/// Whether T-SQL is exactly one row-returning query, not a batch or SELECT INTO.
+pub fn mssql_query(sql: &str) -> bool {
+    mssql::query(sql).is_some() && !crate::guard::writes(Dialect::MsSql, sql)
+}
 
 use crate::adapter::Dialect;
 
@@ -84,6 +90,9 @@ pub fn filtered(
     order: &str,
     columns: &[String],
 ) -> Option<String> {
+    if dialect == Dialect::MsSql {
+        return mssql::filtered(statement, condition, order, columns);
+    }
     let statement = statement.trim().trim_end_matches(';').trim_end();
     if !matches!(
         first_word(statement).as_str(),
@@ -250,6 +259,9 @@ pub fn split_documents(input: &str) -> Vec<Statement> {
 
 /// Splits a SQL buffer into statements respecting the given dialect.
 pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
+    if dialect == Dialect::MsSql {
+        return mssql::batches(input);
+    }
     let mut statements = Vec::new();
     let chars: Vec<char> = input.chars().collect();
 

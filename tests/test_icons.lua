@@ -140,6 +140,7 @@ T['connections']['use the glyph of the dialect they speak'] = function()
     'postgres',
     'mysql',
     'oracle',
+    'mssql',
     'sqlite',
     'duckdb',
     'redis',
@@ -154,7 +155,8 @@ T['connections']['use the glyph of the dialect they speak'] = function()
 end
 
 T['connections']['fall back to a plain database for one nobody has heard of'] = function()
-  eq(icons.connection_kind('mssql'), 'connection')
+  eq(icons.connection_kind('nosuchdb'), 'connection')
+  eq(icons.connection_kind('mssql'), 'mssql')
   eq(icons.connection_kind(nil), 'connection')
 end
 

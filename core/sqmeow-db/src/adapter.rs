@@ -29,6 +29,7 @@ pub enum Dialect {
     SurrealDb,
     ClickHouse,
     Oracle,
+    MsSql,
 }
 
 impl Dialect {
@@ -45,12 +46,14 @@ impl Dialect {
             Self::SurrealDb => "surrealdb",
             Self::ClickHouse => "clickhouse",
             Self::Oracle => "oracle",
+            Self::MsSql => "mssql",
         }
     }
 
     /// Quotes an SQL identifier for this dialect.
     pub fn quote_ident(self, name: &str) -> String {
         match self {
+            Self::MsSql => format!("[{}]", name.replace(']', "]]")),
             Self::MySql => format!("`{}`", name.replace('`', "``")),
             Self::SurrealDb => format!("`{}`", name.replace('\\', "\\\\").replace('`', "\\`")),
             _ => format!("\"{}\"", name.replace('"', "\"\"")),
@@ -83,6 +86,7 @@ impl Dialect {
             "surrealdb" | "surrealdbs" => Some(Self::SurrealDb),
             "clickhouse" | "clickhouses" => Some(Self::ClickHouse),
             "oracle" | "oracledb" | "oracletcps" => Some(Self::Oracle),
+            "mssql" | "sqlserver" => Some(Self::MsSql),
             _ => None,
         }
     }
@@ -201,6 +205,15 @@ mod tests {
 
     #[test]
     fn recognises_the_schemes_people_type() {
+        assert_eq!(
+            Dialect::from_url("mssql://sa@host/app"),
+            Some(Dialect::MsSql)
+        );
+        assert_eq!(
+            Dialect::from_url("SQLSERVER://sa@host/app"),
+            Some(Dialect::MsSql)
+        );
+        assert_eq!(Dialect::MsSql.quote_ident("a]b"), "[a]]b]");
         assert_eq!(Dialect::from_url("sqlite://app.db"), Some(Dialect::Sqlite));
         assert_eq!(Dialect::from_url("sqlite::memory:"), Some(Dialect::Sqlite));
         assert_eq!(
@@ -264,7 +277,7 @@ mod tests {
 
     #[test]
     fn an_unknown_scheme_is_rejected() {
-        assert_eq!(Dialect::from_url("mssql://localhost"), None);
+        assert_eq!(Dialect::from_url("unknown://localhost"), None);
         assert_eq!(Dialect::from_url("not a url"), None);
         assert_eq!(Dialect::from_url(""), None);
     }
