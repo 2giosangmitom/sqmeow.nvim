@@ -153,6 +153,7 @@ M.subcommands = {
     desc = 'Choose the connection queries run against',
     run = function(args)
       local api = require('sqmeow.api')
+      local state = require('sqmeow.state')
 
       local function activate(id)
         local connection = api.use(id)
@@ -161,18 +162,101 @@ M.subcommands = {
         end
       end
 
+      local function is_cluster(connection)
+        if connection.parent or connection.database then
+          return false
+        end
+        local url = require('sqmeow.url').split(connection.url)
+        if not url or url.dialect == 'sqlite' or url.dialect == 'duckdb' then
+          return false
+        end
+        return not url.database or url.database == ''
+      end
+
+      local function activate_child(parent, database)
+        local child = state.child_connection(parent.id, database)
+        if child and (child.state == 'connected' or child.state == 'connecting') then
+          return activate(child.id)
+        end
+
+        local id = api.connect(parent.url, {
+          name = ('%s/%s'):format(parent.name, database),
+          parent = parent.id,
+          database = database,
+          read_only = parent.read_only,
+          ssh = parent.ssh,
+        })
+        if id then
+          activate(id)
+        end
+      end
+
+      local function choose_database(cluster)
+        api.databases(cluster.id, function(dbs, err)
+          if err or not dbs or #dbs == 0 then
+            return notify(
+              err or ('no databases found for %s'):format(cluster.name),
+              vim.log.levels.WARN
+            )
+          end
+
+          if #dbs == 1 then
+            return activate_child(cluster, dbs[1])
+          end
+
+          local db_items = vim.tbl_map(function(db)
+            local icon, highlight = require('sqmeow.icons').get('database')
+            return { label = db, icon = icon, highlight = highlight, value = db }
+          end, dbs)
+
+          local opened, menu_err = require('sqmeow.ui.form').menu({
+            title = cluster.name,
+            items = db_items,
+            on_choice = function(db)
+              activate_child(cluster, db)
+            end,
+          })
+          if not opened then
+            notify(menu_err or 'the menu could not be opened', vim.log.levels.ERROR)
+          end
+        end)
+      end
+
       if args[1] then
         for _, connection in ipairs(api.connections()) do
           if connection.name == args[1] then
+            if is_cluster(connection) then
+              return choose_database(connection)
+            end
             return activate(connection.id)
           end
         end
+
+        local parent_name, child_db = args[1]:match('^([^/]+)/(.+)$')
+        if parent_name and child_db then
+          local parent = state.connection_by_name(parent_name)
+          if parent and parent.state == 'connected' then
+            return activate_child(parent, child_db)
+          end
+        end
+
         return notify(('nothing open is called `%s`'):format(args[1]), vim.log.levels.WARN)
       end
 
       local items = vim.tbl_map(function(connection)
         local icon, highlight = require('sqmeow.icons').get('connected')
-        return { label = connection.name, icon = icon, highlight = highlight, value = connection.id }
+        local label = connection.name
+        if
+          not is_cluster(connection)
+          and not connection.parent
+          and not connection.name:find('/')
+        then
+          local url = require('sqmeow.url').split(connection.url)
+          if url and url.database and url.database ~= '' and url.database ~= connection.name then
+            label = ('%s / %s'):format(connection.name, url.database)
+          end
+        end
+        return { label = label, icon = icon, highlight = highlight, value = connection }
       end, api.connections())
 
       if #items == 0 then
@@ -182,16 +266,35 @@ M.subcommands = {
       local opened, err = require('sqmeow.ui.form').menu({
         title = 'Use',
         items = items,
-        on_choice = activate,
+        on_choice = function(connection)
+          if is_cluster(connection) then
+            return choose_database(connection)
+          end
+          activate(connection.id)
+        end,
       })
       if not opened then
         notify(err or 'the menu could not be opened', vim.log.levels.ERROR)
       end
     end,
     complete = function(lead)
-      local names = vim.tbl_map(function(connection)
-        return connection.name
-      end, require('sqmeow.api').connections())
+      local names = {}
+      local seen = {}
+      for _, connection in ipairs(require('sqmeow.api').connections()) do
+        if not seen[connection.name] then
+          seen[connection.name] = true
+          table.insert(names, connection.name)
+        end
+        local ok, drawer = pcall(require, 'sqmeow.ui.drawer')
+        local dbs = ok and drawer.databases(connection.id)
+        for _, db in ipairs(dbs or {}) do
+          local child_name = ('%s/%s'):format(connection.name, db)
+          if not seen[child_name] then
+            seen[child_name] = true
+            table.insert(names, child_name)
+          end
+        end
+      end
 
       table.sort(names)
       return vim.tbl_filter(function(name)
