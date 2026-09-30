@@ -1750,28 +1750,28 @@ fn decode_cell(row: &oracledb::Row, index: usize, meta: &oracledb::Metadata) -> 
     let db_type = meta.db_type();
     let name = db_type.name();
     // Every branch below reads an `Option`, so `NULL` never errors.
-    if db_type == &oracledb::DB_TYPE_NUMBER {
+    if db_type == oracledb::DB_TYPE_NUMBER {
         return match row.get::<Option<oracledb::OracleNumber>>(index) {
             Ok(Some(number)) => number_text(&number.to_string()),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_BINARY_FLOAT {
+    if db_type == oracledb::DB_TYPE_BINARY_FLOAT {
         return match row.get::<Option<f32>>(index) {
             Ok(Some(value)) => Cell::Float(f64::from(value)),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_BINARY_DOUBLE {
+    if db_type == oracledb::DB_TYPE_BINARY_DOUBLE {
         return match row.get::<Option<f64>>(index) {
             Ok(Some(value)) => Cell::Float(value),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_BOOLEAN {
+    if db_type == oracledb::DB_TYPE_BOOLEAN {
         return match row.get::<Option<bool>>(index) {
             Ok(Some(value)) => Cell::Bool(value),
             Ok(None) => Cell::Null,
@@ -1799,28 +1799,28 @@ fn decode_cell(row: &oracledb::Row, index: usize, meta: &oracledb::Metadata) -> 
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_INTERVAL_DS {
+    if db_type == oracledb::DB_TYPE_INTERVAL_DS {
         return match row.get::<Option<oracledb::OracleIntervalDS>>(index) {
             Ok(Some(value)) => Cell::Text(value.to_string()),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_INTERVAL_YM {
+    if db_type == oracledb::DB_TYPE_INTERVAL_YM {
         return match row.get::<Option<oracledb::OracleIntervalYM>>(index) {
             Ok(Some(value)) => Cell::Text(value.to_string()),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_JSON {
+    if db_type == oracledb::DB_TYPE_JSON {
         return match row.get::<Option<oracledb::JsonValue>>(index) {
             Ok(Some(value)) => Cell::Json(json_text(&value)),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_VECTOR {
+    if db_type == oracledb::DB_TYPE_VECTOR {
         return match row.get::<Option<oracledb::Vector>>(index) {
             Ok(Some(value)) => Cell::Text(format!("{value:?}")),
             Ok(None) => Cell::Null,
