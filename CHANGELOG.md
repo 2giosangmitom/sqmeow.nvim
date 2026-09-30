@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.4.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.3.0...v2.4.0) (2026-09-30)
+
+
+### Features
+
+* add mssql adapter ([#58](https://github.com/2giosangmitom/sqmeow.nvim/issues/58)) ([a65457a](https://github.com/2giosangmitom/sqmeow.nvim/commit/a65457adcb06ee093803318bd90fa3c69c23d972))
+* **drawer:** add scratchpads grouping ([#51](https://github.com/2giosangmitom/sqmeow.nvim/issues/51)) ([90a4212](https://github.com/2giosangmitom/sqmeow.nvim/commit/90a4212040e70835a5977c38887d659d212ff566))
+* **drawer:** allow configuring drawer placement on the right ([#39](https://github.com/2giosangmitom/sqmeow.nvim/issues/39)) ([97ed6ab](https://github.com/2giosangmitom/sqmeow.nvim/commit/97ed6abf11dd119c865cdb673a79a4f634720946))
+* **drawer:** preview relation in an in-memory editor buffer ([#49](https://github.com/2giosangmitom/sqmeow.nvim/issues/49)) ([403cef1](https://github.com/2giosangmitom/sqmeow.nvim/commit/403cef1988cdd82c46a212802e054f241db587e7))
+* **drawer:** re-bind active editor buffer to selected connection on use ([#50](https://github.com/2giosangmitom/sqmeow.nvim/issues/50)) ([a299288](https://github.com/2giosangmitom/sqmeow.nvim/commit/a2992883ec3ae2feb21b0c6354588f417ad112f0))
+* **result:** pin column headers when scrolling (sticky header) & active column in winbar ([#44](https://github.com/2giosangmitom/sqmeow.nvim/issues/44)) ([e2a9d5e](https://github.com/2giosangmitom/sqmeow.nvim/commit/e2a9d5ee2da8a43f1690c0439670d3a06ec711eb))
+* **table:** add actions and keymaps to navigate horizontally between columns ([#38](https://github.com/2giosangmitom/sqmeow.nvim/issues/38)) ([c6197ec](https://github.com/2giosangmitom/sqmeow.nvim/commit/c6197ec5f74e46b8225ef9dac1d87fc695072611))
+
+
+### Fixes
+
+* **api:** reuse open connection in connect_named ([#36](https://github.com/2giosangmitom/sqmeow.nvim/issues/36)) ([a6e0f8c](https://github.com/2giosangmitom/sqmeow.nvim/commit/a6e0f8c8e39323bd0b1ee901a92abd24a3eb3c43))
+* **commands:** support cluster databases in :Sqmeow use ([#57](https://github.com/2giosangmitom/sqmeow.nvim/issues/57)) ([74ae98e](https://github.com/2giosangmitom/sqmeow.nvim/commit/74ae98e082092f419e39cd5ddc89c44717467dc9))
+* **drawer:** activate child connections on expand and allow use on descendant nodes ([#48](https://github.com/2giosangmitom/sqmeow.nvim/issues/48)) ([c78005a](https://github.com/2giosangmitom/sqmeow.nvim/commit/c78005ac189b2569e9fa3f64d794b49298153452))
+* lint ([7787aec](https://github.com/2giosangmitom/sqmeow.nvim/commit/7787aec9f207f4f8913b53af3de1e7b03d0751d4))
+
+
+### Documentation
+
+* update SSH section ([45085d1](https://github.com/2giosangmitom/sqmeow.nvim/commit/45085d1a20d125a6749e303b662a57027899d196)), closes [#30](https://github.com/2giosangmitom/sqmeow.nvim/issues/30)
+
 ## [2.3.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.2.0...v2.3.0) (2026-09-24)
 
 
