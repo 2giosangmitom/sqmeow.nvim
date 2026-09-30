@@ -276,8 +276,12 @@ impl OracleAdapter {
             .iter()
             .map(|bind| bind as &dyn oracledb::ToDbValue)
             .collect();
-        let mut statement = meta.statement(sql).map_err(Error::driver)?;
-        statement.exclude_from_cache();
+        let statement = meta
+            .statement(sql)
+            .map_err(Error::driver)?
+            .exclude_from_cache()
+            .build()
+            .map_err(Error::driver)?;
         let cursor = statement.query(&params).map_err(Error::driver)?;
         let mut rows = Vec::new();
         for row in cursor {
@@ -1468,9 +1472,10 @@ fn run_plsql(
     }
     // Cached OUT-cursor statements can leave this driver stuck after a
     // returned result followed by a PL/SQL exception. Keep these uncached.
-    let mut opened = connection
-        .statement(
-            "declare
+    let mut opened = {
+        let mut statement = connection
+            .statement(
+                "declare
            c integer;
            n integer;
          begin
@@ -1482,11 +1487,21 @@ fn run_plsql(
            if dbms_sql.is_open(c) then dbms_sql.close_cursor(c); end if;
            raise;
          end;",
-        )
-        .map_err(Error::driver)?
-        .exclude_from_cache()
-        .execute_named(&[("source", &sql), ("parent", &&oracledb::DB_TYPE_NUMBER)])
-        .map_err(Error::driver)?;
+            )
+            .map_err(Error::driver)?
+            .exclude_from_cache()
+            .build()
+            .map_err(Error::driver)?;
+        statement
+            .execute_named(&[
+                ("source", &sql as &dyn oracledb::ToDbValue),
+                (
+                    "parent",
+                    &oracledb::DB_TYPE_NUMBER as &dyn oracledb::ToDbValue,
+                ),
+            ])
+            .map_err(Error::driver)?
+    };
     let id: i64 = opened.out_bind_data().get(0).map_err(Error::driver)?;
     let mut parent = PlsqlResults {
         connection,
@@ -1494,11 +1509,21 @@ fn run_plsql(
     };
     let mut results = Vec::new();
     loop {
-        let next = connection
-            .statement("begin dbms_sql.get_next_result(:parent, :result); end;")
-            .map_err(Error::driver)?
-            .exclude_from_cache()
-            .execute_named(&[("parent", &id), ("result", &&oracledb::DB_TYPE_CURSOR)]);
+        let next = {
+            let mut statement = connection
+                .statement("begin dbms_sql.get_next_result(:parent, :result); end;")
+                .map_err(Error::driver)?
+                .exclude_from_cache()
+                .build()
+                .map_err(Error::driver)?;
+            statement.execute_named(&[
+                ("parent", &id as &dyn oracledb::ToDbValue),
+                (
+                    "result",
+                    &oracledb::DB_TYPE_CURSOR as &dyn oracledb::ToDbValue,
+                ),
+            ])
+        };
         let mut next = match next {
             Ok(next) => next,
             // This API raises NO_DATA_FOUND when all results are retrieved.
@@ -1750,28 +1775,28 @@ fn decode_cell(row: &oracledb::Row, index: usize, meta: &oracledb::Metadata) -> 
     let db_type = meta.db_type();
     let name = db_type.name();
     // Every branch below reads an `Option`, so `NULL` never errors.
-    if db_type == &oracledb::DB_TYPE_NUMBER {
+    if db_type == oracledb::DB_TYPE_NUMBER {
         return match row.get::<Option<oracledb::OracleNumber>>(index) {
             Ok(Some(number)) => number_text(&number.to_string()),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_BINARY_FLOAT {
+    if db_type == oracledb::DB_TYPE_BINARY_FLOAT {
         return match row.get::<Option<f32>>(index) {
             Ok(Some(value)) => Cell::Float(f64::from(value)),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_BINARY_DOUBLE {
+    if db_type == oracledb::DB_TYPE_BINARY_DOUBLE {
         return match row.get::<Option<f64>>(index) {
             Ok(Some(value)) => Cell::Float(value),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_BOOLEAN {
+    if db_type == oracledb::DB_TYPE_BOOLEAN {
         return match row.get::<Option<bool>>(index) {
             Ok(Some(value)) => Cell::Bool(value),
             Ok(None) => Cell::Null,
@@ -1799,28 +1824,28 @@ fn decode_cell(row: &oracledb::Row, index: usize, meta: &oracledb::Metadata) -> 
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_INTERVAL_DS {
+    if db_type == oracledb::DB_TYPE_INTERVAL_DS {
         return match row.get::<Option<oracledb::OracleIntervalDS>>(index) {
             Ok(Some(value)) => Cell::Text(value.to_string()),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_INTERVAL_YM {
+    if db_type == oracledb::DB_TYPE_INTERVAL_YM {
         return match row.get::<Option<oracledb::OracleIntervalYM>>(index) {
             Ok(Some(value)) => Cell::Text(value.to_string()),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_JSON {
+    if db_type == oracledb::DB_TYPE_JSON {
         return match row.get::<Option<oracledb::JsonValue>>(index) {
             Ok(Some(value)) => Cell::Json(json_text(&value)),
             Ok(None) => Cell::Null,
             Err(_) => unsupported(name, row, index),
         };
     }
-    if db_type == &oracledb::DB_TYPE_VECTOR {
+    if db_type == oracledb::DB_TYPE_VECTOR {
         return match row.get::<Option<oracledb::Vector>>(index) {
             Ok(Some(value)) => Cell::Text(format!("{value:?}")),
             Ok(None) => Cell::Null,
