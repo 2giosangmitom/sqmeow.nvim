@@ -7,6 +7,9 @@ local M = {}
 ---@param name string
 ---@return string
 function M.quote(dialect, name)
+  if dialect == 'mssql' then
+    return '[' .. name:gsub(']', ']]') .. ']'
+  end
   if dialect == 'mysql' then
     return '`' .. name:gsub('`', '``') .. '`'
   end
@@ -52,6 +55,9 @@ function M.select_from(dialect, parts, limit)
     )
   end
   local sql = ('select * from %s'):format(M.qualify(dialect, parts))
+  if dialect == 'mssql' then
+    return limit and ('select top (%d) * from %s'):format(limit, M.qualify(dialect, parts)) or sql
+  end
   if dialect == 'oracle' then
     -- Oracle reads the first rows with `FETCH FIRST`, not `LIMIT`.
     return limit and ('%s fetch first %d rows only'):format(sql, limit) or sql

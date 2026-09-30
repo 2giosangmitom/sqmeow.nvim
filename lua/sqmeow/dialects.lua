@@ -43,6 +43,20 @@ M.list = {
     fields = server_fields(5432),
   },
   {
+    id = 'mssql',
+    label = 'Microsoft SQL Server',
+    scheme = 'mssql',
+    port = 1433,
+    fields = {
+      { key = 'host', label = 'Host', optional = true, hint = 'localhost' },
+      { key = 'port', label = 'Port', optional = true, hint = '1433' },
+      { key = 'database', label = 'Database', optional = true, hint = 'all' },
+      { key = 'user', label = 'User' },
+      { key = 'password', label = 'Password', mask = true, optional = true },
+      { key = 'options', label = 'Options', optional = true, hint = 'encrypt=true' },
+    },
+  },
+  {
     id = 'mysql',
     label = 'MySQL or MariaDB',
     scheme = 'mysql',
@@ -160,6 +174,7 @@ M.list = {
 
 --- Schemes that mean the same dialect, beyond the one it is written with.
 local aliases = {
+  sqlserver = 'mssql',
   postgresql = 'postgres',
   mariadb = 'mysql',
   rediss = 'redis',

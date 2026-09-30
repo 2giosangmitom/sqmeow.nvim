@@ -2,8 +2,8 @@
 
 use sqlparser::ast::{Expr, Query, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins};
 use sqlparser::dialect::{
-    ClickHouseDialect, Dialect as Grammar, DuckDbDialect, GenericDialect, MySqlDialect,
-    PostgreSqlDialect, SQLiteDialect,
+    ClickHouseDialect, Dialect as Grammar, DuckDbDialect, GenericDialect, MsSqlDialect,
+    MySqlDialect, PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Tokenizer};
@@ -233,6 +233,7 @@ fn grammar(dialect: Dialect) -> Box<dyn Grammar> {
     match dialect {
         Dialect::Postgres => Box::new(PostgreSqlDialect {}),
         Dialect::MySql => Box::new(MySqlDialect {}),
+        Dialect::MsSql => Box::new(MsSqlDialect {}),
         Dialect::Sqlite => Box::new(SQLiteDialect {}),
         Dialect::DuckDb => Box::new(DuckDbDialect {}),
         Dialect::ClickHouse => Box::new(ClickHouseDialect {}),

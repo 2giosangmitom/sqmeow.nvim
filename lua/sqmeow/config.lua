@@ -118,6 +118,7 @@ M.defaults = {
     surrealdb = '',
     clickhouse = '',
     oracle = '',
+    mssql = '',
 
     -- What sits before a drawer row: whether its children are showing, or that it has none.
     markers = { open = '', closed = '', leaf = ' ' },

@@ -53,6 +53,13 @@ end
 
 T['select_from'] = MiniTest.new_set()
 
+T['select_from']['uses T-SQL brackets and TOP'] = function()
+  eq(sql.quote('mssql', 'odd]name'), '[odd]]name]')
+  eq(sql.select_from('mssql', { 'dbo', 'users' }, 10), 'select top (10) * from [dbo].[users]')
+  eq(sql.select_from('mssql', { 'dbo', 'users' }, 0), 'select top (0) * from [dbo].[users]')
+  eq(sql.select_from('mssql', { 'dbo', 'users' }), 'select * from [dbo].[users]')
+end
+
 T['select_from']['finds in a mongodb collection on its own database'] = function()
   -- The command name has to be the first key, and `$db` keeps the scratchpad's database as it is.
   eq(

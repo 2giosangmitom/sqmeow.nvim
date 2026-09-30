@@ -141,6 +141,11 @@ impl ResultSet {
         &self.columns
     }
 
+    /// Enrich column metadata after execution without changing the result shape.
+    pub fn columns_mut(&mut self) -> &mut [Column] {
+        &mut self.columns
+    }
+
     /// Every value in one column, in row order.
     pub fn column_cells(&self, column: usize) -> &[Cell] {
         self.data.get(column).map_or(&[], Vec::as_slice)

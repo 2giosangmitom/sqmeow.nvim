@@ -67,10 +67,15 @@ impl Planner<'_> {
             Dialect::Postgres | Dialect::Sqlite | Dialect::DuckDb => " RETURNING *",
             _ => "",
         };
+        let output = if self.dialect == Dialect::MsSql {
+            " OUTPUT INSERTED.*"
+        } else {
+            ""
+        };
         if cells.is_empty() {
             let insert = match self.dialect {
                 Dialect::MySql => format!("INSERT INTO {name} () VALUES ()"),
-                _ => format!("INSERT INTO {name} DEFAULT VALUES{returning}"),
+                _ => format!("INSERT INTO {name}{output} DEFAULT VALUES{returning}"),
             };
             return Ok(std::iter::once(insert)
                 .chain(self.read_back(table, cells)?)
@@ -91,7 +96,7 @@ impl Planner<'_> {
             ""
         };
         let insert = format!(
-            "INSERT INTO {name} ({}) VALUES ({}){absent}{returning}",
+            "INSERT INTO {name} ({}){output} VALUES ({}){absent}{returning}",
             columns.join(", "),
             values.join(", ")
         );
@@ -290,7 +295,7 @@ fn bytes_literal(dialect: Dialect, bytes: &[u8]) -> String {
     let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     match dialect {
         Dialect::Postgres => format!("'\\x{hex}'"),
-        Dialect::Scylla => format!("0x{hex}"),
+        Dialect::Scylla | Dialect::MsSql => format!("0x{hex}"),
         // DuckDB reads `X'ab'` as text, and `\\x` escapes one byte at a time.
         Dialect::DuckDb => {
             let escaped: String = bytes.iter().map(|byte| format!("\\x{byte:02x}")).collect();
@@ -306,7 +311,11 @@ pub fn quote_text(dialect: Dialect, text: &str) -> String {
         Dialect::MySql => text.replace('\\', "\\\\").replace('\'', "''"),
         _ => text.replace('\'', "''"),
     };
-    format!("'{escaped}'")
+    if dialect == Dialect::MsSql {
+        format!("N'{escaped}'")
+    } else {
+        format!("'{escaped}'")
+    }
 }
 
 /// The condition a row meets when `column` holds `cell`.
@@ -333,7 +342,7 @@ fn cell_literal(dialect: Dialect, cell: &Cell) -> Result<String> {
         Cell::Float(value) if value.is_finite() => cell.display("").into_owned(),
         Cell::Decimal(text) => text.clone(),
         Cell::Bool(value) => match dialect {
-            Dialect::Sqlite => u8::from(*value).to_string(),
+            Dialect::Sqlite | Dialect::MsSql => u8::from(*value).to_string(),
             _ => if *value { "TRUE" } else { "FALSE" }.to_owned(),
         },
         Cell::Bytes { head, .. } => bytes_literal(dialect, head),

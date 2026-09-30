@@ -37,6 +37,9 @@ test-rust:
     set -euo pipefail
     # Each server is checked on its own: one of them being down should skip its own cases, not
     # point the other dialect's tests at a port with nothing behind it.
+    if [ -n "$(docker compose ps --status running --quiet mssql 2>/dev/null)" ]; then
+        export SQMEOW_TEST_MSSQL_URL="mssql://sa:Sqmeow_Test123%21@127.0.0.1:51433/master?trust_server_certificate=true"
+    fi
     if [ -n "$(docker compose ps --status running --quiet postgres 2>/dev/null)" ]; then
         export SQMEOW_TEST_POSTGRES_URL="postgres://sqmeow:sqmeow@127.0.0.1:55432/sqmeow"
     fi
