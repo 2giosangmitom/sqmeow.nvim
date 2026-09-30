@@ -95,7 +95,10 @@ const MONGO_READS: &[&str] = &[
 
 /// Returns a description of what `statement` would destroy, if anything.
 ///
-/// Used to prompt for confirmation before destructive statements.
+/// Used to prompt for confirmation before destructive statements. This is a conservative
+/// lexical heuristic, not a database authorization boundary: dialect grammar and server-side
+/// functions can make a statement's effects impossible to infer reliably from its text. Enforce
+/// permissions at the database as well when statements are untrusted.
 pub fn danger(dialect: Dialect, statement: &str) -> Option<String> {
     match dialect {
         Dialect::Redis => {
@@ -182,7 +185,9 @@ pub fn danger(dialect: Dialect, statement: &str) -> Option<String> {
 
 /// Returns whether `statement` may change data or schema.
 ///
-/// Used to block writes on read-only connections.
+/// Used to block writes on read-only connections when the backend cannot enforce a read-only
+/// session. Unknown command forms are treated as writes. The scanner is intentionally
+/// conservative, but it cannot replace database credentials that lack write privileges.
 pub fn writes(dialect: Dialect, statement: &str) -> bool {
     match dialect {
         Dialect::Redis => !REDIS_READS.contains(&first_word(statement).as_str()),
@@ -344,6 +349,10 @@ fn mongo_keys(statement: &str) -> Option<Vec<String>> {
 
 /// The words of a statement outside quotes and comments, in lower case, each with how deep in
 /// parentheses it sits.
+///
+/// This lightweight tokenizer exists for safety checks and query-shape decisions, not to validate
+/// SQL syntax. It preserves neither punctuation nor source positions; consumers should not use it
+/// to rewrite a statement.
 pub fn words(dialect: Dialect, statement: &str) -> Vec<(String, usize)> {
     let mut words = Vec::new();
     let mut word = String::new();

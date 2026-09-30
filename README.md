@@ -1,6 +1,6 @@
 <h1 align="center">🐱 sqmeow.nvim</h1>
 
-<p align="center">Query your database from your favorite editor — fast, keyboard-driven, and Rust-powered.</p>
+<p align="center">Explore schemas, run queries, and edit results from Neovim — with a responsive Rust engine and keyboard-driven workflow.</p>
 
 <p align="center">
   <a href="https://github.com/2giosangmitom/sqmeow.nvim/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/2giosangmitom/sqmeow.nvim/ci.yml?branch=master&style=flat-square&label=ci" alt="ci status"></a>
@@ -22,34 +22,22 @@
 
 ## ✨ Features
 
-- **⚡ Rust engine** — queries run off the editor thread with paged results; large results never freeze Neovim.
-- **🐘 Multiple connections** — keep several databases open at once.
-- **🌲 Schema drawer** — browse schemas, tables, views, routines and columns with types and keys.
-- **📄 Scratchpads** — persistent query buffers; press `u` on a connection to make it active.
-- **✏️ In-grid editing** — edit cells, add or delete rows, review staged changes before applying.
-- **🔎 Filter and sort** — `WHERE` / `ORDER BY` bar runs on the database (or in-memory for Redis/ScyllaDB/SurrealDB).
+- **⚡ Responsive queries** — the Rust engine runs outside Neovim's UI thread and pages large results.
+- **🐘 Multiple connections** — connect to several databases and switch between them from the drawer.
+- **🌲 Schema browser** — inspect schemas, tables, views, routines, columns, types, and keys.
+- **📄 Query scratchpads** — keep query buffers between sessions and associate them with a connection.
+- **✏️ Editable results** — change cells, insert or delete rows, review staged changes, and apply them.
+- **🔎 Filtering and sorting** — run `WHERE` / `ORDER BY` on supported databases or filter held results in memory.
 - **▶️ Flexible execution** — run the statement under the cursor, a visual selection, or the whole buffer.
-- **🧭 EXPLAIN** — query plans and errors render in the result window.
-- **🕘 Query log** — reopen any past result, even after restart.
-- **📤 Export** — to CSV, JSON or SQL `INSERT` (single or batched, with optional `CREATE TABLE`) — to file or clipboard.
-- **🔐 Secrets** — passwords are masked; URLs can read `{{ env "VAR" }}`, `{{ exec "cmd" }}` or `{{ file "path" }}`.
-- **⌨️ Buffer-local keymaps** — no global mappings; `<Plug>` for everything worth a global key.
+- **🧭 Query plans and errors** — inspect `EXPLAIN` output and database errors in the result window.
+- **🕘 Query history** — reopen previous results, including after restarting Neovim.
+- **📤 Export** — save or copy CSV, JSON, or SQL `INSERT` statements, with optional batching and `CREATE TABLE`.
+- **🔐 Secret-friendly URLs** — mask passwords and load values with `{{ env "VAR" }}`, `{{ file "path" }}`, or `{{ exec "cmd" }}`.
+- **⌨️ Local keymaps** — mappings stay buffer-local; `<Plug>` mappings are available for your own shortcuts.
 
 ## 🗄️ Supported Databases
 
-| Database                       | Notes                                                                                  |
-| ------------------------------ | -------------------------------------------------------------------------------------- |
-| **PostgreSQL** / CockroachDB   | Full support, including `EXPLAIN`, TLS, `postgres://`                                  |
-| **MySQL** / MariaDB            | Full support, `mysql://`                                                               |
-| **SQLite**                     | `sqlite://` / `file:` — zero-config                                                    |
-| **DuckDB**                     | `duckdb:` — local analytics                                                            |
-| **Redis** / Valkey / Dragonfly | Keys grouped by type; `redis://`, `rediss://`, `redis+cluster://`, `redis+sentinel://` |
-| **MongoDB**                    | Extended JSON commands, `mongodb://` / `mongodb+srv://`                                |
-| **ScyllaDB** / Cassandra       | CQL via `scylla://` / `cassandra://`, `?ssl=true`                                      |
-| **SurrealDB**                  | SurrealQL via `surrealdb://` / `surrealdbs://`                                         |
-| **ClickHouse**                 | HTTP via `clickhouse://`, HTTPS via `clickhouses://`; results are read-only            |
-| **Oracle Database**            | `oracle://`, `oracledb://`, `oracletcps://` for TLS                                    |
-| **Microsoft SQL Server**       | Tiberius driver; `mssql://` / `sqlserver://`, SQL authentication, TLS                  |
+PostgreSQL, CockroachDB, MySQL, MariaDB, SQLite, DuckDB, Redis, Valkey, Dragonfly, MongoDB, ScyllaDB, Cassandra, SurrealDB, ClickHouse, Oracle Database, and Microsoft SQL Server.
 
 ## 👀 Preview
 
@@ -65,7 +53,7 @@
 
 ## 🚀 Installation
 
-**Requirements:** Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim).
+**Requirements:** Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim). The build hook below downloads the matching engine binary.
 
 With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
@@ -75,7 +63,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
   dependencies = { "MunifTanjim/nui.nvim" },
   version = "*",
   build = function()
-    -- Downloads the matching release binary; pass 'curl', 'wget', 'powershell' or 'cargo' to choose.
+    -- Downloads the matching release binary. Pass 'curl', 'wget', 'powershell', or 'cargo' to choose a method.
     require("sqmeow").install()
   end,
   opts = {},
@@ -90,47 +78,43 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```
 
 > [!NOTE]
-> To track `master`, remove `version` and build with `install('cargo')` (needs Rust toolchain + DuckDB). Run `:checkhealth sqmeow` to verify.
+> To track `master`, remove `version` and build with `install('cargo')` (requires a Rust toolchain and DuckDB). Run `:checkhealth sqmeow` to verify the installation.
 
 ## ⚡ Quick Start
 
-1. `:Sqmeow` opens the drawer and result window.
-2. `A` in the drawer (or `:Sqmeow add`) adds a connection.
-3. `<CR>` on a connection connects; `a` creates a scratchpad; `u` makes it active.
-4. Write a query and press `<CR>` to run the statement under cursor (or a visual selection).
+1. Run `:Sqmeow` to open the schema drawer and result window.
+2. Press `A` in the drawer (or run `:Sqmeow add`) and enter a connection.
+3. Press `<CR>` on the connection to connect. Press `a` to create a scratchpad and `u` to use that connection for queries.
+4. Write a query, then press `<CR>` to run the statement under the cursor. In visual mode, `<CR>` runs the selection.
 
 > [!TIP]
-> Press `?` in the drawer or result window to list its keymaps. See `:h sqmeow-keymaps` for the full reference.
+> Press `?` in the drawer or result window to see available keymaps. See `:h sqmeow-keymaps` for the complete reference.
 
 ### Dialect Notes
 
-- **SQL** — `<CR>` runs statement under cursor; `<leader>E` runs whole buffer.
-- **Redis** — one command per line, e.g. `GET key`. Drawer lists keys by type. Cluster: `redis+cluster://host:7000,host:7001`. Sentinel: `redis+sentinel://host:26379,host:26380/mymaster/0`.
-- **MongoDB** — database commands as Extended JSON, e.g. `{"find": "users"}`. `use db_name` switches database.
-- **ScyllaDB** — `?ssl=true` for TLS, `?sslrootcert=/path/ca.pem` for custom CA.
-- **SurrealDB** — `surrealdb://user:pass@host:8000/namespace/database`; leave out the database to list every one in the namespace. `surrealdbs://` for TLS, `?auth=namespace` or `?auth=database` for a non-root user, `?sslrootcert=/path/ca.pem` for custom CA. `USE DB name` switches database. Scratchpads ending in `.surql` get the `surql` filetype.
-- **Oracle Database** — `oracle://user:pass@host:1521/XEPDB1` (`oracledb://` also works); `oracletcps://` (port 2484) for TLS. Cancelling a query returns at once, but the next query waits for the cancelled one, since the driver cannot stop it on the server.
-  - Privileged login: append `?as=sysdba` or `?as=sysoper`.
-  - TNS alias: `oracle://user:pass@/MYDB?tns_admin=/opt/oracle/network` reads `MYDB` from that directory's `tnsnames.ora`. Leave Host and Port empty in the connection editor.
-  - SID or full descriptor: `oracle://user:pass@/?tns=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=db)(PORT=1521))(CONNECT_DATA=(SID=ORCL)))`. Leave Host, Port and Service empty. Database switching is unavailable for full descriptors.
-  - Client TLS wallet: `oracletcps://user:pass@db/service?wallet=/opt/oracle/wallet&wallet_password=secret`. The directory must contain the driver's `ewallet.pem`; username/password are still required. TNS aliases and descriptors select their own TCP/TCPS protocol, so wallet connections through TNS must specify `PROTOCOL=TCPS` there.
-  - Set these in the connection editor's Options field; join options with `&` and percent-encode reserved characters in values (especially passwords). Unknown options are rejected.
+- **SQL databases** — `<CR>` runs the statement under the cursor; `<leader>E` runs the whole buffer.
+- **Redis** — enter one command per line. The drawer groups keys by type; cluster and Sentinel URLs are supported.
+- **MongoDB** — enter commands as Extended JSON; use `use db_name` to switch databases.
+- **ScyllaDB** — supports TLS and custom CA certificates through URL options.
+- **SurrealDB** — use SurrealQL; namespaces, database selection, TLS, and custom CAs are supported. `.surql` scratchpads use the SurrealQL filetype.
+- **Oracle Database** — supports Oracle URLs, TLS, privileged logins, TNS aliases, descriptors, and wallets. Cancelling a query returns immediately, but the next query waits for the server operation to finish.
+- **Microsoft SQL Server** — connect with `mssql://` or `sqlserver://`; SQL authentication and TLS are supported. See below for SQL Server-specific details.
 
 ### Microsoft SQL Server
 
-Use `mssql://user:password@host:1433/database`. Leave the database empty to browse accessible databases. SQL authentication is supported; Windows/AD authentication and named-instance discovery are not currently exposed.
+Connect with `mssql://user:password@host:1433/database`. Leave the database empty to browse accessible databases. SQL authentication is supported; Windows/AD authentication and named-instance discovery are not currently available.
 
-- TLS is required and certificates are verified against system roots by default. Use `sslrootcert=/path/ca.pem` for a private CA, or `hostname_in_certificate=db.example.com` when connecting through an SSH tunnel.
-- For a local server with a self-signed certificate, explicitly set `trust_server_certificate=true`. This disables certificate verification. `encrypt=false` encrypts only login traffic. Unknown options are rejected.
-- T-SQL runs as batches separated by a standalone `GO` line (an optional trailing `--` comment is allowed). Semicolons stay inside their batch, preserving variables and procedure definitions. `GO` repetition counts and sqlcmd directives are not supported.
-- Results retain each row set, including empty sets. Row limits bound retained rows; the remaining response is drained to preserve later statements in the batch. For a batch without row sets, the reported affected count is the last statement's `@@ROWCOUNT`.
-- Grid edits use transactions and require a complete primary or unique key. Identity and computed columns are generated by the server. Inserts return rows through `OUTPUT INSERTED.*`; SQL Server rejects this form on tables with enabled INSERT triggers.
-- Cancellation discards the session after a bounded Attention request. The next request reconnects to the configured database; temporary tables, `USE`/`SET` state and open transactions are lost. Failed requests are never replayed.
-- Read-only mode checks statements, rather than enforcing a read-only server session. Use a read-only database user for database-enforced restrictions.
+- **TLS:** encryption is required and certificates are verified against system roots. For a private CA, set `sslrootcert=/path/ca.pem`. Through an SSH tunnel, set `hostname_in_certificate=db.example.com` if the certificate names the database host.
+- **Self-signed certificates:** for a local server, explicitly set `trust_server_certificate=true` to disable certificate verification. `encrypt=false` encrypts only login traffic. Unknown options are rejected.
+- **Batches:** T-SQL statements run in batches separated by a standalone `GO` line (optionally followed by a `--` comment). Semicolons stay within each batch, preserving variables and procedure definitions. `GO` repetition counts and sqlcmd directives are unsupported.
+- **Results:** each row set is retained, including empty sets. Row limits cap retained rows while the rest of the response is drained so later batch statements can complete. For batches without row sets, the affected count comes from the last statement's `@@ROWCOUNT`.
+- **Editing:** grid edits use transactions and require a complete primary or unique key. Identity and computed columns are generated by SQL Server. Inserts use `OUTPUT INSERTED.*`; SQL Server rejects this form on tables with enabled INSERT triggers.
+- **Cancellation:** after a bounded Attention request, the session is discarded. The next request reconnects to the configured database; temporary tables, `USE`/`SET` state, and open transactions are lost. Failed requests are never replayed.
+- **Read-only mode:** the engine checks statements rather than opening a read-only server session. Use a read-only database account for server-enforced restrictions.
 
 ### SSH Tunnels
 
-sqmeow uses your system `ssh` to forward a local port to the database through an SSH host. If you already have a host in `~/.ssh/config`, use its **Host alias** in the connection dialog's **SSH** field:
+sqmeow uses your system `ssh` command to forward a local port through an SSH host. If you already have a host in `~/.ssh/config`, enter its **Host alias** in the connection dialog's **SSH** field:
 
 ```sshconfig
 Host hostname
@@ -140,16 +124,16 @@ Host hostname
   IdentitiesOnly yes
 ```
 
-1. Run `ssh hostname` in a terminal to check that the SSH connection works.
-2. In sqmeow, add a connection with **SSH** set to `hostname` (not `yourip`). For a PostgreSQL server running on the SSH host, set the database URL to `postgres://dbuser@localhost:5432/mydb`. Here `localhost` is resolved **on the SSH host**, and `dbuser` is the database user, not the SSH user.
+1. Run `ssh hostname` in a terminal to verify that the SSH connection works.
+2. Add a sqmeow connection with **SSH** set to `hostname` (not `yourip`). For PostgreSQL running on the SSH host, use `postgres://dbuser@localhost:5432/mydb` as the database URL. `localhost` is resolved **on the SSH host**; `dbuser` is the database login, not the SSH login.
 
-For a saved connection, the same settings are `{"name": "mydb", "url": "postgres://dbuser@localhost:5432/mydb", "ssh": "hostname"}`. If the database is on another machine reachable from the SSH host, use that machine's hostname in the URL instead of `localhost`.
+The equivalent saved connection is `{"name": "mydb", "url": "postgres://dbuser@localhost:5432/mydb", "ssh": "hostname"}`. If the database runs on another machine reachable from the SSH host, use that machine's hostname instead of `localhost` in the URL.
 
-You can also use `user@bastion` or `user@bastion:2222` in **SSH** without a config alias. OpenSSH honors your keys, agent and `~/.ssh/config`, including `ProxyCommand`. If your proxy needs credentials (for example, AWS SSO), authenticate before starting Neovim so `ssh` inherits the required environment.
+You can use `user@bastion` or `user@bastion:2222` in **SSH** without a config alias. OpenSSH still uses your keys, agent, and `~/.ssh/config`, including `ProxyCommand`. If a proxy needs credentials (for example, AWS SSO), authenticate before starting Neovim so `ssh` inherits the required environment.
 
 ### Environment Connections
 
-Define connections in `SQMEOW_CONNECTIONS`:
+Set `SQMEOW_CONNECTIONS` to a JSON array to load connections from the environment. Templates let you keep passwords out of the URL itself:
 
 ```sh
 export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPASSWORD\" }}@localhost/dev"}]'
@@ -157,8 +141,8 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Safety
 
-- Tick **Read only** in the dialog or add `"read_only": true` to a connection (or `connections.json`) to allow only reads. PostgreSQL, MySQL, ClickHouse, SQLite and DuckDB enforce it in the database session (a server that speaks the PostgreSQL protocol without read-only sessions falls back to the check below, with a warning); Redis, MongoDB, ScyllaDB, SurrealDB and OracleDB only check commands against a list of reads, so use a read-only database user where it matters.
-- Before `DELETE`/`UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, or emptying a Redis/MongoDB database, sqmeow asks first. Set `query.confirm_destructive = false` to disable.
+- Enable **Read only** in the connection dialog or set `"read_only": true` in a connection (including `connections.json`) to restrict it to read statements. PostgreSQL, MySQL, ClickHouse, SQLite, and DuckDB enforce read-only access in the database session. Redis, MongoDB, ScyllaDB, SurrealDB, and OracleDB use statement checks instead; use a read-only database account whenever server-enforced permissions matter.
+- sqmeow asks for confirmation before broad `DELETE`/`UPDATE`, `DROP`, `TRUNCATE`, or commands that empty Redis/MongoDB data. Disable prompts with `query.confirm_destructive = false`.
 
 ## ⌨️ Commands
 
@@ -172,7 +156,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 | `:Sqmeow save`                                      | Save connection for next time                   |
 | `:Sqmeow edit [name]`                               | Edit a saved connection                         |
 | `:Sqmeow remove <name>`                             | Delete a saved connection                       |
-| `:Sqmeow use [name]`                                | Choose connection queries run against           |
+| `:Sqmeow use [name]`                                | Choose the connection to run queries against     |
 | `:Sqmeow bind <name\|none>`                         | Tie current buffer to a connection, or untie it |
 | `:Sqmeow disconnect`                                | Close current connection                        |
 | `:Sqmeow scratch [name]`                            | Create a scratchpad                             |
@@ -228,7 +212,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Filter Bar
 
-`gf`/`go` open a bar above the grid with `WHERE` and `ORDER BY`. The query reruns as a subquery; `=` adds cell value to `WHERE`, `s` fills `ORDER BY`. MongoDB takes filter/sort documents; Redis/ScyllaDB/SurrealDB and closed connections filter in-memory with `AND`/`OR`/`NOT`, `IS NULL`, `LIKE`/`ILIKE`, `IN`, `BETWEEN`.
+Press `gf` or `go` to open the filter bar above the grid. On SQL databases, filters rerun the query as a subquery; `=` adds the selected cell's value to `WHERE`, and `s` adds a sort expression to `ORDER BY`. MongoDB uses filter and sort documents. Redis, ScyllaDB, SurrealDB, and disconnected results are filtered in memory with `AND`/`OR`/`NOT`, `IS NULL`, `LIKE`/`ILIKE`, `IN`, and `BETWEEN`.
 
 | Key               | Action                       |
 | ----------------- | ---------------------------- |
@@ -239,7 +223,7 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 
 ### Editing Results
 
-A column is editable when it is a plain table column and its table's whole primary (or unique) key is in the result. Joined rows update each table by its own key; deleted row removes from first editable column's table; rows only addable to single-table results.
+Editing is available when a result column maps directly to a table column and the result includes that table's complete primary or unique key. Joined rows update each table by its own key. Deleting a row affects the table associated with its first editable column; adding rows is limited to single-table results.
 
 | Key           | Action                                           |
 | ------------- | ------------------------------------------------ |
@@ -263,13 +247,13 @@ A column is editable when it is a plain table column and its table's whole prima
 
 ## ⚙️ Configuration
 
-`setup()` is optional. Defaults:
+Calling `setup()` is optional. This is the default configuration; override only the settings you need:
 
 ```lua
 require('sqmeow').setup({
-  sources = { { type = 'file' }, { type = 'env' } }, -- where connections are loaded from
+  sources = { { type = 'file' }, { type = 'env' } }, -- connection sources
   core = {
-    path = vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow'), -- engine, connections, scratchpads, log
+    path = vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow'), -- engine, saved connections, scratchpads, and history
     log_level = 'warn',
   },
   ui = {
@@ -282,8 +266,8 @@ require('sqmeow').setup({
   query = {
     max_rows = 100000,
     timeout_ms = 0, -- 0 disables timeout
-    history_size = 32, -- results kept in memory
-    persist_history = true, -- save log and results to disk
+    history_size = 32, -- result runs kept in memory
+    persist_history = true, -- also save the log and results to disk
     history_limit = 500,
     confirm_destructive = true, -- ask before destructive statements
   },
@@ -293,24 +277,24 @@ require('sqmeow').setup({
 })
 ```
 
-See `:h sqmeow-config` for every option.
+See `:h sqmeow-config` for descriptions of every option.
 
 ## 🤝 Contributing
 
-Toolchain is pinned with [mise](https://mise.jdx.dev) and tasks are [just](https://just.systems) recipes:
+The toolchain is pinned with [mise](https://mise.jdx.dev); development tasks are [just](https://just.systems) recipes:
 
 ```sh
-mise install   # rust, just, stylua, selene, lua-language-server
-just db-up     # start test databases in Docker
-just           # lint, test and check help file, as CI does
-just docs      # regenerate doc/sqmeow.txt
+mise install   # Install Rust, just, stylua, selene, and lua-language-server
+just db-up     # Start integration-test databases in Docker
+just           # Run lint, tests, and the help-file check (same checks as CI)
+just docs      # Regenerate doc/sqmeow.txt
 ```
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org).
 
 ## 📜 License
 
-[MIT](LICENSE). Thanks to all [contributors](https://github.com/2giosangmitom/sqmeow.nvim/graphs/contributors) 💛
+[MIT](LICENSE). Thanks to everyone who has contributed 💛
 
 [![Contributors](https://contrib.rocks/image?repo=2giosangmitom/sqmeow.nvim)](https://github.com/2giosangmitom/sqmeow.nvim/graphs/contributors)
 

@@ -3,6 +3,7 @@
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use rmpv::Value;
@@ -16,14 +17,23 @@ const FORMAT: &str = "sqmeow-result";
 /// Bumped when the layout changes in a way an older reader would get wrong.
 const VERSION: u64 = 1;
 
-/// Saves a result to `path`.
+/// Save a result to `path` using the versioned MessagePack archive format.
+///
+/// Parent directories are created as needed. On Unix, the archive file is created with
+/// owner-only permissions (`0600`). Data is written to a sibling temporary path and renamed into
+/// place so readers do not observe a partially encoded archive.
+///
+/// # Errors
+///
+/// Returns the underlying filesystem error if creating directories, writing the archive, or
+/// replacing the destination fails.
 pub fn write(path: &Path, result: &ResultSet) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let temp = path.with_extension("tmp");
-    let outcome = write_to(&temp, result).and_then(|()| fs::rename(&temp, path));
+    let (temp, file) = temporary(path)?;
+    let outcome = write_to(file, result).and_then(|()| fs::rename(&temp, path));
     if outcome.is_err() {
         let _ = fs::remove_file(&temp);
     }
@@ -32,9 +42,14 @@ pub fn write(path: &Path, result: &ResultSet) -> io::Result<()> {
 
 /// Reads a saved result from `path`.
 ///
+/// The header's format and version are checked before rows are decoded. Each archived row is
+/// reconstructed as a typed result cell; malformed or truncated data is rejected rather than
+/// returned as a shorter result.
+///
 /// # Errors
 ///
-/// Returns a string describing why the file could not be decoded.
+/// Returns a diagnostic string when the file cannot be opened, is not a supported archive, or
+/// contains malformed values.
 pub fn read(path: &Path) -> Result<ResultSet, String> {
     let file =
         File::open(path).map_err(|error| format!("could not open the saved result: {error}"))?;
@@ -88,8 +103,8 @@ pub fn read(path: &Path) -> Result<ResultSet, String> {
     Ok(result)
 }
 
-fn write_to(path: &Path, result: &ResultSet) -> io::Result<()> {
-    let mut out = BufWriter::new(create(path)?);
+fn write_to(file: File, result: &ResultSet) -> io::Result<()> {
+    let mut out = BufWriter::new(file);
     encode(&mut out, &header(result))?;
 
     let width = result.columns().len();
@@ -103,21 +118,36 @@ fn write_to(path: &Path, result: &ResultSet) -> io::Result<()> {
     out.flush()
 }
 
-#[cfg(unix)]
-fn create(path: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn create(path: &Path) -> io::Result<File> {
-    File::create(path)
+/// Create a unique sibling without following or truncating a pre-existing path.
+fn temporary(path: &Path) -> io::Result<(std::path::PathBuf, File)> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("result"))
+        .to_string_lossy();
+    for _ in 0..128 {
+        let candidate = path.with_file_name(format!(
+            ".{name}.{}.{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&candidate) {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not reserve a unique temporary archive path",
+    ))
 }
 
 fn encode(out: &mut impl Write, value: &Value) -> io::Result<()> {
@@ -446,5 +476,21 @@ mod tests {
 
         let mode = fs::metadata(scratch.file()).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_preexisting_temporary_symlink_is_not_followed() {
+        let scratch = Scratch::new();
+        fs::create_dir_all(scratch.file().parent().unwrap()).unwrap();
+        let victim = scratch.0.join("victim");
+        fs::write(&victim, b"keep me").unwrap();
+        let predictable = scratch.file().with_extension("tmp");
+        std::os::unix::fs::symlink(&victim, &predictable).unwrap();
+
+        write(&scratch.file(), &result()).expect("archive should be written safely");
+
+        assert_eq!(fs::read(victim).unwrap(), b"keep me");
+        assert!(predictable.exists());
     }
 }

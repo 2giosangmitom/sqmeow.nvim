@@ -1,4 +1,9 @@
 //! Parses keyword arguments sent from Lua.
+//!
+//! Lua tables arrive as MessagePack maps, except empty tables whose list/map shape is ambiguous.
+//! The accessors make required values strict and let optional values tolerate absence; callers
+//! should choose the strict accessor whenever silently ignoring a malformed value could change
+//! behavior or permissions.
 
 use rmpv::Value;
 

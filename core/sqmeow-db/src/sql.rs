@@ -5,7 +5,11 @@ mod sides;
 
 pub use sides::{Side, Sides};
 
-/// Whether T-SQL is exactly one row-returning query, not a batch or SELECT INTO.
+/// Whether T-SQL is exactly one row-returning query, not a batch or `SELECT INTO`.
+///
+/// The dialect parser first checks query shape; the write guard then rejects side effects such as
+/// writes hidden in a batch. This is used to decide whether the query can safely be wrapped for
+/// in-memory filtering.
 pub fn mssql_query(sql: &str) -> bool {
     mssql::query(sql).is_some() && !crate::guard::writes(Dialect::MsSql, sql)
 }
@@ -24,6 +28,9 @@ pub struct Statement {
 }
 
 /// Returns the statement containing `line`, or the nearest one before it.
+///
+/// Lines are zero-based, matching editor cursor rows. If the cursor is between statements, the
+/// preceding statement is selected; if it precedes all statements, the first is selected.
 pub fn statement_at(statements: &[Statement], line: usize) -> Option<&Statement> {
     if let Some(inside) = statements
         .iter()
@@ -65,8 +72,9 @@ pub fn first_word(statement: &str) -> String {
 
 /// Returns whether each row of `statement` maps directly to a table row.
 ///
-/// A plain query has no grouping, `DISTINCT`, or set operation at the top
-/// level and is therefore editable.
+/// A plain query has no grouping, `DISTINCT`, or set operation at the top level and is therefore
+/// eligible for row editing. Nested subqueries do not make an otherwise plain outer query
+/// non-editable. This is a shape check, not proof that the database will accept an update.
 pub fn plain(dialect: Dialect, statement: &str) -> bool {
     !crate::guard::words(dialect, statement)
         .iter()
@@ -81,8 +89,10 @@ pub fn plain(dialect: Dialect, statement: &str) -> bool {
 
 /// Wraps `statement` as a subquery filtered by `condition` and ordered by `order`.
 ///
-/// Returns `None` if `statement` is not a row-returning query. `columns`
-/// disambiguates repeated names via a CTE.
+/// Returns `None` if `statement` is not a supported row-returning query. `columns` disambiguates
+/// repeated result names through a CTE, where the dialect permits it. The caller supplies
+/// `condition` and `order` as SQL fragments, so they must come from trusted UI controls or be
+/// validated/quoted before reaching this function; this function only wraps them.
 pub fn filtered(
     dialect: Dialect,
     statement: &str,
@@ -176,6 +186,9 @@ enum Mode {
 }
 
 /// Splits a buffer of Redis commands into statements, one per non-comment line.
+///
+/// Redis has no SQL-style statement delimiter here: each nonblank line is sent as a command.
+/// Leading and trailing whitespace is removed, while command quoting is left to Redis.
 pub fn split_lines(input: &str) -> Vec<Statement> {
     input
         .lines()
@@ -193,6 +206,10 @@ pub fn split_lines(input: &str) -> Vec<Statement> {
 }
 
 /// Splits a buffer of MongoDB commands into Extended JSON documents.
+///
+/// A document ends when its brace/bracket nesting returns to zero outside a JSON string. A
+/// top-level `use` line is treated as its own command. Unbalanced input is retained through EOF so
+/// the database can return the syntax error.
 pub fn split_documents(input: &str) -> Vec<Statement> {
     let mut statements = Vec::new();
     let mut current: Option<(usize, String)> = None;
@@ -258,6 +275,10 @@ pub fn split_documents(input: &str) -> Vec<Statement> {
 }
 
 /// Splits a SQL buffer into statements respecting the given dialect.
+///
+/// Semicolons inside quoted strings, identifiers, comments, routine bodies, and dialect-specific
+/// batches do not split statements. The splitter is a boundary detector, not a SQL parser: invalid
+/// fragments are still returned for the database to diagnose. Statement line ranges are zero-based.
 pub fn split(input: &str, dialect: Dialect) -> Vec<Statement> {
     if dialect == Dialect::MsSql {
         return mssql::batches(input);

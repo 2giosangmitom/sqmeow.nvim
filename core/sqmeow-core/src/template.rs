@@ -6,9 +6,22 @@
 //! postgres://app:{{ file "~/.secrets/db" }}@db.internal/app
 //! ```
 //!
-//! The expanded URL is never logged or sent back to the editor.
+//! The expanded URL is never logged or sent back to the editor. Expansion runs on the
+//! user's machine with that user's environment, filesystem, and shell permissions; connection
+//! definitions containing directives must therefore be treated as executable trusted input.
 
 /// Expand every `{{ ... }}` directive in a string.
+///
+/// `env` reads an environment variable, `file` reads a UTF-8 file (with `~/` expanded), and
+/// `exec` runs the contents through the platform shell. Each directive is evaluated in source
+/// order; values are inserted literally and are not recursively expanded. A command has a
+/// 30-second deadline. Callers must avoid exposing the returned expanded string: it may contain
+/// credentials.
+///
+/// # Errors
+///
+/// Returns an error for malformed or unknown directives, unavailable environment variables or
+/// files, and commands that time out, cannot start, or exit unsuccessfully.
 pub async fn expand(input: &str) -> Result<String, String> {
     if !input.contains("{{") {
         return Ok(input.to_owned());
@@ -47,7 +60,10 @@ async fn evaluate(directive: &str) -> Result<String, String> {
     }
 }
 
-/// Split `env "NAME"` into its directive and its argument.
+/// Split a directive at its first whitespace and remove its matching quote pair.
+///
+/// The grammar intentionally does not interpret escapes or nested quotes; the argument is passed
+/// as-is to the selected directive handler.
 fn split(directive: &str) -> Result<(&str, String), String> {
     let (name, rest) = directive
         .split_once(char::is_whitespace)
@@ -87,12 +103,23 @@ const EXEC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 async fn run(command: &str) -> Result<String, String> {
     let output = tokio::time::timeout(EXEC_TIMEOUT, shell(command))
         .await
-        .map_err(|_| format!("`{command}` timed out after {}s", EXEC_TIMEOUT.as_secs()))?
-        .map_err(|error| format!("`{command}` could not be run: {error}"))?;
+        .map_err(|_| {
+            format!(
+                "the configured command timed out after {}s",
+                EXEC_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|_| "the configured command could not be started".to_owned())?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("`{command}` failed: {}", stderr.trim()));
+        // Commands and their diagnostics can contain the very secret being expanded.
+        return Err(format!(
+            "the configured command failed with {}",
+            output
+                .status
+                .code()
+                .map_or_else(|| "a signal".to_owned(), |code| format!("exit code {code}"))
+        ));
     }
 
     // A secret manager prints a trailing newline.
@@ -184,9 +211,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failing_command_reports_itself() {
-        let error = expand("{{ exec \"exit 3\" }}").await.unwrap_err();
-        assert!(error.contains("exit 3"), "{error}");
+    async fn a_failing_command_does_not_echo_its_contents() {
+        let error = expand("{{ exec \"echo hunter2 && exit 3\" }}")
+            .await
+            .unwrap_err();
+        assert!(error.contains("exit code 3"), "{error}");
+        assert!(!error.contains("hunter2"), "{error}");
     }
 
     #[tokio::test]

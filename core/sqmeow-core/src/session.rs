@@ -1,4 +1,8 @@
 //! Holds state for one editor session.
+//!
+//! Connections and completed results are shared through `Arc` so asynchronous work can outlive
+//! the RPC handler that started it. Mutex-protected collections own session membership; cloned
+//! handles remain valid after eviction or disconnect, but are no longer discoverable by id.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -265,6 +269,9 @@ impl Session {
     }
 
     /// Store the results of one run, which count as one against the history and go together.
+    ///
+    /// A multi-statement run can contribute several calls but consumes one history slot. Eviction
+    /// removes all ids in the oldest run; callers holding an `Arc` may continue using that result.
     pub fn store_run(&self, calls: Vec<Call>) -> Vec<Arc<Call>> {
         let limit = self.options().history_size.max(1);
         let mut history = self.calls.lock().expect("calls poisoned");
