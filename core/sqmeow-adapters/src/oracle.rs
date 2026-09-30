@@ -1495,7 +1495,10 @@ fn run_plsql(
         statement
             .execute_named(&[
                 ("source", &sql as &dyn oracledb::ToDbValue),
-                ("parent", &oracledb::DB_TYPE_NUMBER as &dyn oracledb::ToDbValue),
+                (
+                    "parent",
+                    &oracledb::DB_TYPE_NUMBER as &dyn oracledb::ToDbValue,
+                ),
             ])
             .map_err(Error::driver)?
     };
