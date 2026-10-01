@@ -842,7 +842,7 @@ function M.actions.preview()
     local text = (ft == 'sql' or ft == 'surql') and (statement .. ';') or statement
 
     if not preview_buf or not vim.api.nvim_buf_is_valid(preview_buf) then
-      preview_buf = vim.api.nvim_create_buf(false, true)
+      preview_buf = vim.api.nvim_create_buf(true, true)
     end
 
     local rel_name = node.name or (node.path and node.path[#node.path]) or 'preview'
