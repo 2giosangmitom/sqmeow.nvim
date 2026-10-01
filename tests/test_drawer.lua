@@ -357,6 +357,77 @@ T['actions']['preview without editor buffer executes directly when disabled'] = 
   eq(helpers.result_lines()[1], ' K id | t name | n score')
 end
 
+T['actions']['previewing distinct relations creates separate buffers'] = function()
+  local ed_win = require('sqmeow.ui.layout').editing_window()
+  local prev_buf = vim.api.nvim_win_get_buf(ed_win)
+  open_relation('Tables', 'people')
+  goto_line('people')
+  drawer.actions.preview()
+
+  helpers.wait_for('the first preview should finish', function()
+    return state.call ~= nil and state.call.state == 'done'
+  end, TIMEOUT)
+
+  local buf_people = assert(drawer.preview_buffer(), 'people preview buffer should be open')
+  eq(vim.api.nvim_buf_get_name(buf_people):match('%[Preview: people%]'), '[Preview: people]')
+
+  open_relation('Tables', 'posts')
+  goto_line('posts')
+  drawer.actions.preview()
+
+  helpers.wait_for('the second preview should finish', function()
+    return state.call ~= nil and state.call.state == 'done'
+  end, TIMEOUT)
+
+  local buf_posts = assert(drawer.preview_buffer(), 'posts preview buffer should be open')
+  eq(vim.api.nvim_buf_get_name(buf_posts):match('%[Preview: posts%]'), '[Preview: posts]')
+  eq(buf_people ~= buf_posts, true)
+  eq(vim.api.nvim_buf_is_valid(buf_people), true)
+
+  MiniTest.finally(function()
+    pcall(vim.api.nvim_win_set_buf, ed_win, prev_buf)
+    pcall(vim.api.nvim_buf_delete, buf_people, { force = true })
+    pcall(vim.api.nvim_buf_delete, buf_posts, { force = true })
+  end)
+end
+
+T['actions']['previewing modified relation buffer opens fresh buffer without data loss'] = function()
+  local ed_win = require('sqmeow.ui.layout').editing_window()
+  local prev_buf = vim.api.nvim_win_get_buf(ed_win)
+  open_relation('Tables', 'people')
+  goto_line('people')
+  drawer.actions.preview()
+
+  helpers.wait_for('the preview should finish', function()
+    return state.call ~= nil and state.call.state == 'done'
+  end, TIMEOUT)
+
+  local buf1 = assert(drawer.preview_buffer(), 'preview buffer should be open')
+  -- User modifies the query
+  vim.api.nvim_buf_set_lines(buf1, 0, -1, false, { 'SELECT * FROM people WHERE id = 42;' })
+  vim.bo[buf1].modified = true
+
+  -- Preview people again while buf1 is modified
+  goto_line('people')
+  drawer.actions.preview()
+
+  helpers.wait_for('the second preview should finish', function()
+    return state.call ~= nil and state.call.state == 'done'
+  end, TIMEOUT)
+
+  local buf2 = assert(drawer.preview_buffer(), 'fresh preview buffer should be open')
+  eq(buf1 ~= buf2, true)
+  eq(vim.api.nvim_buf_is_valid(buf1), true)
+  -- The modified query in buf1 was preserved
+  eq(vim.api.nvim_buf_get_lines(buf1, 0, -1, false), { 'SELECT * FROM people WHERE id = 42;' })
+
+  MiniTest.finally(function()
+    pcall(vim.api.nvim_win_set_buf, ed_win, prev_buf)
+    pcall(vim.api.nvim_buf_delete, buf1, { force = true })
+    pcall(vim.api.nvim_buf_delete, buf2, { force = true })
+  end)
+end
+
 T['the active connection'] = MiniTest.new_set({
   hooks = {
     pre_case = function()

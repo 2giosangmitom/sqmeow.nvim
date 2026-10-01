@@ -19,6 +19,7 @@ local patterns = {}
 -- The nui tree the drawer was last drawn with, kept so the cursor can be turned into a node.
 local tree = nil
 local preview_buf = nil
+local preview_bufs = {}
 
 local function node_key(conn_id, path)
   return conn_id .. '\0' .. table.concat(path, '\0')
@@ -841,33 +842,83 @@ function M.actions.preview()
     local ft = dialect_filetype(dialect)
     local text = (ft == 'sql' or ft == 'surql') and (statement .. ';') or statement
 
-    if not preview_buf or not vim.api.nvim_buf_is_valid(preview_buf) then
-      preview_buf = vim.api.nvim_create_buf(true, true)
+    local rel_name = node.name or (node.path and node.path[#node.path]) or 'preview'
+    local key = node.path and #node.path > 0 and node_key(node.conn_id, node.path)
+      or node_key(node.conn_id, { rel_name })
+
+    local existing = preview_bufs[key]
+    if existing and not vim.api.nvim_buf_is_valid(existing) then
+      preview_bufs[key] = nil
+      existing = nil
     end
 
-    local rel_name = node.name or (node.path and node.path[#node.path]) or 'preview'
-    pcall(vim.api.nvim_buf_set_name, preview_buf, ('[Preview: %s]'):format(rel_name))
+    local function is_modified(b)
+      if not b or not vim.api.nvim_buf_is_valid(b) then
+        return false
+      end
+      if vim.bo[b].modified then
+        return true
+      end
+      local initial = vim.b[b].sqmeow_preview_statement
+      if initial then
+        local current = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), '\n')
+        return current ~= initial
+      end
+      return false
+    end
 
-    vim.bo[preview_buf].buftype = 'nofile'
-    vim.bo[preview_buf].bufhidden = 'hide'
-    vim.bo[preview_buf].swapfile = false
-    vim.bo[preview_buf].filetype = ft
-    vim.api.nvim_buf_set_lines(preview_buf, 0, -1, false, vim.split(text, '\n'))
-    vim.bo[preview_buf].modified = false
+    local target_buf = nil
+    if existing and not is_modified(existing) then
+      target_buf = existing
+    else
+      target_buf = vim.api.nvim_create_buf(true, true)
+      local base_name = ('[Preview: %s]'):format(rel_name)
+      local ok = pcall(vim.api.nvim_buf_set_name, target_buf, base_name)
+      if not ok then
+        local count = 1
+        while true do
+          local try_name = ('[Preview: %s (%d)]'):format(rel_name, count)
+          if pcall(vim.api.nvim_buf_set_name, target_buf, try_name) then
+            break
+          end
+          count = count + 1
+        end
+      end
+      preview_bufs[key] = target_buf
+    end
+
+    preview_buf = target_buf
+
+    vim.bo[target_buf].buftype = 'nofile'
+    vim.bo[target_buf].bufhidden = 'hide'
+    vim.bo[target_buf].swapfile = false
+    vim.bo[target_buf].filetype = ft
+    vim.api.nvim_buf_set_lines(target_buf, 0, -1, false, vim.split(text, '\n'))
+    vim.bo[target_buf].modified = false
+    vim.b[target_buf].sqmeow_preview_statement = text
 
     local state = require('sqmeow.state')
     local conn = state.connections[node.conn_id]
     local conn_name = conn and conn.name
 
     local editor = require('sqmeow.ui.editor')
-    editor.attach(preview_buf, conn_name)
+    editor.attach(target_buf, conn_name)
 
-    local ed_win = require('sqmeow.ui.layout').editing_window()
-    vim.api.nvim_win_set_buf(ed_win, preview_buf)
+    local ed_win = nil
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_buf(w) == target_buf then
+        ed_win = w
+        break
+      end
+    end
+    if not ed_win then
+      ed_win = require('sqmeow.ui.layout').editing_window()
+      vim.api.nvim_win_set_buf(ed_win, target_buf)
+    end
     vim.api.nvim_set_current_win(ed_win)
     local first_line = vim.split(text, '\n')[1] or ''
     vim.api.nvim_win_set_cursor(ed_win, { 1, #first_line })
-    source_buf = preview_buf
+    source_buf = target_buf
   end
 
   local api = require('sqmeow.api')
@@ -1276,6 +1327,7 @@ function M.reset()
   cache = {}
   tree = nil
   preview_buf = nil
+  preview_bufs = {}
   M.render()
 end
 
