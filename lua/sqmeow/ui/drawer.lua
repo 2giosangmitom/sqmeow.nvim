@@ -852,8 +852,23 @@ function M.actions.preview()
       existing = nil
     end
 
+    local function is_modified(b)
+      if not b or not vim.api.nvim_buf_is_valid(b) then
+        return false
+      end
+      if vim.bo[b].modified then
+        return true
+      end
+      local initial = vim.b[b].sqmeow_preview_statement
+      if initial then
+        local current = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), '\n')
+        return current ~= initial
+      end
+      return false
+    end
+
     local target_buf = nil
-    if existing and not vim.bo[existing].modified then
+    if existing and not is_modified(existing) then
       target_buf = existing
     else
       target_buf = vim.api.nvim_create_buf(true, true)
@@ -880,6 +895,7 @@ function M.actions.preview()
     vim.bo[target_buf].filetype = ft
     vim.api.nvim_buf_set_lines(target_buf, 0, -1, false, vim.split(text, '\n'))
     vim.bo[target_buf].modified = false
+    vim.b[target_buf].sqmeow_preview_statement = text
 
     local state = require('sqmeow.state')
     local conn = state.connections[node.conn_id]

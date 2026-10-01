@@ -408,6 +408,7 @@ T['actions']['previewing modified relation buffer opens fresh buffer without dat
   vim.bo[buf1].modified = true
 
   -- Preview people again while buf1 is modified
+  goto_line('people')
   drawer.actions.preview()
 
   helpers.wait_for('the second preview should finish', function()
