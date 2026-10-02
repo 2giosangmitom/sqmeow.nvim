@@ -9,6 +9,7 @@ Contents ~
   Making a connection .................................... |sqmeow-connecting|
   Which database a query runs on ............................. |sqmeow-active|
   The query log ............................................. |sqmeow-history|
+  Auto-completion ........................................ |sqmeow-completion|
   Configuration .............................................. |sqmeow-config|
   Keymaps ................................................... |sqmeow-keymaps|
   Public interface .............................................. |sqmeow-api|
@@ -43,6 +44,46 @@ Every statement that returns rows is appended to `history/log.jsonl`,
 and its rows are saved under `history/results/` when
 `query.persist_history` is on. The drawer shows the last
 `query.history_limit` entries; `sqmeow.history` reads and trims the file.
+
+------------------------------------------------------------------------------
+                                                             *sqmeow-completion*
+Auto-completion ~
+
+sqmeow provides completion sources for both `blink.cmp` and `nvim-cmp`. The
+completion engine uses the active connection to offer schemas, tables, views,
+and columns as you type.
+Columns are loaded on demand for relations in the current statement, including
+multiline SELECT, WHERE, JOIN, GROUP BY, and ORDER BY clauses. Table aliases and
+double-quoted, backtick-quoted, and bracket-quoted identifiers are supported.
+Metadata comes from the active adapter; opening tables in the drawer is unnecessary.
+Query context uses Neovim's built-in Tree-sitter API and the `sql` parser
+(derekstride/tree-sitter-sql). Install it with `:TSInstall sql` using
+nvim-treesitter. Without the parser, metadata and explicit `table.` column
+completion remain available, but query-aware and alias completion require it.
+
+To use with `blink.cmp`: >lua
+  require('blink.cmp').setup({
+    sources = {
+      default = { 'lsp', 'path', 'buffer', 'sqmeow' },
+      providers = {
+        sqmeow = {
+          name = 'Sqmeow',
+          module = 'sqmeow.completion.blink',
+        },
+      },
+    },
+  })
+<
+
+To use with `nvim-cmp`: >lua
+  require('cmp').setup({
+    sources = {
+      { name = 'sqmeow' },
+      -- ...
+    },
+  })
+  require('cmp').register_source('sqmeow', require('sqmeow.completion.cmp').new())
+<
 
 ------------------------------------------------------------------------------
                                                             *sqmeow.user_config*

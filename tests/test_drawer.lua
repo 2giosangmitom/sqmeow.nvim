@@ -111,6 +111,25 @@ local function open_relation(group, name)
   expand(name)
 end
 
+T['completion loads columns without expanding the drawer'] = function()
+  local completion = require('sqmeow.completion')
+  local sql = 'SELECT * FROM people p WHERE p.'
+  local found
+  helpers.wait_for('completion should load SQLite columns through the engine', function()
+    found = completion.items(0, sql, #sql)
+    return #found == 3
+  end)
+  eq(
+    vim.tbl_map(function(item)
+      return item.label
+    end, found),
+    { 'id', 'name', 'score' }
+  )
+  eq(found[1].kind, 'column')
+  eq(found[1].documentation, 'Primary Key')
+  eq(drawer.is_expanded(assert(state.current, 'a connection should be active'), {}), false)
+end
+
 T['tree'] = MiniTest.new_set()
 
 T['tree']['starts with connections collapsed'] = function()

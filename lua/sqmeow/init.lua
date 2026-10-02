@@ -36,6 +36,46 @@
 ---@tag sqmeow-history
 ---@toc_entry The query log
 
+--- Auto-completion ~
+---
+--- sqmeow provides completion sources for both `blink.cmp` and `nvim-cmp`. The
+--- completion engine uses the active connection to offer schemas, tables, views,
+--- and columns as you type.
+--- Columns are loaded on demand for relations in the current statement, including
+--- multiline SELECT, WHERE, JOIN, GROUP BY, and ORDER BY clauses. Table aliases and
+--- double-quoted, backtick-quoted, and bracket-quoted identifiers are supported.
+--- Metadata comes from the active adapter; opening tables in the drawer is unnecessary.
+--- Query context uses Neovim's built-in Tree-sitter API and the `sql` parser
+--- (derekstride/tree-sitter-sql). Install it with `:TSInstall sql` using
+--- nvim-treesitter. Without the parser, metadata and explicit `table.` column
+--- completion remain available, but query-aware and alias completion require it.
+---
+--- To use with `blink.cmp`: >lua
+---   require('blink.cmp').setup({
+---     sources = {
+---       default = { 'lsp', 'path', 'buffer', 'sqmeow' },
+---       providers = {
+---         sqmeow = {
+---           name = 'Sqmeow',
+---           module = 'sqmeow.completion.blink',
+---         },
+---       },
+---     },
+---   })
+--- <
+---
+--- To use with `nvim-cmp`: >lua
+---   require('cmp').setup({
+---     sources = {
+---       { name = 'sqmeow' },
+---       -- ...
+---     },
+---   })
+---   require('cmp').register_source('sqmeow', require('sqmeow.completion.cmp').new())
+--- <
+---@tag sqmeow-completion
+---@toc_entry Auto-completion
+
 local M = {}
 
 --- The configuration the user passed, kept unmerged for `:checkhealth`.

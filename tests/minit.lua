@@ -11,6 +11,8 @@ require('lazy.minit').setup({
     'nvim-mini/mini.nvim',
     -- The drawer, the grid, the row detail, the help float and the connection dialog.
     'MunifTanjim/nui.nvim',
+    -- The SQL parser for completion tests; master supports Neovim 0.10+.
+    { 'nvim-treesitter/nvim-treesitter', branch = 'master' },
   },
 })
 
@@ -23,6 +25,9 @@ if vim.tbl_contains(vim.v.argv, '--docs') then
   require('mini.doc').generate()
   return
 end
+
+-- The completion tests exercise Neovim's real SQL Tree-sitter parser.
+require('nvim-treesitter.configs').setup({ ensure_installed = { 'sql' }, sync_install = true })
 
 -- Everything the plugin writes lives under `core.path`.
 vim.fn.delete(require('sqmeow.paths').root(), 'rf')

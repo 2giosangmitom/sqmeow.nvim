@@ -86,7 +86,8 @@ end
 --- Ask the engine for one level of the tree.
 ---@param conn_id integer
 ---@param path string[]
-function M.load(conn_id, path)
+---@param async boolean|nil Avoid a nested blocking RPC when called from an engine event.
+function M.load(conn_id, path, async)
   local key = node_key(conn_id, path)
   local entry = cache[key]
   if entry and entry.loading then
@@ -95,13 +96,25 @@ function M.load(conn_id, path)
 
   -- What is already drawn is kept while the reply is on its way.
   cache[key] = { loading = true, nodes = entry and entry.nodes }
-  local _, err = require('sqmeow.rpc').request(
-    'introspect',
-    { conn_id = conn_id, path = path, pattern = patterns[conn_id] }
-  )
-  if err then
-    cache[key] = { error = err }
-    M.render()
+  local pending = cache[key]
+  local function send()
+    -- A disconnect or refresh may have discarded this queued load.
+    if cache[key] ~= pending then
+      return
+    end
+    local _, err = require('sqmeow.rpc').request(
+      'introspect',
+      { conn_id = conn_id, path = path, pattern = patterns[conn_id] }
+    )
+    if err then
+      cache[key] = { error = err }
+      M.render()
+    end
+  end
+  if async then
+    vim.schedule(send)
+  else
+    send()
   end
 end
 
@@ -1317,6 +1330,19 @@ function M.is_open()
   return utils.shows(win, buf)
 end
 
+--- Read the cached schema nodes for a connection at a given path.
+--- Returns nil if the path is not cached.
+---@param conn_id integer
+---@param path string[]
+---@return table[]|nil nodes
+function M.cached_nodes(conn_id, path)
+  local entry = cache[node_key(conn_id, path)]
+  if not entry or not entry.nodes then
+    return nil
+  end
+  return entry.nodes
+end
+
 --- Forget everything. Used when the engine restarts, since its session went with it.
 function M.reset()
   -- The scratchpad section is kept open if it was.
@@ -1329,6 +1355,9 @@ function M.reset()
   preview_buf = nil
   preview_bufs = {}
   M.render()
+  pcall(function()
+    require('sqmeow.completion').invalidate_all()
+  end)
 end
 
 --- The buffer holding the relation preview, if open.

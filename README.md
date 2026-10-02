@@ -144,6 +144,48 @@ export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPA
 - Enable **Read only** in the connection dialog or set `"read_only": true` in a connection (including `connections.json`) to restrict it to read statements. PostgreSQL, MySQL, ClickHouse, SQLite, and DuckDB enforce read-only access in the database session. Redis, MongoDB, ScyllaDB, SurrealDB, and OracleDB use statement checks instead; use a read-only database account whenever server-enforced permissions matter.
 - sqmeow asks for confirmation before broad `DELETE`/`UPDATE`, `DROP`, `TRUNCATE`, or commands that empty Redis/MongoDB data. Disable prompts with `query.confirm_destructive = false`.
 
+## 🤖 Auto-completion
+
+sqmeow provides database metadata auto-completion (schemas, tables, views, and columns) that integrates with your completion engine. Metadata is loaded on demand from the active adapter.
+
+Query-aware column completion uses Neovim's built-in Tree-sitter API. Install the `sql` parser (`derekstride/tree-sitter-sql`), for example with `:TSInstall sql` through nvim-treesitter. This enables columns from the current statement in `WHERE`, `GROUP BY`, `ORDER BY`, and multiline queries, including table aliases. Without the parser, schemas, tables, views, and explicit `table.` column completion remain available.
+
+### blink.cmp
+
+To enable completion in [blink.cmp](https://github.com/saghen/blink.cmp), add the `sqmeow` source provider to your configuration:
+
+```lua
+require('blink.cmp').setup({
+  sources = {
+    default = { 'lsp', 'path', 'buffer', 'sqmeow' },
+    providers = {
+      sqmeow = {
+        name = 'Sqmeow',
+        module = 'sqmeow.completion.blink',
+      },
+    },
+  },
+})
+```
+
+### nvim-cmp
+
+To enable completion in [nvim-cmp](https://github.com/hrsh7th/nvim-cmp), register the custom source and add it to your sources list:
+
+```lua
+local cmp = require('cmp')
+cmp.setup({
+  sources = cmp.config.sources({
+    { name = 'nvim_lsp' },
+    { name = 'sqmeow' },
+    -- ...
+  }),
+})
+
+-- Register the source
+cmp.register_source('sqmeow', require('sqmeow.completion.cmp').new())
+```
+
 ## ⌨️ Commands
 
 | Command                                             | Description                                     |

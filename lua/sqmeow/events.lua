@@ -23,11 +23,17 @@ function M.on_connection(payload)
   -- Forgotten before the drawer is drawn.
   if payload.state == 'error' or payload.state == 'closed' then
     state.remove_connection(payload.id)
+    pcall(function()
+      require('sqmeow.completion').invalidate(payload.id)
+    end)
   end
   state.failures[connection.name] = payload.state == 'error' and payload.error or nil
 
   if payload.state == 'connected' then
     require('sqmeow.session').connected(connection)
+    pcall(function()
+      require('sqmeow.completion').ensure(payload.id)
+    end)
   end
 
   -- A database opened from a cluster is drawn already open.
@@ -129,6 +135,9 @@ end
 ---@param payload table
 function M.on_nodes(payload)
   require('sqmeow.ui.drawer').on_nodes(payload)
+  pcall(function()
+    require('sqmeow.completion').ensure(payload.conn_id)
+  end)
 end
 
 --- Subscribe to engine events. Safe to call repeatedly.
