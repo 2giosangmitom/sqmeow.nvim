@@ -988,22 +988,14 @@ async fn a_cancelled_apply_stops_waiting_on_a_lock_and_rolls_back() {
     )
     .await;
 
-    // One implicit transaction, so the row stays locked while it sleeps.
+    // Await the update in an open transaction so the lock is held before apply starts.
     let holder = connect(&url).await;
-    let held = CancellationToken::new();
-    let holding = {
-        let held = held.clone();
-        tokio::spawn(async move {
-            let _ = holder
-                .execute(
-                    "update apply_locked set optional = 'held' where id = 1; select pg_sleep(10)",
-                    NO_CAP,
-                    held,
-                )
-                .await;
-        })
-    };
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    run(&holder, "begin").await;
+    run(
+        &holder,
+        "update apply_locked set optional = 'held' where id = 1",
+    )
+    .await;
 
     let cancel = CancellationToken::new();
     let stopper = cancel.clone();
@@ -1019,12 +1011,11 @@ async fn a_cancelled_apply_stops_waiting_on_a_lock_and_rolls_back() {
         std::time::Duration::from_secs(5),
         backend.apply(&statements, cancel),
     )
-    .await
-    .expect("the cancel should end the wait for the lock");
+    .await;
+    run(&holder, "rollback").await;
+    let outcome = outcome.expect("the cancel should end the wait for the lock");
     assert!(matches!(outcome, Err(Error::Cancelled)), "{outcome:?}");
 
-    held.cancel();
-    holding.await.unwrap();
     // The first statement ran before the cancel, and was rolled back with the rest.
     assert_eq!(
         run(&backend, "select label from apply_locked where id = 2")
