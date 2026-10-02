@@ -415,8 +415,6 @@ M.actions = {
     require('sqmeow.api').execute_statement()
   end,
   execute_selection = function()
-    -- Leave visual mode first, so the `<` and `>` marks describe what was selected.
-    vim.cmd('normal! \27')
     require('sqmeow.api').execute_selection()
   end,
   execute_buffer = function()

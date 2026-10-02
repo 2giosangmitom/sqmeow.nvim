@@ -357,7 +357,7 @@ M.subcommands = {
         return void(api.execute(table.concat(args, ' ')))
       end
       if opts.range and opts.range > 0 then
-        return void(api.execute_selection())
+        return void(api.execute_range(opts.line1, opts.line2))
       end
       void(api.execute_buffer())
     end,

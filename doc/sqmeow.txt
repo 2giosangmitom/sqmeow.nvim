@@ -636,6 +636,20 @@ Return ~
 Run the most recent visual selection.
 Return ~
 `(integer|nil)` call_id
+Return ~
+`(string|nil)` error
+
+------------------------------------------------------------------------------
+                                                    *sqmeow.api.execute_range()*
+                  `sqmeow.api.execute_range`({first}, {last})
+Run an explicit one-based, inclusive line range from the current buffer.
+Parameters ~
+{first} `(integer)` First line, counted from one.
+{last} `(integer)` Last line, inclusive.
+Return ~
+`(integer|nil)` call_id
+Return ~
+`(string|nil)` error
 
 ------------------------------------------------------------------------------
                                                            *sqmeow.api.cancel()*

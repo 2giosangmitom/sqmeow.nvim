@@ -107,6 +107,18 @@ impl Core {
                     .ok_or("only a query that returns rows can be filtered")?
             })
         };
+        // Filter/order fragments are editable SQL too. Check the actual request,
+        // not just the original query, before sending it to an unenforced backend.
+        if connection.read_only
+            && wrapped
+                .as_deref()
+                .is_some_and(|sql| guard::writes(dialect, sql))
+        {
+            return Err(format!(
+                "`{}` is read-only, so it runs only statements that read",
+                connection.name
+            ));
+        }
 
         // After applying edits, rows the inserts returned are shown even where the query leaves them out.
         let inserted = args.opt_bool("inserted").unwrap_or(false);

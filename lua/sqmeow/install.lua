@@ -180,7 +180,10 @@ function M.fetch(url, destination, opts, callback)
       'powershell',
       '-NoProfile',
       '-Command',
-      ("Invoke-WebRequest -Uri '%s' -OutFile '%s'"):format(url, destination),
+      ("Invoke-WebRequest -Uri '%s' -OutFile '%s'"):format(
+        url:gsub("'", "''"),
+        destination:gsub("'", "''")
+      ),
     },
   }
 

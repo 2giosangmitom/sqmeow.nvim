@@ -31,6 +31,31 @@ end
 
 local T = MiniTest.new_set()
 
+T['powershell downloads quote literal arguments'] = function()
+  local command
+  helpers.stub(vim.fn, 'executable', function()
+    return 1
+  end)
+  helpers.stub(vim, 'system', function(argv, _, callback)
+    command = argv
+    callback({ code = 0 })
+    return {}
+  end)
+  local done = false
+  install.fetch("https://example.test/a'; Write-Host unsafe; '", "C:/user's/download", {
+    method = 'powershell',
+  }, function(ok)
+    done = ok
+  end)
+  helpers.wait_for('download callback', function()
+    return done
+  end)
+  eq(
+    command[4],
+    "Invoke-WebRequest -Uri 'https://example.test/a''; Write-Host unsafe; ''' -OutFile 'C:/user''s/download'"
+  )
+end
+
 T['triple'] = MiniTest.new_set()
 
 T['triple']['names this machine the way rustc does'] = function()

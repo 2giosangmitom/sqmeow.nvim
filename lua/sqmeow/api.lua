@@ -407,20 +407,37 @@ end
 
 --- Run the most recent visual selection.
 ---@return integer|nil call_id
+---@return string|nil error
 function M.execute_selection()
-  local start_pos = vim.api.nvim_buf_get_mark(0, '<')
-  local end_pos = vim.api.nvim_buf_get_mark(0, '>')
+  local buf = vim.api.nvim_get_current_buf()
+  local mode = vim.fn.mode()
+  local active = mode == 'v' or mode == 'V' or mode == '\22'
+  local first = vim.fn.getpos(active and 'v' or "'<")
+  local last = vim.fn.getpos(active and '.' or "'>")
+  if first[2] == 0 or last[2] == 0 then
+    return nil, 'there is no visual selection to run'
+  end
+  -- Let Neovim handle rectangles, reversed selections, exclusive endpoints,
+  -- tabs and multibyte characters rather than treating every region as bytes.
+  local lines = vim.fn.getregion(first, last, {
+    type = active and mode or vim.fn.visualmode(),
+    exclusive = vim.o.selection == 'exclusive',
+  })
+  if active then
+    vim.cmd('normal! \27')
+  end
+  return M.execute(table.concat(lines, '\n'), { source_buf = buf })
+end
 
-  local lines = vim.api.nvim_buf_get_text(
-    0,
-    start_pos[1] - 1,
-    start_pos[2],
-    end_pos[1] - 1,
-    -- The end mark's column is inclusive, and can sit past the line end for a linewise selection.
-    math.min(end_pos[2] + 1, #vim.fn.getline(end_pos[1])),
-    {}
-  )
-  return M.execute(table.concat(lines, '\n'), { source_buf = vim.api.nvim_get_current_buf() })
+--- Run an explicit one-based, inclusive line range from the current buffer.
+---@param first integer First line, counted from one.
+---@param last integer Last line, inclusive.
+---@return integer|nil call_id
+---@return string|nil error
+function M.execute_range(first, last)
+  local buf = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(buf, first - 1, last, true)
+  return M.execute(table.concat(lines, '\n'), { source_buf = buf })
 end
 
 --- Stop the running query, or the changes being applied.

@@ -13,6 +13,17 @@ local T = MiniTest.new_set({
 
 T['redact'] = MiniTest.new_set()
 
+T['redact']['hides query credentials without authority credentials'] = function()
+  eq(
+    url.redact('postgres://host/db?password=secret&access_token=private&sslmode=require'),
+    'postgres://host/db?password=***&access_token=***&sslmode=require'
+  )
+end
+
+T['redact']['automatic labels hide passwords without a database'] = function()
+  eq(url.label('mssql://sa:secret@host'), 'mssql://sa:***@host')
+end
+
 T['redact']['hides a password'] = function()
   eq(url.redact('postgres://app:hunter2@db.internal/app'), 'postgres://app:***@db.internal/app')
 end

@@ -249,8 +249,14 @@ impl Backend {
     pub fn read_only_unenforced(&self) -> bool {
         match self {
             Self::Postgres(adapter) => !adapter.read_only_session(),
-            // SurrealDB and OracleDB have no read-only session at all.
-            Self::SurrealDb(_) | Self::Oracle(_) | Self::MsSql(_) => true,
+            // These adapters have no server-enforced read-only session. The
+            // engine's lexical checks are a convenience, not authorization.
+            Self::SurrealDb(_)
+            | Self::Oracle(_)
+            | Self::MsSql(_)
+            | Self::Redis(_)
+            | Self::MongoDb(_)
+            | Self::Scylla(_) => true,
             _ => false,
         }
     }

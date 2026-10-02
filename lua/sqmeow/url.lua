@@ -6,6 +6,20 @@ local M = {}
 ---@param url string
 ---@return string
 function M.redact(url)
+  url = url:gsub('([?&])([^=&]+)=([^&#]*)', function(separator, key, value)
+    local decoded = vim.uri_decode(key):lower()
+    if
+      decoded == 'password'
+      or decoded == 'passwd'
+      or decoded == 'pwd'
+      or decoded == 'token'
+      or decoded == 'access_token'
+      or decoded == 'api_key'
+    then
+      value = '***'
+    end
+    return separator .. key .. '=' .. value
+  end)
   local scheme, rest = url:match('^(%w[%w%+%-%.]*://)(.*)$')
   if not scheme then
     return url
@@ -54,7 +68,7 @@ function M.label(url)
   end
 
   local bare = url:match('://[^/]*/([^%?]+)')
-  return bare or url:gsub('%?.*$', '')
+  return bare or M.redact(url:gsub('%?.*$', ''))
 end
 
 --- Split the authority into credentials and address.

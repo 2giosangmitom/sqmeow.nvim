@@ -195,12 +195,34 @@ pub fn writes(dialect: Dialect, statement: &str) -> bool {
             if first_word(statement) == "use" {
                 return false;
             }
-            let Some(keys) = mongo_keys(statement) else {
+            let Some(command) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(statement).ok()
+            else {
                 return true;
             };
-            let reads = keys.iter().any(|key| MONGO_READS.contains(&key.as_str()));
-            // An aggregation writes through these stages.
-            !reads || statement.contains("\"$out\"") || statement.contains("\"$merge\"")
+            // MongoDB dispatches on the FIRST key, not any key in the object.
+            // Decode it independently because serde_json's map can sort keys.
+            let first = statement.trim_start().strip_prefix('{').and_then(|rest| {
+                serde_json::Deserializer::from_str(rest.trim_start())
+                    .into_iter::<String>()
+                    .next()
+                    .and_then(Result::ok)
+            });
+            let reads = first
+                .as_deref()
+                .is_some_and(|key| MONGO_READS.contains(&key));
+            // Inspect decoded stage keys: JSON unicode escapes must not hide writes.
+            let pipeline_writes = command
+                .get("pipeline")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|stages| {
+                    stages.iter().any(|stage| {
+                        stage.as_object().is_some_and(|stage| {
+                            stage.contains_key("$out") || stage.contains_key("$merge")
+                        })
+                    })
+                });
+            !reads || pipeline_writes
         }
         Dialect::SurrealDb => {
             let words = words(dialect, statement);
@@ -340,13 +362,6 @@ fn mongo_danger(statement: &str) -> Option<String> {
     None
 }
 
-/// The top-level keys of a MongoDB command.
-fn mongo_keys(statement: &str) -> Option<Vec<String>> {
-    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(statement)
-        .ok()
-        .map(|command| command.into_iter().map(|(key, _)| key).collect())
-}
-
 /// The words of a statement outside quotes and comments, in lower case, each with how deep in
 /// parentheses it sits.
 ///
@@ -436,6 +451,21 @@ fn skip_line(chars: &mut impl Iterator<Item = char>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mongodb_read_checks_use_the_command_key_and_decoded_stages() {
+        for statement in [
+            r#"{"delete":"users","find":"users","deletes":[]}"#,
+            r#"{"aggregate":"users","pipeline":[{"\u0024out":"copy"}]}"#,
+            r#"{"aggregate":"users","pipeline":[{"$\u006derge":"copy"}]}"#,
+        ] {
+            assert!(writes(Dialect::MongoDb, statement), "{statement}");
+        }
+        assert!(!writes(
+            Dialect::MongoDb,
+            r#"{"find":"users","filter":{"note":"$out"}}"#
+        ));
+    }
 
     #[test]
     fn mssql_checks_every_statement_in_a_batch() {

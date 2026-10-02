@@ -6,7 +6,7 @@ pub enum Error {
     Driver(String),
 
     /// No adapter recognises this URL's scheme.
-    #[error("unsupported database url `{0}`")]
+    #[error("unsupported database URL (unknown or invalid scheme)")]
     UnsupportedUrl(String),
 
     /// The user cancelled while the statement was running.
@@ -23,3 +23,15 @@ impl Error {
 
 /// Result alias used throughout this crate.
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_urls_do_not_disclose_credentials() {
+        let error = Error::UnsupportedUrl("unknown://user:secret@host/db?token=private".into());
+        assert!(!error.to_string().contains("secret"));
+        assert!(!error.to_string().contains("private"));
+    }
+}

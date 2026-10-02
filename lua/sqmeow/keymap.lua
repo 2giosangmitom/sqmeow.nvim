@@ -306,7 +306,8 @@ end
 --- Define the `<Plug>` mappings.
 function M.register_plug()
   for name, entry in pairs(M.plug) do
-    vim.keymap.set('n', '<Plug>(' .. name .. ')', entry.run, {
+    local mode = name == 'sqmeow-execute-selection' and { 'n', 'x' } or 'n'
+    vim.keymap.set(mode, '<Plug>(' .. name .. ')', entry.run, {
       desc = 'sqmeow: ' .. entry.desc,
     })
   end

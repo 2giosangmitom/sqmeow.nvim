@@ -103,8 +103,8 @@ T['execute without words runs the buffer, or the lines a range covers'] = functi
   helpers.stub(api, 'execute_buffer', function()
     table.insert(called, 'buffer')
   end)
-  helpers.stub(api, 'execute_selection', function()
-    table.insert(called, 'selection')
+  helpers.stub(api, 'execute_range', function(first, last)
+    table.insert(called, { first, last })
   end)
 
   local buf = helpers.temp_buf({ 'select 1;', 'select 2;' })
@@ -112,7 +112,7 @@ T['execute without words runs the buffer, or the lines a range covers'] = functi
 
   vim.cmd('Sqmeow execute')
   vim.cmd('1,2Sqmeow execute')
-  eq(called, { 'buffer', 'selection' })
+  eq(called, { 'buffer', { 1, 2 } })
 end
 
 T['export writes a file, or copies with clipboard as the path'] = function()
