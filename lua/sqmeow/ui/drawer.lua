@@ -835,18 +835,18 @@ function M.actions.preview()
     return
   end
 
+  local config = require('sqmeow.config').get()
+  local page_size = config.ui.result.page_size
   -- Nil for a Redis key of a type nothing reads back.
-  local max_rows = require('sqmeow.config').get().query.max_rows
   local statement = preview_statement(
     node,
-    -- The whole relation, up to the row cap.
-    max_rows > 0 and max_rows + 1 or nil
+    -- Preview the first page of rows.
+    (page_size and page_size > 0) and page_size or nil
   )
   if not statement then
     return
   end
 
-  local config = require('sqmeow.config').get()
   local preview_in_editor = config.ui.drawer.preview_in_editor ~= false
   local source_buf = nil
 
