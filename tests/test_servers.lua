@@ -402,11 +402,12 @@ T['mongodb']['lists every database when the url names none'] = function()
 end
 
 T['mongodb']['refreshing the server reloads the databases opened under it'] = function()
+  -- Connecting preloads the drawer, so create the database before opening the server.
+  eq(run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}').state, 'done')
+  eq(run('{"insert": "first", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}').state, 'done')
   api.disconnect()
   local url = vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')
   local cluster_id = helpers.connect(url, nil, TIMEOUT)
-  run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
-  run('{"insert": "first", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}')
   MiniTest.finally(function()
     run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
     api.disconnect(cluster_id)
@@ -429,7 +430,7 @@ T['mongodb']['refreshing the server reloads the databases opened under it'] = fu
   end, helpers.drawer_lines())
   eq(#repeated, 1)
 
-  run('{"insert": "second", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}')
+  eq(run('{"insert": "second", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}').state, 'done')
   press('mongodb://', 'refresh')
   -- Refreshing the server lists the collection added since.
   helpers.drawer_line('second', TIMEOUT)
