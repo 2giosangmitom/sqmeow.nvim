@@ -11,6 +11,24 @@ local function silence()
   helpers.stub(vim, 'notify', function() end)
 end
 
+-- Load the real installer from a disposable checkout, keeping the RPC module cached.
+local function checkout_installer()
+  local root = vim.fn.tempname()
+  local directory = vim.fs.joinpath(root, 'lua', 'sqmeow')
+  vim.fn.mkdir(directory, 'p')
+  MiniTest.finally(function()
+    vim.fn.delete(root, 'rf')
+  end)
+  local source = debug.getinfo(install.archive_url, 'S').source:sub(2)
+  local destination = vim.fs.joinpath(directory, 'install.lua')
+  assert(vim.uv.fs_copyfile(source, destination))
+  local checkout = dofile(destination)
+  checkout.managed_path = function()
+    return vim.fs.joinpath(root, 'bin', checkout.binary)
+  end
+  return checkout, vim.fs.joinpath(root, '.release-please-manifest.json')
+end
+
 local T = MiniTest.new_set()
 
 T['triple'] = MiniTest.new_set()
@@ -49,7 +67,7 @@ T['archive_url']['points at the release for a version'] = function()
   )
 end
 
-T['archive_url']['defaults to the version this plugin was built against'] = function()
+T['archive_url']['defaults to the checkout release version'] = function()
   local triple = assert(install.triple())
   helpers.contains(install.archive_url(nil, triple), '/v' .. rpc.version .. '/')
 end
@@ -130,6 +148,53 @@ T['download']['answers through the callback instead of waiting'] = function()
 end
 
 T['install'] = MiniTest.new_set()
+
+T['install']['follows checkout upgrades and downgrades with cached modules'] = function()
+  silence()
+  local checkout, manifest = checkout_installer()
+  helpers.stub(package.loaded, 'sqmeow.install', checkout)
+  local cached_rpc = require('sqmeow.rpc')
+  local requested
+  checkout.fetch = function(url, _, _, callback)
+    requested = url:match('/download/v([^/]+)/')
+    callback(false, 'stopped at download boundary')
+  end
+
+  for _, version in ipairs({ rpc.version, '99.0.0', '0.0.1' }) do
+    vim.fn.writefile({ vim.json.encode({ ['.'] = version }) }, manifest)
+    require('sqmeow').install('curl')
+    eq(requested, version)
+    eq(require('sqmeow.rpc'), cached_rpc)
+  end
+
+  require('sqmeow').install({ method = 'curl', version = '1.2.3' })
+  eq(requested, '1.2.3')
+end
+
+T['install']['reports unusable metadata and permits an explicit version'] = function()
+  silence()
+  local checkout, manifest = checkout_installer()
+  local fetched = false
+  checkout.fetch = function(_, _, _, callback)
+    fetched = true
+    callback(false, 'stopped at download boundary')
+  end
+
+  -- Missing, invalid JSON, and absent or invalid release versions all fail before downloading.
+  for _, contents in ipairs({ false, '{', '{}', 'null', '{".":42}', '{".":""}' }) do
+    if contents then
+      vim.fn.writefile({ contents }, manifest)
+    end
+    local ok, err = checkout.install('curl')
+    eq(ok, false)
+    helpers.contains(err, 'release manifest')
+    eq(fetched, false)
+    eq(checkout.installing(), nil)
+  end
+
+  checkout.install({ method = 'curl', version = '1.2.3' })
+  eq(fetched, true)
+end
 
 T['install']['builds with cargo when asked for it'] = function()
   silence()

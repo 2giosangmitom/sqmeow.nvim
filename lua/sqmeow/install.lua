@@ -125,13 +125,32 @@ function M.archive_name(triple)
 end
 
 --- Where the archive for a release lives.
----@param version string|nil Defaults to this plugin's version.
+---@param version string|nil Defaults to the release version in this checkout.
 ---@param triple string Rust target triple.
----@return string
+---@return string|nil url
+---@return string|nil error
 function M.archive_url(version, triple)
+  if not version then
+    -- A plugin manager can update the checkout while Lua modules still hold the old version.
+    -- Read the manifest on every install rather than consulting the cached RPC module.
+    local path = vim.fs.joinpath(root, '.release-please-manifest.json')
+    local ok, manifest = pcall(function()
+      return vim.json.decode(table.concat(vim.fn.readfile(path), '\n'))
+    end)
+    if
+      not ok
+      or type(manifest) ~= 'table'
+      or type(manifest['.']) ~= 'string'
+      or manifest['.'] == ''
+    then
+      return nil, ('could not read a release version from the release manifest: %s'):format(path)
+    end
+    version = manifest['.']
+  end
+
   return ('https://github.com/%s/releases/download/v%s/%s'):format(
     M.repository,
-    version or require('sqmeow.rpc').version,
+    version,
     M.archive_name(triple)
   )
 end
@@ -285,7 +304,10 @@ function M.download(opts, callback)
   end
   progress('downloading ' .. M.binary)
 
-  local url = M.archive_url(opts.version, triple)
+  local url, version_err = M.archive_url(opts.version, triple)
+  if not url then
+    return callback(nil, version_err)
+  end
   local directory = vim.fs.dirname(M.managed_path())
   vim.fn.mkdir(directory, 'p')
 
