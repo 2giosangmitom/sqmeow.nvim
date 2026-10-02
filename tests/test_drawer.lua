@@ -376,6 +376,27 @@ T['actions']['preview without editor buffer executes directly when disabled'] = 
   eq(helpers.result_lines()[1], ' K id | t name | n score')
 end
 
+T['actions']['preview respects ui.result.page_size limit'] = function()
+  local ed_win = require('sqmeow.ui.layout').editing_window()
+  local prev_buf = vim.api.nvim_win_get_buf(ed_win)
+  helpers.stub(require('sqmeow.config').get().ui.result, 'page_size', 50)
+  open_relation('Tables', 'people')
+  goto_line('people')
+  drawer.actions.preview()
+
+  helpers.wait_for('the preview should finish', function()
+    return state.call ~= nil and state.call.state == 'done'
+  end, TIMEOUT)
+
+  local buf = assert(drawer.preview_buffer(), 'preview buffer should be open')
+  MiniTest.finally(function()
+    pcall(vim.api.nvim_win_set_buf, ed_win, prev_buf)
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end)
+  local line = vim.api.nvim_buf_get_lines(buf, 0, -1, false)[1]
+  helpers.contains(line, 'limit 50')
+end
+
 T['actions']['previewing distinct relations creates separate buffers'] = function()
   local ed_win = require('sqmeow.ui.layout').editing_window()
   local prev_buf = vim.api.nvim_win_get_buf(ed_win)
