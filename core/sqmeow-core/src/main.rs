@@ -3,6 +3,11 @@
 //! The binary reads msgpack-rpc from stdin and serves requests through
 //! [`Core`]. Pass `--version` to print the engine version without starting
 //! the async runtime.
+//!
+//! Lua owns editor windows and configuration; this process owns live database
+//! connections, cancellation, and retained results. Stdout is reserved for RPC
+//! frames and tracing goes to stderr. Closing the editor channel or requesting
+//! `shutdown` ends the server; saved result archives are managed separately.
 
 mod archive;
 mod args;

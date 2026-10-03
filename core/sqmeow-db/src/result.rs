@@ -1,4 +1,8 @@
 //! Defines the in-memory result set stored column-wise.
+//!
+//! Adapters append row-shaped data; the result stores columns independently for
+//! paging, measurement, filtering, and export. Source metadata links editable
+//! cells back to table keys and is separate from display column metadata.
 
 use std::time::Duration;
 
@@ -58,6 +62,10 @@ pub struct ColumnStats {
 }
 
 /// Holds the rows one statement produced, stored column-wise.
+///
+/// Every data column has `row_count` cells. A statement with no returned rows
+/// can still carry affected-row counts and timing. `truncated` means more rows
+/// existed than were retained; paging/export cannot recover those omitted rows.
 #[derive(Debug, Clone, Default)]
 pub struct ResultSet {
     columns: Vec<Column>,
@@ -87,7 +95,10 @@ impl ResultSet {
         }
     }
 
-    /// Append a row.
+    /// Append a row, padding missing cells with NULL and discarding excess cells.
+    ///
+    /// Preserves rectangular storage. This does not enforce a row limit; the
+    /// adapter decides when to stop retaining rows and mark the result truncated.
     pub fn push_row(&mut self, mut row: Vec<Cell>) {
         row.resize(self.columns.len(), Cell::Null);
         for (column, cell) in self.data.iter_mut().zip(row) {

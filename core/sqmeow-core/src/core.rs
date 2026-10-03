@@ -1,10 +1,21 @@
 //! Routes RPC methods to their handlers.
+//!
+//! Requests carry one keyword-argument map decoded by [`Args`]. Short operations
+//! return a value directly. Long operations validate/register their work, return
+//! an acknowledgement or id, then run in a spawned task and emit completion
+//! events through [`Nvim`]. The reply is queued before the task starts so Lua can
+//! record the accepted id before handling its events.
+//!
+//! [`Session`] owns connection/result membership; the handler modules implement
+//! individual operations. Protocol failures become RPC errors, while failures
+//! after acceptance are reported by the operation's event stream.
 
 mod calls;
 mod connections;
 mod edits;
 mod exports;
 mod params;
+mod project;
 mod schema;
 mod summary;
 
@@ -26,7 +37,11 @@ type Work = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// A method that answers at once and keeps working: its answer and the work, or why it refused.
 type Started = Result<(Value, Work), String>;
 
-/// Everything one editor session talks to.
+/// RPC endpoint and database session for one editor process.
+///
+/// Shared by request tasks through `Arc`. It does not own editor buffers; all UI
+/// updates are notifications sent to `nvim`. A new engine creates a fresh session
+/// and fresh call ids, so ids from an earlier process must not be reused.
 pub struct Core {
     nvim: Nvim,
     session: Session,
@@ -75,12 +90,16 @@ impl Core {
         ]))
     }
 
-    /// Answer a method that only reads or changes session state.
+    /// Answer a short request without scheduling a separate completion task.
+    ///
+    /// Includes local parsing and result inspection as well as session access.
+    /// Unknown method names return an RPC error rather than being ignored.
     fn answer(&self, method: &str, args: &Args) -> Result<Value, String> {
         match method {
             "handshake" => self.handshake(args),
             "ping" => Ok(Value::from("pong")),
             "configure" => self.configure(args),
+            "project_connections" => project::parse(&args.string("contents")?),
             "cancel" => self.cancel(args),
             "row" => self.row(args),
             "rows" => self.rows(args),

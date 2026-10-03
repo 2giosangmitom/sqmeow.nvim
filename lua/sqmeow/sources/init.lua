@@ -1,4 +1,7 @@
 --- Where connections come from.
+---
+--- Source modules load definitions; this module owns name uniqueness, provenance,
+--- and write routing. Definitions can exist without a live database connection.
 
 local M = {}
 
@@ -15,6 +18,7 @@ M.builtin = {
   command = require('sqmeow.sources.command'),
   env = require('sqmeow.sources.env'),
   file = require('sqmeow.sources.file'),
+  project = require('sqmeow.sources.project'),
 }
 
 local function valid(entry)
@@ -26,6 +30,8 @@ local function valid(entry)
 end
 
 --- Read every configured source.
+--- The first valid entry for a name wins. Invalid entries and source failures
+--- are collected as problems without discarding entries from other sources.
 ---@return sqmeow.ConnectionSpec[] connections In configured order, names unique.
 ---@return string[] problems Everything that went wrong.
 function M.load()
@@ -74,7 +80,8 @@ function M.load()
   return connections, problems
 end
 
---- Find one connection by name.
+--- Reload sources and find the first accepted definition with this name.
+--- Discards source diagnostics; callers needing them should use load() directly.
 ---@param name string
 ---@return sqmeow.ConnectionSpec|nil
 function M.find(name)
@@ -109,12 +116,18 @@ function M.save(connection)
   }, writable())
 end
 
---- Change a saved connection, by the name it is saved under.
+--- Update a file-source entry by its existing name, preserving other entries.
+--- Refuses an entry whose winning definition came from a read-only source,
+--- even when the JSON file contains a shadowed connection of the same name.
 ---@param name string
 ---@param connection sqmeow.ConnectionSpec The name and url to save instead.
 ---@return boolean written
 ---@return string|nil error
 function M.update(name, connection)
+  local spec = M.find(name)
+  if spec and spec.source ~= 'file' then
+    return false, ('`%s` comes from %s, so it cannot be edited'):format(name, spec.source)
+  end
   return require('sqmeow.sources.file').update(name, connection, writable())
 end
 

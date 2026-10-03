@@ -131,6 +131,29 @@ The equivalent saved connection is `{"name": "mydb", "url": "postgres://dbuser@l
 
 You can use `user@bastion` or `user@bastion:2222` in **SSH** without a config alias. OpenSSH still uses your keys, agent, and `~/.ssh/config`, including `ProxyCommand`. If a proxy needs credentials (for example, AWS SSO), authenticate before starting Neovim so `ssh` inherits the required environment.
 
+### Project Connections
+
+Create `.sqmeow/connections.toml` in your project:
+
+```toml
+[dev_db]
+type = "postgres"
+host = "localhost"
+port = 5432
+database = "my_app_dev"
+user = "dev_user"
+
+[staging_db]
+type = "mysql"
+host = "staging.example.com"
+port = 3306
+database = "my_app_staging"
+```
+
+The nearest file is discovered from Neovim's current working directory upward whenever connections are loaded. Section names become connection names; fields match the connection dialog for that `type`. Ports are integers; `read_only`, `tls`, and `srv` are booleans. Optional `password` and `ssh` fields are supported, including password templates such as `password = '{{ env "PGPASSWORD" }}'`. SQLite and DuckDB use `path`, resolved relative to the project (or `:memory:`).
+
+Project connections load before saved and environment connections by default. Duplicate names report a conflict and the first source wins. Edit project connections in the TOML file. To disable discovery, configure `sources = { { type = 'file' }, { type = 'env' } }`. Reading TOML requires the matching engine binary.
+
 ### Environment Connections
 
 Set `SQMEOW_CONNECTIONS` to a JSON array to load connections from the environment. Templates let you keep passwords out of the URL itself:
@@ -293,7 +316,7 @@ Calling `setup()` is optional. This is the default configuration; override only 
 
 ```lua
 require('sqmeow').setup({
-  sources = { { type = 'file' }, { type = 'env' } }, -- connection sources
+  sources = { { type = 'project' }, { type = 'file' }, { type = 'env' } }, -- connection sources
   core = {
     path = vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow'), -- engine, saved connections, scratchpads, and history
     log_level = 'warn',

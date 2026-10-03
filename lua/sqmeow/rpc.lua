@@ -1,4 +1,8 @@
 --- Manages the msgpack-rpc channel to the engine.
+---
+--- One job is shared by all connections. Requests wait only for the RPC reply;
+--- long-running methods report completion later through events dispatched here.
+--- This module owns process lifetime and transport errors, not database state.
 
 local M = {}
 
@@ -69,6 +73,8 @@ function M.info()
 end
 
 --- Starts the engine if it is not already running.
+--- Resolves a managed/development binary, performs the handshake, and mirrors
+--- query settings before returning. It never downloads a missing binary.
 ---@return integer|nil channel
 ---@return string|nil error
 function M.start()
@@ -183,6 +189,9 @@ function M.restart()
 end
 
 --- Calls an engine method and waits for its answer.
+--- Starts the engine lazily and catches transport/RPC errors. A successful reply
+--- may merely acknowledge queued work; listen for the method's completion event
+--- before using results. Database and UI state are managed by callers/events.
 ---@param method string
 ---@param args table|nil Keyword arguments for the method.
 ---@return any|nil result
@@ -216,6 +225,8 @@ function M.notify(method, args)
 end
 
 --- Subscribes to an engine event.
+--- Listeners run in registration order during dispatch. A failing listener is
+--- reported without preventing the remaining listeners from running.
 ---@param event string Event name (e.g. `'call:state'`).
 ---@param callback fun(payload: any)
 ---@return fun() unsubscribe

@@ -1,4 +1,9 @@
 //! The contract every database adapter meets.
+//!
+//! The engine submits dialect-native statements through [`Adapter`] and receives
+//! driver-independent [`ResultSet`] values. Drivers own network/pool behavior,
+//! row decoding, schema discovery, and cancellation. The engine owns statement
+//! selection, session history, and editor notifications.
 
 use std::future::Future;
 
@@ -11,7 +16,7 @@ use crate::node::{
 };
 use crate::result::ResultSet;
 
-/// Represents the SQL dialect a connection speaks.
+/// Query language and database family a connection speaks, including non-SQL backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
     Sqlite,
@@ -50,7 +55,10 @@ impl Dialect {
         }
     }
 
-    /// Quotes an SQL identifier for this dialect.
+    /// Quote one identifier, escaping embedded delimiter characters.
+    ///
+    /// This does not split qualified names: quote schema and table separately
+    /// before joining them with a dot. Do not use identifier quoting for values.
     pub fn quote_ident(self, name: &str) -> String {
         match self {
             Self::MsSql => format!("[{}]", name.replace(']', "]]")),
@@ -96,6 +104,9 @@ impl Dialect {
 ///
 /// Each adapter owns its connection pool and translates `sqmeow-db` types
 /// to and from the underlying driver.
+/// Methods receive unquoted schema/relation names; implementations are responsible
+/// for binding values or quoting identifiers in generated statements. Default
+/// metadata methods return empty results where a feature is unsupported.
 pub trait Adapter: Send + Sync {
     /// Returns the dialect this connection speaks.
     fn dialect(&self) -> Dialect;
@@ -105,7 +116,12 @@ pub trait Adapter: Send + Sync {
         self.dialect().quote_ident(name)
     }
 
-    /// Executes one statement and streams rows until `max_rows` or cancellation.
+    /// Execute one statement and retain at most `max_rows` rows in its result.
+    ///
+    /// Mark a capped result as truncated rather than treating the cap as failure.
+    /// `cancel` is cooperative: adapters must stop or drain driver work safely
+    /// before the connection can be reused. A cancelled statement need not undo
+    /// side effects already committed by the database.
     fn execute(
         &self,
         statement: &str,
@@ -115,7 +131,9 @@ pub trait Adapter: Send + Sync {
 
     /// Executes `statement` as a wrapper around `origin`.
     ///
-    /// Tracing of columns to their source tables uses `origin`.
+    /// Tracing of columns to their source tables uses `origin`, the unwrapped
+    /// query. This preserves edit provenance when filtering/sorting adds an outer
+    /// SELECT. The default implementation ignores provenance and calls `execute`.
     fn execute_wrapped(
         &self,
         statement: &str,
@@ -127,6 +145,9 @@ pub trait Adapter: Send + Sync {
     }
 
     /// Executes one statement, keeping every result set it returns in order.
+    ///
+    /// Drivers with multiple row sets (such as SQL Server batches) override this.
+    /// The default wraps `execute_wrapped` in a one-element vector.
     fn execute_results(
         &self,
         statement: &str,
@@ -142,14 +163,19 @@ pub trait Adapter: Send + Sync {
     }
 
     /// Plans staged changes to a result into the SQL statements that make them.
+    ///
+    /// Does not write to the database. The default planner validates source/key
+    /// metadata and generates dialect-quoted SQL; non-SQL adapters can override it.
     fn plan(&self, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         crate::edit::sql_plan(self.dialect(), result, changes)
     }
 
     /// Applies planned statements transactionally where the dialect allows.
     ///
-    /// Returns rows produced by the statements that returned them. A cancel never interrupts a
-    /// commit, so `Error::Cancelled` means nothing was committed.
+    /// Returns rows produced by statements that return them. Cancellation must
+    /// not interrupt a commit: `Error::Cancelled` means no changes were committed.
+    /// Adapters without transactions report partial application as a driver error
+    /// instead, so callers do not mistake partial writes for a complete rollback.
     fn apply(
         &self,
         statements: &[String],

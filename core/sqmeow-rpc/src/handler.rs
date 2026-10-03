@@ -8,6 +8,9 @@ use crate::client::Client;
 ///
 /// Dropping the reply without answering sends a generic error so
 /// `rpcrequest` in Neovim does not block forever.
+/// `ok` and `err` consume the handle, preventing a second response. Sending a
+/// response after the peer disconnects is logged rather than propagated to the
+/// caller; a queued reply is not proof the peer received it.
 pub struct Reply {
     inner: Option<(Client, u32)>,
 }
@@ -58,6 +61,9 @@ pub trait Handler: Send + Sync + 'static {
     ///
     /// Returns promptly; answers through `reply`. Dropping `reply` without
     /// answering sends a generic error.
+    /// For slow work, move the reply into a task or acknowledge first and report
+    /// completion with notifications. Blocking this callback delays dispatch of
+    /// other messages, including responses needed by calls back to the peer.
     fn on_request(self: Arc<Self>, method: String, params: Vec<Value>, reply: Reply);
 
     /// Handles a fire-and-forget notification.
