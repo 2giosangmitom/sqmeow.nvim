@@ -4,6 +4,9 @@ use crate::adapter::Dialect;
 use crate::edit::{Source, literal};
 use crate::result::ResultSet;
 use crate::value::Cell;
+use polars::prelude::{
+    Column as PolarsColumn, CsvWriter, DataFrame, JsonFormat, JsonWriter, SerWriter,
+};
 
 /// Describes the format an export is written in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,53 +109,194 @@ fn chosen(result: &ResultSet, columns: Option<&[usize]>) -> Vec<usize> {
 
 /// Write a result as CSV, optionally with a header row.
 pub fn csv(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>, headers: bool) -> String {
-    let mut writer = csv::Writer::from_writer(Vec::new());
     let columns = chosen(result, columns);
-
+    let mut bytes = Vec::new();
     if headers {
-        writer
-            .write_record(
-                columns
-                    .iter()
-                    .map(|column| result.columns()[*column].name.as_str()),
-            )
-            .expect("writing to memory cannot fail");
+        // Polars requires unique frame column names, but result headers may repeat.
+        // Write the original names before the Polars rows instead of renaming the export.
+        let names = columns
+            .iter()
+            .map(|&index| csv_field(&result.columns()[index].name, columns.len() == 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        bytes.extend_from_slice(names.as_bytes());
+        bytes.push(b'\n');
     }
-
-    for &row in rows {
-        writer
-            .write_record(
-                columns
-                    .iter()
-                    .map(|&column| match result.cell(row, column) {
-                        Some(Cell::Null) | None => String::new(),
-                        Some(cell) => cell.text("").into_owned(),
-                    }),
-            )
-            .expect("writing to memory cannot fail");
+    if columns.is_empty() {
+        bytes.extend(std::iter::repeat_n(b'\n', rows.len()));
+        return String::from_utf8(bytes).expect("CSV contains only UTF-8");
     }
-
-    let bytes = writer.into_inner().expect("flushing to memory cannot fail");
+    let values: Vec<PolarsColumn> = columns
+        .iter()
+        .enumerate()
+        .map(|(position, &index)| {
+            let cells: Vec<Option<String>> = rows
+                .iter()
+                .map(|&row| {
+                    result
+                        .cell(row, index)
+                        .filter(|cell| !cell.is_null())
+                        .map(|cell| cell.text("").into_owned())
+                        .or_else(|| (columns.len() == 1).then(String::new))
+                })
+                .collect();
+            PolarsColumn::new(format!("column_{position}").into(), cells)
+        })
+        .collect();
+    let mut frame = DataFrame::new(rows.len(), values).expect("columns share the same row count");
+    CsvWriter::new(&mut bytes)
+        .include_header(false)
+        .finish(&mut frame)
+        .expect("writing a string frame to memory cannot fail");
     String::from_utf8(bytes).expect("every field written was a string")
+}
+
+fn csv_field(text: &str, only_field: bool) -> String {
+    if (text.is_empty() && only_field) || text.contains([',', '"', '\r', '\n']) {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text.to_owned()
+    }
 }
 
 /// Write a result as a JSON array of objects.
 pub fn json(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>) -> String {
     let columns = chosen(result, columns);
-    let records: Vec<serde_json::Value> = rows
+    if columns.is_empty() {
+        let records = vec![serde_json::json!({}); rows.len()];
+        return serde_json::to_string_pretty(&records).expect("empty objects serialize");
+    }
+
+    // Polars requires unique, homogeneous columns. Use native types when every non-null
+    // cell agrees; preserve mixed, nested and non-finite values after the Polars writer.
+    let mut overlays = Vec::with_capacity(columns.len());
+    let frame_columns: Vec<PolarsColumn> = columns
         .iter()
-        .map(|&row| {
+        .enumerate()
+        .map(|(position, &index)| {
+            let cells: Vec<&Cell> = rows
+                .iter()
+                .map(|&row| result.cell(row, index).unwrap_or(&Cell::Null))
+                .collect();
+            let name = format!("column_{position}");
+            if cells
+                .iter()
+                .all(|cell| matches!(cell, Cell::Null | Cell::Bool(_)))
+            {
+                overlays.push(false);
+                PolarsColumn::new(
+                    name.into(),
+                    cells
+                        .iter()
+                        .map(|cell| match cell {
+                            Cell::Bool(value) => Some(*value),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else if cells
+                .iter()
+                .all(|cell| matches!(cell, Cell::Null | Cell::Int(_)))
+            {
+                overlays.push(false);
+                PolarsColumn::new(
+                    name.into(),
+                    cells
+                        .iter()
+                        .map(|cell| match cell {
+                            Cell::Int(value) => Some(*value),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else if cells.iter().all(|cell| {
+                matches!(cell, Cell::Null) || matches!(cell, Cell::Float(v) if v.is_finite())
+            }) {
+                // Use the original values for formatting: JSON numbers distinguish 1.0 from 1.
+                overlays.push(true);
+                PolarsColumn::new(
+                    name.into(),
+                    cells
+                        .iter()
+                        .map(|cell| match cell {
+                            Cell::Float(value) => Some(*value),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else if cells.iter().all(|cell| {
+                matches!(
+                    cell,
+                    Cell::Null
+                        | Cell::Text(_)
+                        | Cell::Decimal(_)
+                        | Cell::Bytes { .. }
+                        | Cell::Timestamp(_)
+                        | Cell::Date(_)
+                        | Cell::Time(_)
+                        | Cell::Uuid(_)
+                        | Cell::Unsupported { .. }
+                )
+            }) {
+                overlays.push(false);
+                PolarsColumn::new(
+                    name.into(),
+                    cells
+                        .iter()
+                        .map(|cell| match cell {
+                            Cell::Null => None,
+                            other => Some(other.text("").into_owned()),
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                overlays.push(true);
+                PolarsColumn::new(
+                    name.into(),
+                    cells
+                        .iter()
+                        .map(|cell| match cell {
+                            Cell::Null => None,
+                            other => Some(other.text("").into_owned()),
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        })
+        .collect();
+    let mut frame =
+        DataFrame::new(rows.len(), frame_columns).expect("columns share the same row count");
+    let mut bytes = Vec::new();
+    JsonWriter::new(&mut bytes)
+        .with_json_format(JsonFormat::Json)
+        .finish(&mut frame)
+        .expect("writing a Polars frame to memory cannot fail");
+    let encoded: Vec<serde_json::Map<String, serde_json::Value>> =
+        serde_json::from_slice(&bytes).expect("Polars writes valid JSON records");
+    let records: Vec<serde_json::Value> = encoded
+        .into_iter()
+        .zip(rows)
+        .map(|(record, &row)| {
             let mut object = serde_json::Map::with_capacity(columns.len());
-            for &index in &columns {
-                let cell = result.cell(row, index).unwrap_or(&Cell::Null);
-                object.insert(result.columns()[index].name.clone(), value(cell));
+            for (position, &index) in columns.iter().enumerate() {
+                let name = format!("column_{position}");
+                let cell = record
+                    .get(&name)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                object.insert(
+                    result.columns()[index].name.clone(),
+                    if overlays[position] {
+                        value(result.cell(row, index).unwrap_or(&Cell::Null))
+                    } else {
+                        cell
+                    },
+                );
             }
             serde_json::Value::Object(object)
         })
         .collect();
-
-    serde_json::to_string_pretty(&serde_json::Value::Array(records))
-        .unwrap_or_else(|_| "[]".to_owned())
+    serde_json::to_string_pretty(&records).expect("valid JSON records serialize")
 }
 
 /// Write rows as `INSERT`s, into the table asked for or else the first table the result came from.
@@ -438,6 +582,39 @@ mod tests {
     }
 
     #[test]
+    fn csv_preserves_duplicate_and_quoted_headers_with_reordered_rows() {
+        let mut result = ResultSet::new(
+            "select",
+            vec![column("same"), column("same"), column("has,\"quote")],
+        );
+        result.push_row(vec![Cell::Text("first".into()), Cell::Int(1), Cell::Null]);
+        result.push_row(vec![
+            Cell::Text("second".into()),
+            Cell::Int(2),
+            Cell::Text("x".into()),
+        ]);
+        assert_eq!(
+            csv(&result, &[1, 0, 1], Some(&[2, 1, 0, 99]), true),
+            "\"has,\"\"quote\",same,same\nx,2,second\n,1,first\nx,2,second\n"
+        );
+    }
+
+    #[test]
+    fn csv_keeps_cell_text_exact_and_handles_empty_selections() {
+        let mut result = ResultSet::new("select", vec![column("value")]);
+        result.push_row(vec![Cell::Decimal("12345678901234567890.0123".into())]);
+        result.push_row(vec![Cell::Text(String::new())]);
+        assert_eq!(
+            csv(&result, &[0, 1], None, false),
+            "12345678901234567890.0123\n\"\"\n"
+        );
+        assert_eq!(csv(&result, &[], None, true), "value\n");
+        assert_eq!(csv(&result, &[0, 1], Some(&[]), false), "\n\n");
+        let empty_name = ResultSet::new("select", vec![column("")]);
+        assert_eq!(csv(&empty_name, &[], None, true), "\"\"\n");
+    }
+
+    #[test]
     fn a_row_range_past_the_end_is_clamped() {
         let result = sample();
         let text = csv(
@@ -522,6 +699,46 @@ mod tests {
         assert_eq!(
             json(&result, &Rows::all().resolve(&result, None), None),
             "[]"
+        );
+    }
+
+    #[test]
+    fn json_preserves_mixed_and_nested_values_and_selected_order() {
+        let mut result = ResultSet::new(
+            "select",
+            vec![column("value"), column("value"), column("extra")],
+        );
+        result.push_row(vec![
+            Cell::Int(9_007_199_254_740_993),
+            Cell::Json("{\"n\":1}".into()),
+            Cell::Array(vec![Cell::Bool(true), Cell::Null]),
+        ]);
+        result.push_row(vec![
+            Cell::Text("one".into()),
+            Cell::Json("invalid json".into()),
+            Cell::Float(f64::INFINITY),
+        ]);
+        let text = json(&result, &[1, 0, 1], Some(&[0, 1, 2]));
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!([
+                {"value": "invalid json", "extra": "Infinity"},
+                {"value": {"n": 1}, "extra": [true, null]},
+                {"value": "invalid json", "extra": "Infinity"},
+            ])
+        );
+        assert!(text.contains("\n  {\n"), "export stays pretty-printed");
+        assert_eq!(json(&result, &[0, 1], Some(&[])), "[\n  {},\n  {}\n]");
+    }
+
+    #[test]
+    fn json_preserves_exact_integers_and_float_formatting() {
+        let mut result = ResultSet::new("select", vec![column("id"), column("float")]);
+        result.push_row(vec![Cell::Int(9_007_199_254_740_993), Cell::Float(1.0)]);
+        assert_eq!(
+            json(&result, &[0], None),
+            "[\n  {\n    \"id\": 9007199254740993,\n    \"float\": 1.0\n  }\n]"
         );
     }
 

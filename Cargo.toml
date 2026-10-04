@@ -70,7 +70,6 @@ tiberius = { git = "https://github.com/tiberius-rs/tiberius", rev = "35605c90adb
 # TLS for ScyllaDB, with the same crypto provider and roots as sqlx.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
-csv = "1.4"
 # Reads a query's FROM aliases, and parses the filters typed for results held in memory.
 sqlparser = { version = "0.63", default-features = false, features = ["std"] }
 # The version sqlx's SQLite driver links, for `sqlite3_interrupt`, which sqlx does not expose.
