@@ -1,0 +1,106 @@
+# Local development databases from compose.yaml. Start them with `just db-up`.
+# SQLite and DuckDB run in memory and do not need Docker.
+# Credentials below are the disposable test credentials from compose.yaml.
+
+[postgres]
+type = "postgres"
+host = "127.0.0.1"
+port = 55432
+database = "sqmeow"
+user = "sqmeow"
+password = "sqmeow"
+
+[cockroach]
+type = "postgres"
+host = "127.0.0.1"
+port = 56257
+database = "defaultdb"
+user = "root"
+options = "sslmode=disable"
+
+[questdb]
+type = "postgres"
+host = "127.0.0.1"
+port = 58812
+database = "qdb"
+user = "admin"
+password = "quest"
+options = "sslmode=disable"
+
+[mysql]
+type = "mysql"
+host = "127.0.0.1"
+port = 53306
+database = "sqmeow"
+user = "root"
+password = "sqmeow"
+
+[mssql]
+type = "mssql"
+host = "127.0.0.1"
+port = 51433
+database = "master"
+user = "sa"
+password = "Sqmeow_Test123!"
+options = "trust_server_certificate=true"
+
+[clickhouse]
+type = "clickhouse"
+host = "127.0.0.1"
+port = 58123
+database = "default"
+user = "sqmeow"
+password = "sqmeow"
+
+[redis]
+type = "redis"
+host = "127.0.0.1"
+port = 56379
+database = "0"
+
+[dragonfly]
+type = "redis"
+host = "127.0.0.1"
+port = 56380
+database = "0"
+
+[mongodb]
+type = "mongodb"
+host = "127.0.0.1"
+port = 57017
+database = "sqmeow"
+
+[scylla]
+type = "scylla"
+host = "127.0.0.1"
+port = 59042
+
+[cassandra]
+type = "scylla"
+host = "127.0.0.1"
+port = 59043
+
+[surrealdb]
+type = "surrealdb"
+host = "127.0.0.1"
+port = 58000
+namespace = "sqmeow"
+database = "sqmeow"
+user = "root"
+password = "root"
+
+[oracle]
+type = "oracle"
+host = "127.0.0.1"
+port = 51521
+database = "FREEPDB1"
+user = "sqmeow"
+password = "sqmeow"
+
+[sqlite]
+type = "sqlite"
+path = ":memory:"
+
+[duckdb]
+type = "duckdb"
+path = ":memory:"

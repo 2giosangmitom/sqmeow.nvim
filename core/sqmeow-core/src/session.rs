@@ -18,6 +18,9 @@ use tokio_util::sync::CancellationToken;
 pub struct ConnId(pub i64);
 
 /// The id of one run of statements, and of the result it keeps.
+///
+/// Allocated by the engine and meaningful only within this process. A run that
+/// produces multiple results can retain several call ids as one history group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CallId(pub u64);
 
@@ -48,7 +51,10 @@ impl From<CallId> for Value {
 /// Engine-side settings, mirrored from the plugin's configuration.
 #[derive(Debug, Clone)]
 pub struct Options {
+    /// Maximum retained rows per result. `update` maps the wire value 0 to
+    /// `usize::MAX`; adapters receive the normalized limit, not a zero sentinel.
     pub max_rows: usize,
+    /// Maximum retained query-run groups, clamped to at least one by `update`.
     pub history_size: usize,
     /// Milliseconds a call may run before it is cancelled, or 0 for no limit.
     pub timeout_ms: u64,
@@ -101,6 +107,10 @@ pub struct Connection {
 }
 
 /// A finished result, kept so its rows can be read and reopened.
+///
+/// The result data is immutable after insertion. Filtering/sorting replaces the
+/// optional row-index view under a short lock instead of copying or mutating
+/// cells. Existing readers may keep an `Arc` to an older view safely.
 #[derive(Debug)]
 pub struct Call {
     pub id: CallId,
@@ -127,6 +137,11 @@ impl Call {
 }
 
 /// The state one editor session owns.
+///
+/// Connection ids come from Lua; call ids are allocated here. Running work is
+/// tracked separately from retained history so cancellation does not depend on
+/// the result cache. Do not hold collection locks across database I/O or awaits;
+/// clone the shared connection/result handle and release the lock first.
 #[derive(Default)]
 pub struct Session {
     connections: Mutex<HashMap<ConnId, Arc<Connection>>>,

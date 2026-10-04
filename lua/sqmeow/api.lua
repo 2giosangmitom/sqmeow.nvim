@@ -1,4 +1,14 @@
---- The public interface.
+--- Lua API for connections, queries, and plugin windows.
+---
+--- Import with `local db = require('sqmeow.api')`. Connection definitions from
+--- |sqmeow.api.available()| are distinct from live connections returned by
+--- |sqmeow.api.connections()|. Connection ids and query call ids belong to the
+--- current engine session; do not persist them across engine restarts.
+---
+--- Connection and query methods return when the engine accepts work, not when
+--- it finishes. State and result windows update from engine events. Methods
+--- may start the engine and open/redraw UI; this is not a headless driver API.
+--- Rejected requests generally return nil/false and display a notification.
 ---@tag sqmeow-api
 ---@toc_entry Public interface
 
@@ -13,7 +23,8 @@ end
 
 --- Open a connection. Returns once the engine accepts the request; success arrives as an event.
 ---@param url string A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
----@param opts table|nil `name` labels it; `database` and `parent` open one database of cluster `parent`; `read_only` runs only statements that read.
+---@param opts table|nil `name` labels it; `database` and `parent` identify a child
+--- database; `read_only` rejects writes; `ssh` selects an SSH host or alias.
 ---@return integer|nil id The connection id, or nil if the engine refused the request.
 ---@return string|nil error
 ---@usage >lua
@@ -57,18 +68,15 @@ function M.connect(url, opts)
   return id
 end
 
---- Connect to a connection declared by a source.
+--- Open a named source entry, carrying over its read-only and SSH settings.
+--- Reuses an existing non-closed connection only when its current definition matches.
+--- Changed definitions must be disconnected before reconnecting.
+--- A returned id may still be connecting; it does not prove login succeeded.
 ---@param name string The name the source gave it.
 ---@return integer|nil id
 ---@return string|nil error
 function M.connect_named(name)
   local state = require('sqmeow.state')
-  local existing = state.connection_by_name(name)
-  if existing and existing.state ~= 'closed' then
-    M.use(existing.id)
-    return existing.id
-  end
-
   local spec = require('sqmeow.sources').find(name)
   if not spec then
     local message = ('there is no configured connection named `%s`'):format(name)
@@ -76,17 +84,39 @@ function M.connect_named(name)
     return nil, message
   end
 
+  local existing = state.connection_by_name(name)
+  if existing and existing.state ~= 'closed' then
+    if
+      existing.url ~= spec.url
+      or (existing.read_only == true) ~= (spec.read_only == true)
+      or (existing.ssh or '') ~= (spec.ssh or '')
+    then
+      local message = ('connection `%s` has different settings; close it before reconnecting'):format(
+        name
+      )
+      notify(message, vim.log.levels.ERROR)
+      return nil, message
+    end
+    M.use(existing.id)
+    return existing.id
+  end
+
   return M.connect(spec.url, { name = spec.name, read_only = spec.read_only, ssh = spec.ssh })
 end
 
---- Every connection the configured sources declare.
+--- Read configured sources without connecting to their databases.
+--- Entries are returned in source order, with duplicate names removed. The
+--- problems list includes source failures and conflicts; usable entries remain.
+--- Project parsing can start the engine; command sources may still be loading.
 ---@return sqmeow.ConnectionSpec[] connections
 ---@return string[] problems
 function M.available()
   return require('sqmeow.sources').load()
 end
 
---- Save a connection to the file source.
+--- Persist a connection to the first configured file source (or its default).
+--- Replaces the same-named file entry. Does not open a connection or write back
+--- to project, environment, or command sources. Templates remain unexpanded.
 ---@param name string
 ---@param url string
 ---@param opts table|nil `read_only` saves it as a connection that runs only statements that read,
@@ -106,8 +136,9 @@ function M.save(name, url, opts)
   return written
 end
 
---- Change a saved connection's name, URL, read-only flag or SSH tunnel, and rename its open
---- connection to match.
+--- Update a file-source connection and rename its open connection to match.
+--- URL, read-only, and tunnel changes take effect only after reconnecting.
+--- Entries from project, environment, and command sources cannot be edited here.
 ---@param name string The name it is saved under now.
 ---@param changes table `name`, `url`, `read_only` and `ssh`, `''` for no tunnel; any may be left out
 ---  to keep what is there.
@@ -156,7 +187,8 @@ function M.edit(name, changes)
   return true
 end
 
---- Change what an open connection is called.
+--- Rename an open connection in editor state and refresh its displayed label.
+--- Does not update a saved definition; use |sqmeow.api.edit()| for that.
 ---@param id integer
 ---@param name string
 ---@return boolean renamed
@@ -258,7 +290,8 @@ function M.disconnect(id)
   state.remove_connection(id)
 end
 
---- Make a connection the active one.
+--- Select the default target for buffers without a connection binding.
+--- Does not connect or wait for readiness. Bound buffers retain their own target.
 ---@param id integer
 ---@return sqmeow.Connection|nil connection The one now active, or nil if there is no such id.
 function M.use(id)
@@ -275,7 +308,9 @@ function M.use(id)
   return connection
 end
 
---- Which connection a query from this buffer belongs to.
+--- Resolve a buffer's target: its named binding first, then the active connection.
+--- A missing bound connection is an error, not a reason to fall back. This only
+--- looks up editor state; it neither opens a connection nor waits for readiness.
 ---@param buf integer|nil Defaults to the current buffer.
 ---@return sqmeow.Connection|nil connection
 ---@return string|nil error Why there is none.
@@ -298,13 +333,17 @@ function M.target(buf)
   return nil, 'connect to a database first'
 end
 
---- Run SQL on the current connection.
----@param sql string One or more statements.
----@param opts table|nil `line` runs only the statement at that zero-based line; `where` and
---- `order_by` run a single query as a subquery filtered and ordered by them; `confirmed` skips
---- asking before a destructive statement.
----@return integer|nil call_id
----@return string|nil error
+--- Submit statements and open the result window. Completion arrives via events.
+--- Uses `opts.conn_id` when supplied; otherwise resolves `opts.source_buf` (or
+--- the current buffer) with |sqmeow.api.target()|. Pending edits or destructive
+--- statements can defer submission while a confirmation prompt is shown.
+---@param sql string One or more statements in the connection's dialect.
+---@param opts table|nil `conn_id` selects a connection; `source_buf` selects the
+--- buffer used for binding lookup; `line` selects a statement by zero-based line.
+--- `where` and `order_by` wrap a single query; `history = false` skips logging
+--- and archiving; `confirmed = true` bypasses the destructive-statement prompt.
+---@return integer|nil call_id Accepted run id; nil if rejected or awaiting input.
+---@return string|nil error Failure reason, or an explanation of deferred work.
 function M.execute(sql, opts)
   opts = opts or {}
   local state = require('sqmeow.state')
@@ -390,6 +429,7 @@ end
 
 --- Run the whole current buffer.
 ---@return integer|nil call_id
+---@return string|nil error See |sqmeow.api.execute()|, including deferred prompts.
 function M.execute_buffer()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   return M.execute(table.concat(lines, '\n'), { source_buf = vim.api.nvim_get_current_buf() })
@@ -397,6 +437,7 @@ end
 
 --- Run the statement the cursor is in.
 ---@return integer|nil call_id
+---@return string|nil error See |sqmeow.api.execute()|, including deferred prompts.
 function M.execute_statement()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   return M.execute(table.concat(lines, '\n'), {
@@ -440,8 +481,10 @@ function M.execute_range(first, last)
   return M.execute(table.concat(lines, '\n'), { source_buf = buf })
 end
 
---- Stop the running query, or the changes being applied.
----@return boolean stopped Whether there was anything to stop.
+--- Request cancellation of an edit apply, or otherwise the current query.
+--- Completion is asynchronous; true means cancellation was requested, not that
+--- the database has already stopped or that arbitrary SQL was rolled back.
+---@return boolean stopped Whether the engine accepted cancellation.
 function M.cancel()
   local state = require('sqmeow.state')
   -- Changes being applied are stopped by their result's call id.
@@ -606,8 +649,14 @@ function M.restore(entry)
   return call_id
 end
 
---- Write the current result to a file.
----@param opts table|nil `path` skips the dialog.
+--- Export retained result rows to a file or the clipboard, asynchronously.
+--- Without `path` or `clipboard`, opens a dialog with a preview. Uses visible
+--- columns and the current view unless `all` is true. Does not rerun the query.
+---@param opts table|nil `format`: `csv` (default), `json`, or `sql`; `path`: file
+--- destination; `clipboard = true`: copy instead. `headers = false` omits CSV
+--- headers. `offset` (zero-based) and `limit` select rows. SQL options: `table`
+--- overrides the target, `batch` combines INSERT rows, `create` includes DDL.
+--- `all = true` exports retained rows outside the current filtered view.
 function M.export(opts)
   opts = opts or {}
   local state = require('sqmeow.state')

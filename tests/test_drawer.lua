@@ -52,6 +52,7 @@ local T = MiniTest.new_set({
       require('sqmeow').setup({
         -- A directory of its own.
         core = { path = vim.fn.tempname() },
+        sources = { { type = 'file' } },
         icons = {
           connection = '#',
           schema = '@',
@@ -112,6 +113,19 @@ local function open_relation(group, name)
 end
 
 T['completion loads columns without expanding the drawer'] = function()
+  -- Real project parsing during schema-event redraws must not nest RPC requests.
+  local path = helpers.temp_file({ '[project]', 'type = "sqlite"', 'path = ":memory:"' })
+  helpers.stub(require('sqmeow.sources.project'), 'path', function()
+    return path
+  end)
+  helpers.stub(
+    require('sqmeow.config').get(),
+    'sources',
+    { { type = 'project' }, { type = 'file' } }
+  )
+  MiniTest.finally(function()
+    vim.schedule(drawer.render)
+  end)
   local completion = require('sqmeow.completion')
   local sql = 'SELECT * FROM people p WHERE p.'
   local found

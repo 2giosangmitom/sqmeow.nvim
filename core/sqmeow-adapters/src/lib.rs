@@ -3,6 +3,11 @@
 //! Each adapter implements [`sqmeow_db::Adapter`] for one dialect. The
 //! [`Backend`] enum erases the concrete type so the engine can hold a
 //! heterogenous set of connections.
+//!
+//! URL schemes select adapters; protocol-compatible databases share a family
+//! (for example PostgreSQL/CockroachDB and Redis/Dragonfly). Driver-specific
+//! configuration stays in each adapter. Secret expansion and SSH forwarding are
+//! handled by the engine before an adapter receives the connection URL.
 
 pub mod clickhouse;
 pub mod duckdb;
@@ -135,8 +140,18 @@ impl Backend {
         Self::connect_to(url, None, false).await
     }
 
-    /// Open a connection to one database of the server the URL points at, which refuses writes
-    /// when `read_only` and the database can be told to.
+    /// Open the URL, optionally selecting a child database on supported adapters.
+    ///
+    /// `database` overrides database selection for PostgreSQL, MongoDB, SurrealDB,
+    /// Oracle, and SQL Server. Other adapters use the URL's database. `read_only`
+    /// is forwarded where session-level enforcement exists; the engine also
+    /// enforces its read-only policy before execution and edits.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::UnsupportedUrl` for an unknown scheme, or the adapter's
+    /// connection error for invalid options, authentication, or network failure.
+    /// The URL must already have templates expanded and tunnel addresses applied.
     pub async fn connect_to(url: &str, database: Option<&str>, read_only: bool) -> Result<Self> {
         // More than one crypto backend is linked in, so rustls cannot pick one by itself.
         let _ = rustls::crypto::ring::default_provider().install_default();

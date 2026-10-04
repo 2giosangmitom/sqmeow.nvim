@@ -400,6 +400,26 @@ T['connecting']['opens a new connection when not already open'] = function()
   eq(connected, { url = 'sqlite://dev.db', name = 'dev' })
 end
 
+T['connecting']['refuses changed connection settings'] = MiniTest.new_set({
+  parametrize = {
+    { { url = 'sqlite://other.db' } },
+    { { read_only = true } },
+    { { ssh = 'bastion' } },
+  },
+})
+T['connecting']['refuses changed connection settings']['until closed'] = function(changes)
+  only_file()
+  file.save(
+    { vim.tbl_extend('force', { name = 'dev', url = 'sqlite://dev.db' }, changes) },
+    { path = scratch }
+  )
+  local id = state.next_connection_id()
+  state.add_connection({ id = id, name = 'dev', url = 'sqlite://dev.db', state = 'connected' })
+  local returned, err = api.connect_named('dev')
+  eq(returned, nil)
+  helpers.contains(err, 'close it before reconnecting')
+end
+
 T['a command source reads what the command prints, in the background'] = function()
   local command = require('sqmeow.sources.command')
   command.reload()

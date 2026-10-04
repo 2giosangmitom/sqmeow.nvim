@@ -1,4 +1,18 @@
---- Every mapping the plugin makes.
+--- Buffer-local mappings for the drawer, result grid, filter bar, and editor.
+---
+--- Override by surface and action name, not by the existing key. A string sets
+--- one key, a list sets aliases, and `false` disables the action: >lua
+---   require('sqmeow').setup({
+---     keymaps = {
+---       drawer = { close = { 'q', '<Esc>' } },
+---       result = { next_page = '<C-n>', prev_page = '<C-p>' },
+---       editor = { execute_buffer = '<leader>rr', cancel = false },
+---     },
+---   })
+--- <
+--- Unspecified actions retain their defaults. The `?` popup shows resolved
+--- mappings for its window; `:checkhealth sqmeow` reports unknown action names.
+--- The tables below show defaults; <leader> uses your `mapleader` setting.
 ---@tag sqmeow-keymaps
 ---@toc_entry Keymaps
 
@@ -196,7 +210,7 @@ local function as_list(value)
 end
 
 --- The mappings for one surface, after the user's overrides.
----@param surface string 'drawer' or 'result'.
+---@param surface string `drawer`, `result`, `filter`, or `editor`.
 ---@return sqmeow.ResolvedKeymap[] # In presentation order.
 function M.resolve(surface)
   local overrides = (require('sqmeow.config').get().keymaps or {})[surface] or {}

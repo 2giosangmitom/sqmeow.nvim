@@ -1,15 +1,28 @@
 --- Configuration defaults and validation.
+---
+--- Pass only the options you want to change to |sqmeow.setup()|. Each setup
+--- starts from the defaults, rather than extending the previous setup call.
+--- Nested option tables are merged; a `sources` list replaces the default list.
+--- See |sqmeow-sources| before replacing it, and |sqmeow-keymaps| for mappings.
+---
+--- The most useful limits are `query.max_rows` (retained rows),
+--- `ui.result.page_size` (displayed rows per page), and `query.timeout_ms`
+--- (execution deadline). A zero row limit is unlimited; a zero timeout is off.
+--- `query.history_size` is in-memory retention, while `query.history_limit`
+--- controls the visible persistent log. See |sqmeow-history| for storage paths.
 ---@tag sqmeow-config
 ---@toc_entry Configuration
 
 local M = {}
 
---- Default configuration.
+--- Complete default configuration. Override selected fields in setup; there is
+--- no need to copy the whole table. Icon values are display glyphs, not behavior.
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 M.defaults = {
-  -- Where connections are loaded from, in order: `file`, `env`, or `command`, which runs `command`
-  -- and reads the JSON array of connections it prints.
+  -- Where connections are loaded from, in order: `project` (.sqmeow/connections.toml), `file`,
+  -- `env`, or `command`, which runs `command` and reads the JSON array of connections it prints.
   sources = {
+    { type = 'project' },
     { type = 'file' },
     { type = 'env' },
   },
