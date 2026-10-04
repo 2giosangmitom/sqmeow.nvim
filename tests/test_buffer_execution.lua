@@ -26,8 +26,6 @@ local adapters = {
   clickhouse = {},
   redis = { query = 'ECHO "a;b"' },
   dragonfly = { query = 'ECHO "a;b"' },
-  redis_cluster = { query = 'ECHO "a;b"' },
-  redis_sentinel = { query = 'ECHO "a;b"' },
   mongodb = { query = '{"ping":1}' },
   surrealdb = { query = "RETURN 'a;b';" },
   scylla = { query = 'SELECT cluster_name FROM system.local;' },

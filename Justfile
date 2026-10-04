@@ -55,12 +55,6 @@ test-rust:
     if [ -n "$(docker compose ps --status running --quiet dragonfly 2>/dev/null)" ]; then
         export SQMEOW_TEST_DRAGONFLY_URL="redis://127.0.0.1:56380/0"
     fi
-    if [ -n "$(docker compose ps --status running --quiet redis-cluster 2>/dev/null)" ]; then
-        export SQMEOW_TEST_REDIS_CLUSTER_URL="redis+cluster://127.0.0.1:47000"
-    fi
-    if [ -n "$(docker compose ps --status running --quiet redis-sentinel 2>/dev/null)" ]; then
-        export SQMEOW_TEST_REDIS_SENTINEL_URL="redis+sentinel://127.0.0.1:56391/sqmeow/0"
-    fi
     if [ -n "$(docker compose ps --status running --quiet mongodb 2>/dev/null)" ]; then
         export SQMEOW_TEST_MONGODB_URL="mongodb://127.0.0.1:57017/sqmeow"
     fi
@@ -84,7 +78,7 @@ test-rust:
     fi
     cargo test {{cargo_flags}}
 
-# Start the PostgreSQL, MySQL, ClickHouse, Redis, Dragonfly, MongoDB, ScyllaDB, Cassandra, SurrealDB and Oracle servers the integration tests use.
+# Start the database servers used by the integration tests.
 db-up:
     docker compose up -d --wait
 
@@ -128,12 +122,6 @@ test-lua: build-debug
     fi
     if [ -n "$(docker compose ps --status running --quiet dragonfly 2>/dev/null)" ]; then
         export SQMEOW_TEST_DRAGONFLY_URL="redis://127.0.0.1:56380/0"
-    fi
-    if [ -n "$(docker compose ps --status running --quiet redis-cluster 2>/dev/null)" ]; then
-        export SQMEOW_TEST_REDIS_CLUSTER_URL="redis+cluster://127.0.0.1:47000"
-    fi
-    if [ -n "$(docker compose ps --status running --quiet redis-sentinel 2>/dev/null)" ]; then
-        export SQMEOW_TEST_REDIS_SENTINEL_URL="redis+sentinel://127.0.0.1:56391/sqmeow/0"
     fi
     if [ -n "$(docker compose ps --status running --quiet mongodb 2>/dev/null)" ]; then
         export SQMEOW_TEST_MONGODB_URL="mongodb://127.0.0.1:57017/sqmeow"

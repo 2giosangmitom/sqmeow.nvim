@@ -36,7 +36,7 @@ From the development shell, run the checks relevant to your change:
 | `just db-up` | Start Docker databases for server-backed integration tests.            |
 | `just docs`  | Regenerate `doc/sqmeow.txt` from annotated sources.                    |
 
-You can run a single task without entering the shell, for example `nix develop --command just lint`. See [`justfile`](justfile) for more targeted recipes.
+You can run a single task without entering the shell, for example `nix develop --command just lint`. See [`Justfile`](Justfile) for more targeted recipes.
 
 > [!NOTE]
 > Server-backed tests skip their cases when the corresponding Docker services are not running. Run `just db-up` before testing database-specific changes. If you edit annotated help sources, run `just docs` before `just` and include the regenerated help file.

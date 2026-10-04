@@ -156,12 +156,23 @@ Run `:checkhealth sqmeow` to verify your installation.
 ### Dialect notes
 
 - **SQL databases:** `<CR>` runs the statement under the cursor; `<leader>E` runs the whole buffer.
-- **Redis:** enter one command per line. The drawer groups keys by type; cluster and Sentinel URLs are supported.
+- **Redis:** enter one command per line. The drawer groups keys by type; Cluster and Sentinel URLs are supported (see below).
 - **MongoDB:** enter commands as Extended JSON; use `use db_name` to switch databases.
 - **ScyllaDB:** supports TLS and custom CA certificates through URL options.
 - **SurrealDB:** use SurrealQL; namespaces, database selection, TLS, and custom CAs are supported. `.surql` scratchpads use the SurrealQL filetype.
 - **Oracle Database:** supports Oracle URLs, TLS, privileged logins, TNS aliases, descriptors, and wallets. Cancelling a query returns immediately, but the next query waits for the server operation to finish.
 - **Microsoft SQL Server:** connect with `mssql://` or `sqlserver://`; SQL authentication and TLS are supported. See below for SQL Server-specific details.
+
+### Redis Cluster and Sentinel
+
+Add a connection with `:Sqmeow add` using one of these URLs:
+
+```text
+redis+cluster://node1.example.com:6379,node2.example.com:6379
+redis+sentinel://sentinel1.example.com:26379,sentinel2.example.com:26379/mymaster/0
+```
+
+Cluster URLs list reachable seed nodes; all nodes advertised by the cluster must also be reachable. Clusters use database 0 only. Sentinel URLs list Sentinel hosts, followed by the master service name (`mymaster`) and optional database number (default 0). The Redis master's advertised address must be reachable. Prefix the hosts with `user:password@` to authenticate to the Redis nodes/master (not to Sentinel). Use `rediss+cluster://` or `rediss+sentinel://` for TLS; percent-encode special characters in credentials.
 
 ### Microsoft SQL Server
 

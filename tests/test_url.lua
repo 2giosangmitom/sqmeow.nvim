@@ -365,6 +365,8 @@ end
 
 T['parse']['leaves a url naming several hosts to be edited whole'] = function()
   eq(url.parse('redis+cluster://a:7000,b:7001'), nil)
+  eq(url.parse('redis+sentinel://s1:26379,s2:26379/mymaster/0'), nil)
+  eq(require('sqmeow.core.dialects').of_url('redis+cluster://a:7000,b:7001'), 'redis')
   eq(require('sqmeow.core.dialects').of_url('redis+sentinel://s:26379/mymaster/0'), 'redis')
 end
 

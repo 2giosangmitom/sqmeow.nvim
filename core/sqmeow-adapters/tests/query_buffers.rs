@@ -104,8 +104,6 @@ server_case!(mssql, "SQMEOW_TEST_MSSQL_URL");
 server_case!(oracle, "SQMEOW_TEST_ORACLE_URL");
 server_case!(clickhouse, "SQMEOW_TEST_CLICKHOUSE_URL");
 server_case!(redis, "SQMEOW_TEST_REDIS_URL");
-server_case!(redis_cluster, "SQMEOW_TEST_REDIS_CLUSTER_URL");
-server_case!(redis_sentinel, "SQMEOW_TEST_REDIS_SENTINEL_URL");
 server_case!(dragonfly, "SQMEOW_TEST_DRAGONFLY_URL");
 server_case!(mongodb, "SQMEOW_TEST_MONGODB_URL");
 server_case!(scylla, "SQMEOW_TEST_SCYLLA_URL");

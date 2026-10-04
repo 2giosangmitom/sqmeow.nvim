@@ -50,6 +50,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          # Release binaries (especially bundled DuckDB) exhaust the cache quota.
+          cache-targets: false
 
       - name: Install cross
         if: matrix.cross

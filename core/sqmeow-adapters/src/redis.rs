@@ -1022,7 +1022,7 @@ fn cell(value: Value) -> Cell {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn a_cluster_or_sentinel_url_names_its_hosts_login_and_path() {
+    fn a_sentinel_url_names_its_hosts_master_and_database() {
         assert_eq!(
             hosts("redis+sentinel://u:p%40ss@s1,[::1]:26380/mymaster/2", 26379).unwrap(),
             Hosts {
@@ -1033,11 +1033,21 @@ mod tests {
             }
         );
         assert_eq!(
-            hosts("redis+cluster://a:7000,b:7001", 6379)
-                .unwrap()
-                .addresses,
-            vec![("a".into(), 7000), ("b".into(), 7001)]
+            hosts("redis+sentinel://s/mymaster", 26379).unwrap().path,
+            vec!["mymaster"]
         );
+    }
+
+    #[test]
+    fn a_cluster_url_names_its_seed_nodes_and_login() {
+        let parsed = hosts("redis+cluster://u:p%40ss@a:7000,b", 6379).unwrap();
+        assert_eq!(parsed.user.as_deref(), Some("u"));
+        assert_eq!(parsed.password.as_deref(), Some("p@ss"));
+        assert_eq!(
+            parsed.addresses,
+            vec![("a".into(), 7000), ("b".into(), 6379)]
+        );
+        assert!(parsed.path.is_empty());
         assert!(hosts("redis+cluster:///", 6379).is_err());
     }
 
