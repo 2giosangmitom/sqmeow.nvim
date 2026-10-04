@@ -88,7 +88,8 @@ function M.installing()
   return running and running.step or nil
 end
 
---- The Rust target triple for this machine.
+--- The Rust target triple for this machine, or nil when no prebuilt engine
+--- ships for it (Intel Macs build from source instead).
 ---@return string|nil triple
 ---@return string|nil error
 function M.triple()
@@ -111,6 +112,9 @@ function M.triple()
   local system = systems[uname.sysname]
 
   if not (architecture and system) then
+    return nil, ('no prebuilt engine for %s %s'):format(uname.sysname, machine)
+  end
+  if uname.sysname == 'Darwin' and architecture == 'x86_64' then
     return nil, ('no prebuilt engine for %s %s'):format(uname.sysname, machine)
   end
   return ('%s-%s'):format(architecture, system)

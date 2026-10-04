@@ -22,19 +22,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: rhysd/action-setup-vim@v1
+      - uses: cachix/install-nix-action@v31
+      - uses: nix-community/cache-nix-action@v6
         with:
-          neovim: true
-          version: stable
-
-      # The pinned toolchain from mise.toml: rust, just, stylua, selene, lua-language-server.
-      - uses: jdx/mise-action@v4
-      - run: rustup component add rustfmt clippy
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ hashFiles('flake.lock') }}
 
+      - run: nix flake check --all-systems --no-build
       # Also installs the plugins lua-language-server checks against.
-      - run: just docs-check
-      - run: just lint
+      - run: nix develop --command just docs-check
+      - run: nix develop --command just lint
 
   test:
     name: test
@@ -43,30 +43,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: rhysd/action-setup-vim@v1
+      - uses: cachix/install-nix-action@v31
+      - uses: nix-community/cache-nix-action@v6
         with:
-          neovim: true
-          version: stable
-
-      # The pinned toolchain from mise.toml: rust, just, stylua, selene, lua-language-server.
-      - uses: jdx/mise-action@v4
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
       - uses: Swatinem/rust-cache@v2
-
-      # DuckDB's prebuilt libduckdb instead of compiling it. It lives outside target/, which the
-      # cache prunes; libduckdb-sys 1.MMmmpp.x wraps DuckDB MM.mm.pp.
-      - name: Install libduckdb
-        run: |
-          set -euo pipefail
-          n=$(grep -A1 '^name = "libduckdb-sys"$' Cargo.lock | sed -n 's/^version = "1\.\([0-9]*\)\..*/\1/p')
-          version="$((n / 10000)).$((n / 100 % 100)).$((n % 100))"
-          curl -fsSL -o "$RUNNER_TEMP/libduckdb.zip" \
-            "https://github.com/duckdb/duckdb/releases/download/v$version/libduckdb-linux-amd64.zip"
-          sudo unzip -o "$RUNNER_TEMP/libduckdb.zip" libduckdb.so -d /usr/local/lib
-          sudo ldconfig
-          echo "DUCKDB_LIB_DIR=/usr/local/lib" >> "$GITHUB_ENV"
+        with:
+          key: ${{ hashFiles('flake.lock') }}
 
       # The databases come from compose.yaml, on the same ports and with the same
       # server-backed URLs `just test-rust` and `just test-lua` use locally.
-      - run: just db-up
-      - run: just test-rust
-      - run: just test-lua
+      - run: nix develop --command just db-up
+      - run: nix develop --command just test-rust
+      - run: nix develop --command just test-lua

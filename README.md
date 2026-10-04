@@ -79,6 +79,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 > [!NOTE]
 > To track `master`, remove `version` and build with `install('cargo')` (requires a Rust toolchain and DuckDB). Run `:checkhealth sqmeow` to verify the installation.
+> Prebuilt engines ship for Linux (x86_64 and ARM64), Apple Silicon, and Windows x86_64; other machines build from source automatically.
 
 ## ⚡ Quick Start
 
@@ -348,14 +349,31 @@ See `:h sqmeow-config` for descriptions of every option.
 
 ## 🤝 Contributing
 
-The toolchain is pinned with [mise](https://mise.jdx.dev); development tasks are [just](https://just.systems) recipes:
+The [Nix](https://nixos.org/download/) flake provides a locked development environment on
+Linux (x86_64 and ARM64) and Apple Silicon Macs. Enable Nix's `nix-command` and `flakes`
+experimental features. The shell includes Rust (with rustfmt and Clippy), just,
+StyLua, Selene, lua-language-server, Neovim, SQLite, and DuckDB's CLI and library.
+Docker with Compose is needed separately for server-backed integration tests.
+Development tasks are [just](https://just.systems) recipes:
 
 ```sh
-mise install   # Install Rust, just, stylua, selene, and lua-language-server
+nix develop    # Enter the same development environment used by CI
 just db-up     # Start integration-test databases in Docker
 just           # Run lint, tests, and the help-file check (same checks as CI)
 just docs      # Regenerate doc/sqmeow.txt
 ```
+
+For a single command, use `nix develop --command just lint`. Without Nix,
+`mise install` installs the tools in `mise.toml`; install Neovim and the DuckDB
+library separately.
+
+Nix is only the development environment: CI runs lint and tests inside the
+shell, and releases keep building with plain cargo (`cross` for Linux) with no
+Nix involved.
+
+`flake.lock` pins Rust and system dependencies. Update with `nix flake update`,
+then run `nix flake check --all-systems --no-build` and `nix develop --command just`.
+Keep Rust compatible with `Cargo.toml`'s `rust-version` and `mise.toml`.
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org).
 
