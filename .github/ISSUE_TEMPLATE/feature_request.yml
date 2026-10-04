@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an improvement to sqmeow.nvim
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the workflow or limitation you are facing.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe what you would like sqmeow.nvim to do.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or context
+      description: Share workarounds, example queries, or affected databases if relevant.
