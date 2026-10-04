@@ -69,24 +69,36 @@ function M.connect(url, opts)
 end
 
 --- Open a named source entry, carrying over its read-only and SSH settings.
---- Reuses and activates an existing non-closed connection of that name.
+--- Reuses an existing non-closed connection only when its current definition matches.
+--- Changed definitions must be disconnected before reconnecting.
 --- A returned id may still be connecting; it does not prove login succeeded.
 ---@param name string The name the source gave it.
 ---@return integer|nil id
 ---@return string|nil error
 function M.connect_named(name)
   local state = require('sqmeow.state')
-  local existing = state.connection_by_name(name)
-  if existing and existing.state ~= 'closed' then
-    M.use(existing.id)
-    return existing.id
-  end
-
   local spec = require('sqmeow.sources').find(name)
   if not spec then
     local message = ('there is no configured connection named `%s`'):format(name)
     notify(message, vim.log.levels.ERROR)
     return nil, message
+  end
+
+  local existing = state.connection_by_name(name)
+  if existing and existing.state ~= 'closed' then
+    if
+      existing.url ~= spec.url
+      or (existing.read_only == true) ~= (spec.read_only == true)
+      or (existing.ssh or '') ~= (spec.ssh or '')
+    then
+      local message = ('connection `%s` has different settings; close it before reconnecting'):format(
+        name
+      )
+      notify(message, vim.log.levels.ERROR)
+      return nil, message
+    end
+    M.use(existing.id)
+    return existing.id
   end
 
   return M.connect(spec.url, { name = spec.name, read_only = spec.read_only, ssh = spec.ssh })

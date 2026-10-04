@@ -209,6 +209,9 @@
 --- Missing configs are ignored. Invalid TOML, unsupported fields, or wrong value
 --- types reject the entire file and report its path. Other sources still load.
 --- Reading TOML starts the engine if needed, so use a matching engine build.
+--- Project files reject `exec` templates; `env` and `file` templates are supported.
+--- If a same-named open connection has different URL, read-only, or SSH settings,
+--- disconnect it before connecting to the current project's definition.
 --- Edit these connections directly in TOML. To disable project discovery, set
 --- `sources = { { type = 'file' }, { type = 'env' } }` in |sqmeow.setup()|.
 ---@tag sqmeow-project

@@ -18,6 +18,10 @@ local channel = nil
 local info = nil
 local subscribers = {}
 local log = {}
+local requesting = 0
+local pending_events = {}
+local dispatching = false
+local scheduled = false
 
 -- Jobs we asked to stop.
 local expected_exit = {}
@@ -27,6 +31,23 @@ M.log_limit = 200
 
 local function warn(message)
   require('sqmeow.utils').notify(message, vim.log.levels.WARN)
+end
+
+local function drain_events()
+  if requesting > 0 or dispatching or scheduled then
+    return
+  end
+  dispatching = true
+  while #pending_events > 0 do
+    local event = table.remove(pending_events, 1)
+    for _, callback in ipairs(subscribers[event[1]] or {}) do
+      local ok, err = pcall(callback, event[2])
+      if not ok then
+        warn(('a handler for `%s` failed: %s'):format(event[1], err))
+      end
+    end
+  end
+  dispatching = false
 end
 
 local function record(line)
@@ -202,7 +223,17 @@ function M.request(method, args)
     return nil, err
   end
 
+  requesting = requesting + 1
   local ok, result = pcall(vim.rpcrequest, chan, method, args or vim.empty_dict())
+  requesting = requesting - 1
+  if requesting == 0 and #pending_events > 0 and not dispatching and not scheduled then
+    -- Let the caller record the accepted call id before handling its events.
+    scheduled = true
+    vim.schedule(function()
+      scheduled = false
+      drain_events()
+    end)
+  end
   if not ok then
     return nil, tostring(result)
   end
@@ -249,12 +280,10 @@ end
 ---@param event string
 ---@param payload any
 function M.dispatch(event, payload)
-  for _, callback in ipairs(subscribers[event] or {}) do
-    local ok, err = pcall(callback, payload)
-    if not ok then
-      warn(('a handler for `%s` failed: %s'):format(event, err))
-    end
-  end
+  -- A handler can redraw the drawer and parse project sources through RPC. Calling
+  -- back while an earlier request is waiting can violate Neovim's reply ordering.
+  table.insert(pending_events, { event, payload })
+  drain_events()
 end
 
 return M

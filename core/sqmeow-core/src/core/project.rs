@@ -2,8 +2,8 @@
 //!
 //! Lua locates and reads the file, then sends its contents through
 //! `project_connections`. This module checks TOML syntax and the flat connection
-//! table shape; Lua validates dialect fields and builds URLs. No filesystem,
-//! environment, shell, or database access occurs during parsing.
+//! table shape and rejects shell directives; Lua validates dialect fields and
+//! builds URLs. No filesystem, environment, shell, or database access occurs during parsing.
 
 use rmpv::Value;
 
@@ -15,7 +15,7 @@ use rmpv::Value;
 ///
 /// # Errors
 ///
-/// Rejects malformed TOML, non-table top-level entries, and non-scalar fields.
+/// Rejects malformed TOML, non-table top-level entries, non-scalar fields, and exec directives.
 /// Parsing is all-or-nothing. Syntax errors identify the line without including
 /// the source line, which may contain credentials.
 pub(super) fn parse(contents: &str) -> Result<Value, String> {
@@ -39,7 +39,18 @@ pub(super) fn parse(contents: &str) -> Result<Value, String> {
         let mut values = Vec::new();
         for (key, value) in fields {
             let value = match value {
-                toml::Value::String(value) => Value::from(value),
+                toml::Value::String(value) => {
+                    // Use Rust's Unicode whitespace rules, like template::expand.
+                    // Project files are discovered automatically, unlike personal sources.
+                    if value
+                        .split("{{")
+                        .skip(1)
+                        .any(|directive| directive.split_whitespace().next() == Some("exec"))
+                    {
+                        return Err("exec directives are not allowed in project connections".into());
+                    }
+                    Value::from(value)
+                }
                 toml::Value::Integer(value) => Value::from(value),
                 toml::Value::Boolean(value) => Value::from(value),
                 _ => {

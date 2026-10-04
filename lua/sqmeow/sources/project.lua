@@ -1,6 +1,6 @@
 --- Connections from the nearest project's TOML file.
 ---
---- Discovery and field validation belong to Lua; the engine only decodes TOML.
+--- Lua discovers files and validates fields; the engine decodes TOML and rejects exec directives.
 --- Loading is read-only and uncached so directory/config changes are visible on
 --- the next source read. A malformed entry rejects the whole project source.
 

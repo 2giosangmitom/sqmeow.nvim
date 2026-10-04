@@ -106,13 +106,51 @@ ssh = 'user@bastion'
   })
 end
 
-T['preserves password templates'] = function()
-  write([=[
-[dev]
-type = 'postgres'
-password = '{{ env "PGPASSWORD" }}'
-]=])
-  eq(sources.load()[1].url, 'postgres://:{{ env "PGPASSWORD" }}@localhost/')
+T['preserves password templates'] = MiniTest.new_set({
+  parametrize = { { '{{ env "PGPASSWORD" }}' }, { '{{ file "~/.secrets/database" }}' } },
+})
+T['preserves password templates']['without expanding them'] = function(template)
+  write(("[dev]\ntype = 'postgres'\npassword = '%s'"):format(template))
+  eq(sources.load()[1].url, 'postgres://:' .. template .. '@localhost/')
+end
+
+T['rejects project exec templates'] = MiniTest.new_set({
+  parametrize = {
+    { 'password', '{{ exec "echo private-secret" }}' },
+    { 'host', '{{exec `echo private-secret`}}' },
+    { 'ssh', '{{\texec\t"echo private-secret" }}' },
+    { 'database', '{{ env "DB" }}{{ exec "echo private-secret" }}' },
+    { 'user', '{{\194\160exec\194\160"echo private-secret" }}' },
+  },
+})
+T['rejects project exec templates']['without exposing commands'] = function(field, value)
+  write(("[dev]\ntype = 'postgres'\n%s = '%s'"):format(field, value))
+  local found, problems = sources.load()
+  eq(found, {})
+  eq(#problems, 1)
+  helpers.contains(problems[1], 'exec directives are not allowed')
+  helpers.absent(problems[1], 'private-secret')
+end
+
+T['refuses reuse after switching to a different same-named project definition'] = function()
+  local api = require('sqmeow.api')
+  local state = require('sqmeow.state')
+  helpers.stub(state, 'connections', {})
+  helpers.stub(state, 'current', nil)
+  helpers.stub(api, 'connect', function()
+    error('a conflicting connection must not be opened')
+  end)
+  write('[dev]\ntype = "sqlite"\npath = "data.db"')
+  local spec = assert(sources.find('dev'))
+  state.add_connection({ id = 123, name = 'dev', url = spec.url, state = 'connected' })
+  eq(api.connect_named('dev'), 123)
+  local nested = vim.fs.joinpath(root, 'other')
+  write('[dev]\ntype = "sqlite"\npath = "data.db"', nested)
+  vim.api.nvim_set_current_dir(nested)
+  local id, err = api.connect_named('dev')
+  eq(id, nil)
+  helpers.contains(err, 'close it before reconnecting')
+  eq(state.connections[123].url, spec.url)
 end
 
 T['resolves database files relative to the project'] = function()

@@ -88,6 +88,37 @@ T['events']['reach a subscriber'] = function()
   eq(seen[1].state, 'done')
 end
 
+T['events']['defer RPC callbacks and preserve event order across handler requests'] = function()
+  rpc.start()
+  local seen, waiting, returned = {}, false, false
+  helpers.stub(vim, 'rpcrequest', function(_, method)
+    waiting = true
+    if method == 'outer' then
+      rpc.dispatch('ordered', 1)
+      rpc.dispatch('ordered', 2)
+    elseif method == 'inner' then
+      rpc.dispatch('ordered', 3)
+    end
+    waiting = false
+    return true
+  end)
+  subscribe('ordered', function(value)
+    eq(waiting, false)
+    eq(returned, true)
+    table.insert(seen, value)
+    if value == 1 then
+      rpc.request('inner')
+    end
+  end)
+  rpc.request('outer')
+  returned = true
+  rpc.dispatch('ordered', 4)
+  helpers.wait_for('all deferred events arrive', function()
+    return #seen == 4
+  end)
+  eq(seen, { 1, 2, 4, 3 })
+end
+
 T['events']['stop reaching an unsubscribed handler'] = function()
   local count = 0
   local unsubscribe = rpc.on('log', function()

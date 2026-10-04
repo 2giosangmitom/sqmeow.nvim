@@ -154,6 +154,8 @@ The nearest file is discovered from Neovim's current working directory upward wh
 
 Project connections load before saved and environment connections by default. Duplicate names report a conflict and the first source wins. Edit project connections in the TOML file. To disable discovery, configure `sources = { { type = 'file' }, { type = 'env' } }`. Reading TOML requires the matching engine binary.
 
+Project files support `env` and `file` templates but reject `exec` directives. If an open connection's name matches a changed definition, disconnect it before reconnecting; its URL, read-only setting, and SSH host must match for reuse.
+
 ### Environment Connections
 
 Set `SQMEOW_CONNECTIONS` to a JSON array to load connections from the environment. Templates let you keep passwords out of the URL itself:
