@@ -391,4 +391,67 @@ mod tests {
             Vec::<usize>::new()
         );
     }
+
+    #[test]
+    fn duplicate_columns_and_export_use_the_original_cells() {
+        use crate::export::{self, Format, Rows};
+        let mut result = ResultSet::new(
+            "saved",
+            vec![
+                ResultColumn::new("value", "TEXT"),
+                ResultColumn::new("value", "TEXT"),
+            ],
+        );
+        result.push_row(vec![
+            Cell::Text("first".into()),
+            Cell::Json("{\"n\":1}".into()),
+        ]);
+        result.push_row(vec![
+            Cell::Text("second".into()),
+            Cell::Json("{\"n\":2}".into()),
+        ]);
+        let names = super::super::names(result.columns());
+        assert_eq!(names, ["value", "value_2"]);
+        let query = Query::parse("value_2 = '{\"n\":2}'", "", &names).unwrap();
+        let view = select_with(&result, &[], &[], None, query.as_ref()).unwrap();
+        assert_eq!(view, vec![1]);
+        let rows = Rows::all().resolve(&result, Some(&view));
+        assert_eq!(
+            export::write(&result, &Format::Csv, &rows, None, true),
+            "value,value\nsecond,\"{\"\"n\"\":2}\"\n"
+        );
+    }
+
+    #[test]
+    fn null_and_literal_text_filters_keep_row_positions() {
+        let result = people();
+        let nulls = [Filter {
+            column: Some(2),
+            op: Op::IsNull,
+            value: String::new(),
+        }];
+        assert_eq!(
+            select_with(&result, &nulls, &[], None, None).unwrap(),
+            vec![1]
+        );
+        let prefix = [Filter {
+            column: Some(1),
+            op: Op::StartsWith,
+            value: "AL".into(),
+        }];
+        assert_eq!(
+            select_with(&result, &prefix, &[], None, None).unwrap(),
+            vec![0, 3, 4]
+        );
+        let query = Query::parse(
+            "name LIKE 'a%'",
+            "id DESC",
+            &super::super::names(result.columns()),
+        )
+        .unwrap();
+        assert_eq!(
+            select_with(&result, &[], &[], Some(&[0, 3, 4]), query.as_ref()).unwrap(),
+            vec![4, 3]
+        );
+    }
 }

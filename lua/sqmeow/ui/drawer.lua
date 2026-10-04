@@ -951,9 +951,13 @@ function M.actions.structure()
   require('sqmeow.ui.structure').open(node.conn_id, node.path[1], node.path[#node.path])
 end
 
---- Copy the qualified name of the node under the cursor.
+--- Copy the qualified name, or the full command on a history entry.
 function M.actions.yank_name()
   local node = M.current_node()
+  if node and node.kind == 'query' and node.entry then
+    vim.fn.setreg(vim.v.register or '"', node.entry.statement)
+    return utils.notify('yanked history command')
+  end
   -- A group heading names nothing, so there is nothing to copy from one.
   if not node or not node.path or #node.path == 0 or node.count then
     return

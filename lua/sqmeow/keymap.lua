@@ -41,7 +41,7 @@ M.defaults = {
     { action = 'structure', lhs = 'K', desc = 'Show the structure of this table or key' },
     { action = 'filter_keys', lhs = 'f', desc = 'Show only the Redis keys matching a pattern' },
     { action = 'refresh', lhs = 'r', desc = 'Reload this subtree' },
-    { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified name' },
+    { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified name or history command' },
     { action = 'yank_select', lhs = 's', desc = 'Yank a SELECT for this relation' },
     -- `r` refreshes on every surface.
     { action = 'rename', lhs = 'R', desc = 'Rename the connection or scratchpad under the cursor' },

@@ -95,10 +95,11 @@ T['names the connection the call ran on'] = function()
   eq(history.entries()[1].dialect, 'postgres')
 end
 
-T['keeps a failure as readily as a success'] = function()
+T['does not record failed commands in memory or on disk'] = function()
   history.append(call({ state = 'error', rows = nil, error = 'no such table: people' }))
-  eq(history.entries()[1].state, 'error')
-  eq(history.entries()[1].error, 'no such table: people')
+  history.append(call({ state = 'cancelled', statement = 'select slow()' }))
+  eq(history.entries(), {})
+  eq(written(), {})
 end
 
 T['leaves out a call the user did not submit'] = function()
@@ -275,7 +276,7 @@ T['results']['are pointed at only by a run that returned columns'] = function()
   local kept = history.result_path()
   history.append(call({ call_id = 1, archive = kept, columns = { { name = 'n' } } }))
   history.append(call({ call_id = 2, archive = history.result_path(), columns = {}, affected = 3 }))
-  history.append(call({ call_id = 3, state = 'error', archive = history.result_path() }))
+  history.append(call({ call_id = 3, archive = history.result_path(), columns = {} }))
 
   local entries = history.entries()
   eq(entries[3].result, kept)
