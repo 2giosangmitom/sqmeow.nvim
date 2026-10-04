@@ -3,8 +3,7 @@ local MiniTest = require('mini.test')
 
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local api = require('sqmeow.api')
-local state = require('sqmeow.state')
+local state = require('sqmeow.core.state')
 local drawer = require('sqmeow.ui.drawer')
 local file = require('sqmeow.sources.file')
 
@@ -20,7 +19,7 @@ local T = MiniTest.new_set({
     end,
     post_case = function()
       for _, connection in ipairs(state.connection_list()) do
-        api.disconnect(connection.id)
+        require('sqmeow.api.connection').disconnect(connection.id)
       end
       helpers.wait_for('every connection should close', function()
         return next(state.connections) == nil
@@ -37,19 +36,19 @@ T['reopens the saved connections, the current one, and the open drawer nodes'] =
   local other = helpers.connect('sqlite::memory:', { name = 'other' })
   -- Opened by URL rather than from a source, so it has nothing to be opened again from.
   helpers.connect('sqlite::memory:', { name = 'loose' })
-  api.use(other)
+  require('sqmeow.api.connection').use(other)
   drawer.expand(other, {})
-  require('sqmeow.session').save()
+  require('sqmeow.server.session').save()
 
   for _, id in ipairs({ kept, other, state.connection_by_name('loose').id }) do
-    api.disconnect(id)
+    require('sqmeow.api.connection').disconnect(id)
   end
   helpers.wait_for('every connection should close', function()
     return next(state.connections) == nil
   end)
 
   package.loaded['sqmeow.session'] = nil
-  require('sqmeow.session').restore()
+  require('sqmeow.server.session').restore()
   helpers.wait_for('the saved connections should reopen', function()
     local first, second = state.connection_by_name('kept'), state.connection_by_name('other')
     return first ~= nil

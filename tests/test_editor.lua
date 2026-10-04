@@ -1,16 +1,15 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local api = require('sqmeow.api')
 local config = require('sqmeow.config')
 local editor = require('sqmeow.ui.editor')
 local detail = require('sqmeow.ui.detail')
 local drawer = require('sqmeow.ui.drawer')
 local layout = require('sqmeow.ui.layout')
 local log = require('sqmeow.ui.log')
-local paths = require('sqmeow.paths')
+local paths = require('sqmeow.core.paths')
 local result = require('sqmeow.ui.result')
-local state = require('sqmeow.state')
+local state = require('sqmeow.core.state')
 
 --- A tab page of its own, closed when the case ends.
 local function tabpage()
@@ -465,7 +464,7 @@ T['opening everything'] = MiniTest.new_set({
 
 T['opening everything']['puts up the drawer and the result, and creates no scratchpad'] = function()
   local before = #editor.list()
-  api.open_all()
+  require('sqmeow.api.view').open_all()
 
   eq(drawer.is_open(), true)
   eq(result.is_open(), true)
@@ -475,8 +474,8 @@ T['opening everything']['puts up the drawer and the result, and creates no scrat
 end
 
 T['opening everything']['closes it all again'] = function()
-  api.open_all()
-  api.toggle()
+  require('sqmeow.api.view').open_all()
+  require('sqmeow.api.view').toggle()
 
   eq(drawer.is_open(), false)
   eq(result.is_open(), false)

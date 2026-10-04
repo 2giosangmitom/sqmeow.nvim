@@ -19,10 +19,12 @@ M.timeout = 10 * 60 * 1000
 local running = nil
 
 local root = vim.fs.normalize(
-  vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2))))
+  vim.fs.dirname(
+    vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2))))
+  )
 )
 
-local notify = require('sqmeow.utils').notify
+local notify = require('sqmeow.core.utils').notify
 
 --- Show how far the install has got, on the message line rather than in the notification history.
 ---@param message string|nil nil clears the line.
@@ -50,7 +52,7 @@ end
 --- Where a downloaded engine is kept.
 ---@return string
 function M.managed_path()
-  return vim.fs.joinpath(require('sqmeow.paths').bin(), M.binary)
+  return vim.fs.joinpath(require('sqmeow.core.paths').bin(), M.binary)
 end
 
 --- Where `cargo build` inside the plugin puts an engine, release before debug.

@@ -30,7 +30,7 @@ local expected_exit = {}
 M.log_limit = 200
 
 local function warn(message)
-  require('sqmeow.utils').notify(message, vim.log.levels.WARN)
+  require('sqmeow.core.utils').notify(message, vim.log.levels.WARN)
 end
 
 local function drain_events()
@@ -103,7 +103,7 @@ function M.start()
     return channel
   end
 
-  local install = require('sqmeow.install')
+  local install = require('sqmeow.server.install')
   local config = require('sqmeow.config').get()
 
   local path, source = install.resolve()

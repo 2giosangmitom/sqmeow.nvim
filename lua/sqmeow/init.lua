@@ -100,7 +100,7 @@
 --- Leave the database empty to browse databases on the server where supported.
 --- PostgreSQL databases open as child connections named `connection/database`.
 --- `:Sqmeow use` selects an open connection; it does not open a saved one.
---- Lua callers can open saved entries with |sqmeow.api.connect_named()|.
+--- Lua callers can open saved entries with |sqmeow.require('sqmeow.api.connection').connect_named()|.
 ---
 --- Common URL forms: >text
 ---   postgres://user:password@localhost:5432/app
@@ -245,7 +245,7 @@
 ---
 --- A bound buffer requires that named connection to be open. It never silently
 --- falls back to another connection. An unbound buffer uses the active one;
---- execution fails if there is none. See |sqmeow.api.target()| for Lua callers.
+--- execution fails if there is none. See |sqmeow.require('sqmeow.api.connection').target()| for Lua callers.
 ---@tag sqmeow-active
 ---@toc_entry Which database a query runs on
 
@@ -369,7 +369,7 @@
 --- Connection missing from the drawer:
 ---   Check `:pwd`, the nearest project config, and `sources` order. Duplicate
 ---   names keep the first entry. Inspect source errors with: >lua
----     local _, errors = require('sqmeow.api').available()
+---     local _, errors = require('sqmeow.api.connection').available()
 ---     vim.print(errors)
 --- <
 --- Query goes to the wrong database:
@@ -405,7 +405,7 @@ function M.setup(opts)
 
   local _, errors = require('sqmeow.config').apply(M.user_config)
   for _, err in ipairs(errors) do
-    require('sqmeow.utils').notify(err, vim.log.levels.ERROR)
+    require('sqmeow.core.utils').notify(err, vim.log.levels.ERROR)
   end
 
   require('sqmeow.ui.highlights').setup()
@@ -425,7 +425,7 @@ function M.setup(opts)
       group = session,
       desc = 'Save the open sqmeow connections',
       callback = function()
-        require('sqmeow.session').save()
+        require('sqmeow.server.session').save()
       end,
     })
   end
@@ -456,7 +456,7 @@ end
 ---@return boolean|nil ok Whether an engine was installed, or nil when a `callback` was given.
 ---@return string|nil err
 function M.install(opts)
-  return require('sqmeow.install').install(opts)
+  return require('sqmeow.server.install').install(opts)
 end
 
 --- Stop the engine. It restarts on the next call that needs it.

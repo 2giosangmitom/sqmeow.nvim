@@ -1,6 +1,6 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
-local url = require('sqmeow.url')
+local url = require('sqmeow.core.url')
 local config = require('sqmeow.config')
 
 local T = MiniTest.new_set({
@@ -330,7 +330,7 @@ T['build']['omits a port for a hostless oracle TNS address'] = function()
 end
 
 T['build']['masks oracle options in the connection form'] = function()
-  for _, field in ipairs(require('sqmeow.dialects').fields('oracle')) do
+  for _, field in ipairs(require('sqmeow.core.dialects').fields('oracle')) do
     if field.key == 'options' then
       eq(field.mask, true)
       return
@@ -365,7 +365,7 @@ end
 
 T['parse']['leaves a url naming several hosts to be edited whole'] = function()
   eq(url.parse('redis+cluster://a:7000,b:7001'), nil)
-  eq(require('sqmeow.dialects').of_url('redis+sentinel://s:26379/mymaster/0'), 'redis')
+  eq(require('sqmeow.core.dialects').of_url('redis+sentinel://s:26379/mymaster/0'), 'redis')
 end
 
 return T

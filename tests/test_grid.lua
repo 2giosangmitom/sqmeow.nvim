@@ -3,8 +3,7 @@ local MiniTest = require('mini.test')
 local helpers = dofile('tests/helpers.lua')
 
 local eq = MiniTest.expect.equality
-local api = require('sqmeow.api')
-local state = require('sqmeow.state')
+local state = require('sqmeow.core.state')
 local result = require('sqmeow.ui.result')
 local edit = require('sqmeow.ui.edit')
 local rpc = require('sqmeow.rpc.client')
@@ -32,7 +31,7 @@ local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
       require('sqmeow').setup({ ui = { result = { page_size = 10, column_icons = false } } })
-      api.use(helpers.connect('sqlite::memory:', { name = 'grid' }))
+      require('sqmeow.api.connection').use(helpers.connect('sqlite::memory:', { name = 'grid' }))
       run('create table people (id integer primary key, name text, age integer)')
       run([[insert into people (id, name, age) values
               (1, 'alice', 30), (2, 'bob', null), (3, 'carol', 9)]])
@@ -45,7 +44,7 @@ local T = MiniTest.new_set({
       result.close()
     end,
     post_once = function()
-      api.disconnect()
+      require('sqmeow.api.connection').disconnect()
     end,
   },
 })
@@ -72,20 +71,20 @@ T['a join is editable through each table, but takes no new rows'] = function()
 end
 
 T['a view filters and sorts in the engine, and pages count what it holds'] = function()
-  api.view({ filters = { { column = 1, op = 'contains', value = 'O' } } })
+  require('sqmeow.api.view').view({ filters = { { column = 1, op = 'contains', value = 'O' } } })
   wait('the view should arrive', function()
     return state.call.view_rows == 2
   end)
   eq(#rows(), 2)
 
-  api.view({ sort = { { column = 2, descending = true } } })
+  require('sqmeow.api.view').view({ sort = { { column = 2, descending = true } } })
   wait('the sort should arrive', function()
     return (rows()[1] or ''):match('^%s*2') ~= nil
   end)
   -- bob's age is NULL, which sorts last whichever way, and carol is filtered out by the `o`.
   eq(rows()[1]:match('^%s*(%d)'), '2')
 
-  api.view({ filters = {}, sort = {} })
+  require('sqmeow.api.view').view({ filters = {}, sort = {} })
   wait('every row should come back', function()
     return state.call.view_rows == nil and #rows() == 3
   end)
@@ -222,7 +221,10 @@ T['staged changes are asked about before a new result replaces them'] = function
 
   answer = 'Discard them'
   local before = state.call.call_id
-  api.execute('select id from people', { conn_id = state.call.conn_id, confirmed = true })
+  require('sqmeow.api.query').execute(
+    'select id from people',
+    { conn_id = state.call.conn_id, confirmed = true }
+  )
   wait('the query should run once the changes are discarded', function()
     return state.call.call_id ~= before and state.call.state == 'done'
   end)
@@ -432,7 +434,7 @@ T['an export as SQL writes an INSERT per row into the table'] = function()
 end
 
 T['an export as SQL can batch rows, create the table, and ignore the view'] = function()
-  api.view({ filters = { { column = 1, op = 'contains', value = 'O' } } })
+  require('sqmeow.api.view').view({ filters = { { column = 1, op = 'contains', value = 'O' } } })
   wait('the view should arrive', function()
     return state.call.view_rows == 2
   end)
@@ -456,7 +458,7 @@ T['an export as SQL can batch rows, create the table, and ignore the view'] = fu
   text = copied({ all = true })
   eq(select(2, text:gsub('INSERT INTO', '')), 3)
 
-  api.view({ filters = {}, sort = {} })
+  require('sqmeow.api.view').view({ filters = {}, sort = {} })
   wait('every row should come back', function()
     return state.call.view_rows == nil
   end)
@@ -549,7 +551,7 @@ end
 T['a DuckDB EXPLAIN shows its plan as lines'] = function()
   local id = helpers.connect('duckdb::memory:', { name = 'plans' })
   MiniTest.finally(function()
-    api.disconnect(id)
+    require('sqmeow.api.connection').disconnect(id)
   end)
   run('explain select 42', { conn_id = id })
   local text = table.concat(helpers.result_lines(), '\n')
@@ -566,12 +568,12 @@ T['a DELETE without WHERE asks first, and runs only when told to'] = function()
     on_choice(answer)
   end)
 
-  eq(api.execute('delete from doomed'), nil)
+  eq(require('sqmeow.api.query').execute('delete from doomed'), nil)
   helpers.contains(asked, 'DELETE without WHERE')
 
   answer = 'Run it'
   local before = state.call.call_id
-  api.execute('delete from doomed')
+  require('sqmeow.api.query').execute('delete from doomed')
   wait('the delete should run', function()
     return state.call.call_id ~= before and state.call.state == 'done'
   end)
@@ -582,7 +584,7 @@ end
 T['a read-only connection reads, and refuses writes and edits'] = function()
   local id = helpers.connect('sqlite::memory:', { name = 'locked', read_only = true })
   MiniTest.finally(function()
-    api.disconnect(id)
+    require('sqmeow.api.connection').disconnect(id)
   end)
   helpers.contains(state.label(state.connections[id]), 'read-only')
   eq(run('select 1 as one', { conn_id = id }).state, 'done')
@@ -591,7 +593,13 @@ T['a read-only connection reads, and refuses writes and edits'] = function()
   helpers.stub(vim, 'notify', function(message)
     table.insert(messages, message)
   end)
-  eq(api.execute('create table nope (id integer)', { conn_id = id, confirmed = true }), nil)
+  eq(
+    require('sqmeow.api.query').execute(
+      'create table nope (id integer)',
+      { conn_id = id, confirmed = true }
+    ),
+    nil
+  )
   helpers.contains(messages[1], 'read-only')
   result.actions.add_row()
   helpers.contains(messages[2], 'read-only')

@@ -1,10 +1,9 @@
---- Export retained result rows, without depending on the rest of the API.
----
---- Callers require this file directly; there is no re-export.
+-- Export helper, standalone so callers require it directly.
+-- No re-export through sqmeow.api.
 
 local M = {}
 
-local notify = require('sqmeow.utils').notify
+local notify = require('sqmeow.core.utils').notify
 
 local function engine()
   require('sqmeow.rpc.events').ensure()
@@ -21,7 +20,7 @@ end
 --- `all = true` exports retained rows outside the current filtered view.
 function M.export(opts)
   opts = opts or {}
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local call = state.call
   if not (call and call.call_id) then
     notify('there is no result to export', vim.log.levels.WARN)

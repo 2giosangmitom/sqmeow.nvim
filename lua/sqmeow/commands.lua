@@ -2,7 +2,7 @@
 
 local M = {}
 
-local notify = require('sqmeow.utils').notify
+local notify = require('sqmeow.core.utils').notify
 
 --- Discard a return value.
 local function void(_) end
@@ -25,20 +25,18 @@ M.subcommands = {
   save = {
     desc = 'Save a connection for next time',
     run = function(args)
-      local api = require('sqmeow.api')
-
       if args[1] and args[2] then
-        return void(api.save(args[1], args[2]))
+        return void(require('sqmeow.api.connection').save(args[1], args[2]))
       end
 
-      local current = require('sqmeow.state').current_connection()
+      local current = require('sqmeow.core.state').current_connection()
       if not current then
         return notify('connect first, or pass a name and a url', vim.log.levels.WARN)
       end
 
       vim.ui.input({ prompt = 'Save as: ', default = current.name }, function(name)
         if name and name ~= '' then
-          void(api.save(name, current.url))
+          void(require('sqmeow.api.connection').save(name, current.url))
         end
       end)
     end,
@@ -61,7 +59,7 @@ M.subcommands = {
             if not url or url == '' then
               return
             end
-            require('sqmeow.api').edit(spec.name, { name = name, url = url })
+            require('sqmeow.api.connection').edit(spec.name, { name = name, url = url })
           end)
         end)
       end
@@ -84,7 +82,7 @@ M.subcommands = {
       end
 
       local items = vim.tbl_map(function(spec)
-        local icon, highlight = require('sqmeow.icons').get('connection')
+        local icon, highlight = require('sqmeow.core.icons').get('connection')
         return { label = spec.name, icon = icon, highlight = highlight, value = spec }
       end, saved)
 
@@ -100,7 +98,7 @@ M.subcommands = {
     complete = function(lead)
       local names = vim.tbl_map(function(connection)
         return connection.name
-      end, (require('sqmeow.api').available()))
+      end, (require('sqmeow.api.connection').available()))
 
       table.sort(names)
       return vim.tbl_filter(function(name)
@@ -112,7 +110,7 @@ M.subcommands = {
   disconnect = {
     desc = 'Close the current connection',
     run = function()
-      require('sqmeow.api').disconnect()
+      require('sqmeow.api.connection').disconnect()
     end,
   },
 
@@ -124,7 +122,7 @@ M.subcommands = {
         return notify('name a connection to delete', vim.log.levels.WARN)
       end
       local spec = require('sqmeow.sources').find(name)
-      if require('sqmeow.api').remove(name) then
+      if require('sqmeow.api.connection').remove(name) then
         -- A connection from any other source is only closed, since its entry cannot be removed.
         if spec and spec.source ~= 'file' then
           notify(('disconnected from %s'):format(name))
@@ -138,7 +136,7 @@ M.subcommands = {
       for _, spec in ipairs((require('sqmeow.sources').load())) do
         table.insert(names, spec.name)
       end
-      for _, connection in ipairs(require('sqmeow.api').connections()) do
+      for _, connection in ipairs(require('sqmeow.api.connection').connections()) do
         table.insert(names, connection.name)
       end
 
@@ -152,11 +150,10 @@ M.subcommands = {
   use = {
     desc = 'Choose the connection queries run against',
     run = function(args)
-      local api = require('sqmeow.api')
-      local state = require('sqmeow.state')
+      local state = require('sqmeow.core.state')
 
       local function activate(id)
-        local connection = api.use(id)
+        local connection = require('sqmeow.api.connection').use(id)
         if connection then
           notify(('queries now run on %s'):format(connection.name))
         end
@@ -166,7 +163,7 @@ M.subcommands = {
         if connection.parent or connection.database then
           return false
         end
-        local url = require('sqmeow.url').split(connection.url)
+        local url = require('sqmeow.core.url').split(connection.url)
         if not url or url.dialect == 'sqlite' or url.dialect == 'duckdb' then
           return false
         end
@@ -179,7 +176,7 @@ M.subcommands = {
           return activate(child.id)
         end
 
-        local id = api.connect(parent.url, {
+        local id = require('sqmeow.api.connection').connect(parent.url, {
           name = ('%s/%s'):format(parent.name, database),
           parent = parent.id,
           database = database,
@@ -192,7 +189,7 @@ M.subcommands = {
       end
 
       local function choose_database(cluster)
-        api.databases(cluster.id, function(dbs, err)
+        require('sqmeow.api.connection').databases(cluster.id, function(dbs, err)
           if err or not dbs or #dbs == 0 then
             return notify(
               err or ('no databases found for %s'):format(cluster.name),
@@ -205,7 +202,7 @@ M.subcommands = {
           end
 
           local db_items = vim.tbl_map(function(db)
-            local icon, highlight = require('sqmeow.icons').get('database')
+            local icon, highlight = require('sqmeow.core.icons').get('database')
             return { label = db, icon = icon, highlight = highlight, value = db }
           end, dbs)
 
@@ -223,7 +220,7 @@ M.subcommands = {
       end
 
       if args[1] then
-        for _, connection in ipairs(api.connections()) do
+        for _, connection in ipairs(require('sqmeow.api.connection').connections()) do
           if connection.name == args[1] then
             if is_cluster(connection) then
               return choose_database(connection)
@@ -244,20 +241,20 @@ M.subcommands = {
       end
 
       local items = vim.tbl_map(function(connection)
-        local icon, highlight = require('sqmeow.icons').get('connected')
+        local icon, highlight = require('sqmeow.core.icons').get('connected')
         local label = connection.name
         if
           not is_cluster(connection)
           and not connection.parent
           and not connection.name:find('/')
         then
-          local url = require('sqmeow.url').split(connection.url)
+          local url = require('sqmeow.core.url').split(connection.url)
           if url and url.database and url.database ~= '' and url.database ~= connection.name then
             label = ('%s / %s'):format(connection.name, url.database)
           end
         end
         return { label = label, icon = icon, highlight = highlight, value = connection }
-      end, api.connections())
+      end, require('sqmeow.api.connection').connections())
 
       if #items == 0 then
         return notify('nothing is connected', vim.log.levels.WARN)
@@ -280,7 +277,7 @@ M.subcommands = {
     complete = function(lead)
       local names = {}
       local seen = {}
-      for _, connection in ipairs(require('sqmeow.api').connections()) do
+      for _, connection in ipairs(require('sqmeow.api.connection').connections()) do
         if not seen[connection.name] then
           seen[connection.name] = true
           table.insert(names, connection.name)
@@ -324,7 +321,7 @@ M.subcommands = {
 
       if
         not require('sqmeow.sources').find(name)
-        and not require('sqmeow.state').connection_by_name(name)
+        and not require('sqmeow.core.state').connection_by_name(name)
       then
         return notify(('there is no connection called `%s`'):format(name), vim.log.levels.WARN)
       end
@@ -338,7 +335,7 @@ M.subcommands = {
       for _, spec in ipairs((require('sqmeow.sources').load())) do
         table.insert(names, spec.name)
       end
-      for _, connection in ipairs(require('sqmeow.api').connections()) do
+      for _, connection in ipairs(require('sqmeow.api.connection').connections()) do
         table.insert(names, connection.name)
       end
 
@@ -352,42 +349,41 @@ M.subcommands = {
   execute = {
     desc = 'Run the current buffer, the selection, or the given SQL',
     run = function(args, opts)
-      local api = require('sqmeow.api')
       if #args > 0 then
-        return void(api.execute(table.concat(args, ' ')))
+        return void(require('sqmeow.api.query').execute(table.concat(args, ' ')))
       end
       if opts.range and opts.range > 0 then
-        return void(api.execute_range(opts.line1, opts.line2))
+        return void(require('sqmeow.api.query').execute_range(opts.line1, opts.line2))
       end
-      void(api.execute_buffer())
+      void(require('sqmeow.api.query').execute_buffer())
     end,
   },
 
   float = {
     desc = 'Show the result in a bigger float, or back in its split',
     run = function()
-      require('sqmeow.api').toggle_float()
+      require('sqmeow.api.view').toggle_float()
     end,
   },
 
   review = {
     desc = 'Review the changes staged in the result, and apply them',
     run = function()
-      require('sqmeow.api').review()
+      require('sqmeow.api.view').review()
     end,
   },
 
   statement = {
     desc = 'Run the statement the cursor is in',
     run = function()
-      void(require('sqmeow.api').execute_statement())
+      void(require('sqmeow.api.query').execute_statement())
     end,
   },
 
   scratch = {
     desc = 'Create a scratchpad',
     run = function(args)
-      void(require('sqmeow.api').scratchpad(args[1]))
+      void(require('sqmeow.api.view').scratchpad(args[1]))
     end,
   },
 
@@ -409,7 +405,7 @@ M.subcommands = {
   cancel = {
     desc = 'Stop the running query',
     run = function()
-      if not require('sqmeow.api').cancel() then
+      if not require('sqmeow.api.query').cancel() then
         notify('there is no query running')
       end
     end,
@@ -418,42 +414,42 @@ M.subcommands = {
   next = {
     desc = 'Show the next page of results',
     run = function()
-      require('sqmeow.api').next_page()
+      require('sqmeow.api.query').next_page()
     end,
   },
 
   prev = {
     desc = 'Show the previous page of results',
     run = function()
-      require('sqmeow.api').prev_page()
+      require('sqmeow.api.query').prev_page()
     end,
   },
 
   toggle = {
     desc = 'Show the schema drawer, or hide it',
     run = function()
-      require('sqmeow.api').toggle()
+      require('sqmeow.api.view').toggle()
     end,
   },
 
   drawer = {
     desc = 'Show the schema drawer',
     run = function()
-      require('sqmeow.api').open_drawer()
+      require('sqmeow.api.view').open_drawer()
     end,
   },
 
   open = {
     desc = 'Show the result window',
     run = function()
-      require('sqmeow.api').open()
+      require('sqmeow.api.view').open()
     end,
   },
 
   close = {
     desc = 'Hide the result window',
     run = function()
-      require('sqmeow.api').close()
+      require('sqmeow.api.view').close()
     end,
   },
 
@@ -462,12 +458,12 @@ M.subcommands = {
     complete = function(lead)
       return vim.tbl_filter(function(method)
         return method:find(lead, 1, true) == 1
-      end, require('sqmeow.install').methods)
+      end, require('sqmeow.server.install').methods)
     end,
     run = function(args)
       -- Nothing is said here, and nothing is waited for.
       local method = args[1]
-      require('sqmeow.install').install({
+      require('sqmeow.server.install').install({
         method = method ~= '' and method or nil,
         version = args[2],
         callback = function(path)
@@ -477,7 +473,7 @@ M.subcommands = {
 
           -- The old engine is still running, and the new one cannot start until it has gone.
           require('sqmeow.rpc.client').stop()
-          require('sqmeow.state').reset()
+          require('sqmeow.core.state').reset()
           require('sqmeow.ui.drawer').reset()
         end,
       })
@@ -495,7 +491,7 @@ M.subcommands = {
     desc = 'Choose a past query and show its result again, or `clear` to forget them',
     run = function(args)
       if args[1] == 'clear' then
-        require('sqmeow.history').clear()
+        require('sqmeow.server.history').clear()
         require('sqmeow.ui.drawer').render()
         return notify('the query log is empty')
       end
@@ -536,7 +532,7 @@ M.subcommands = {
     desc = 'Stop the engine',
     run = function()
       require('sqmeow.rpc.client').stop()
-      require('sqmeow.state').reset()
+      require('sqmeow.core.state').reset()
       require('sqmeow.ui.drawer').reset()
       notify('engine stopped')
     end,
@@ -547,7 +543,7 @@ M.subcommands = {
     run = function()
       local channel, err = require('sqmeow.rpc.client').restart()
       -- The engine's session went with it, so the mirrored state is no longer true.
-      require('sqmeow.state').reset()
+      require('sqmeow.core.state').reset()
       require('sqmeow.ui.drawer').reset()
       if channel then
         return notify('engine restarted')
@@ -562,7 +558,7 @@ local function run(opts)
   local name = table.remove(args, 1)
 
   if not name then
-    return require('sqmeow.api').open_all()
+    return require('sqmeow.api.view').open_all()
   end
 
   local subcommand = M.subcommands[name]

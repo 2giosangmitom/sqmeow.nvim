@@ -1,7 +1,6 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local api = require('sqmeow.api')
 
 local captured
 local original_execute, original_selection
@@ -9,7 +8,7 @@ local T = MiniTest.new_set({
   hooks = {
     pre_case = function()
       captured = nil
-      original_execute = helpers.swap(api, 'execute', function(sql, opts)
+      original_execute = helpers.swap(require('sqmeow.api.query'), 'execute', function(sql, opts)
         captured = { sql = sql, opts = opts }
         return 42
       end)
@@ -17,7 +16,7 @@ local T = MiniTest.new_set({
       vim.o.selection = 'inclusive'
     end,
     post_case = function()
-      api.execute = original_execute
+      require('sqmeow.api.query').execute = original_execute
       vim.cmd('normal! \27')
       vim.o.selection = original_selection
     end,
@@ -40,7 +39,7 @@ T['active selection ignores stale marks'] = function()
   vim.api.nvim_buf_set_mark(buf, '>', 3, 20, {})
   vim.api.nvim_win_set_cursor(0, { 2, 0 })
   visual('V')
-  eq(api.execute_selection(), 42)
+  eq(require('sqmeow.api.query').execute_selection(), 42)
   eq(captured.sql, 'SELECT 2;')
   eq(captured.opts.source_buf, buf)
 end
@@ -49,21 +48,21 @@ T['characterwise exclusive selection excludes its endpoint'] = function()
   buffer({ 'SELECT 1;DELETE FROM important;' })
   vim.o.selection = 'exclusive'
   visual('gg0v9l')
-  api.execute_selection()
+  require('sqmeow.api.query').execute_selection()
   eq(captured.sql, 'SELECT 1;')
 end
 
 T['blockwise selection never includes unselected SQL'] = function()
   buffer({ 'xxSELECT 1; DROP TABLE a;', 'xxSELECT 2; DROP TABLE b;' })
   visual('gg02l<C-v>8lj')
-  api.execute_selection()
+  require('sqmeow.api.query').execute_selection()
   eq(captured.sql, 'SELECT 1;\nSELECT 2;')
 end
 
 T['reversed selection preserves multibyte characters'] = function()
   buffer({ 'a猫🐱z' })
   visual('gg0llvh')
-  api.execute_selection()
+  require('sqmeow.api.query').execute_selection()
   eq(captured.sql, '猫🐱')
 end
 
@@ -96,10 +95,10 @@ for dialect, query in pairs(queries) do
     vim.bo[buf].modified = true
     vim.b[buf].sqmeow_connection = dialect
     visual('ggVG')
-    api.execute_selection()
+    require('sqmeow.api.query').execute_selection()
     eq(captured.sql, query)
     eq(captured.opts.source_buf, buf)
-    api.execute_buffer()
+    require('sqmeow.api.query').execute_buffer()
     eq(captured.sql, query)
     eq(vim.fn.readfile(path), { 'saved stale query' })
   end

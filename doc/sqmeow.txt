@@ -24,7 +24,6 @@ Contents ~
   Troubleshooting ................................... |sqmeow-troubleshooting|
   Configuration .............................................. |sqmeow-config|
   Keymaps ................................................... |sqmeow-keymaps|
-  Public interface .............................................. |sqmeow-api|
 
 ------------------------------------------------------------------------------
                                                            *sqmeow-installation*
@@ -119,7 +118,7 @@ next connection, while renaming updates the open connection's label.
 Leave the database empty to browse databases on the server where supported.
 PostgreSQL databases open as child connections named `connection/database`.
 `:Sqmeow use` selects an open connection; it does not open a saved one.
-Lua callers can open saved entries with |sqmeow.api.connect_named()|.
+Lua callers can open saved entries with |sqmeow.require('sqmeow.api.connection').connect_named()|.
 
 Common URL forms: >text
   postgres://user:password@localhost:5432/app
@@ -264,7 +263,7 @@ specific database, use `:Sqmeow bind dev`; this sets `b:sqmeow_connection`.
 
 A bound buffer requires that named connection to be open. It never silently
 falls back to another connection. An unbound buffer uses the active one;
-execution fails if there is none. See |sqmeow.api.target()| for Lua callers.
+execution fails if there is none. See |sqmeow.require('sqmeow.api.connection').target()| for Lua callers.
 
 ------------------------------------------------------------------------------
                                                                 *sqmeow-queries*
@@ -388,7 +387,7 @@ Engine missing or incompatible:
 Connection missing from the drawer:
   Check `:pwd`, the nearest project config, and `sources` order. Duplicate
   names keep the first entry. Inspect source errors with: >lua
-    local _, errors = require('sqmeow.api').available()
+    local _, errors = require('sqmeow.api.connection').available()
     vim.print(errors)
 <
 Query goes to the wrong database:
@@ -835,22 +834,8 @@ Define the `<Plug>` mappings.
 
 ==============================================================================
 ------------------------------------------------------------------------------
-                                                                    *sqmeow-api*
-Lua API for connections, queries, and plugin windows.
-
-Import with `local db = require('sqmeow.api')`. Connection definitions from
-|sqmeow.api.available()| are distinct from live connections returned by
-|sqmeow.api.connections()|. Connection ids and query call ids belong to the
-current engine session; do not persist them across engine restarts.
-
-Connection and query methods return when the engine accepts work, not when
-it finishes. State and result windows update from engine events. Methods
-may start the engine and open/redraw UI; this is not a headless driver API.
-Rejected requests generally return nil/false and display a notification.
-
-------------------------------------------------------------------------------
-                                                          *sqmeow.api.connect()*
-                      `sqmeow.api.connect`({url}, {opts})
+                                               *sqmeow.api.connection.connect()*
+                 `sqmeow.api.connection.connect`({url}, {opts})
 Open a connection. Returns once the engine accepts the request; success arrives as an event.
 Parameters ~
 {url} `(string)` A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
@@ -862,11 +847,11 @@ Return ~
 `(string|nil)` error
 Usage ~
 >lua
-  require('sqmeow.api').connect('sqlite://./app.db', { name = 'app' })
+  require('sqmeow.api.connection').connect('sqlite://./app.db', { name = 'app' })
 <
 ------------------------------------------------------------------------------
-                                                    *sqmeow.api.connect_named()*
-                       `sqmeow.api.connect_named`({name})
+                                         *sqmeow.api.connection.connect_named()*
+                 `sqmeow.api.connection.connect_named`({name})
 Open a named source entry, carrying over its read-only and SSH settings.
 Reuses an existing non-closed connection only when its current definition matches.
 Changed definitions must be disconnected before reconnecting.
@@ -879,8 +864,8 @@ Return ~
 `(string|nil)` error
 
 ------------------------------------------------------------------------------
-                                                        *sqmeow.api.available()*
-                            `sqmeow.api.available`()
+                                             *sqmeow.api.connection.available()*
+                      `sqmeow.api.connection.available`()
 Read configured sources without connecting to their databases.
 Entries are returned in source order, with duplicate names removed. The
 problems list includes source failures and conflicts; usable entries remain.
@@ -891,8 +876,8 @@ Return ~
 `(string[])` problems
 
 ------------------------------------------------------------------------------
-                                                             *sqmeow.api.save()*
-                    `sqmeow.api.save`({name}, {url}, {opts})
+                                                  *sqmeow.api.connection.save()*
+              `sqmeow.api.connection.save`({name}, {url}, {opts})
 Persist a connection to the first configured file source (or its default).
 Replaces the same-named file entry. Does not open a connection or write back
 to project, environment, or command sources. Templates remain unexpanded.
@@ -905,8 +890,8 @@ Return ~
 `(boolean)` written
 
 ------------------------------------------------------------------------------
-                                                             *sqmeow.api.edit()*
-                      `sqmeow.api.edit`({name}, {changes})
+                                                  *sqmeow.api.connection.edit()*
+                `sqmeow.api.connection.edit`({name}, {changes})
 Update a file-source connection and rename its open connection to match.
 URL, read-only, and tunnel changes take effect only after reconnecting.
 Entries from project, environment, and command sources cannot be edited here.
@@ -918,11 +903,11 @@ Return ~
 `(boolean)` written
 Usage ~
 >lua
-  require('sqmeow.api').edit('app', { name = 'production' })
+  require('sqmeow.api.connection').edit('app', { name = 'production' })
 <
 ------------------------------------------------------------------------------
-                                                           *sqmeow.api.rename()*
-                       `sqmeow.api.rename`({id}, {name})
+                                                *sqmeow.api.connection.rename()*
+                  `sqmeow.api.connection.rename`({id}, {name})
 Rename an open connection in editor state and refresh its displayed label.
 Does not update a saved definition; use |sqmeow.api.edit()| for that.
 Parameters ~
@@ -932,8 +917,8 @@ Return ~
 `(boolean)` renamed
 
 ------------------------------------------------------------------------------
-                                                           *sqmeow.api.remove()*
-                          `sqmeow.api.remove`({name})
+                                                *sqmeow.api.connection.remove()*
+                     `sqmeow.api.connection.remove`({name})
 Delete a connection: close it while it is open, and forget the saved entry.
 A connection from a source other than the file is only closed, since its entry cannot be
 removed.
@@ -943,15 +928,15 @@ Return ~
 `(boolean)` removed Whether anything was closed or forgotten.
 
 ------------------------------------------------------------------------------
-                                                       *sqmeow.api.disconnect()*
-                         `sqmeow.api.disconnect`({id})
+                                            *sqmeow.api.connection.disconnect()*
+                    `sqmeow.api.connection.disconnect`({id})
 Close a connection.
 Parameters ~
 {id} `(integer|nil)` Defaults to the current connection.
 
 ------------------------------------------------------------------------------
-                                                              *sqmeow.api.use()*
-                             `sqmeow.api.use`({id})
+                                                   *sqmeow.api.connection.use()*
+                       `sqmeow.api.connection.use`({id})
 Select the default target for buffers without a connection binding.
 Does not connect or wait for readiness. Bound buffers retain their own target.
 Parameters ~
@@ -960,8 +945,8 @@ Return ~
 `(sqmeow.Connection|nil)` connection The one now active, or nil if there is no such id.
 
 ------------------------------------------------------------------------------
-                                                           *sqmeow.api.target()*
-                           `sqmeow.api.target`({buf})
+                                                *sqmeow.api.connection.target()*
+                     `sqmeow.api.connection.target`({buf})
 Resolve a buffer's target: its named binding first, then the active connection.
 A missing bound connection is an error, not a reason to fall back. This only
 looks up editor state; it neither opens a connection nor waits for readiness.
@@ -973,8 +958,26 @@ Return ~
 `(string|nil)` error Why there is none.
 
 ------------------------------------------------------------------------------
-                                                          *sqmeow.api.execute()*
-                      `sqmeow.api.execute`({sql}, {opts})
+                                           *sqmeow.api.connection.connections()*
+                     `sqmeow.api.connection.connections`()
+Every open connection.
+Return ~
+`(sqmeow.Connection[])`
+
+------------------------------------------------------------------------------
+                                             *sqmeow.api.connection.databases()*
+            `sqmeow.api.connection.databases`({conn_id}, {callback})
+Discovered databases of a connection, if it is a cluster. Uses cached schema nodes
+if already introspected, or queries the engine otherwise.
+Parameters ~
+{conn_id} `(integer)`
+{callback} `(fun(databases: string[]|nil, error: string|nil))`
+
+
+==============================================================================
+------------------------------------------------------------------------------
+                                                    *sqmeow.api.query.execute()*
+                   `sqmeow.api.query.execute`({sql}, {opts})
 Submit statements and open the result window. Completion arrives via events.
 Uses `opts.conn_id` when supplied; otherwise resolves `opts.source_buf` (or
 the current buffer) with |sqmeow.api.target()|. Pending edits or destructive
@@ -991,8 +994,8 @@ Return ~
 `(string|nil)` error Failure reason, or an explanation of deferred work.
 
 ------------------------------------------------------------------------------
-                                                   *sqmeow.api.execute_buffer()*
-                         `sqmeow.api.execute_buffer`()
+                                             *sqmeow.api.query.execute_buffer()*
+                      `sqmeow.api.query.execute_buffer`()
 Run the whole current buffer.
 Return ~
 `(integer|nil)` call_id
@@ -1000,8 +1003,8 @@ Return ~
 `(string|nil)` error See |sqmeow.api.execute()|, including deferred prompts.
 
 ------------------------------------------------------------------------------
-                                                *sqmeow.api.execute_statement()*
-                        `sqmeow.api.execute_statement`()
+                                          *sqmeow.api.query.execute_statement()*
+                     `sqmeow.api.query.execute_statement`()
 Run the statement the cursor is in.
 Return ~
 `(integer|nil)` call_id
@@ -1009,8 +1012,8 @@ Return ~
 `(string|nil)` error See |sqmeow.api.execute()|, including deferred prompts.
 
 ------------------------------------------------------------------------------
-                                                *sqmeow.api.execute_selection()*
-                        `sqmeow.api.execute_selection`()
+                                          *sqmeow.api.query.execute_selection()*
+                     `sqmeow.api.query.execute_selection`()
 Run the most recent visual selection.
 Return ~
 `(integer|nil)` call_id
@@ -1018,8 +1021,8 @@ Return ~
 `(string|nil)` error
 
 ------------------------------------------------------------------------------
-                                                    *sqmeow.api.execute_range()*
-                  `sqmeow.api.execute_range`({first}, {last})
+                                              *sqmeow.api.query.execute_range()*
+               `sqmeow.api.query.execute_range`({first}, {last})
 Run an explicit one-based, inclusive line range from the current buffer.
 Parameters ~
 {first} `(integer)` First line, counted from one.
@@ -1030,8 +1033,8 @@ Return ~
 `(string|nil)` error
 
 ------------------------------------------------------------------------------
-                                                           *sqmeow.api.cancel()*
-                             `sqmeow.api.cancel`()
+                                                     *sqmeow.api.query.cancel()*
+                          `sqmeow.api.query.cancel`()
 Request cancellation of an edit apply, or otherwise the current query.
 Completion is asynchronous; true means cancellation was requested, not that
 the database has already stopped or that arbitrary SQL was rolled back.
@@ -1039,38 +1042,40 @@ Return ~
 `(boolean)` stopped Whether the engine accepted cancellation.
 
 ------------------------------------------------------------------------------
-                                                        *sqmeow.api.next_page()*
-                            `sqmeow.api.next_page`()
+                                                  *sqmeow.api.query.next_page()*
+                         `sqmeow.api.query.next_page`()
 Show the next page of the current result.
 
 ------------------------------------------------------------------------------
-                                                        *sqmeow.api.prev_page()*
-                            `sqmeow.api.prev_page`()
+                                                  *sqmeow.api.query.prev_page()*
+                         `sqmeow.api.query.prev_page`()
 Show the previous page of the current result.
 
 ------------------------------------------------------------------------------
-                                                       *sqmeow.api.first_page()*
-                           `sqmeow.api.first_page`()
+                                                 *sqmeow.api.query.first_page()*
+                        `sqmeow.api.query.first_page`()
 Show the first page of the current result.
 
 ------------------------------------------------------------------------------
-                                                        *sqmeow.api.last_page()*
-                            `sqmeow.api.last_page`()
+                                                  *sqmeow.api.query.last_page()*
+                         `sqmeow.api.query.last_page`()
 Show the last page of the current result.
 
+
+==============================================================================
 ------------------------------------------------------------------------------
-                                                     *sqmeow.api.toggle_float()*
-                          `sqmeow.api.toggle_float`()
+                                                *sqmeow.api.view.toggle_float()*
+                        `sqmeow.api.view.toggle_float`()
 Show the result in a float, or put it back in its split.
 
 ------------------------------------------------------------------------------
-                                                           *sqmeow.api.review()*
-                             `sqmeow.api.review`()
+                                                      *sqmeow.api.view.review()*
+                           `sqmeow.api.view.review`()
 Show the statements the changes staged in the result plan into, to apply with `<C-s>`.
 
 ------------------------------------------------------------------------------
-                                                           *sqmeow.api.filter()*
-                          `sqmeow.api.filter`({view})
+                                                      *sqmeow.api.view.filter()*
+                        `sqmeow.api.view.filter`({view})
 Filter and order the current result with a WHERE condition and an ORDER BY list, which an open
 SQL or MongoDB connection runs in the query and Redis, ScyllaDB, SurrealDB or a closed connection
 runs on the rows held. Empty strings clear them.
@@ -1080,11 +1085,11 @@ Return ~
 `(boolean)` started
 Usage ~
 >lua
-  require('sqmeow.api').filter({ where = "name like 'a%'", order_by = 'age desc' })
+  require('sqmeow.api.view').filter({ where = "name like 'a%'", order_by = 'age desc' })
 <
 ------------------------------------------------------------------------------
-                                                             *sqmeow.api.view()*
-                           `sqmeow.api.view`({view})
+                                                        *sqmeow.api.view.view()*
+                         `sqmeow.api.view.view`({view})
 Filter and sort the current result's rows in the engine's memory, without querying again.
 Columns are zero-based; a filter without one searches every column.
 Parameters ~
@@ -1092,28 +1097,28 @@ Parameters ~
 `op`: `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `starts_with`, `is_null`, `not_null`.
 Usage ~
 >lua
-  require('sqmeow.api').view({ filters = { { column = 1, op = 'contains', value = 'al' } } })
+  require('sqmeow.api.view').view({ filters = { { column = 1, op = 'contains', value = 'al' } } })
 <
 ------------------------------------------------------------------------------
-                                                             *sqmeow.api.open()*
-                              `sqmeow.api.open`()
+                                                        *sqmeow.api.view.open()*
+                            `sqmeow.api.view.open`()
 Open the result window.
 
 ------------------------------------------------------------------------------
-                                                            *sqmeow.api.close()*
-                              `sqmeow.api.close`()
+                                                       *sqmeow.api.view.close()*
+                           `sqmeow.api.view.close`()
 Close the result window.
 
 ------------------------------------------------------------------------------
-                                                           *sqmeow.api.reopen()*
-                         `sqmeow.api.reopen`({call_id})
+                                                      *sqmeow.api.view.reopen()*
+                      `sqmeow.api.view.reopen`({call_id})
 Put a past result back in the result window.
 Parameters ~
 {call_id} `(integer)` From the query log.
 
 ------------------------------------------------------------------------------
-                                                          *sqmeow.api.restore()*
-                         `sqmeow.api.restore`({entry})
+                                                     *sqmeow.api.view.restore()*
+                       `sqmeow.api.view.restore`({entry})
 Show a logged result the engine no longer holds, from the copy saved beside the log.
 Parameters ~
 {entry} `(table)` From the query log, with a saved result.
@@ -1123,8 +1128,40 @@ Return ~
 `(string|nil)` error
 
 ------------------------------------------------------------------------------
-                                                           *sqmeow.api.export()*
-                          `sqmeow.api.export`({opts})
+                                                  *sqmeow.api.view.scratchpad()*
+                `sqmeow.api.view.scratchpad`({name}, {default})
+Create a scratchpad, asking what to call it. `/` in the name makes folders.
+Parameters ~
+{name} `(string|nil)` Raw name with extension (e.g. `report.sql`, `cache.redis`, `reports/monthly.sql`). If given, it is created directly; otherwise the user is prompted.
+{default} `(string|nil)` Prefilled prompt when asking, such as a folder followed by `/`.
+
+------------------------------------------------------------------------------
+                                                 *sqmeow.api.view.open_drawer()*
+                        `sqmeow.api.view.open_drawer`()
+Show the schema drawer.
+Return ~
+`(integer)` win
+
+------------------------------------------------------------------------------
+                                                *sqmeow.api.view.close_drawer()*
+                        `sqmeow.api.view.close_drawer`()
+Hide the schema drawer.
+
+------------------------------------------------------------------------------
+                                                    *sqmeow.api.view.open_all()*
+                          `sqmeow.api.view.open_all`()
+Open the drawer and the result window.
+
+------------------------------------------------------------------------------
+                                                      *sqmeow.api.view.toggle()*
+                           `sqmeow.api.view.toggle`()
+Show everything, or hide it all if any of it is showing.
+
+
+==============================================================================
+------------------------------------------------------------------------------
+                                                    *sqmeow.api.export.export()*
+                       `sqmeow.api.export.export`({opts})
 Export retained result rows to a file or the clipboard, asynchronously.
 Without `path` or `clipboard`, opens a dialog with a preview. Uses visible
 columns and the current view unless `all` is true. Does not rerun the query.
@@ -1134,52 +1171,6 @@ destination; `clipboard = true`: copy instead. `headers = false` omits CSV
 headers. `offset` (zero-based) and `limit` select rows. SQL options: `table`
 overrides the target, `batch` combines INSERT rows, `create` includes DDL.
 `all = true` exports retained rows outside the current filtered view.
-
-------------------------------------------------------------------------------
-                                                       *sqmeow.api.scratchpad()*
-                   `sqmeow.api.scratchpad`({name}, {default})
-Create a scratchpad, asking what to call it. `/` in the name makes folders.
-Parameters ~
-{name} `(string|nil)` Raw name with extension (e.g. `report.sql`, `cache.redis`, `reports/monthly.sql`). If given, it is created directly; otherwise the user is prompted.
-{default} `(string|nil)` Prefilled prompt when asking, such as a folder followed by `/`.
-
-------------------------------------------------------------------------------
-                                                      *sqmeow.api.open_drawer()*
-                           `sqmeow.api.open_drawer`()
-Show the schema drawer.
-Return ~
-`(integer)` win
-
-------------------------------------------------------------------------------
-                                                     *sqmeow.api.close_drawer()*
-                          `sqmeow.api.close_drawer`()
-Hide the schema drawer.
-
-------------------------------------------------------------------------------
-                                                         *sqmeow.api.open_all()*
-                            `sqmeow.api.open_all`()
-Open the drawer and the result window.
-
-------------------------------------------------------------------------------
-                                                           *sqmeow.api.toggle()*
-                             `sqmeow.api.toggle`()
-Show everything, or hide it all if any of it is showing.
-
-------------------------------------------------------------------------------
-                                                      *sqmeow.api.connections()*
-                           `sqmeow.api.connections`()
-Every open connection.
-Return ~
-`(sqmeow.Connection[])`
-
-------------------------------------------------------------------------------
-                                                        *sqmeow.api.databases()*
-                 `sqmeow.api.databases`({conn_id}, {callback})
-Discovered databases of a connection, if it is a cluster. Uses cached schema nodes
-if already introspected, or queries the engine otherwise.
-Parameters ~
-{conn_id} `(integer)`
-{callback} `(fun(databases: string[]|nil, error: string|nil))`
 
 
  vim:tw=78:ts=8:noet:ft=help:norl:

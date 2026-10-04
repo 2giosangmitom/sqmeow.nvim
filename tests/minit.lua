@@ -30,7 +30,7 @@ end
 require('nvim-treesitter.configs').setup({ ensure_installed = { 'sql' }, sync_install = true })
 
 -- Everything the plugin writes lives under `core.path`.
-vim.fn.delete(require('sqmeow.paths').root(), 'rf')
+vim.fn.delete(require('sqmeow.core.paths').root(), 'rf')
 
 local MiniTest = require('mini.test')
 MiniTest.setup()

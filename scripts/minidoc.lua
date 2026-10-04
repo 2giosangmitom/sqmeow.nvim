@@ -14,7 +14,10 @@ local input = {
   'lua/sqmeow/init.lua',
   'lua/sqmeow/config.lua',
   'lua/sqmeow/keymap.lua',
-  'lua/sqmeow/api.lua',
+  'lua/sqmeow/api/connection.lua',
+  'lua/sqmeow/api/query.lua',
+  'lua/sqmeow/api/view.lua',
+  'lua/sqmeow/api/export.lua',
 }
 
 -- The name each file's `M` stands for.
@@ -22,7 +25,10 @@ local modules = {
   ['lua/sqmeow/init.lua'] = 'sqmeow',
   ['lua/sqmeow/config.lua'] = 'sqmeow.config',
   ['lua/sqmeow/keymap.lua'] = 'sqmeow.keymap',
-  ['lua/sqmeow/api.lua'] = 'sqmeow.api',
+  ['lua/sqmeow/api/connection.lua'] = 'sqmeow.api.connection',
+  ['lua/sqmeow/api/query.lua'] = 'sqmeow.api.query',
+  ['lua/sqmeow/api/view.lua'] = 'sqmeow.api.view',
+  ['lua/sqmeow/api/export.lua'] = 'sqmeow.api.export',
 }
 
 --- The module a block was parsed out of, or nil when it did not come from a file.

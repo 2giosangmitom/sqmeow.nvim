@@ -4,12 +4,12 @@ local M = {}
 
 local wired = false
 
-local notify = require('sqmeow.utils').notify
+local notify = require('sqmeow.core.utils').notify
 
 --- Handle a connection changing state.
 ---@param payload table
 function M.on_connection(payload)
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local connection = state.connections[payload.id]
   if not connection then
     return
@@ -30,7 +30,7 @@ function M.on_connection(payload)
   state.failures[connection.name] = payload.state == 'error' and payload.error or nil
 
   if payload.state == 'connected' then
-    require('sqmeow.session').connected(connection)
+    require('sqmeow.server.session').connected(connection)
     pcall(function()
       require('sqmeow.completion').ensure(payload.id)
     end)
@@ -67,7 +67,7 @@ end
 --- Handle a query changing state.
 ---@param payload table
 function M.on_call(payload)
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local result = require('sqmeow.ui.result')
 
   -- Merge rather than replace: the SQL text is the plugin's own record of this call, and the engine has no reason to send them back.
@@ -103,7 +103,7 @@ function M.on_call(payload)
 
   if payload.state ~= 'executing' then
     state.record_call(state.call)
-    require('sqmeow.history').append(state.call)
+    require('sqmeow.server.history').append(state.call)
     -- The drawer lists the log, so a finished query shows up there without anyone asking.
     require('sqmeow.ui.drawer').render()
   end

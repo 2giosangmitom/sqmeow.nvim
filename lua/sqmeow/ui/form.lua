@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 --- What the form needs from its caller.
 ---@class sqmeow.FormSpec

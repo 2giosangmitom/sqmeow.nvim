@@ -1,9 +1,9 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local install = require('sqmeow.install')
+local install = require('sqmeow.server.install')
 local config = require('sqmeow.config')
-local paths = require('sqmeow.paths')
+local paths = require('sqmeow.core.paths')
 local rpc = require('sqmeow.rpc.client')
 
 --- Swallow notifications for the rest of the case.

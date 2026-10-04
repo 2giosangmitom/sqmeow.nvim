@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 local popup = nil
 --- The table asked for last, so an answer for an earlier one is dropped.

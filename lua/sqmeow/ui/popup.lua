@@ -21,7 +21,7 @@ local M = {}
 ---@return any|nil popup Mounted nui popup.
 ---@return string|nil err
 function M.open(spec)
-  local utils = require('sqmeow.utils')
+  local utils = require('sqmeow.core.utils')
   local nui, nui_err = utils.nui({ 'popup' }, 'the popup')
   if not nui then
     return nil, nui_err

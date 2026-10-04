@@ -55,7 +55,7 @@
 
 ---@alias sqmeow.Table.RowMark { mark: string, mark_hl: string|nil, line_hl: string|nil }
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 local M = {}
 M.__index = M

@@ -1,10 +1,10 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local history = require('sqmeow.history')
+local history = require('sqmeow.server.history')
 local config = require('sqmeow.config')
-local paths = require('sqmeow.paths')
-local state = require('sqmeow.state')
+local paths = require('sqmeow.core.paths')
+local state = require('sqmeow.core.state')
 
 -- Everything the log writes goes under here, so the suite never touches a real one.
 local root = vim.fn.tempname()

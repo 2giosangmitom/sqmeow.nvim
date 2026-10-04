@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 local popup = nil
 
@@ -15,7 +15,7 @@ local TYPE_WIDTH = 16
 ---@return NuiLine[]
 function M.lines(columns, width)
   local Line = require('nui.line')
-  local truncate = require('sqmeow.utils').truncate
+  local truncate = require('sqmeow.core.utils').truncate
   local config = require('sqmeow.config').get()
   local ellipsis = config.icons.grid.ellipsis
 
@@ -56,7 +56,7 @@ end
 --- Show one row of the current result.
 ---@param row integer Zero-based row index within the whole result.
 function M.open(row)
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if not (call and call.call_id) then
     return
   end

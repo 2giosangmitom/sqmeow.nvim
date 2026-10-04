@@ -6,7 +6,7 @@ local helpers = dofile('tests/helpers.lua')
 local config = require('sqmeow.config')
 local health = require('sqmeow.health')
 local rpc = require('sqmeow.rpc.client')
-local state = require('sqmeow.state')
+local state = require('sqmeow.core.state')
 
 --- Read connections from the environment, and nothing else.
 local function use_env()

@@ -3,12 +3,11 @@ local MiniTest = require('mini.test')
 
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local api = require('sqmeow.api')
 local rpc = require('sqmeow.rpc.client')
-local state = require('sqmeow.state')
+local state = require('sqmeow.core.state')
 local result = require('sqmeow.ui.result')
 local drawer = require('sqmeow.ui.drawer')
-local sql = require('sqmeow.sql')
+local sql = require('sqmeow.core.sql')
 
 local TIMEOUT = 15000
 
@@ -56,7 +55,7 @@ for _, dialect in ipairs({ 'postgres', 'mysql' }) do
         helpers.connect(url, nil, TIMEOUT)
       end,
       post_case = function()
-        api.disconnect()
+        require('sqmeow.api.connection').disconnect()
       end,
     },
   })
@@ -170,7 +169,7 @@ for _, server in ipairs({ 'redis', 'dragonfly' }) do
         helpers.connect(url, nil, TIMEOUT)
       end,
       post_case = function()
-        api.disconnect()
+        require('sqmeow.api.connection').disconnect()
       end,
     },
   })
@@ -276,7 +275,7 @@ T['postgres cluster'] = MiniTest.new_set({
       skip_unless(servers.postgres, 'SQMEOW_TEST_POSTGRES_URL')
     end,
     post_case = function()
-      api.disconnect()
+      require('sqmeow.api.connection').disconnect()
       drawer.close()
     end,
   },
@@ -316,7 +315,7 @@ T['postgres cluster']['opens a database from the drawer as its own connection'] 
   eq(state.current, child.id)
 
   -- Pressing `u` on the database row also switches to the child connection.
-  api.use(cluster.id)
+  require('sqmeow.api.connection').use(cluster.id)
   eq(state.current, cluster.id)
   vim.api.nvim_win_set_cursor(
     drawer.open(),
@@ -329,7 +328,7 @@ T['postgres cluster']['opens a database from the drawer as its own connection'] 
     helpers.absent(line, 'cluster/')
   end
 
-  api.disconnect(cluster.id)
+  require('sqmeow.api.connection').disconnect(cluster.id)
   eq(state.child_connection(cluster.id, database), nil)
 end
 
@@ -341,7 +340,7 @@ T['mongodb'] = MiniTest.new_set({
       helpers.connect(vim.env.SQMEOW_TEST_MONGODB_URL, nil, TIMEOUT)
     end,
     post_case = function()
-      api.disconnect()
+      require('sqmeow.api.connection').disconnect()
     end,
   },
 })
@@ -395,7 +394,7 @@ T['mongodb']['lists collections and previews one'] = function()
 end
 
 T['mongodb']['lists every database when the url names none'] = function()
-  api.disconnect()
+  require('sqmeow.api.connection').disconnect()
   helpers.connect((vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')), nil, TIMEOUT)
   -- Rows the drawer opens as connections of their own, which is what `u` chooses between.
   eq(named(introspect({}), 'sqmeow').kind, 'database')
@@ -405,12 +404,12 @@ T['mongodb']['refreshing the server reloads the databases opened under it'] = fu
   -- Connecting preloads the drawer, so create the database before opening the server.
   eq(run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}').state, 'done')
   eq(run('{"insert": "first", "documents": [{"x": 1}], "$db": "sqmeow_refresh"}').state, 'done')
-  api.disconnect()
+  require('sqmeow.api.connection').disconnect()
   local url = vim.env.SQMEOW_TEST_MONGODB_URL:gsub('/[^/]*$', '/')
   local cluster_id = helpers.connect(url, nil, TIMEOUT)
   MiniTest.finally(function()
     run('{"dropDatabase": 1, "$db": "sqmeow_refresh"}')
-    api.disconnect(cluster_id)
+    require('sqmeow.api.connection').disconnect(cluster_id)
   end)
 
   local function press(pattern, action)
@@ -468,7 +467,7 @@ for _, server in ipairs({ 'scylla', 'cassandra' }) do
         )
       end,
       post_case = function()
-        api.disconnect()
+        require('sqmeow.api.connection').disconnect()
       end,
     },
   })
@@ -521,7 +520,7 @@ T['surrealdb'] = MiniTest.new_set({
       run('DEFINE DATABASE IF NOT EXISTS lua')
     end,
     post_case = function()
-      api.disconnect()
+      require('sqmeow.api.connection').disconnect()
     end,
   },
 })
@@ -547,7 +546,7 @@ T['surrealdb']['lists tables and previews one with its id first'] = function()
 end
 
 T['surrealdb']['lists every database when the url names none'] = function()
-  api.disconnect()
+  require('sqmeow.api.connection').disconnect()
   helpers.connect(surreal, nil, TIMEOUT)
   eq(named(introspect({}), 'lua').kind, 'database')
 end
@@ -566,7 +565,7 @@ T['clickhouse'] = MiniTest.new_set({
       helpers.connect(vim.env.SQMEOW_TEST_CLICKHOUSE_URL, nil, TIMEOUT)
     end,
     post_case = function()
-      api.disconnect()
+      require('sqmeow.api.connection').disconnect()
     end,
   },
 })
@@ -615,7 +614,7 @@ T['oracle'] = MiniTest.new_set({
       helpers.connect(vim.env.SQMEOW_TEST_ORACLE_URL, nil, TIMEOUT)
     end,
     post_case = function()
-      api.disconnect()
+      require('sqmeow.api.connection').disconnect()
     end,
   },
 })

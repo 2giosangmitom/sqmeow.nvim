@@ -2,7 +2,7 @@ local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
 local result = require('sqmeow.ui.result')
-local icons = require('sqmeow.icons')
+local icons = require('sqmeow.core.icons')
 local sqmeow = require('sqmeow')
 
 local T = MiniTest.new_set({
@@ -134,7 +134,7 @@ T['window']['has no sticky window when not scrolled'] = function()
 end
 
 T['window']['pins sticky header when scrolled past line 2'] = function()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local previous = state.call
   MiniTest.finally(function()
     state.call = previous
@@ -198,7 +198,7 @@ T['window']['pins sticky header when scrolled past line 2'] = function()
 end
 
 T['window']['sticky header closes when result window closes'] = function()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local previous = state.call
   MiniTest.finally(function()
     state.call = previous
@@ -250,7 +250,7 @@ T['window']['sticky header closes when result window closes'] = function()
 end
 
 T['window']['does not pin sticky header for errors'] = function()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local previous = state.call
   MiniTest.finally(function()
     state.call = previous
@@ -282,7 +282,7 @@ T['winbar'] = MiniTest.new_set({
 })
 
 T['winbar']['renders winbar on open window'] = function()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local summary = {
     call_id = 999,
     state = 'done',

@@ -136,7 +136,7 @@ T['events']['stop'] = MiniTest.new_set({ parametrize = { { false }, { true } } }
 
 T['events']['stop']['discards events before a scheduled drain'] = function(exited)
   local on_exit
-  helpers.stub(require('sqmeow.install'), 'resolve', function()
+  helpers.stub(require('sqmeow.server.install'), 'resolve', function()
     return '/fake/engine', 'development'
   end)
   helpers.stub(vim.fn, 'jobstart', function(_, opts)

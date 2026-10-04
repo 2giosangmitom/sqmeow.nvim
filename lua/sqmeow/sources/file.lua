@@ -5,7 +5,7 @@ local M = {}
 --- Where connections are kept when the source does not name a path.
 ---@return string
 function M.default_path()
-  return require('sqmeow.paths').connections()
+  return require('sqmeow.core.paths').connections()
 end
 
 --- The path this source reads.

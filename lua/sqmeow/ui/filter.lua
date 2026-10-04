@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow.filter')
 
@@ -161,7 +161,7 @@ function M.complete(findstart, base)
   end
 
   local result = require('sqmeow.ui.result')
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   local prefix = base:lower()
   local items = {}
   local names = call and result.filter_names(call) or {}
@@ -204,7 +204,7 @@ M.actions = {
 ---@param line integer 1 for WHERE, 2 for ORDER BY.
 function M.open(line)
   local result = require('sqmeow.ui.result')
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   local win = result.window()
   if not (call and call.call_id and win) then
     return utils.notify('there is no result to filter', vim.log.levels.WARN)

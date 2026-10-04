@@ -4,8 +4,7 @@ local helpers = dofile('tests/helpers.lua')
 local sources = require('sqmeow.sources')
 local file = require('sqmeow.sources.file')
 local config = require('sqmeow.config')
-local state = require('sqmeow.state')
-local api = require('sqmeow.api')
+local state = require('sqmeow.core.state')
 
 local scratch = vim.fs.joinpath(vim.fn.tempname(), 'connections.json')
 
@@ -194,7 +193,7 @@ T['editing']['changes the saved connection'] = function()
   save('app', 'sqlite://app.db')
   only_file()
 
-  eq(api.edit('app', { name = 'production' }), true)
+  eq(require('sqmeow.api.connection').edit('app', { name = 'production' }), true)
 
   local found = sources.load()
   eq(found[1].name, 'production')
@@ -215,24 +214,24 @@ T['editing']['renames an open connection along with the saved one'] = function()
     state = 'connected',
   })
 
-  api.edit('app', { name = 'production' })
+  require('sqmeow.api.connection').edit('app', { name = 'production' })
   eq(state.connections[id].name, 'production')
 end
 
 T['editing']['refuses a connection no source declares'] = function()
   only_file()
-  eq(api.edit('nope', { name = 'x' }), false)
+  eq(require('sqmeow.api.connection').edit('nope', { name = 'x' }), false)
 end
 
 T['editing']['renames an open connection on its own'] = function()
   local id = state.next_connection_id()
   state.add_connection({ id = id, name = 'scratch', url = 'sqlite::memory:', state = 'connected' })
 
-  eq(api.rename(id, 'notes'), true)
+  eq(require('sqmeow.api.connection').rename(id, 'notes'), true)
   eq(state.connections[id].name, 'notes')
   -- An empty name would leave a row with nothing on it.
-  eq(api.rename(id, ''), false)
-  eq(api.rename(id + 99, 'nowhere'), false)
+  eq(require('sqmeow.api.connection').rename(id, ''), false)
+  eq(require('sqmeow.api.connection').rename(id + 99, 'nowhere'), false)
 end
 
 T['removing'] = MiniTest.new_set({
@@ -259,7 +258,7 @@ T['removing']['forgets the saved connection and closes it while it is open'] = f
     return true
   end)
 
-  eq(api.remove('app'), true)
+  eq(require('sqmeow.api.connection').remove('app'), true)
   eq(sources.find('app'), nil)
   eq(state.connections[id], nil)
 end
@@ -268,7 +267,7 @@ T['removing']['forgets a saved connection that was never opened'] = function()
   save('app', 'sqlite://app.db')
   only_file()
 
-  eq(api.remove('app'), true)
+  eq(require('sqmeow.api.connection').remove('app'), true)
   eq(sources.load(), {})
 end
 
@@ -281,7 +280,7 @@ T['removing']['closes a connection that was never saved'] = function()
     return true
   end)
 
-  eq(api.remove('scratch'), true)
+  eq(require('sqmeow.api.connection').remove('scratch'), true)
   eq(state.connections[id], nil)
 end
 
@@ -296,7 +295,7 @@ T['removing']['only closes a connection from another source'] = function()
   end)
 
   -- The open connection is closed, but the entry it came from stays.
-  eq(api.remove('ci'), true)
+  eq(require('sqmeow.api.connection').remove('ci'), true)
   eq(state.connections[id], nil)
   eq(sources.find('ci').url, 'sqlite://ci.db')
 end
@@ -305,13 +304,13 @@ T['removing']['refuses a connection from another source that is not open'] = fun
   vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'ci', url = 'sqlite://ci.db' } })
   only({ type = 'env' })
 
-  eq(api.remove('ci'), false)
+  eq(require('sqmeow.api.connection').remove('ci'), false)
   eq(sources.find('ci').url, 'sqlite://ci.db')
 end
 
 T['removing']['refuses a connection nothing declares'] = function()
   only_file()
-  eq(api.remove('nope'), false)
+  eq(require('sqmeow.api.connection').remove('nope'), false)
 end
 
 T['combining'] = MiniTest.new_set()
@@ -375,11 +374,11 @@ T['connecting']['reuses an open connection of the same name'] = function()
   state.add_connection({ id = id, name = 'dev', url = 'sqlite://dev.db', state = 'connected' })
 
   local connect_called = false
-  helpers.stub(api, 'connect', function()
+  helpers.stub(require('sqmeow.api.connection'), 'connect', function()
     connect_called = true
   end)
 
-  local returned_id = api.connect_named('dev')
+  local returned_id = require('sqmeow.api.connection').connect_named('dev')
   eq(returned_id, id)
   eq(state.current, id)
   eq(connect_called, false)
@@ -390,12 +389,12 @@ T['connecting']['opens a new connection when not already open'] = function()
   only_file()
 
   local connected
-  helpers.stub(api, 'connect', function(url, opts)
+  helpers.stub(require('sqmeow.api.connection'), 'connect', function(url, opts)
     connected = { url = url, name = opts.name }
     return 42
   end)
 
-  local returned_id = api.connect_named('dev')
+  local returned_id = require('sqmeow.api.connection').connect_named('dev')
   eq(returned_id, 42)
   eq(connected, { url = 'sqlite://dev.db', name = 'dev' })
 end
@@ -415,7 +414,7 @@ T['connecting']['refuses changed connection settings']['until closed'] = functio
   )
   local id = state.next_connection_id()
   state.add_connection({ id = id, name = 'dev', url = 'sqlite://dev.db', state = 'connected' })
-  local returned, err = api.connect_named('dev')
+  local returned, err = require('sqmeow.api.connection').connect_named('dev')
   eq(returned, nil)
   helpers.contains(err, 'close it before reconnecting')
 end

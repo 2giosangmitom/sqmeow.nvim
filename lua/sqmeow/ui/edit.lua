@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 --- `updates[row][column]` is the new value: a string, `vim.NIL` for `NULL`, or `{ sql = expression }`.
 --- Zero-based indices.
@@ -300,7 +300,7 @@ local FOOTER = {
 ---@param target { row: integer|nil, insert: integer|nil, column: integer, name: string }
 ---@param sql boolean|nil Take a SQL expression, such as `now()`, rather than a value.
 function M.edit_cell(target, sql)
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   local described = call and call.columns and call.columns[target.column + 1]
   if not (call and described and described.editable) then
     return utils.notify(('`%s` cannot be edited'):format(target.name), vim.log.levels.WARN)
@@ -412,7 +412,7 @@ end
 
 --- The filetype planned statements are shown with.
 local function filetype(call)
-  local connection = require('sqmeow.state').connections[call.conn_id]
+  local connection = require('sqmeow.core.state').connections[call.conn_id]
   local dialect = connection and connection.dialect
   if dialect == 'mongodb' then
     return 'json'
@@ -462,7 +462,7 @@ function M.on_applied(payload)
     ('applied %d statement%s'):format(payload.statements, payload.statements == 1 and '' or 's')
   )
 
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if call and call.conn_id == payload.conn_id then
     require('sqmeow.ui.result').rerun(nil, true)
   end
@@ -470,7 +470,7 @@ end
 
 --- Show the statements the staged changes plan into, and apply them on `<C-s>`.
 function M.review()
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if M.count() == 0 then
     return utils.notify('there are no changes to review')
   end

@@ -8,7 +8,7 @@ local filetypes = { sql = 'sql', redis = 'redis', json = 'json', surql = 'surql'
 --- Where scratchpads are kept.
 ---@return string
 function M.directory()
-  return require('sqmeow.paths').scratch()
+  return require('sqmeow.core.paths').scratch()
 end
 
 --- A path inside the scratch directory, relative to it with `/` separators.
@@ -412,16 +412,16 @@ end
 --- Actions the scratchpad's keys are bound to.
 M.actions = {
   execute_statement = function()
-    require('sqmeow.api').execute_statement()
+    require('sqmeow.api.query').execute_statement()
   end,
   execute_selection = function()
-    require('sqmeow.api').execute_selection()
+    require('sqmeow.api.query').execute_selection()
   end,
   execute_buffer = function()
-    require('sqmeow.api').execute_buffer()
+    require('sqmeow.api.query').execute_buffer()
   end,
   cancel = function()
-    require('sqmeow.api').cancel()
+    require('sqmeow.api.query').cancel()
   end,
   help = function()
     require('sqmeow.ui.help').open('editor')
@@ -460,8 +460,8 @@ function M.update_winbar()
     local buf = vim.api.nvim_win_get_buf(win)
     -- Scratchpads, and any other buffer someone has tied to a connection with `:Sqmeow bind`.
     if M.is_scratchpad(buf) or vim.b[buf].sqmeow_connection then
-      local connection, reason = require('sqmeow.api').target(buf)
-      local label = connection and require('sqmeow.state').label(connection) or reason
+      local connection, reason = require('sqmeow.api.connection').target(buf)
+      local label = connection and require('sqmeow.core.state').label(connection) or reason
 
       vim.wo[win].winbar = ('%%#SqmeowWinbar# %s %%*'):format(label)
     end
