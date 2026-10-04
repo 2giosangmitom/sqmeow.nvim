@@ -9,6 +9,16 @@
 //! [`Session`] owns connection/result membership; the handler modules implement
 //! individual operations. Protocol failures become RPC errors, while failures
 //! after acceptance are reported by the operation's event stream.
+//!
+//! `result_view` is the shared view request. `mode = "memory"` accepts `call_id`,
+//! `filters`, `sort`, `where`, and `order_by`; it acknowledges the call id and
+//! emits `call:view`. `mode = "query"` accepts the existing `execute` arguments
+//! (`conn_id`, `sql`, `where`, `order_by`, `columns`, etc.) and the originating
+//! `call_id`, acknowledges a new
+//! call id, and emits `call:state`. `rows` always returns `indices` into the
+//! original retained result, regardless of the mode that made the view.
+//! `result_capabilities` reads the current ability to re-query or filter held
+//! rows; summaries carry a snapshot of the same map.
 
 pub mod archive;
 pub mod args;
@@ -111,6 +121,7 @@ impl Core {
             "cancel" => self.cancel(args),
             "row" => self.row(args),
             "rows" => self.rows(args),
+            "result_capabilities" => self.result_capabilities(args),
             "condition" => self.condition(args),
             "inspect" => self.inspect(args),
             "plan" => self.plan(args),
@@ -146,6 +157,13 @@ impl Handler for Core {
             "execute" => core.execute(&args),
             "restore" => core.restore(&args),
             "view" => core.view(&args),
+            // Phase A: both existing execution paths share a request name. Lua still selects
+            // the mode; moving that policy behind this boundary is a separate change.
+            "result_view" => match args.opt_string("mode").as_deref() {
+                None | Some("memory") => core.view(&args),
+                Some("query") => core.execute(&args),
+                Some(other) => Err(format!("result_view: unknown mode `{other}`")),
+            },
             "apply" => core.apply(&args),
             "introspect" => core.introspect(&args),
             "structure" => core.structure(&args),

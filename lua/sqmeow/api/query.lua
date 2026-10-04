@@ -32,6 +32,7 @@ end
 --- buffer used for binding lookup; `line` selects a statement by zero-based line.
 --- `where` and `order_by` wrap a single query; `history = false` skips logging
 --- and archiving; `confirmed = true` bypasses the destructive-statement prompt.
+--- `view_request = true` routes a result rerun through the unified result-view RPC.
 ---@return integer|nil call_id Accepted run id; nil if rejected or awaiting input.
 ---@return string|nil error Failure reason, or an explanation of deferred work.
 function M.execute(sql, opts)
@@ -89,7 +90,9 @@ function M.execute(sql, opts)
       and require('sqmeow.server.history').result_path()
     or nil
 
-  local call_id, err = engine().request('execute', {
+  local call_id, err = engine().request(opts.view_request and 'result_view' or 'execute', {
+    mode = opts.view_request and 'query' or nil,
+    call_id = opts.view_call_id,
     conn_id = connection.id,
     sql = sql,
     line = opts.line,

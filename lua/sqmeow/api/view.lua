@@ -101,6 +101,7 @@ function M.restore(entry)
     path = entry.result,
     others = entry.results,
     conn_id = conn_id,
+    dialect = entry.dialect,
   })
   if not call_id then
     notify(err or 'the saved result could not be read', vim.log.levels.ERROR)

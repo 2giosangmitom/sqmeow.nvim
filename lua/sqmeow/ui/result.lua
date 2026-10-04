@@ -763,7 +763,8 @@ function M.send_view()
   local spec = M.spec()
   -- A result filtered by its query arrives narrowed, so only held rows take the condition here.
   local held = not M.queried(call)
-  local _, err = require('sqmeow.rpc.client').request('view', {
+  local _, err = require('sqmeow.rpc.client').request('result_view', {
+    mode = 'memory',
     call_id = call.call_id,
     filters = spec.filters,
     sort = spec.sort,
@@ -890,6 +891,8 @@ function M.rerun(view, keep)
       return column.name
     end, call.columns or {}),
     inserted = keep,
+    view_request = true,
+    view_call_id = call.call_id,
   })
   if not started then
     carried = nil

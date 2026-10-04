@@ -15,7 +15,7 @@ use sqmeow_db::sql;
 use sqmeow_db::value::Cell;
 use sqmeow_db::view;
 
-use super::summary::{cell_value, summarize};
+use super::summary::{capabilities, cell_value, summarize};
 use super::{Core, Started, params};
 use crate::server::archive;
 use crate::server::args::Args;
@@ -198,7 +198,7 @@ impl Core {
                 Ok(results) => {
                     for result in results {
                         if let Some(previous) = last.replace(result) {
-                            let (call, mut summary) = self.keep(conn_id, previous);
+                            let (call, mut summary) = self.keep(conn_id, previous, None);
                             if let Some(path) = archive
                                 .as_deref()
                                 .filter(|_| !call.result.columns().is_empty())
@@ -255,8 +255,9 @@ impl Core {
             0
         };
 
-        let call = Call::new(call_id, conn_id, result);
-        let mut payload = summarize(&call);
+        let call =
+            Call::new(call_id, conn_id, result).with_dialect(Some(connection.backend.dialect()));
+        let mut payload = summarize(&call, true);
         payload.extend(elapsed(started));
         if appended > 0 {
             payload.push(("appended", Value::from(appended as u64)));
@@ -288,10 +289,20 @@ impl Core {
     }
 
     /// An earlier statement's result as a call of its own, and how the editor sees it.
-    fn keep(&self, conn_id: ConnId, result: ResultSet) -> (Call, Vec<(&'static str, Value)>) {
+    fn keep(
+        &self,
+        conn_id: ConnId,
+        result: ResultSet,
+        saved_dialect: Option<Dialect>,
+    ) -> (Call, Vec<(&'static str, Value)>) {
         let elapsed_ms = result.elapsed().as_millis() as u64;
         let call = Call::new(self.session.next_call_id(), conn_id, result);
-        let mut summary = summarize(&call);
+        let dialect = self
+            .session
+            .connection(conn_id)
+            .map(|connection| connection.backend.dialect());
+        let call = call.with_dialect(dialect.or(saved_dialect));
+        let mut summary = summarize(&call, dialect.is_some());
         summary.push(("state", Value::from("done")));
         summary.push(("elapsed_ms", Value::from(elapsed_ms)));
         (call, summary)
@@ -309,6 +320,9 @@ impl Core {
             .collect();
         // The connection it ran on, when that is open.
         let conn_id = ConnId(args.opt_integer("conn_id").unwrap_or(0));
+        let saved_dialect = args
+            .opt_string("dialect")
+            .and_then(|name| Dialect::from_url(&format!("{name}:")));
         let call_id = self.session.next_call_id();
 
         let work = async move {
@@ -341,7 +355,7 @@ impl Core {
             // An earlier result whose file has gone is left out.
             for (other, read) in others {
                 if let Ok(result) = read {
-                    let (call, mut summary) = self.keep(conn_id, result);
+                    let (call, mut summary) = self.keep(conn_id, result, saved_dialect);
                     summary.push(("archive", Value::from(other.display().to_string())));
                     kept.push(call);
                     earlier.push(map(summary));
@@ -349,8 +363,12 @@ impl Core {
             }
 
             let elapsed_ms = result.elapsed().as_millis() as u64;
-            let call = Call::new(call_id, conn_id, result);
-            let mut payload = summarize(&call);
+            let open = self
+                .session
+                .connection(conn_id)
+                .map(|connection| connection.backend.dialect());
+            let call = Call::new(call_id, conn_id, result).with_dialect(open.or(saved_dialect));
+            let mut payload = summarize(&call, open.is_some());
             payload.push(("elapsed_ms", Value::from(elapsed_ms)));
             if !earlier.is_empty() {
                 let mut current = payload.clone();
@@ -478,6 +496,20 @@ impl Core {
         });
 
         rows.ok_or_else(|| format!("result {call_id} is no longer held"))
+    }
+
+    /// Capabilities are live: a saved result may lose its connection after its summary was sent.
+    pub(super) fn result_capabilities(&self, args: &Args) -> Result<Value, String> {
+        let call_id = args.call_id()?;
+        let (conn_id, saved_dialect) = self
+            .session
+            .with_call(call_id, |call| (call.conn_id, call.dialect))
+            .ok_or_else(|| format!("result {call_id} is no longer held"))?;
+        let open = self
+            .session
+            .connection(conn_id)
+            .map(|connection| connection.backend.dialect());
+        Ok(capabilities(open.or(saved_dialect), open.is_some()))
     }
 
     /// Narrow and order the rows of a stored result, for the grid to page through.

@@ -80,6 +80,23 @@ T['querying']['returns rows'] = function()
   eq(summary.state, 'done')
   eq(summary.rows, 3)
   eq(#summary.columns, 2)
+  eq(summary.capabilities, { query = true, memory = true, filter = true })
+end
+
+T['querying']['capabilities update when a result loses its connection'] = function()
+  local id = helpers.connect('sqlite::memory:', { name = 'capability-check' })
+  local summary = run('select 1 as value', { conn_id = id })
+  local call_id = summary.call_id
+  eq(rpc.request('result_capabilities', { call_id = call_id }).query, true)
+  require('sqmeow.api.connection').disconnect(id)
+  helpers.wait_for('the connection should close', function()
+    return state.connections[id] == nil
+  end, TIMEOUT)
+  eq(rpc.request('result_capabilities', { call_id = call_id }), {
+    query = false,
+    memory = true,
+    filter = true,
+  })
 end
 
 T['querying']['writes an aligned grid into the buffer'] = function()

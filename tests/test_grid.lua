@@ -71,11 +71,16 @@ T['a join is editable through each table, but takes no new rows'] = function()
 end
 
 T['a view filters and sorts in the engine, and pages count what it holds'] = function()
+  eq(state.call.capabilities, { query = true, memory = true, filter = true })
+  eq(rpc.request('result_capabilities', { call_id = state.call.call_id }), state.call.capabilities)
   require('sqmeow.api.view').view({ filters = { { column = 1, op = 'contains', value = 'O' } } })
   wait('the view should arrive', function()
     return state.call.view_rows == 2
   end)
   eq(#rows(), 2)
+  local page = rpc.request('rows', { call_id = state.call.call_id, offset = 0, limit = 10 })
+  eq(page.indices, { 1, 2 })
+  eq(page.total, 2)
 
   require('sqmeow.api.view').view({ sort = { { column = 2, descending = true } } })
   wait('the sort should arrive', function()
@@ -88,6 +93,25 @@ T['a view filters and sorts in the engine, and pages count what it holds'] = fun
   wait('every row should come back', function()
     return state.call.view_rows == nil and #rows() == 3
   end)
+end
+
+T['the result view contract keeps the old view request available'] = function()
+  local id = state.call.call_id
+  eq(
+    rpc.request('view', { call_id = id, filters = { { column = 1, op = 'eq', value = 'bob' } } }),
+    id
+  )
+  wait('the legacy view should arrive', function()
+    return state.call.view_rows == 1
+  end)
+  eq(rpc.request('rows', { call_id = id, offset = 0, limit = 10 }).indices, { 1 })
+end
+
+T['the result view contract rejects unknown modes without losing the result'] = function()
+  local id = state.call.call_id
+  local _, err = rpc.request('result_view', { call_id = id, mode = 'unknown' })
+  helpers.contains(err, 'unknown mode')
+  eq(rpc.request('rows', { call_id = id, offset = 0, limit = 1 }).indices, { 0 })
 end
 
 --- Wait for the result that replaces the current one.

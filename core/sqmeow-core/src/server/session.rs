@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use rmpv::Value;
 use sqmeow_adapters::Backend;
+use sqmeow_db::adapter::Dialect;
 use sqmeow_db::result::ResultSet;
 use tokio_util::sync::CancellationToken;
 
@@ -115,6 +116,8 @@ pub struct Connection {
 pub struct Call {
     pub id: CallId,
     pub conn_id: ConnId,
+    /// The source dialect also survives a closed connection for local-view capabilities.
+    pub dialect: Option<Dialect>,
     pub result: ResultSet,
     /// The rows the editor is paging through, when it filtered or sorted them.
     pub view: Mutex<Option<Arc<Vec<usize>>>>,
@@ -125,9 +128,15 @@ impl Call {
         Self {
             id,
             conn_id,
+            dialect: None,
             result,
             view: Mutex::default(),
         }
+    }
+
+    pub fn with_dialect(mut self, dialect: Option<Dialect>) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     /// The rows the editor pages through: the view when there is one.
