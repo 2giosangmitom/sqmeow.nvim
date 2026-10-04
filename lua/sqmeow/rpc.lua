@@ -189,6 +189,7 @@ end
 
 --- Stops the engine gracefully.
 function M.stop()
+  pending_events = {}
   if not channel then
     return
   end
@@ -199,6 +200,8 @@ function M.stop()
   pcall(vim.rpcrequest, job, 'shutdown', vim.empty_dict())
   pcall(vim.fn.jobstop, job)
   forget(job)
+  -- Shutdown can receive more events while waiting for the RPC reply.
+  pending_events = {}
 end
 
 --- Restarts the engine.

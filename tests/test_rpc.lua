@@ -132,6 +132,55 @@ T['events']['stop reaching an unsubscribed handler'] = function()
   eq(count, 1)
 end
 
+T['events']['stop'] = MiniTest.new_set({ parametrize = { { false }, { true } } })
+
+T['events']['stop']['discards events before a scheduled drain'] = function(exited)
+  local on_exit
+  helpers.stub(require('sqmeow.install'), 'resolve', function()
+    return '/fake/engine', 'development'
+  end)
+  helpers.stub(vim.fn, 'jobstart', function(_, opts)
+    on_exit = opts.on_exit
+    return 123
+  end)
+  helpers.stub(vim.fn, 'jobstop', function(job)
+    on_exit(job, 0)
+  end)
+  helpers.stub(vim, 'rpcrequest', function(_, method)
+    if method == 'queue' or method == 'shutdown' then
+      rpc.dispatch('stopped', method)
+    end
+    return {}
+  end)
+
+  local seen = {}
+  subscribe('stopped', function(payload)
+    table.insert(seen, payload)
+  end)
+
+  rpc.request('queue')
+  eq(seen, {})
+  if exited then
+    on_exit(123, 0)
+  end
+  eq(rpc.is_running(), not exited)
+  rpc.stop()
+  eq(rpc.is_running(), false)
+
+  local drained = false
+  vim.schedule(function()
+    drained = true
+  end)
+  helpers.wait_for('the scheduled drain runs after stop', function()
+    return drained
+  end)
+  eq(seen, {})
+
+  -- Stopping keeps subscriptions usable for subsequent events.
+  rpc.dispatch('stopped', 'fresh')
+  eq(seen, { 'fresh' })
+end
+
 T['events']['survive a failing subscriber'] = function()
   local reached = false
   subscribe('log', function()
