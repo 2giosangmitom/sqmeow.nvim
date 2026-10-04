@@ -114,6 +114,30 @@ T['the result view contract rejects unknown modes without losing the result'] = 
   eq(rpc.request('rows', { call_id = id, offset = 0, limit = 1 }).indices, { 0 })
 end
 
+T['automatic view routing keeps structured rows and re-queries free-form SQL'] = function()
+  local id = state.call.call_id
+  eq(rpc.request('result_view_route', { call_id = id }), 'query')
+  eq(rpc.request('result_view_route', { call_id = id, structured = true }), 'memory')
+  local memory = rpc.request('result_view', {
+    call_id = id,
+    structured = true,
+    filters = { { column = 1, op = 'eq', value = 'bob' } },
+  })
+  eq(memory, { route = 'memory', call_id = id })
+  wait('the structured view should arrive', function()
+    return state.call.view_rows == 1
+  end)
+  eq(rpc.request('rows', { call_id = id, offset = 0, limit = 1 }).indices, { 1 })
+
+  local _, mismatch = rpc.request('result_view', {
+    call_id = id,
+    conn_id = -1,
+    sql = state.call.sql,
+    where = 'id = 1',
+  })
+  helpers.contains(mismatch, 'does not belong')
+end
+
 --- Wait for the result that replaces the current one.
 local function next_result(what, condition)
   local before = state.call.call_id
@@ -145,14 +169,24 @@ T['the filter bar docks above the grid and filters in the database'] = function(
   helpers.contains(vim.wo[result.window()].winbar, 'where age > 20')
 end
 
-T['a result that cannot be queried again is filtered on the rows held with the same SQL'] = function()
-  helpers.stub(result, 'queried', function()
-    return false
+T['a result that cannot be queried again is filtered with Polars SQL'] = function()
+  local id = helpers.connect('sqlite::memory:', { name = 'held-view' })
+  run(
+    "select 1 as id, 'alice' as name, 30 as age union all select 2, 'bob', null union all select 3, 'carol', 20",
+    { conn_id = id }
+  )
+  require('sqmeow.api.connection').disconnect(id)
+  wait('the connection should close', function()
+    return state.connections[id] == nil
   end)
+  eq(rpc.request('result_view_route', { call_id = state.call.call_id }), 'memory')
   local win = focus_result()
 
-  eq(result.filter('nope = 1', ''), false)
-  eq(result.spec().where, '')
+  -- Polars resolves column names while it builds the asynchronous held-row view.
+  eq(result.filter('nope = 1', ''), true)
+  wait('the invalid filter should be rejected', function()
+    return result.spec().where == ''
+  end)
 
   eq(result.filter('age > 20 or age is null', 'id desc'), true)
   wait('the held rows should narrow', function()
@@ -253,6 +287,21 @@ T['staged changes are asked about before a new result replaces them'] = function
     return state.call.call_id ~= before and state.call.state == 'done'
   end)
   eq(edit.count(), 0)
+end
+
+T['a deferred view keeps the requested filter after edits are discarded'] = function()
+  result.open()
+  edit.set({ row = 0 }, 1, 'x')
+  helpers.stub(vim.ui, 'select', function(_, _, on_choice)
+    on_choice('Discard them')
+  end)
+  local arrived = next_result('the deferred filter should arrive', function()
+    return #rows() == 1
+  end)
+  result.filter('id = 2', '')
+  arrived()
+  eq(result.spec().where, 'id = 2')
+  eq(rows()[1]:match('^%s*(%d)'), '2')
 end
 
 T['editing applies through a review'] = function()
