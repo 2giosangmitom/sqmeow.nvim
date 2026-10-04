@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.5.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.4.0...v2.5.0) (2026-10-04)
+
+
+### Features
+
+* **completion:** add auto completion ([01cf139](https://github.com/2giosangmitom/sqmeow.nvim/commit/01cf1390f4588a4e8c0115c618a784d88e653de9)), closes [#41](https://github.com/2giosangmitom/sqmeow.nvim/issues/41)
+* **drawer:** allow distinct preview buffers per relation and prevent silent data loss on modified queries ([#62](https://github.com/2giosangmitom/sqmeow.nvim/issues/62)) ([e08832b](https://github.com/2giosangmitom/sqmeow.nvim/commit/e08832b9d12c41254ec3e18bfe71ad42dc7b9a28))
+* **drawer:** respect ui.result.page_size for relation preview ([#64](https://github.com/2giosangmitom/sqmeow.nvim/issues/64)) ([c620d23](https://github.com/2giosangmitom/sqmeow.nvim/commit/c620d23613d7ab9b68e7e381c9916ed24d5373a9))
+* **install:** don't spam install progress ([1a74cbd](https://github.com/2giosangmitom/sqmeow.nvim/commit/1a74cbda5deff05e64164dfe3e6b00b116925307))
+* support load connections from local project config ([#66](https://github.com/2giosangmitom/sqmeow.nvim/issues/66)) ([11afbb8](https://github.com/2giosangmitom/sqmeow.nvim/commit/11afbb88a2bb8f39d99995b43fd8e49ffbc6d3f0))
+
+
+### Fixes
+
+* **drawer:** make preview buffer listed ([66a8a49](https://github.com/2giosangmitom/sqmeow.nvim/commit/66a8a491c68a01c3d909e600b39bdf3b6ecbca32)), closes [#59](https://github.com/2giosangmitom/sqmeow.nvim/issues/59)
+* **install:** read manifest file at install time for default version ([950d037](https://github.com/2giosangmitom/sqmeow.nvim/commit/950d0377d6b4f023abf4a9427586b252ac832133)), closes [#65](https://github.com/2giosangmitom/sqmeow.nvim/issues/65)
+* run exact selections and harden query safeguards ([3dfd81b](https://github.com/2giosangmitom/sqmeow.nvim/commit/3dfd81bfe81f0da54b2952e80153e07c0ff14d05))
+* tests ([40e83df](https://github.com/2giosangmitom/sqmeow.nvim/commit/40e83df4a0de5b4a9489884c1762ac13725758cc))
+* tests ([e9b967c](https://github.com/2giosangmitom/sqmeow.nvim/commit/e9b967ca168fdb62c75645e728e6ce94ee950213))
+
+
+### Refactoring
+
+* group server/rpc/api, drop re-exports and dead code ([#68](https://github.com/2giosangmitom/sqmeow.nvim/issues/68)) ([ad9d342](https://github.com/2giosangmitom/sqmeow.nvim/commit/ad9d3421951de93c22c57fd1d98beb5d6faf341c))
+
+
+### Documentation
+
+* add contribution guide and update README ([9ba03d7](https://github.com/2giosangmitom/sqmeow.nvim/commit/9ba03d75900bbd979083937b21839a0722696bd2))
+
 ## [2.4.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.3.0...v2.4.0) (2026-09-30)
 
 
