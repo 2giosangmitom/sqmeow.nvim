@@ -97,14 +97,6 @@ impl Message {
             ]),
         }
     }
-
-    /// Returns the method name for a request or notification.
-    pub fn method(&self) -> Option<&str> {
-        match self {
-            Self::Request { method, .. } | Self::Notification { method, .. } => Some(method),
-            Self::Response { .. } => None,
-        }
-    }
 }
 
 fn field_u32(value: &Value, what: &str) -> Result<u32> {
@@ -163,7 +155,13 @@ mod tests {
             method: "call:state".into(),
             params: vec![],
         });
-        assert_eq!(decoded.method(), Some("call:state"));
+        match decoded {
+            Message::Notification { method, params } => {
+                assert_eq!(method, "call:state");
+                assert!(params.is_empty());
+            }
+            other => panic!("expected a notification, got {other:?}"),
+        }
     }
 
     #[test]

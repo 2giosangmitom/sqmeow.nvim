@@ -5,11 +5,23 @@ use std::sync::{PoisonError, RwLock};
 use std::time::Instant;
 
 use percent_encoding::percent_decode_str;
+use sqmeow_db::adapter::Adapter;
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::Changes;
+use sqmeow_db::edit::Source;
 use sqmeow_db::edit::{self, check_column, check_row};
-use sqmeow_db::{
-    Adapter, Cell, Changes, Column, ColumnNode, Dialect, Error, IndexNode, RelationKind,
-    RelationNode, Result, ResultSet, RoleNode, RoutineNode, SchemaNode, Source,
-};
+use sqmeow_db::error::Error;
+use sqmeow_db::error::Result;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::IndexNode;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoleNode;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
+use sqmeow_db::result::Column;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::value::Cell;
 use surrealdb::Surreal;
 use surrealdb::engine::remote::ws::{Client, Ws, Wss};
 use surrealdb::opt::Config;
@@ -392,7 +404,7 @@ impl Adapter for SurrealAdapter {
     }
 
     /// The table's definition, comment and events.
-    async fn details(&self, _schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+    async fn details(&self, _schema: &str, relation: &str) -> Result<sqmeow_db::node::Details> {
         let db = self.one("INFO FOR DB").await?;
         let definition = match &db {
             Value::Object(info) => match info.get("tables") {
@@ -421,14 +433,14 @@ impl Adapter for SurrealAdapter {
             })
             .collect();
 
-        Ok(sqmeow_db::Details {
+        Ok(sqmeow_db::node::Details {
             properties: comment
                 .map(|comment| ("comment".to_owned(), comment))
                 .into_iter()
                 .collect(),
             triggers,
             definition,
-            ..sqmeow_db::Details::default()
+            ..sqmeow_db::node::Details::default()
         })
     }
 
@@ -870,7 +882,7 @@ fn cell(value: Value) -> Cell {
 
 #[cfg(test)]
 mod tests {
-    use sqmeow_db::TypeClass;
+    use sqmeow_db::types::TypeClass;
     use surrealdb::types::{Object, RecordId};
 
     use super::*;

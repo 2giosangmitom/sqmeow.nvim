@@ -476,7 +476,7 @@ M.subcommands = {
           end
 
           -- The old engine is still running, and the new one cannot start until it has gone.
-          require('sqmeow.rpc').stop()
+          require('sqmeow.rpc.client').stop()
           require('sqmeow.state').reset()
           require('sqmeow.ui.drawer').reset()
         end,
@@ -511,7 +511,7 @@ M.subcommands = {
   messages = {
     desc = 'Show what the engine has been saying',
     run = function()
-      local lines = require('sqmeow.rpc').messages()
+      local lines = require('sqmeow.rpc.client').messages()
       if #lines == 0 then
         return notify('the engine log is empty')
       end
@@ -522,7 +522,7 @@ M.subcommands = {
   start = {
     desc = 'Start the engine',
     run = function()
-      local rpc = require('sqmeow.rpc')
+      local rpc = require('sqmeow.rpc.client')
       local channel, err = rpc.start()
       if not channel then
         return notify(err or 'the engine could not be started', vim.log.levels.ERROR)
@@ -535,7 +535,7 @@ M.subcommands = {
   stop = {
     desc = 'Stop the engine',
     run = function()
-      require('sqmeow.rpc').stop()
+      require('sqmeow.rpc.client').stop()
       require('sqmeow.state').reset()
       require('sqmeow.ui.drawer').reset()
       notify('engine stopped')
@@ -545,7 +545,7 @@ M.subcommands = {
   restart = {
     desc = 'Restart the engine',
     run = function()
-      local channel, err = require('sqmeow.rpc').restart()
+      local channel, err = require('sqmeow.rpc.client').restart()
       -- The engine's session went with it, so the mirrored state is no longer true.
       require('sqmeow.state').reset()
       require('sqmeow.ui.drawer').reset()

@@ -3,17 +3,25 @@
 use std::sync::Arc;
 
 use rmpv::Value;
-use sqmeow_db::{
-    ColumnNode, Details, Dialect, Error as DbError, IndexNode, KeyType, RelationKind, RelationNode,
-    RoleNode, RoutineKind, RoutineNode, SchemaNode,
-};
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::error::Error as DbError;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::Details;
+use sqmeow_db::node::IndexNode;
+use sqmeow_db::node::KeyType;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoleNode;
+use sqmeow_db::node::RoutineKind;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
 
 use sqmeow_adapters::Backend;
 
 use super::{Core, Started};
-use crate::args::Args;
-use crate::session::Connection;
-use crate::value::{map, strings};
+use crate::server::args::Args;
+use crate::server::payload::{map, strings};
+use crate::server::session::Connection;
 
 impl Core {
     pub(super) fn introspect(self: Arc<Self>, args: &Args) -> Started {

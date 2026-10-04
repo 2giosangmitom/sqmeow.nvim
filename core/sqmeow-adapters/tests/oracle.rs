@@ -1,7 +1,12 @@
 //! The Oracle Database adapter against a real server.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Changes, Error, RelationKind, ResultSet, Source};
+use sqmeow_db::edit::Changes;
+use sqmeow_db::edit::Source;
+use sqmeow_db::error::Error;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -341,9 +346,18 @@ async fn lists_functions_and_procedures_apart() {
             .collect::<Vec<_>>()
     };
 
-    assert_eq!(kinds("ORA_FN"), vec![sqmeow_db::RoutineKind::Function]);
-    assert_eq!(kinds("ORA_PROC"), vec![sqmeow_db::RoutineKind::Procedure]);
-    assert_eq!(kinds("ORA_PACK"), vec![sqmeow_db::RoutineKind::Package]);
+    assert_eq!(
+        kinds("ORA_FN"),
+        vec![sqmeow_db::node::RoutineKind::Function]
+    );
+    assert_eq!(
+        kinds("ORA_PROC"),
+        vec![sqmeow_db::node::RoutineKind::Procedure]
+    );
+    assert_eq!(
+        kinds("ORA_PACK"),
+        vec![sqmeow_db::node::RoutineKind::Package]
+    );
     run(&backend, "drop function ora_fn").await;
     run(&backend, "drop procedure ora_proc").await;
     run(&backend, "drop package ora_pack").await;

@@ -1,7 +1,11 @@
 // Cases every Redis-protocol server must pass.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Error, KeyType, RelationKind, ResultSet};
+use sqmeow_db::value::Cell;
+use sqmeow_db::error::Error;
+use sqmeow_db::node::KeyType;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::result::ResultSet;
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -297,10 +301,10 @@ async fn a_stream_entry_is_deleted_and_added_and_a_listed_key_renamed() {
     run(&backend, "XADD test:stream 1-1 name al").await;
 
     let entries = run(&backend, "XRANGE test:stream - +").await;
-    let changes = sqmeow_db::Changes {
+    let changes = sqmeow_db::edit::Changes {
         deletes: vec![0],
         inserts: vec![vec![(1, "name bo".into())]],
-        ..sqmeow_db::Changes::default()
+        ..sqmeow_db::edit::Changes::default()
     };
     backend
         .apply(&backend.plan(&entries, &changes).unwrap(), CancellationToken::new())
@@ -312,9 +316,9 @@ async fn a_stream_entry_is_deleted_and_added_and_a_listed_key_renamed() {
     run(&backend, "DEL test:to-rename test:renamed").await;
     run(&backend, "SET test:to-rename x").await;
     let keys = run(&backend, "KEYS test:to-rename").await;
-    let changes = sqmeow_db::Changes {
+    let changes = sqmeow_db::edit::Changes {
         updates: vec![(0, vec![(0, "test:renamed".into())])],
-        ..sqmeow_db::Changes::default()
+        ..sqmeow_db::edit::Changes::default()
     };
     backend
         .apply(&backend.plan(&keys, &changes).unwrap(), CancellationToken::new())
@@ -331,9 +335,9 @@ async fn an_edit_keeps_ttls_positions_and_existing_keys() {
 
     run(&backend, "SET test:ttl a EX 600").await;
     let value = run(&backend, "GET test:ttl").await;
-    let changes = sqmeow_db::Changes {
+    let changes = sqmeow_db::edit::Changes {
         updates: vec![(0, vec![(0, "b".into())])],
-        ..sqmeow_db::Changes::default()
+        ..sqmeow_db::edit::Changes::default()
     };
     backend
         .apply(&backend.plan(&value, &changes).unwrap(), CancellationToken::new())
@@ -344,9 +348,9 @@ async fn an_edit_keeps_ttls_positions_and_existing_keys() {
 
     run(&backend, "RPUSH test:dupes x y x z").await;
     let list = run(&backend, "LRANGE test:dupes 0 -1").await;
-    let changes = sqmeow_db::Changes {
+    let changes = sqmeow_db::edit::Changes {
         deletes: vec![2],
-        ..sqmeow_db::Changes::default()
+        ..sqmeow_db::edit::Changes::default()
     };
     backend
         .apply(&backend.plan(&list, &changes).unwrap(), CancellationToken::new())
@@ -365,9 +369,9 @@ async fn an_edit_keeps_ttls_positions_and_existing_keys() {
     run(&backend, "SET test:taken kept").await;
     run(&backend, "SET test:taker moved").await;
     let keys = run(&backend, "KEYS test:taker").await;
-    let changes = sqmeow_db::Changes {
+    let changes = sqmeow_db::edit::Changes {
         updates: vec![(0, vec![(0, "test:taken".into())])],
-        ..sqmeow_db::Changes::default()
+        ..sqmeow_db::edit::Changes::default()
     };
     let error = backend
         .apply(&backend.plan(&keys, &changes).unwrap(), CancellationToken::new())

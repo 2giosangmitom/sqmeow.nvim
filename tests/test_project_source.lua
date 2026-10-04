@@ -70,7 +70,7 @@ T['finds the nearest file and follows working directory changes'] = function()
 end
 
 T['does not start the engine when no file exists'] = function()
-  helpers.stub(require('sqmeow.rpc'), 'request', function()
+  helpers.stub(require('sqmeow.rpc.client'), 'request', function()
     error('no RPC needed')
   end)
   local found, problems = sources.load()

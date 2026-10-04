@@ -1,7 +1,12 @@
 //! SQL Server integration tests; `just db-up` supplies the server.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Changes, Dialect, Error, KeyKind, ResultSet};
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::Changes;
+use sqmeow_db::error::Error;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::types::KeyKind;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 macro_rules! server {

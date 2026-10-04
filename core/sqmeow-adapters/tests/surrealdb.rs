@@ -1,7 +1,12 @@
 //! The SurrealDB adapter against a real server.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Changes, RelationKind, ResultSet, Source, edit};
+use sqmeow_db::edit;
+use sqmeow_db::edit::Changes;
+use sqmeow_db::edit::Source;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;

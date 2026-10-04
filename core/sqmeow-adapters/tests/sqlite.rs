@@ -1,7 +1,14 @@
 //! The SQLite adapter against a real database.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Changes, Error, ForeignKey, KeyKind, RelationKind, Source, TypeClass};
+use sqmeow_db::edit::Changes;
+use sqmeow_db::edit::Source;
+use sqmeow_db::error::Error;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::types::ForeignKey;
+use sqmeow_db::types::KeyKind;
+use sqmeow_db::types::TypeClass;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -12,7 +19,7 @@ async fn database() -> Backend {
         .expect("an in-memory database should open")
 }
 
-async fn run(backend: &Backend, sql: &str) -> sqmeow_db::ResultSet {
+async fn run(backend: &Backend, sql: &str) -> sqmeow_db::result::ResultSet {
     backend
         .execute(sql, NO_CAP, CancellationToken::new())
         .await
@@ -932,7 +939,7 @@ async fn a_filtered_result_stays_editable() {
     let backend = seeded().await;
     let origin = "select id, name from people order by id";
     let wrapped = sqmeow_db::sql::filtered(
-        sqmeow_db::Dialect::Sqlite,
+        sqmeow_db::adapter::Dialect::Sqlite,
         origin,
         "name like 'b%'",
         "id desc",
@@ -1016,13 +1023,13 @@ async fn a_table_lists_its_indexes_and_column_defaults() {
     assert_eq!(
         backend.indexes("main", "indexed").await.unwrap(),
         vec![
-            sqmeow_db::IndexNode {
+            sqmeow_db::node::IndexNode {
                 name: "indexed_ab".into(),
                 columns: vec!["a".into(), "b".into()],
                 unique: false,
                 primary: false,
             },
-            sqmeow_db::IndexNode {
+            sqmeow_db::node::IndexNode {
                 name: "sqlite_autoindex_indexed_1".into(),
                 columns: vec!["email".into()],
                 unique: true,
@@ -1246,7 +1253,7 @@ async fn a_table_describes_its_keys_triggers_and_definition() {
     );
     assert_eq!(
         details.foreign_keys,
-        vec![sqmeow_db::ForeignKeyNode {
+        vec![sqmeow_db::node::ForeignKeyNode {
             name: String::new(),
             columns: vec!["parent_id".into()],
             target: "det_parent".into(),

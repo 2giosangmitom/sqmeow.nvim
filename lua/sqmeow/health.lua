@@ -34,7 +34,7 @@ local function check_engine()
   vim.health.start('engine')
 
   local install = require('sqmeow.install')
-  local rpc = require('sqmeow.rpc')
+  local rpc = require('sqmeow.rpc.client')
   local path, source = install.resolve()
 
   if not path then
@@ -100,7 +100,7 @@ local function check_sources()
     return
   end
 
-  local adapters = require('sqmeow.rpc').info()
+  local adapters = require('sqmeow.rpc.client').info()
   adapters = adapters and adapters.adapters or {}
 
   local url = require('sqmeow.url')

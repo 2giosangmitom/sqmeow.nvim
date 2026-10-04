@@ -1,7 +1,11 @@
 //! The Redis adapter against a master Redis Sentinel watches.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Changes, KeyType, RelationKind, ResultSet};
+use sqmeow_db::edit::Changes;
+use sqmeow_db::node::KeyType;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 /// The server URL, or a note explaining why the test did nothing.

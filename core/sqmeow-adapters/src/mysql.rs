@@ -9,10 +9,21 @@ use sqlx::{
     AssertSqlSafe, Connection, Decode, MySql, Pool, Row, Statement as _, Type, TypeInfo, ValueRef,
     types,
 };
-use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode, Source, TableName,
-};
+use sqmeow_db::adapter::Adapter;
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::Source;
+use sqmeow_db::edit::TableName;
+use sqmeow_db::error::Error;
+use sqmeow_db::error::Result;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
+use sqmeow_db::result::Column;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::types::KeyKind;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 use crate::stream::{
@@ -422,7 +433,11 @@ impl Adapter for MySqlAdapter {
             .collect())
     }
 
-    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+    async fn indexes(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::IndexNode>> {
         let rows = sqlx::query(
             "select s.index_name as index_name, s.non_unique as non_unique,
                     s.column_name as column_name
@@ -436,7 +451,7 @@ impl Adapter for MySqlAdapter {
         .await
         .map_err(Error::driver)?;
 
-        let mut indexes: Vec<sqmeow_db::IndexNode> = Vec::new();
+        let mut indexes: Vec<sqmeow_db::node::IndexNode> = Vec::new();
         for row in &rows {
             let name: String = row.try_get("index_name").map_err(Error::driver)?;
             let column = row
@@ -446,7 +461,7 @@ impl Adapter for MySqlAdapter {
                 .unwrap_or_else(|| "(expression)".to_owned());
             match indexes.last_mut() {
                 Some(index) if index.name == name => index.columns.push(column),
-                _ => indexes.push(sqmeow_db::IndexNode {
+                _ => indexes.push(sqmeow_db::node::IndexNode {
                     unique: row.try_get::<i64, _>("non_unique").unwrap_or(1) == 0,
                     primary: name == "PRIMARY",
                     columns: vec![column],
@@ -457,7 +472,7 @@ impl Adapter for MySqlAdapter {
         Ok(indexes)
     }
 
-    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::node::Details> {
         let comment = sqlx::query_scalar::<_, String>(
             "select table_comment from information_schema.tables
              where table_schema = ? and table_name = ?",
@@ -491,10 +506,10 @@ impl Adapter for MySqlAdapter {
         .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
-        let mut foreign_keys: Vec<sqmeow_db::ForeignKeyNode> = Vec::new();
+        let mut foreign_keys: Vec<sqmeow_db::node::ForeignKeyNode> = Vec::new();
         for (name, column, target_schema, target, referenced) in parts {
             if foreign_keys.last().is_none_or(|key| key.name != name) {
-                foreign_keys.push(sqmeow_db::ForeignKeyNode {
+                foreign_keys.push(sqmeow_db::node::ForeignKeyNode {
                     name,
                     columns: Vec::new(),
                     target: format!("{target_schema}.{target}"),
@@ -543,7 +558,7 @@ impl Adapter for MySqlAdapter {
             .map_err(Error::driver)?
             .and_then(|row| row.try_get::<String, _>(1).ok());
 
-        Ok(sqmeow_db::Details {
+        Ok(sqmeow_db::node::Details {
             properties: comment
                 .map(|comment| ("comment".to_owned(), comment))
                 .into_iter()
@@ -556,7 +571,7 @@ impl Adapter for MySqlAdapter {
         })
     }
 
-    async fn roles(&self) -> Result<Vec<sqmeow_db::RoleNode>> {
+    async fn roles(&self) -> Result<Vec<sqmeow_db::node::RoleNode>> {
         let rows = sqlx::query_as::<_, (String, String, String)>(
             "select user, host, account_locked from mysql.user order by user, host",
         )
@@ -565,7 +580,7 @@ impl Adapter for MySqlAdapter {
         .map_err(Error::driver)?;
         Ok(rows
             .into_iter()
-            .map(|(user, host, locked)| sqmeow_db::RoleNode {
+            .map(|(user, host, locked)| sqmeow_db::node::RoleNode {
                 name: format!("{user}@{host}"),
                 attributes: (locked == "Y")
                     .then(|| "locked".to_owned())

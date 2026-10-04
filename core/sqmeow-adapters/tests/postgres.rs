@@ -1,10 +1,16 @@
 //! The PostgreSQL adapter against a real server.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{
-    Cell, Changes, Error, ForeignKey, KeyKind, RelationKind, ResultSet, RoutineKind, Source,
-    TypeClass,
-};
+use sqmeow_db::edit::Changes;
+use sqmeow_db::edit::Source;
+use sqmeow_db::error::Error;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RoutineKind;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::types::ForeignKey;
+use sqmeow_db::types::KeyKind;
+use sqmeow_db::types::TypeClass;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -1162,7 +1168,7 @@ async fn a_filtered_result_stays_editable() {
 
     let origin = "select id, name from pg_filtered order by id";
     let wrapped = sqmeow_db::sql::filtered(
-        sqmeow_db::Dialect::Postgres,
+        sqmeow_db::adapter::Dialect::Postgres,
         origin,
         "name = 'bob'",
         "",
@@ -1227,13 +1233,13 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
     assert_eq!(
         backend.indexes(SCHEMA, "tagged_unique").await.unwrap(),
         vec![
-            sqmeow_db::IndexNode {
+            sqmeow_db::node::IndexNode {
                 name: "tagged_unique_code_key".into(),
                 columns: vec!["code".into()],
                 unique: true,
                 primary: false,
             },
-            sqmeow_db::IndexNode {
+            sqmeow_db::node::IndexNode {
                 name: "tagged_unique_label".into(),
                 columns: vec!["label".into()],
                 unique: false,

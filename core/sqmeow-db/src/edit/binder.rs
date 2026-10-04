@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn each_read_of_a_self_joined_table_is_bound_apart() {
         let sides = Sides::read(
-            crate::Dialect::Postgres,
+            crate::adapter::Dialect::Postgres,
             "select c.id, p.id, p.name from people c join people p on p.id = c.boss",
         );
         let mut binder = TableBinder::default().sides(sides);

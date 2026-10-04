@@ -1,7 +1,7 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local rpc = require('sqmeow.rpc')
+local rpc = require('sqmeow.rpc.client')
 
 local T = MiniTest.new_set({
   hooks = {

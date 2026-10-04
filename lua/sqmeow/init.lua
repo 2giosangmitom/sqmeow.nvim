@@ -431,7 +431,7 @@ function M.setup(opts)
   end
 
   -- A running engine holds the old settings, so tell it about the new ones.
-  require('sqmeow.rpc').configure()
+  require('sqmeow.rpc.client').configure()
 end
 
 --- Install the engine binary. Nothing installs it automatically; call it from a build hook: >lua
@@ -461,7 +461,7 @@ end
 
 --- Stop the engine. It restarts on the next call that needs it.
 function M.stop()
-  require('sqmeow.rpc').stop()
+  require('sqmeow.rpc.client').stop()
 end
 
 return M

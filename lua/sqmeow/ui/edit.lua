@@ -261,7 +261,8 @@ local function current_text(call, target, column)
   end
 
   -- The full value, line breaks and all, rather than the flattened one the grid holds.
-  local row = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = target.row })
+  local row =
+    require('sqmeow.rpc.client').request('row', { call_id = call.call_id, row = target.row })
   local cell = row and row[column + 1]
   if not cell or cell.is_null then
     return nil
@@ -436,7 +437,7 @@ end
 ---@param call { conn_id: integer, call_id: integer }
 ---@param statements string[]
 function M.apply(call, statements)
-  local _, err = require('sqmeow.rpc').request(
+  local _, err = require('sqmeow.rpc.client').request(
     'apply',
     { conn_id = call.conn_id, call_id = call.call_id, statements = statements }
   )
@@ -478,7 +479,7 @@ function M.review()
   end
 
   local statements, err =
-    require('sqmeow.rpc').request('plan', { call_id = call.call_id, changes = M.changes() })
+    require('sqmeow.rpc.client').request('plan', { call_id = call.call_id, changes = M.changes() })
   if not statements then
     return utils.notify(err or 'the changes could not be planned', vim.log.levels.ERROR)
   end

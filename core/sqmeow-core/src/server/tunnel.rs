@@ -3,7 +3,7 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use sqmeow_db::Dialect;
+use sqmeow_db::adapter::Dialect;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command};

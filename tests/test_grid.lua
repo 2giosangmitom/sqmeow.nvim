@@ -7,7 +7,7 @@ local api = require('sqmeow.api')
 local state = require('sqmeow.state')
 local result = require('sqmeow.ui.result')
 local edit = require('sqmeow.ui.edit')
-local rpc = require('sqmeow.rpc')
+local rpc = require('sqmeow.rpc.client')
 
 local wait = helpers.wait_for
 local run = helpers.run

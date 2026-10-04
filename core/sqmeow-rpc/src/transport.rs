@@ -16,7 +16,7 @@ pub struct Transport {
 ///
 /// Spawns a reader thread blocking on stdin and a writer thread blocking
 /// on stdout, each forwarding frames through channels.
-pub fn stdio() -> Transport {
+pub(crate) fn stdio() -> Transport {
     let (incoming_tx, incoming) = mpsc::unbounded_channel();
     let (outgoing, outgoing_rx) = mpsc::unbounded_channel();
 

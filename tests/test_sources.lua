@@ -255,7 +255,7 @@ T['removing']['forgets the saved connection and closes it while it is open'] = f
     dialect = 'sqlite',
     state = 'connected',
   })
-  helpers.stub(require('sqmeow.rpc'), 'request', function()
+  helpers.stub(require('sqmeow.rpc.client'), 'request', function()
     return true
   end)
 
@@ -277,7 +277,7 @@ T['removing']['closes a connection that was never saved'] = function()
 
   local id = state.next_connection_id()
   state.add_connection({ id = id, name = 'scratch', url = 'sqlite::memory:', state = 'connected' })
-  helpers.stub(require('sqmeow.rpc'), 'request', function()
+  helpers.stub(require('sqmeow.rpc.client'), 'request', function()
     return true
   end)
 
@@ -291,7 +291,7 @@ T['removing']['only closes a connection from another source'] = function()
 
   local id = state.next_connection_id()
   state.add_connection({ id = id, name = 'ci', url = 'sqlite://ci.db', state = 'connected' })
-  helpers.stub(require('sqmeow.rpc'), 'request', function()
+  helpers.stub(require('sqmeow.rpc.client'), 'request', function()
     return true
   end)
 

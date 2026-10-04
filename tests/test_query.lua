@@ -4,7 +4,7 @@ local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
 local api = require('sqmeow.api')
-local rpc = require('sqmeow.rpc')
+local rpc = require('sqmeow.rpc.client')
 local state = require('sqmeow.state')
 local result = require('sqmeow.ui.result')
 

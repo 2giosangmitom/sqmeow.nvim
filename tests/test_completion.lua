@@ -3,7 +3,7 @@ local eq = MiniTest.expect.equality
 local completion = require('sqmeow.completion')
 local drawer = require('sqmeow.ui.drawer')
 local api = require('sqmeow.api')
-local rpc = require('sqmeow.rpc')
+local rpc = require('sqmeow.rpc.client')
 local helpers = dofile('tests/helpers.lua')
 local connection, calls, buf, target, request
 

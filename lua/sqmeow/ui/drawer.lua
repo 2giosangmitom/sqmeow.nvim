@@ -102,7 +102,7 @@ function M.load(conn_id, path, async)
     if cache[key] ~= pending then
       return
     end
-    local _, err = require('sqmeow.rpc').request(
+    local _, err = require('sqmeow.rpc.client').request(
       'introspect',
       { conn_id = conn_id, path = path, pattern = patterns[conn_id] }
     )

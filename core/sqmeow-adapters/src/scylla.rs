@@ -14,10 +14,22 @@ use scylla::serialize::row::SerializeRow;
 use scylla::value::{CqlValue, Row};
 use sqlx::types::BigDecimal;
 use sqlx::types::chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode, Source, TableBinder, TableName,
-};
+use sqmeow_db::adapter::Adapter;
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::Source;
+use sqmeow_db::edit::TableBinder;
+use sqmeow_db::edit::TableName;
+use sqmeow_db::error::Error;
+use sqmeow_db::error::Result;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
+use sqmeow_db::result::Column;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::types::KeyKind;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_PORT: u16 = 9042;
@@ -209,7 +221,11 @@ impl Adapter for ScyllaAdapter {
         Ok(Vec::new())
     }
 
-    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+    async fn indexes(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::IndexNode>> {
         let mut rows = self
             .rows::<(String, std::collections::HashMap<String, String>)>(
                 "select index_name, options from system_schema.indexes
@@ -229,7 +245,7 @@ impl Adapter for ScyllaAdapter {
             .await?;
         key.retain(|(_, kind, _)| kind == "partition_key" || kind == "clustering");
         key.sort_by_key(|(_, kind, position)| (kind != "partition_key", *position));
-        let primary = (!key.is_empty()).then(|| sqmeow_db::IndexNode {
+        let primary = (!key.is_empty()).then(|| sqmeow_db::node::IndexNode {
             name: "PRIMARY KEY".to_owned(),
             columns: key.into_iter().map(|(name, ..)| name).collect(),
             unique: true,
@@ -240,7 +256,7 @@ impl Adapter for ScyllaAdapter {
             .into_iter()
             .chain(
                 rows.into_iter()
-                    .map(|(name, options)| sqmeow_db::IndexNode {
+                    .map(|(name, options)| sqmeow_db::node::IndexNode {
                         name,
                         // What the index is on, such as `v` or `keys(m)`.
                         columns: options.get("target").cloned().into_iter().collect(),
@@ -367,7 +383,7 @@ impl Adapter for ScyllaAdapter {
             .collect())
     }
 
-    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::node::Details> {
         let comment = self
             .rows::<(Option<String>,)>(
                 "select comment from system_schema.tables where keyspace_name = ? and table_name = ?",
@@ -395,13 +411,13 @@ impl Adapter for ScyllaAdapter {
                 None
             }
         };
-        Ok(sqmeow_db::Details {
+        Ok(sqmeow_db::node::Details {
             properties: comment
                 .map(|comment| ("comment".to_owned(), comment))
                 .into_iter()
                 .collect(),
             definition,
-            ..sqmeow_db::Details::default()
+            ..sqmeow_db::node::Details::default()
         })
     }
 

@@ -148,7 +148,7 @@ T['says when there is nothing to act on'] = function()
   helpers.stub(api, 'connections', function()
     return {}
   end)
-  helpers.stub(require('sqmeow.rpc'), 'messages', function()
+  helpers.stub(require('sqmeow.rpc.client'), 'messages', function()
     return {}
   end)
 
@@ -201,7 +201,11 @@ T['a notice from connecting is shown as a warning'] = function()
   local id = state.next_connection_id()
   state.add_connection({ id = id, name = 'quest', url = 'postgres://quest', state = 'connecting' })
 
-  require('sqmeow.events').on_connection({ id = id, state = 'connected', notice = 'no sessions' })
+  require('sqmeow.rpc.events').on_connection({
+    id = id,
+    state = 'connected',
+    notice = 'no sessions',
+  })
 
   eq(notes, { { message = 'sqmeow: quest: no sessions', level = vim.log.levels.WARN } })
   state.remove_connection(id)

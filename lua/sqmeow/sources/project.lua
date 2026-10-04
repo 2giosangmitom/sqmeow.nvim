@@ -93,7 +93,7 @@ function M.load()
   if not ok then
     return {}, ('could not read %s'):format(path)
   end
-  local decoded, err = require('sqmeow.rpc').request('project_connections', {
+  local decoded, err = require('sqmeow.rpc.client').request('project_connections', {
     contents = table.concat(lines, '\n'),
   })
   if not decoded then

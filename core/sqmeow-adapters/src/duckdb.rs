@@ -6,10 +6,23 @@ use std::time::Instant;
 use duckdb::types::{Value, ValueRef};
 use duckdb::{Connection, InterruptHandle, Row, Statement};
 use sqlx::types::chrono::{NaiveDate, NaiveDateTime, NaiveTime};
-use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
-    RelationNode, Result, ResultSet, RoutineNode, SchemaNode, Source, TableBinder, TableName,
-};
+use sqmeow_db::adapter::Adapter;
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::Source;
+use sqmeow_db::edit::TableBinder;
+use sqmeow_db::edit::TableName;
+use sqmeow_db::error::Error;
+use sqmeow_db::error::Result;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
+use sqmeow_db::result::Column;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::types::ForeignKey;
+use sqmeow_db::types::KeyKind;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 use crate::stream::{check_affected, rolled_back};
@@ -292,7 +305,11 @@ impl Adapter for DuckDbAdapter {
         .await
     }
 
-    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+    async fn indexes(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::IndexNode>> {
         let params = [schema, relation, schema, relation].map(str::to_owned);
         self.run_meta(move |connection| {
             rows(
@@ -310,7 +327,7 @@ impl Adapter for DuckDbAdapter {
                  ) order by 1",
                 params,
                 |row| {
-                    Ok(sqmeow_db::IndexNode {
+                    Ok(sqmeow_db::node::IndexNode {
                         name: row.get(0)?,
                         columns: list_names(&row.get::<_, String>(1)?),
                         unique: row.get(2)?,
@@ -322,7 +339,7 @@ impl Adapter for DuckDbAdapter {
         .await
     }
 
-    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::node::Details> {
         let (schema, relation) = (schema.to_owned(), relation.to_owned());
         self.run_meta(move |connection| {
             let named = [schema.as_str(), relation.as_str()];
@@ -368,7 +385,7 @@ impl Adapter for DuckDbAdapter {
                  order by constraint_name",
                 named,
                 |row| {
-                    Ok(sqmeow_db::ForeignKeyNode {
+                    Ok(sqmeow_db::node::ForeignKeyNode {
                         name: row.get(0)?,
                         columns: list_names(&row.get::<_, String>(1)?),
                         target: row.get(2)?,
@@ -385,7 +402,7 @@ impl Adapter for DuckDbAdapter {
                 named,
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
-            Ok(sqmeow_db::Details {
+            Ok(sqmeow_db::node::Details {
                 properties: comment
                     .map(|comment| ("comment".to_owned(), comment))
                     .into_iter()

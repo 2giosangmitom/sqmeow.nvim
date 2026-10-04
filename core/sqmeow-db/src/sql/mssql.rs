@@ -25,7 +25,7 @@ pub(super) fn filtered(
     order: &str,
     columns: &[String],
 ) -> Option<String> {
-    if crate::guard::writes(crate::Dialect::MsSql, sql) {
+    if crate::guard::writes(crate::adapter::Dialect::MsSql, sql) {
         return None;
     }
     let mut query = query(sql)?;
@@ -40,7 +40,7 @@ pub(super) fn filtered(
         inner.push_str(" OFFSET 0 ROWS");
     }
     let prefix = with.map(|with| with.to_string());
-    let mut result = match super::distinct_names(crate::Dialect::MsSql, columns) {
+    let mut result = match super::distinct_names(crate::adapter::Dialect::MsSql, columns) {
         Some(names) => format!(
             "{}sqmeow_view ({names}) AS (\n{inner}\n)\nSELECT * FROM sqmeow_view",
             prefix.map_or("WITH ".into(), |p| format!("{p}, "))
@@ -159,7 +159,7 @@ fn is_go_separator(text: &str) -> bool {
 fn push(result: &mut Vec<Statement>, batch: &mut String, start_line: usize, end_line: usize) {
     let sql = batch.trim().to_owned();
     batch.clear();
-    if !super::super::guard::words(crate::Dialect::MsSql, &sql).is_empty() {
+    if !super::super::guard::words(crate::adapter::Dialect::MsSql, &sql).is_empty() {
         result.push(Statement {
             sql,
             start_line,

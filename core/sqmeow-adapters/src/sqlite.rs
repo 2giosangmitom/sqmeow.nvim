@@ -8,10 +8,22 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{AssertSqlSafe, Pool, Row, Sqlite, SqlitePool, Statement as _, TypeInfo, ValueRef};
-use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, ForeignKey, KeyKind, RelationKind,
-    RelationNode, Result, ResultSet, RoutineNode, SchemaNode, Source, TableName,
-};
+use sqmeow_db::adapter::Adapter;
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::Source;
+use sqmeow_db::edit::TableName;
+use sqmeow_db::error::Error;
+use sqmeow_db::error::Result;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
+use sqmeow_db::result::Column;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::types::ForeignKey;
+use sqmeow_db::types::KeyKind;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 use crate::stream::{
@@ -360,7 +372,11 @@ impl Adapter for SqliteAdapter {
             .collect())
     }
 
-    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+    async fn indexes(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::IndexNode>> {
         let sql = format!(
             "pragma {}.index_list({})",
             self.quote_ident(schema),
@@ -392,7 +408,7 @@ impl Adapter for SqliteAdapter {
                         .unwrap_or_else(|| "(expression)".to_owned())
                 })
                 .collect();
-            indexes.push(sqmeow_db::IndexNode {
+            indexes.push(sqmeow_db::node::IndexNode {
                 columns,
                 unique: row.try_get::<i64, _>("unique").unwrap_or(0) == 1,
                 primary: row
@@ -405,7 +421,7 @@ impl Adapter for SqliteAdapter {
         Ok(indexes)
     }
 
-    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::node::Details> {
         let master = format!("{}.sqlite_master", self.quote_ident(schema));
         let definition = sqlx::query_scalar::<_, Option<String>>(AssertSqlSafe(format!(
             "select sql from {master} where name = ? and type in ('table', 'view')"
@@ -436,13 +452,13 @@ impl Adapter for SqliteAdapter {
             .fetch_all(&self.meta)
             .await
             .map_err(Error::driver)?;
-        let mut foreign_keys: Vec<(i64, sqmeow_db::ForeignKeyNode)> = Vec::new();
+        let mut foreign_keys: Vec<(i64, sqmeow_db::node::ForeignKeyNode)> = Vec::new();
         for row in &rows {
             let id: i64 = row.try_get("id").map_err(Error::driver)?;
             if !matches!(foreign_keys.last(), Some((known, _)) if *known == id) {
                 foreign_keys.push((
                     id,
-                    sqmeow_db::ForeignKeyNode {
+                    sqmeow_db::node::ForeignKeyNode {
                         name: String::new(),
                         columns: Vec::new(),
                         target: row.try_get("table").map_err(Error::driver)?,
@@ -457,11 +473,11 @@ impl Adapter for SqliteAdapter {
                 .extend(row.try_get::<Option<String>, _>("to").ok().flatten());
         }
 
-        Ok(sqmeow_db::Details {
+        Ok(sqmeow_db::node::Details {
             foreign_keys: foreign_keys.into_iter().map(|(_, key)| key).collect(),
             triggers,
             definition,
-            ..sqmeow_db::Details::default()
+            ..sqmeow_db::node::Details::default()
         })
     }
 

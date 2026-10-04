@@ -147,7 +147,7 @@ function M.ensure()
   end
   wired = true
 
-  local rpc = require('sqmeow.rpc')
+  local rpc = require('sqmeow.rpc.client')
   rpc.on('conn:state', M.on_connection)
   rpc.on('call:state', M.on_call)
   rpc.on('schema:nodes', M.on_nodes)

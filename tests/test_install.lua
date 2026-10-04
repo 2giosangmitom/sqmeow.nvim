@@ -4,7 +4,7 @@ local helpers = dofile('tests/helpers.lua')
 local install = require('sqmeow.install')
 local config = require('sqmeow.config')
 local paths = require('sqmeow.paths')
-local rpc = require('sqmeow.rpc')
+local rpc = require('sqmeow.rpc.client')
 
 --- Swallow notifications for the rest of the case.
 local function silence()
@@ -235,7 +235,7 @@ T['install']['follows checkout upgrades and downgrades with cached modules'] = f
   silence()
   local checkout, manifest = checkout_installer()
   helpers.stub(package.loaded, 'sqmeow.install', checkout)
-  local cached_rpc = require('sqmeow.rpc')
+  local cached_rpc = require('sqmeow.rpc.client')
   local requested
   checkout.fetch = function(url, _, _, callback)
     requested = url:match('/download/v([^/]+)/')
@@ -246,7 +246,7 @@ T['install']['follows checkout upgrades and downgrades with cached modules'] = f
     vim.fn.writefile({ vim.json.encode({ ['.'] = version }) }, manifest)
     require('sqmeow').install('curl')
     eq(requested, version)
-    eq(require('sqmeow.rpc'), cached_rpc)
+    eq(require('sqmeow.rpc.client'), cached_rpc)
   end
 
   require('sqmeow').install({ method = 'curl', version = '1.2.3' })

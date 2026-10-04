@@ -12,11 +12,23 @@ use redis::{
     AsyncConnectionConfig, Client, Cmd, ConnectionAddr, FromRedisValue, IntoConnectionInfo,
     Pipeline, ProtocolVersion, RedisFuture, TlsMode, Value,
 };
+use sqmeow_db::adapter::Adapter;
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::Changes;
+use sqmeow_db::edit::RedisKind;
+use sqmeow_db::edit::Source;
 use sqmeow_db::edit::{self, Value as Edit, check_column, check_row};
-use sqmeow_db::{
-    Adapter, Cell, Changes, Column, ColumnNode, Dialect, Error, KeyType, RedisKind, RelationKind,
-    RelationNode, Result, ResultSet, RoutineNode, SchemaNode, Source,
-};
+use sqmeow_db::error::Error;
+use sqmeow_db::error::Result;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::KeyType;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
+use sqmeow_db::result::Column;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 /// The most keys the drawer lists from one database.
@@ -517,7 +529,7 @@ impl Adapter for RedisAdapter {
     }
 
     /// A key's type, TTL, length, encoding and memory.
-    async fn details(&self, _schema: &str, key: &str) -> Result<sqmeow_db::Details> {
+    async fn details(&self, _schema: &str, key: &str) -> Result<sqmeow_db::node::Details> {
         let kind: String = self.query(redis::cmd("TYPE").arg(key)).await?;
         if kind == "none" {
             return Err(Error::driver(format!("there is no key `{key}`")));
@@ -560,9 +572,9 @@ impl Adapter for RedisAdapter {
         {
             properties.push(("memory".to_owned(), format!("{bytes} bytes")));
         }
-        Ok(sqmeow_db::Details {
+        Ok(sqmeow_db::node::Details {
             properties,
-            ..sqmeow_db::Details::default()
+            ..sqmeow_db::node::Details::default()
         })
     }
 
@@ -1029,7 +1041,7 @@ mod tests {
         assert!(hosts("redis+cluster:///", 6379).is_err());
     }
 
-    use sqmeow_db::TypeClass;
+    use sqmeow_db::types::TypeClass;
 
     use super::*;
 

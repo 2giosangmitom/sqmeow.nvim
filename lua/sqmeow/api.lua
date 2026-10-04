@@ -17,8 +17,8 @@ local M = {}
 local notify = require('sqmeow.utils').notify
 
 local function engine()
-  require('sqmeow.events').ensure()
-  return require('sqmeow.rpc')
+  require('sqmeow.rpc.events').ensure()
+  return require('sqmeow.rpc.client')
 end
 
 --- Open a connection. Returns once the engine accepts the request; success arrives as an event.
@@ -872,7 +872,7 @@ end
 ---@param name string|nil Raw name with extension (e.g. `report.sql`, `cache.redis`, `reports/monthly.sql`). If given, it is created directly; otherwise the user is prompted.
 ---@param default string|nil Prefilled prompt when asking, such as a folder followed by `/`.
 function M.scratchpad(name, default)
-  require('sqmeow.events').ensure()
+  require('sqmeow.rpc.events').ensure()
 
   -- ` :Sqmeow scratch <name>` passes the desired name directly.
   if name and vim.trim(name) ~= '' then
@@ -906,7 +906,7 @@ end
 --- Show the schema drawer.
 ---@return integer win
 function M.open_drawer()
-  require('sqmeow.events').ensure()
+  require('sqmeow.rpc.events').ensure()
   local win = require('sqmeow.ui.drawer').open()
   resume()
   return win
@@ -919,7 +919,7 @@ end
 
 --- Open the drawer and the result window.
 function M.open_all()
-  require('sqmeow.events').ensure()
+  require('sqmeow.rpc.events').ensure()
 
   require('sqmeow.ui.drawer').open()
   require('sqmeow.ui.result').open()

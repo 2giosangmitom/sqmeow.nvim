@@ -488,7 +488,7 @@ local function plan_lines(call)
   end
   -- DuckDB puts its whole plan in the second column of one row.
   if names == 'explain_key,explain_value' then
-    local row = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = 0 })
+    local row = require('sqmeow.rpc.client').request('row', { call_id = call.call_id, row = 0 })
     if row and row[2] and not row[2].is_null then
       return vim.split(row[2].value, '\n', { plain = true })
     end
@@ -499,7 +499,7 @@ local function plan_lines(call)
 
   -- A plan in one value, such as MySQL's `FORMAT=TREE`, spans lines the grid's rows flatten.
   if call.rows == 1 then
-    local row = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = 0 })
+    local row = require('sqmeow.rpc.client').request('row', { call_id = call.call_id, row = 0 })
     if row and row[1] and not row[1].is_null then
       return vim.split(row[1].value, '\n', { plain = true })
     end
@@ -724,7 +724,7 @@ function M.show_page(offset)
   local last = math.max(math.ceil(total / size) - 1, 0) * size
   offset = math.max(math.min(offset, last), 0)
 
-  local reply, err = require('sqmeow.rpc').request('rows', {
+  local reply, err = require('sqmeow.rpc.client').request('rows', {
     call_id = call.call_id,
     offset = offset,
     limit = size,
@@ -772,7 +772,7 @@ function M.send_view()
   local spec = M.spec()
   -- A result filtered by its query arrives narrowed, so only held rows take the condition here.
   local held = not M.queried(call)
-  local _, err = require('sqmeow.rpc').request('view', {
+  local _, err = require('sqmeow.rpc.client').request('view', {
     call_id = call.call_id,
     filters = spec.filters,
     sort = spec.sort,
@@ -1427,7 +1427,7 @@ function M.actions.filter_cell()
   local call = require('sqmeow.state').call
   if call and M.filterable(call) then
     local queried = M.queried(call)
-    local condition, err = require('sqmeow.rpc').request('condition', {
+    local condition, err = require('sqmeow.rpc.client').request('condition', {
       call_id = call.call_id,
       row = cell.row,
       column = cell.column,
@@ -1559,7 +1559,8 @@ function M.actions.duplicate_row()
       vim.log.levels.WARN
     )
   end
-  local row, err = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = cell.row })
+  local row, err =
+    require('sqmeow.rpc.client').request('row', { call_id = call.call_id, row = cell.row })
   if not row then
     return utils.notify(err or 'that row is not there', vim.log.levels.WARN)
   end
