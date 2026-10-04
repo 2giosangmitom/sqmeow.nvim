@@ -158,19 +158,19 @@ end
 --- Download something, with whichever tool this machine has.
 ---@param url string
 ---@param destination string
----@param opts table|nil `label` names the download in the progress line.
+---@param opts table|nil `method` names the download tool.
 ---@param callback fun(ok: boolean, err: string|nil)
 function M.fetch(url, destination, opts, callback)
   opts = opts or {}
 
-  -- curl draws a progress bar when its output is a file and it is not asked to be silent.
+  -- Keep downloads quiet, just like cargo builds, while retaining errors.
   local attempts = {
     {
       'curl',
       '--fail',
       '--location',
       '--show-error',
-      opts.label and '--progress-bar' or '--silent',
+      '--silent',
       '--output',
       destination,
       url,
@@ -180,7 +180,7 @@ function M.fetch(url, destination, opts, callback)
       'powershell',
       '-NoProfile',
       '-Command',
-      ("Invoke-WebRequest -Uri '%s' -OutFile '%s'"):format(
+      ("$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri '%s' -OutFile '%s'"):format(
         url:gsub("'", "''"),
         destination:gsub("'", "''")
       ),
@@ -207,43 +207,11 @@ function M.fetch(url, destination, opts, callback)
       return attempt()
     end
 
-    -- Reading stderr as it arrives is what turns curl's bar into a percentage.
-    local tail = {}
-
-    -- curl redraws its bar by returning to the start of the line.
-    local carry = ''
-    local function on_stderr(_, data)
-      if not data then
-        return
-      end
-      table.insert(tail, data)
-      if #tail > 4 then
-        table.remove(tail, 1)
-      end
-      if not opts.label then
-        return
-      end
-
-      carry = carry .. data
-      local latest
-      for bar in carry:gmatch('([^\r\n]*)[\r\n]') do
-        latest = bar:match('(%d+%.%d)%%%s*$') or latest
-      end
-      carry = carry:match('[^\r\n]*$') or ''
-
-      if latest then
-        vim.schedule(function()
-          -- Right-aligned, so the line does not jitter as the number grows.
-          progress(('%s %5s%%'):format(opts.label, latest))
-        end)
-      end
-    end
-
-    spawn(command, { text = true, stderr = on_stderr }, function(result)
+    spawn(command, { text = true }, function(result)
       if result.code == 0 then
         return callback(true)
       end
-      local stderr = result.stderr or table.concat(tail, '')
+      local stderr = result.stderr or ''
       last = ('%s failed: %s'):format(command[1], stderr:gsub('%s+$', ''))
       attempt()
     end)
@@ -297,6 +265,10 @@ end
 function M.download(opts, callback)
   opts = opts or {}
 
+  if opts.method and vim.fn.executable(opts.method) ~= 1 then
+    return callback(nil, ('%s is not installed'):format(opts.method))
+  end
+
   local triple, err = M.triple()
   if not triple then
     return callback(nil, err)
@@ -315,9 +287,7 @@ function M.download(opts, callback)
   vim.fn.mkdir(directory, 'p')
 
   local archive = vim.fs.joinpath(directory, M.archive_name(triple))
-  local label = 'downloading ' .. M.binary
-
-  M.fetch(url, archive, { label = label, method = opts.method }, function(ok, fetch_err)
+  M.fetch(url, archive, { method = opts.method }, function(ok, fetch_err)
     if not ok then
       return callback(nil, fetch_err)
     end

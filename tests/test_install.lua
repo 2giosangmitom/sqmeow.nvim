@@ -52,8 +52,40 @@ T['powershell downloads quote literal arguments'] = function()
   end)
   eq(
     command[4],
-    "Invoke-WebRequest -Uri 'https://example.test/a''; Write-Host unsafe; ''' -OutFile 'C:/user''s/download'"
+    "$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri 'https://example.test/a''; Write-Host unsafe; ''' -OutFile 'C:/user''s/download'"
   )
+end
+
+T['curl downloads stay quiet and retain errors'] = function()
+  local echoes = 0
+  helpers.stub(vim.api, 'nvim_echo', function()
+    echoes = echoes + 1
+  end)
+  helpers.stub(vim.fn, 'executable', function()
+    return 1
+  end)
+  helpers.stub(vim, 'system', function(argv, opts, callback)
+    eq(vim.tbl_contains(argv, '--silent'), true)
+    eq(vim.tbl_contains(argv, '--show-error'), true)
+    eq(vim.tbl_contains(argv, '--progress-bar'), false)
+    eq(opts.stderr, nil)
+    callback({ code = 28, stderr = 'connection timed out\n' })
+    return {}
+  end)
+
+  local answered, err = false, nil
+  install.fetch('https://example.test/engine', '/unused', {
+    method = 'curl',
+    label = 'downloading engine',
+  }, function(ok, failure)
+    eq(ok, false)
+    answered, err = true, failure
+  end)
+  helpers.wait_for('download failure', function()
+    return answered
+  end)
+  eq(err, 'curl failed: connection timed out')
+  eq(echoes, 0)
 end
 
 T['triple'] = MiniTest.new_set()
@@ -148,6 +180,31 @@ T['managed_path']['is under core.path, not the plugin'] = function()
 end
 
 T['download'] = MiniTest.new_set()
+
+T['download']['checks the requested tool before announcing a download'] = function()
+  local echoes, commands = 0, 0
+  helpers.stub(vim.fn, 'executable', function(tool)
+    eq(tool, 'wget')
+    return 0
+  end)
+  helpers.stub(vim.api, 'nvim_echo', function()
+    echoes = echoes + 1
+  end)
+  helpers.stub(vim, 'system', function()
+    commands = commands + 1
+  end)
+
+  local answered, path, err = false, nil, nil
+  install.download({ method = 'wget' }, function(p, e)
+    answered, path, err = true, p, e
+  end)
+
+  eq(answered, true)
+  eq(path, nil)
+  eq(err, 'wget is not installed')
+  eq(echoes, 0)
+  eq(commands, 0)
+end
 
 T['download']['answers through the callback instead of waiting'] = function()
   helpers.stub(install, 'fetch', function(_, _, _, callback)
