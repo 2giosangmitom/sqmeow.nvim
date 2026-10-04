@@ -59,6 +59,77 @@ impl Drop for Deadline {
 }
 
 impl Core {
+    /// Choose the executor for a held result, not from Lua's connection snapshot.
+    fn query_view(&self, call_id: CallId, structured: bool) -> Result<bool, String> {
+        let conn_id = self
+            .session
+            .with_call(call_id, |call| call.conn_id)
+            .ok_or_else(|| format!("result {call_id} is no longer held"))?;
+        let dialect = self
+            .session
+            .connection(conn_id)
+            .map(|conn| conn.backend.dialect());
+        Ok(view_queries(dialect, structured))
+    }
+
+    /// Automatic result view: retain original row indices for memory views; a query view
+    /// returns a new call id and the same call:state events as execute.
+    pub(super) fn result_view(self: Arc<Self>, args: &Args) -> Started {
+        let call_id = args.call_id()?;
+        let query = self.query_view(call_id, args.opt_bool("structured").unwrap_or(false))?;
+        let (conn_id, dialect) = self
+            .session
+            .with_call(call_id, |call| (call.conn_id, call.dialect))
+            .ok_or_else(|| format!("result {call_id} is no longer held"))?;
+        if query && args.conn_id("conn_id")? != conn_id {
+            return Err("result_view: the connection does not belong to this result".to_owned());
+        }
+        if !query
+            && !args.opt_bool("structured").unwrap_or(false)
+            && dialect == Some(Dialect::MongoDb)
+            && (args
+                .opt_string("where")
+                .is_some_and(|text| !text.is_empty())
+                || args
+                    .opt_string("order_by")
+                    .is_some_and(|text| !text.is_empty()))
+        {
+            return Err(
+                "a MongoDB result is filtered in its query, and its connection is closed"
+                    .to_owned(),
+            );
+        }
+        if !query && args.opt_bool("refresh").unwrap_or(false) {
+            return Err("the connection this result came from is not open".to_owned());
+        }
+        let (answer, work) = if query {
+            self.execute(args)?
+        } else {
+            self.view(args)?
+        };
+        Ok((
+            map(vec![
+                ("call_id", answer),
+                ("route", Value::from(if query { "query" } else { "memory" })),
+            ]),
+            work,
+        ))
+    }
+
+    /// The same routing policy used for the edit confirmation before a new result replaces one.
+    pub(super) fn result_view_route(&self, args: &Args) -> Result<Value, String> {
+        Ok(Value::from(
+            if self.query_view(
+                args.call_id()?,
+                args.opt_bool("structured").unwrap_or(false),
+            )? {
+                "query"
+            } else {
+                "memory"
+            },
+        ))
+    }
+
     /// The error for a result the history no longer holds.
     pub(super) fn held(&self, id: CallId) -> Result<(), String> {
         self.session
@@ -430,11 +501,12 @@ impl Core {
             .with_call(call_id, |call| call.conn_id)
             .ok_or_else(gone)?;
         // A filter run on the rows held takes the SQL the filter bar reads, whatever the database.
-        let dialect = if args.opt_bool("memory").unwrap_or(false) {
-            Dialect::Postgres
-        } else {
-            self.connection(conn_id)?.backend.dialect()
-        };
+        let dialect =
+            if args.opt_bool("memory").unwrap_or(false) || !self.query_view(call_id, false)? {
+                Dialect::Postgres
+            } else {
+                self.connection(conn_id)?.backend.dialect()
+            };
         self.session
             .with_call(call_id, |call| {
                 let result = &call.result;
@@ -536,27 +608,30 @@ impl Core {
                         || !sort.is_empty()
                         || scope.is_some()
                         || query.is_some();
-                    let view = narrowed.then(|| {
-                        Arc::new(view::select_with(
+                    let view = if narrowed {
+                        Some(Arc::new(view::select_with(
                             &call.result,
                             &filters,
                             &sort,
                             scope.as_deref(),
                             query.as_ref(),
-                        ))
-                    });
+                        )?))
+                    } else {
+                        None
+                    };
                     let rows = view
                         .as_ref()
                         .map_or(call.result.row_count(), |view| view.len());
                     *call.view.lock().expect("view poisoned") = view;
-                    rows
+                    Ok::<_, String>(rows)
                 })
             })
             .await;
 
             let mut payload = vec![("call_id", Value::from(call_id))];
             match built {
-                Ok(Some(rows)) => payload.push(("rows", Value::from(rows as u64))),
+                Ok(Some(Ok(rows))) => payload.push(("rows", Value::from(rows as u64))),
+                Ok(Some(Err(error))) => payload.push(("error", Value::from(error))),
                 Ok(None) => payload.push(("error", Value::from("the result is no longer held"))),
                 Err(error) => payload.push(("error", Value::from(error.to_string()))),
             }
@@ -574,6 +649,11 @@ impl Core {
         pairs.extend(extra);
         self.emit("call:state", map(pairs));
     }
+}
+
+fn view_queries(dialect: Option<Dialect>, structured: bool) -> bool {
+    !structured
+        && matches!(dialect, Some(d) if !matches!(d, Dialect::Redis | Dialect::Scylla | Dialect::SurrealDb))
 }
 
 /// The statements a buffer holds, or only the one at `line`.
@@ -631,4 +711,24 @@ fn elapsed(started: Instant) -> Vec<(&'static str, Value)> {
         "elapsed_ms",
         Value::from(started.elapsed().as_millis() as u64),
     )]
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+
+    #[test]
+    fn view_routes_by_live_dialect_and_intent() {
+        assert!(view_queries(Some(Dialect::Sqlite), false));
+        assert!(view_queries(Some(Dialect::MongoDb), false));
+        for dialect in [
+            None,
+            Some(Dialect::Redis),
+            Some(Dialect::Scylla),
+            Some(Dialect::SurrealDb),
+        ] {
+            assert!(!view_queries(dialect, false));
+        }
+        assert!(!view_queries(Some(Dialect::Sqlite), true));
+    }
 }

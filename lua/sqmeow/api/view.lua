@@ -27,8 +27,9 @@ function M.review()
 end
 
 --- Filter and order the current result with a WHERE condition and an ORDER BY list, which an open
---- SQL or MongoDB connection runs in the query and Redis, ScyllaDB, SurrealDB or a closed connection
---- runs on the rows held. Empty strings clear them.
+--- SQL or MongoDB connection runs in the query; Redis, ScyllaDB, SurrealDB or a closed connection
+--- uses Polars SQL on the rows held. Empty strings clear them. Polars SQL supports a different
+--- subset and type coercions than the database's dialect.
 ---@param view { where: string|nil, order_by: string|nil }
 ---@return boolean started
 ---@usage >lua
@@ -50,7 +51,7 @@ function M.view(view)
   local spec = result.spec()
   spec.filters = view.filters or spec.filters
   spec.sort = view.sort or spec.sort
-  result.send_view()
+  result.send_view({ structured = true })
 end
 
 --- Open the result window.
