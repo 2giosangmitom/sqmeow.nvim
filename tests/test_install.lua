@@ -208,26 +208,25 @@ end
 
 T['install'] = MiniTest.new_set()
 
-T['install']['follows checkout upgrades and downgrades with cached modules'] = function()
-  silence()
+T['archive_url']['follows checkout upgrades and downgrades without downloading'] = function()
   local checkout, manifest = checkout_installer()
-  helpers.stub(package.loaded, 'sqmeow.server.install', checkout)
   local cached_rpc = require('sqmeow.rpc.client')
-  local requested
-  checkout.fetch = function(url, _, _, callback)
-    requested = url:match('/download/v([^/]+)/')
-    callback(false, 'stopped at download boundary')
-  end
+  local triple = 'x86_64-unknown-linux-musl'
 
   for _, version in ipairs({ rpc.version, '99.0.0', '0.0.1' }) do
     vim.fn.writefile({ vim.json.encode({ ['.'] = version }) }, manifest)
-    require('sqmeow').install('curl')
-    eq(requested, version)
+    eq(
+      checkout.archive_url(nil, triple),
+      ('https://github.com/%s/releases/download/v%s/%s'):format(
+        checkout.repository,
+        version,
+        checkout.archive_name(triple)
+      )
+    )
     eq(require('sqmeow.rpc.client'), cached_rpc)
   end
 
-  require('sqmeow').install({ method = 'curl', version = '1.2.3' })
-  eq(requested, '1.2.3')
+  helpers.contains(checkout.archive_url('1.2.3', triple), '/download/v1.2.3/')
 end
 
 T['install']['reports unusable metadata and permits an explicit version'] = function()
