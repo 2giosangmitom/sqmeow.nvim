@@ -340,7 +340,7 @@ end
 T['an export without a file goes to the clipboard, as the grid shows it'] = function()
   vim.fn.setreg('"', '')
   result.spec().hidden = { [2] = true }
-  api.export({ clipboard = true, format = 'csv' })
+  require('sqmeow.api.export').export({ clipboard = true, format = 'csv' })
   wait('the export should be copied', function()
     return vim.fn.getreg('"') ~= ''
   end)
@@ -349,7 +349,7 @@ end
 
 T['the export dialog previews what it writes, scrolls it, and gives focus back'] = function()
   local win = focus_result()
-  api.export()
+  require('sqmeow.api.export').export()
 
   local function preview()
     for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
@@ -424,7 +424,7 @@ end
 
 T['an export as SQL writes an INSERT per row into the table'] = function()
   vim.fn.setreg('"', '')
-  api.export({ clipboard = true, format = 'sql', limit = 1 })
+  require('sqmeow.api.export').export({ clipboard = true, format = 'sql', limit = 1 })
   wait('the export should be copied', function()
     return vim.fn.getreg('"') ~= ''
   end)
@@ -439,7 +439,9 @@ T['an export as SQL can batch rows, create the table, and ignore the view'] = fu
 
   local function copied(opts)
     vim.fn.setreg('"', '')
-    api.export(vim.tbl_extend('force', { clipboard = true, format = 'sql' }, opts))
+    require('sqmeow.api.export').export(
+      vim.tbl_extend('force', { clipboard = true, format = 'sql' }, opts)
+    )
     wait('the export should be copied', function()
       return vim.fn.getreg('"') ~= ''
     end)

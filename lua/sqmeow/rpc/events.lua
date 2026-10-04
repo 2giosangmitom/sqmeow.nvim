@@ -140,6 +140,11 @@ function M.on_nodes(payload)
   end)
 end
 
+--- Handle the engine restarting: call ids start over, so nothing held is valid.
+function M.on_engine_restart()
+  require('sqmeow.ui.result').forget()
+end
+
 --- Subscribe to engine events. Safe to call repeatedly.
 function M.ensure()
   if wired then

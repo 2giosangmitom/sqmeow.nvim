@@ -581,7 +581,13 @@ end
 
 T['exporting']['writes only the rows asked for, without a header'] = function()
   local path = vim.fn.tempname() .. '.csv'
-  api.export({ format = 'csv', path = path, headers = false, offset = 1, limit = 1 })
+  require('sqmeow.api.export').export({
+    format = 'csv',
+    path = path,
+    headers = false,
+    offset = 1,
+    limit = 1,
+  })
   eq(written(path), '2,bob\n')
   vim.fn.delete(path)
 end
@@ -622,7 +628,7 @@ T['exporting']['the dialog follows the format and asks before overwriting'] = fu
     return vim.api.nvim_buf_get_lines(0, 0, -1, false)
   end
 
-  api.export()
+  require('sqmeow.api.export').export()
   -- Named after the table the query reads from.
   eq(drawn()[2]:match('people_%d+_%d+%.csv$') ~= nil, true)
   eq(drawn()[4]:match('%[x%]$') ~= nil, true)
@@ -655,7 +661,7 @@ end
 
 T['exporting']['writes the whole result to a file'] = function()
   local path = vim.fn.tempname() .. '.json'
-  api.export({ format = 'json', path = path })
+  require('sqmeow.api.export').export({ format = 'json', path = path })
 
   local decoded = vim.json.decode(written(path))
   eq(#decoded, 3)
@@ -670,7 +676,7 @@ T['exporting']['reports a path it cannot write'] = function()
   helpers.stub(vim, 'notify', function(message)
     table.insert(messages, message)
   end)
-  api.export({ format = 'csv', path = '/nonexistent/dir/out.csv' })
+  require('sqmeow.api.export').export({ format = 'csv', path = '/nonexistent/dir/out.csv' })
   -- Nothing is written and nothing crashes; the failure arrives as a notification.
   helpers.wait_for('the failure should be reported', function()
     return table.concat(messages, '\n'):find('could not write', 1, true) ~= nil

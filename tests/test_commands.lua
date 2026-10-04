@@ -117,7 +117,7 @@ end
 
 T['export writes a file, or copies with clipboard as the path'] = function()
   local seen = {}
-  helpers.stub(api, 'export', function(opts)
+  helpers.stub(require('sqmeow.api.export'), 'export', function(opts)
     table.insert(seen, opts)
   end)
   vim.cmd('Sqmeow export csv out.csv')

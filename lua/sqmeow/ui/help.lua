@@ -53,43 +53,24 @@ function M.open(surface)
     return
   end
 
-  local nui, err = utils.nui({ 'popup' }, 'the help float')
-  if not nui then
-    utils.notify(err, vim.log.levels.ERROR)
-    return
-  end
-  local Popup = nui.Popup
-
   local width = 0
   for _, line in ipairs(lines) do
     width = math.max(width, vim.fn.strdisplaywidth(line))
   end
 
-  popup = Popup({
-    enter = true,
-    focusable = true,
-    position = '50%',
-    size = {
-      width = math.min(width + 2, vim.o.columns - 4),
-      height = math.min(#lines, vim.o.lines - 4),
-    },
-    border = {
-      style = require('sqmeow.config').border(),
-      text = { top = ' ' .. surface .. ' ' },
-    },
-    buf_options = { modifiable = true, readonly = false },
-    win_options = { number = false, relativenumber = false, signcolumn = 'no' },
+  local opened, open_err = require('sqmeow.ui.popup').open({
+    title = ' ' .. surface .. ' ',
+    lines = lines,
+    width = math.min(width + 2, vim.o.columns - 4),
+    height = math.min(#lines, vim.o.lines - 4),
+    on_close = M.close,
+    extra_maps = { { mode = 'n', lhs = '?', handler = M.close } },
   })
-
-  popup:mount()
-  vim.api.nvim_buf_set_lines(popup.bufnr, 0, -1, false, lines)
-  vim.bo[popup.bufnr].modifiable = false
-
-  -- Any of the usual ways of dismissing a float works, so nobody has to guess.
-  popup:on('BufLeave', M.close, { once = true })
-  for _, lhs in ipairs({ 'q', '<Esc>', '?' }) do
-    popup:map('n', lhs, M.close, { nowait = true })
+  if not opened then
+    utils.notify(open_err or 'could not open the popup', vim.log.levels.ERROR)
+    return
   end
+  popup = opened
 end
 
 return M

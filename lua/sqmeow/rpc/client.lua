@@ -161,7 +161,7 @@ function M.start()
 
   info = handshake
   -- A new engine numbers its calls from one again, so nothing kept by call id still holds.
-  require('sqmeow.ui.result').forget()
+  require('sqmeow.rpc.events').on_engine_restart()
   M.configure()
   return channel
 end

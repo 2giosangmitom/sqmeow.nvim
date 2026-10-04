@@ -315,16 +315,7 @@ function M.describe(summary, highlight)
 end
 
 local function scratch(name, filetype)
-  local handle = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(handle, name)
-
-  vim.bo[handle].buftype = 'nofile'
-  vim.bo[handle].bufhidden = 'hide'
-  vim.bo[handle].swapfile = false
-  vim.bo[handle].filetype = filetype
-  vim.bo[handle].modifiable = false
-
-  return handle
+  return require('sqmeow.ui.buffer').scratch(name, filetype, false)
 end
 
 --- The buffer the grid is drawn into.
@@ -1298,7 +1289,7 @@ end
 
 --- Write the whole result to a file.
 function M.actions.export()
-  require('sqmeow.api').export()
+  require('sqmeow.api.export').export()
 end
 
 --- Write the rows the visual selection covers to a file.
@@ -1315,7 +1306,7 @@ function M.actions.export_selection()
   if last < first then
     return
   end
-  require('sqmeow.api').export({ offset = page.offset + first - 1, limit = last - first + 1 })
+  require('sqmeow.api.export').export({ offset = page.offset + first - 1, limit = last - first + 1 })
 end
 
 --- Show the row under the cursor as a list of columns and values.

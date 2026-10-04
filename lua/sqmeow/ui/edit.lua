@@ -495,44 +495,30 @@ function M.review()
   end
 
   close()
-  popup = nui.Popup({
-    enter = true,
-    focusable = true,
-    relative = 'editor',
-    position = '50%',
-    size = {
-      width = math.floor(vim.o.columns * 0.7),
-      height = math.max(math.min(#lines, math.floor(vim.o.lines * 0.6)), 1),
-    },
+  local opened, open_err = require('sqmeow.ui.popup').open({
+    title = (' Review %d change%s '):format(M.count(), M.count() == 1 and '' or 's'),
+    bottom = ' <C-s> apply   q back ',
+    lines = lines,
+    width = math.floor(vim.o.columns * 0.7),
+    height = math.max(math.min(#lines, math.floor(vim.o.lines * 0.6)), 1),
+    filetype = filetype(call),
     zindex = 60,
-    border = {
-      style = require('sqmeow.config').border(),
-      text = {
-        top = (' Review %d change%s '):format(M.count(), M.count() == 1 and '' or 's'),
-        top_align = 'center',
-        bottom = ' <C-s> apply   q back ',
-        bottom_align = 'center',
+    on_close = close,
+    extra_maps = {
+      {
+        mode = 'n',
+        lhs = '<C-s>',
+        handler = function()
+          close()
+          M.apply(call, statements)
+        end,
       },
     },
-    buf_options = {
-      buftype = 'nofile',
-      bufhidden = 'wipe',
-      swapfile = false,
-      filetype = filetype(call),
-    },
-    win_options = { wrap = false, number = false, relativenumber = false },
   })
-  popup:mount()
-  vim.api.nvim_buf_set_lines(popup.bufnr, 0, -1, false, lines)
-  vim.bo[popup.bufnr].modifiable = false
-
-  popup:map('n', '<C-s>', function()
-    close()
-    M.apply(call, statements)
-  end, { nowait = true })
-  popup:map('n', 'q', close, { nowait = true })
-  popup:map('n', '<Esc>', close, { nowait = true })
-  popup:on('BufLeave', close, { once = true })
+  if not opened then
+    return utils.notify(open_err or 'could not open the popup', vim.log.levels.ERROR)
+  end
+  popup = opened
 end
 
 return M

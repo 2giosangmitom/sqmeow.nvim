@@ -395,9 +395,9 @@ M.subcommands = {
     desc = 'Write the result to a file, or with `clipboard` as the path copy it',
     run = function(args)
       if args[2] == 'clipboard' then
-        return require('sqmeow.api').export({ format = args[1], clipboard = true })
+        return require('sqmeow.api.export').export({ format = args[1], clipboard = true })
       end
-      require('sqmeow.api').export({ format = args[1], path = args[2] })
+      require('sqmeow.api.export').export({ format = args[1], path = args[2] })
     end,
     complete = function(lead)
       return vim.tbl_filter(function(format)

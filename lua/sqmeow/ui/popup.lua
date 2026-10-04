@@ -13,6 +13,9 @@ local M = {}
 ---@field height integer
 ---@field filetype string|nil Buffer filetype.
 ---@field on_close fun() Close callback for mappings and BufLeave.
+---@field bottom string|nil Bottom border text.
+---@field zindex integer|nil Nui zindex, default 50.
+---@field extra_maps table|nil Extra `{ mode, lhs, handler }` mappings.
 
 ---@param spec sqmeow.PopupSpec
 ---@return any|nil popup Mounted nui popup.
@@ -24,16 +27,21 @@ function M.open(spec)
     return nil, nui_err
   end
 
+  local border_text = { top = spec.title, top_align = 'center' }
+  if spec.bottom then
+    border_text.bottom = spec.bottom
+    border_text.bottom_align = 'center'
+  end
   local popup = nui.Popup({
     enter = true,
     focusable = true,
     relative = 'editor',
     position = '50%',
     size = { width = spec.width, height = spec.height },
-    zindex = 50,
+    zindex = spec.zindex or 50,
     border = {
       style = require('sqmeow.config').border(),
-      text = { top = spec.title, top_align = 'center' },
+      text = border_text,
     },
     buf_options = {
       buftype = 'nofile',
@@ -46,6 +54,9 @@ function M.open(spec)
   popup:mount()
   popup:map('n', 'q', spec.on_close, { nowait = true })
   popup:map('n', '<Esc>', spec.on_close, { nowait = true })
+  for _, map in ipairs(spec.extra_maps or {}) do
+    popup:map(map.mode, map.lhs, map.handler, { nowait = true })
+  end
   popup:on('BufLeave', spec.on_close, { once = true })
 
   local first = spec.lines[1]
