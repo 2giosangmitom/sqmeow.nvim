@@ -162,7 +162,7 @@ end
 --- Records a finished query in the log.
 ---@param summary sqmeow.CallSummary
 function M.append(summary)
-  if summary.history == false then
+  if summary.history == false or summary.state ~= 'done' then
     return
   end
 

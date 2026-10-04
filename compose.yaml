@@ -72,7 +72,7 @@ services:
       retries: 30
 
   clickhouse:
-    image: clickhouse/clickhouse-server:25.8
+    image: clickhouse/clickhouse-server:25.8-alpine
     environment:
       CLICKHOUSE_USER: sqmeow
       CLICKHOUSE_PASSWORD: sqmeow
@@ -81,7 +81,7 @@ services:
     ports:
       - "58123:8123"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
       interval: 2s
       timeout: 3s
       retries: 30

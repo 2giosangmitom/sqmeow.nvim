@@ -752,25 +752,25 @@ T['history']['shows a saved result once the engine no longer holds it'] = functi
   eq(#history.entries(), 1)
 end
 
-T['history']['shows the error a failed query had'] = function()
+T['history']['does not list a failed query'] = function()
   run('select nope_at_all from nowhere_at_all')
-  local entry = history.entries()[1]
-  eq(entry.state, 'error')
-
-  local session = history.session
-  history.session = 'a later one'
-  MiniTest.finally(function()
-    history.session = session
-  end)
-
+  eq(history.entries(), {})
   drawer.render()
   expand('history')
-  goto_line('nope_at_all')
-  drawer.actions.toggle()
-
+  eq(table.concat(lines(), '\n'):find('nope_at_all', 1, true), nil)
   eq(state.call.state, 'error')
-  eq(state.call.error, entry.error)
-  eq(state.call.call_id, nil)
+end
+
+T['history']['yanks the full command under the cursor'] = function()
+  local command = 'select 1 as one\nunion all select 2 as one'
+  run(command)
+  drawer.render()
+  expand('history')
+  goto_line('select 1')
+  vim.api.nvim_set_current_win(drawer.open())
+  vim.fn.setreg('"', 'untouched')
+  vim.api.nvim_feedkeys('y', 'mx', false)
+  eq(vim.fn.getreg('"'), command)
 end
 
 T['history']['leaves out a preview the drawer ran'] = function()

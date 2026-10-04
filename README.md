@@ -344,7 +344,7 @@ cmp.register_source('sqmeow', require('sqmeow.completion.cmp').new())
 | `K`         | Show table's or key's structure            |
 | `f`         | Show only Redis keys matching a glob       |
 | `r`         | Reload subtree                             |
-| `y` / `s`   | Yank qualified name / a `SELECT`           |
+| `y` / `s`   | Yank qualified name (or history command) / a `SELECT` |
 | `a`         | Create a scratchpad                        |
 | `A` / `e`   | Add / edit a connection                    |
 | `R`         | Rename connection or scratchpad            |
