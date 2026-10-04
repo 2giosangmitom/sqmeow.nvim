@@ -1,19 +1,16 @@
 //! The MySQL adapter against a real server.
 
-use sqmeow_adapters::Backend;
 use sqmeow_db::edit::Changes;
 use sqmeow_db::edit::Source;
 use sqmeow_db::error::Error;
 use sqmeow_db::node::RelationKind;
 use sqmeow_db::node::RoutineKind;
-use sqmeow_db::result::ResultSet;
 use sqmeow_db::types::ForeignKey;
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::types::TypeClass;
 use sqmeow_db::value::Cell;
-use tokio_util::sync::CancellationToken;
 
-const NO_CAP: usize = usize::MAX;
+include!("common/harness.rs");
 
 // Introspection reads the catalogue.
 const SCHEMA: &str = "sqmeow";
@@ -29,34 +26,9 @@ async fn fixture(backend: &Backend, table: &str) {
     .await;
 }
 
-macro_rules! server {
-    () => {
-        match std::env::var("SQMEOW_TEST_MYSQL_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("skipped: set SQMEOW_TEST_MYSQL_URL, or run `just db-up`");
-                return;
-            }
-        }
-    };
-}
-
-async fn connect(url: &str) -> Backend {
-    Backend::connect(url)
-        .await
-        .expect("the test server should accept a connection")
-}
-
-async fn run(backend: &Backend, sql: &str) -> ResultSet {
-    backend
-        .execute(sql, NO_CAP, CancellationToken::new())
-        .await
-        .unwrap_or_else(|error| panic!("{sql} should run: {error}"))
-}
-
 #[tokio::test]
 async fn connects_and_reports_its_dialect() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     assert_eq!(backend.dialect().name(), "mysql");
 }
 
@@ -70,7 +42,7 @@ async fn refuses_a_server_that_is_not_there() {
 
 #[tokio::test]
 async fn selects_rows_with_their_columns() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let result = run(&backend, "select 1 as id, 'alice' as name").await;
 
     let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
@@ -81,7 +53,7 @@ async fn selects_rows_with_their_columns() {
 
 #[tokio::test]
 async fn decodes_the_types_a_real_schema_holds() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
 
     run(
         &backend,
@@ -141,7 +113,7 @@ async fn decodes_the_types_a_real_schema_holds() {
 
 #[tokio::test]
 async fn an_unsigned_bigint_stays_exact() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "create temporary table big (v bigint unsigned)").await;
     // One past what an i64 holds.
     run(&backend, "insert into big values (18446744073709551615)").await;
@@ -155,7 +127,7 @@ async fn an_unsigned_bigint_stays_exact() {
 
 #[tokio::test]
 async fn a_small_unsigned_value_stays_an_integer() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "create temporary table small (v bigint unsigned)").await;
     run(&backend, "insert into small values (42)").await;
 
@@ -165,7 +137,7 @@ async fn a_small_unsigned_value_stays_an_integer() {
 
 #[tokio::test]
 async fn a_null_decodes_in_every_column() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let result = run(
         &backend,
         "select null as a, cast(null as char) as b, cast(null as date) as c",
@@ -179,7 +151,7 @@ async fn a_null_decodes_in_every_column() {
 
 #[tokio::test]
 async fn an_empty_result_still_knows_its_columns() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let result = run(
         &backend,
         "select 1 as id, 'x' as name from dual where false",
@@ -193,7 +165,7 @@ async fn an_empty_result_still_knows_its_columns() {
 
 #[tokio::test]
 async fn counts_rows_a_statement_changed() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "create temporary table counted (v int)").await;
     let result = run(&backend, "insert into counted values (1), (2), (3)").await;
 
@@ -202,7 +174,7 @@ async fn counts_rows_a_statement_changed() {
 
 #[tokio::test]
 async fn statements_share_one_session() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "create temporary table scratch (v int)").await;
     run(&backend, "insert into scratch values (1)").await;
 
@@ -211,7 +183,7 @@ async fn statements_share_one_session() {
 
 #[tokio::test]
 async fn reports_an_error_and_keeps_working() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let error = backend
         .execute("select nope", NO_CAP, CancellationToken::new())
         .await
@@ -223,7 +195,7 @@ async fn reports_an_error_and_keeps_working() {
 
 #[tokio::test]
 async fn stops_at_the_row_cap_and_says_so() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let result = backend
         .execute(
             "with recursive n(x) as (select 1 union all select x + 1 from n where x < 1000)
@@ -240,7 +212,7 @@ async fn stops_at_the_row_cap_and_says_so() {
 
 #[tokio::test]
 async fn cancelling_mid_query_stops_it() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let cancel = CancellationToken::new();
 
     let stopper = cancel.clone();
@@ -258,14 +230,14 @@ async fn cancelling_mid_query_stops_it() {
 
 #[tokio::test]
 async fn quotes_identifiers_for_the_dialect() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     assert_eq!(backend.quote_ident("plain"), "`plain`");
     assert_eq!(backend.quote_ident("od`d"), "`od``d`");
 }
 
 #[tokio::test]
 async fn lists_its_schemas() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let schemas = backend.schemas().await.expect("schemas should load");
 
     assert!(
@@ -287,7 +259,7 @@ async fn lists_its_schemas() {
 
 #[tokio::test]
 async fn lists_tables_and_views() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "listed").await;
     run(
         &backend,
@@ -316,7 +288,7 @@ async fn lists_tables_and_views() {
 #[tokio::test]
 async fn lists_functions_and_procedures_apart() {
     // Creating a function needs SUPER while binary logging is on.
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop function if exists listed_fn").await;
     run(&backend, "drop procedure if exists listed_proc").await;
     run(
@@ -343,7 +315,7 @@ async fn lists_functions_and_procedures_apart() {
 
 #[tokio::test]
 async fn lists_columns_in_their_declared_order() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "described").await;
 
     let columns = backend
@@ -368,7 +340,7 @@ async fn lists_columns_in_their_declared_order() {
 
 #[tokio::test]
 async fn marks_the_result_columns_that_are_keys() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists keyed_child").await;
     run(&backend, "drop table if exists keyed_parent").await;
     run(
@@ -404,7 +376,7 @@ async fn marks_the_result_columns_that_are_keys() {
 
 #[tokio::test]
 async fn a_result_column_that_is_an_expression_is_not_a_key() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists keyed_expr").await;
     run(&backend, "create table keyed_expr (id int primary key)").await;
 
@@ -421,7 +393,7 @@ async fn a_result_column_that_is_an_expression_is_not_a_key() {
 
 #[tokio::test]
 async fn a_result_column_is_classified_by_its_type() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists classed").await;
     run(
         &backend,
@@ -450,7 +422,7 @@ async fn a_result_column_is_classified_by_its_type() {
 
 #[tokio::test]
 async fn a_drawer_column_names_what_it_references() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists fk_child").await;
     run(&backend, "drop table if exists fk_parent").await;
     run(&backend, "create table fk_parent (id int primary key)").await;
@@ -481,13 +453,13 @@ async fn a_drawer_column_names_what_it_references() {
 
 #[tokio::test]
 async fn a_relation_that_is_not_there_has_no_columns() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     assert!(backend.columns(SCHEMA, "absent").await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn an_explain_tree_is_one_value_spanning_lines() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "explained").await;
 
     let tree = run(
@@ -513,7 +485,7 @@ async fn an_explain_tree_is_one_value_spanning_lines() {
 
 #[tokio::test]
 async fn a_plain_explain_is_a_table() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "explained_table").await;
 
     // Laid out as columns already, so the result window keeps it a grid.
@@ -529,7 +501,7 @@ fn text(value: &str) -> Cell {
 
 #[tokio::test]
 async fn a_select_from_one_table_is_edited_through_its_primary_key() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "my_edited").await;
     run(
         &backend,
@@ -581,7 +553,7 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
 
 #[tokio::test]
 async fn setting_a_value_to_what_it_already_is_applies() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "my_same").await;
     run(&backend, "insert into my_same (id, label) values (1, 'a')").await;
     let result = run(&backend, "select id, label from my_same").await;
@@ -600,7 +572,7 @@ async fn setting_a_value_to_what_it_already_is_applies() {
 
 #[tokio::test]
 async fn a_composite_key_finds_its_row_by_every_part() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists my_pair").await;
     run(
         &backend,
@@ -632,7 +604,7 @@ async fn a_composite_key_finds_its_row_by_every_part() {
 
 #[tokio::test]
 async fn a_failing_statement_rolls_back_the_ones_before_it() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "my_rollback").await;
     run(
         &backend,
@@ -661,7 +633,7 @@ async fn a_failing_statement_rolls_back_the_ones_before_it() {
 
 #[tokio::test]
 async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "my_vanished").await;
     run(
         &backend,
@@ -694,7 +666,7 @@ async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
 
 #[tokio::test]
 async fn a_transaction_spans_statements_run_one_at_a_time() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "my_tx").await;
 
     run(&backend, "start transaction").await;
@@ -710,7 +682,7 @@ async fn a_transaction_spans_statements_run_one_at_a_time() {
 
 #[tokio::test]
 async fn upserts_count_the_way_mysql_does() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "my_upsert").await;
     run(
         &backend,
@@ -750,7 +722,7 @@ async fn upserts_count_the_way_mysql_does() {
 
 #[tokio::test]
 async fn show_and_describe_read_as_text() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "my_show").await;
 
     let tables = run(&backend, "show tables like 'my_show'").await;
@@ -786,7 +758,7 @@ async fn show_and_describe_read_as_text() {
 
 #[tokio::test]
 async fn a_procedure_call_shows_the_rows_it_selects() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop procedure if exists my_rows").await;
     run(
         &backend,
@@ -809,7 +781,7 @@ async fn a_procedure_call_shows_the_rows_it_selects() {
 
 #[tokio::test]
 async fn a_user_variable_lasts_the_session() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "set @answer = 42").await;
     assert_eq!(
         run(&backend, "select @answer as answer").await.cell(0, 0),
@@ -819,7 +791,7 @@ async fn a_user_variable_lasts_the_session() {
 
 #[tokio::test]
 async fn decodes_unsigned_bit_set_and_binary_columns() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(
         &backend,
         "create temporary table more_kinds (
@@ -856,7 +828,7 @@ async fn decodes_unsigned_bit_set_and_binary_columns() {
 
 #[tokio::test]
 async fn json_functions_answer_json() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let result = run(
         &backend,
         r#"select json_object('a', 1) as doc, json_extract('{"a": [1, 2]}', '$.a') as list"#,
@@ -868,7 +840,7 @@ async fn json_functions_answer_json() {
 
 #[tokio::test]
 async fn common_table_expressions_and_window_functions() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let result = run(
         &backend,
         "with recursive n(x) as (select 1 union all select x + 1 from n where x < 3)
@@ -890,7 +862,7 @@ async fn common_table_expressions_and_window_functions() {
 
 #[tokio::test]
 async fn a_cancelled_query_leaves_the_connection_ready_for_the_next() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let cancel = CancellationToken::new();
 
     let stopper = cancel.clone();
@@ -919,7 +891,7 @@ async fn a_cancelled_query_leaves_the_connection_ready_for_the_next() {
 
 #[tokio::test]
 async fn a_query_run_again_after_its_table_changed_shows_the_change() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     fixture(&backend, "my_altered").await;
     run(
         &backend,
@@ -956,7 +928,7 @@ async fn a_query_run_again_after_its_table_changed_shows_the_change() {
 
 #[tokio::test]
 async fn each_side_of_a_self_join_is_written_through_its_own_key() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists my_nodes").await;
     run(
         &backend,
@@ -990,7 +962,7 @@ async fn each_side_of_a_self_join_is_written_through_its_own_key() {
 
 #[tokio::test]
 async fn a_join_is_edited_through_each_table_key() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists my_members, my_teams").await;
     run(
         &backend,
@@ -1056,7 +1028,7 @@ async fn a_join_is_edited_through_each_table_key() {
 
 #[tokio::test]
 async fn a_filtered_result_stays_editable() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists my_filtered").await;
     run(
         &backend,
@@ -1124,7 +1096,7 @@ async fn a_filtered_result_stays_editable() {
 
 #[tokio::test]
 async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists tagged_unique").await;
     run(
         &backend,
@@ -1176,7 +1148,9 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
 
 #[tokio::test]
 async fn a_read_only_connection_is_refused_writes_by_the_server() {
-    let backend = Backend::connect_to(&server!(), None, true).await.unwrap();
+    let backend = Backend::connect_to(&server!("SQMEOW_TEST_MYSQL_URL"), None, true)
+        .await
+        .unwrap();
     run(&backend, "select 1").await;
     let error = backend
         .execute(
@@ -1191,7 +1165,7 @@ async fn a_read_only_connection_is_refused_writes_by_the_server() {
 
 #[tokio::test]
 async fn a_new_row_with_an_auto_increment_key_is_read_back() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists auto_rows").await;
     run(
         &backend,
@@ -1220,7 +1194,7 @@ async fn a_new_row_with_an_auto_increment_key_is_read_back() {
 
 #[tokio::test]
 async fn a_table_without_a_key_is_edited_by_every_column() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists keyless_rows").await;
     run(
         &backend,
@@ -1267,7 +1241,7 @@ async fn a_table_without_a_key_is_edited_by_every_column() {
 
 #[tokio::test]
 async fn the_drawer_is_not_held_up_by_a_long_query() {
-    let backend = std::sync::Arc::new(connect(&server!()).await);
+    let backend = std::sync::Arc::new(connect(&server!("SQMEOW_TEST_MYSQL_URL")).await);
     let running = std::sync::Arc::clone(&backend);
     let query = tokio::spawn(async move {
         running
@@ -1284,7 +1258,7 @@ async fn the_drawer_is_not_held_up_by_a_long_query() {
 
 #[tokio::test]
 async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&backend, "drop table if exists det_child, det_parent").await;
     run(&backend, "create table det_parent (id int primary key)").await;
     run(
@@ -1326,7 +1300,7 @@ async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
 
 #[tokio::test]
 async fn the_users_are_read() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let roles = backend.roles().await.unwrap();
     assert!(
         roles.iter().any(|role| role.name.starts_with("root@")),

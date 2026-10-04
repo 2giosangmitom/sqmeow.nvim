@@ -2,45 +2,17 @@
 
 use std::time::Duration;
 
-use sqmeow_adapters::Backend;
 use sqmeow_db::error::Error;
 use sqmeow_db::node::RelationKind;
-use sqmeow_db::result::ResultSet;
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::types::TypeClass;
 use sqmeow_db::value::Cell;
-use tokio_util::sync::CancellationToken;
 
-const NO_CAP: usize = usize::MAX;
-
-macro_rules! server {
-    () => {
-        match std::env::var("SQMEOW_TEST_CLICKHOUSE_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("skipped: set SQMEOW_TEST_CLICKHOUSE_URL, or run `just db-up`");
-                return;
-            }
-        }
-    };
-}
-
-async fn connect(url: &str) -> Backend {
-    Backend::connect(url)
-        .await
-        .expect("the test server should accept a connection")
-}
-
-async fn run(backend: &Backend, sql: &str) -> ResultSet {
-    backend
-        .execute(sql, NO_CAP, CancellationToken::new())
-        .await
-        .unwrap_or_else(|error| panic!("{sql} should run: {error}"))
-}
+include!("common/harness.rs");
 
 #[tokio::test]
 async fn connects_and_reports_its_dialect() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
     assert_eq!(backend.dialect().name(), "clickhouse");
 }
 
@@ -54,13 +26,13 @@ async fn refuses_a_server_that_is_not_there() {
 
 #[tokio::test]
 async fn refuses_a_wrong_password() {
-    let url = server!().replace("sqmeow:sqmeow@", "sqmeow:wrong@");
+    let url = server!("SQMEOW_TEST_CLICKHOUSE_URL").replace("sqmeow:sqmeow@", "sqmeow:wrong@");
     assert!(Backend::connect(&url).await.is_err());
 }
 
 #[tokio::test]
 async fn decodes_the_types_it_returns() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
     let result = run(
         &backend,
         "select toUInt8(7) as small, 18446744073709551615 as wide, 1.5 as float,
@@ -94,7 +66,7 @@ async fn decodes_the_types_it_returns() {
 
 #[tokio::test]
 async fn stops_at_the_row_cap() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
     let result = backend
         .execute(
             "select number from numbers(100)",
@@ -109,7 +81,7 @@ async fn stops_at_the_row_cap() {
 
 #[tokio::test]
 async fn reports_a_server_error() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
     let error = backend
         .execute("select nope from nowhere", NO_CAP, CancellationToken::new())
         .await
@@ -119,7 +91,7 @@ async fn reports_a_server_error() {
 
 #[tokio::test]
 async fn a_cancel_stops_a_slow_query() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
     let cancel = CancellationToken::new();
     let stop = cancel.clone();
     tokio::spawn(async move {
@@ -138,7 +110,7 @@ async fn a_cancel_stops_a_slow_query() {
 
 #[tokio::test]
 async fn a_read_only_connection_refuses_writes() {
-    let url = server!();
+    let url = server!("SQMEOW_TEST_CLICKHOUSE_URL");
     let backend = Backend::connect_to(&url, None, true).await.unwrap();
     run(&backend, "select 1").await;
     let error = backend
@@ -154,7 +126,7 @@ async fn a_read_only_connection_refuses_writes() {
 
 #[tokio::test]
 async fn results_are_read_only() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
     let result = run(&backend, "select 1 as a").await;
     assert!(result.source().is_none());
     assert!(
@@ -167,7 +139,7 @@ async fn results_are_read_only() {
 
 #[tokio::test]
 async fn lists_what_the_drawer_shows() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
     run(&backend, "create database if not exists drawer").await;
     run(&backend, "drop table if exists drawer.events").await;
     run(&backend, "drop view if exists drawer.recent").await;

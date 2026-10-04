@@ -1,19 +1,16 @@
 //! The PostgreSQL adapter against a real server.
 
-use sqmeow_adapters::Backend;
 use sqmeow_db::edit::Changes;
 use sqmeow_db::edit::Source;
 use sqmeow_db::error::Error;
 use sqmeow_db::node::RelationKind;
 use sqmeow_db::node::RoutineKind;
-use sqmeow_db::result::ResultSet;
 use sqmeow_db::types::ForeignKey;
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::types::TypeClass;
 use sqmeow_db::value::Cell;
-use tokio_util::sync::CancellationToken;
 
-const NO_CAP: usize = usize::MAX;
+include!("common/harness.rs");
 
 // Introspection reads the catalogue.
 const SCHEMA: &str = "public";
@@ -30,34 +27,9 @@ async fn fixture(backend: &Backend, table: &str) {
 }
 
 /// The server URL, or a note explaining why the test did nothing.
-macro_rules! server {
-    () => {
-        match std::env::var("SQMEOW_TEST_POSTGRES_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("skipped: set SQMEOW_TEST_POSTGRES_URL, or run `just db-up`");
-                return;
-            }
-        }
-    };
-}
-
-async fn connect(url: &str) -> Backend {
-    Backend::connect(url)
-        .await
-        .expect("the test server should accept a connection")
-}
-
-async fn run(backend: &Backend, sql: &str) -> ResultSet {
-    backend
-        .execute(sql, NO_CAP, CancellationToken::new())
-        .await
-        .unwrap_or_else(|error| panic!("{sql} should run: {error}"))
-}
-
 #[tokio::test]
 async fn a_url_naming_no_database_lists_the_cluster() {
-    let url = server!();
+    let url = server!("SQMEOW_TEST_POSTGRES_URL");
     let (cluster, database) = url.rsplit_once('/').expect("the test url names a database");
 
     let backend = connect(cluster).await;
@@ -82,7 +54,7 @@ async fn a_url_naming_no_database_lists_the_cluster() {
 
 #[tokio::test]
 async fn connects_and_reports_its_dialect() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     assert_eq!(backend.dialect().name(), "postgres");
 }
 
@@ -96,7 +68,7 @@ async fn refuses_a_server_that_is_not_there() {
 
 #[tokio::test]
 async fn selects_rows_with_their_columns() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let result = run(&backend, "select 1 as id, 'alice' as name").await;
 
     let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
@@ -107,7 +79,7 @@ async fn selects_rows_with_their_columns() {
 
 #[tokio::test]
 async fn decodes_the_types_a_real_schema_holds() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
 
     // A temporary table is private to this connection, so the tests do not have to coordinate.
     run(
@@ -171,7 +143,7 @@ async fn decodes_the_types_a_real_schema_holds() {
 
 #[tokio::test]
 async fn a_null_decodes_in_every_column() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let result = run(
         &backend,
         "select null::int4, null::text, null::timestamptz, null::int4[]",
@@ -185,7 +157,7 @@ async fn a_null_decodes_in_every_column() {
 
 #[tokio::test]
 async fn a_type_nothing_understands_is_named_rather_than_failing() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let result = run(&backend, "select 1 as ok, '10.0.0.1'::inet as address").await;
 
     // The row still arrives, and the column the adapter cannot decode keeps the server's own text.
@@ -201,7 +173,7 @@ async fn a_type_nothing_understands_is_named_rather_than_failing() {
 
 #[tokio::test]
 async fn an_empty_result_still_knows_its_columns() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let result = run(&backend, "select 1 as id, 'x'::text as name where false").await;
 
     assert_eq!(result.row_count(), 0);
@@ -211,7 +183,7 @@ async fn an_empty_result_still_knows_its_columns() {
 
 #[tokio::test]
 async fn counts_rows_a_statement_changed() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "create temporary table counted (v int)").await;
     let result = run(&backend, "insert into counted values (1), (2), (3)").await;
 
@@ -220,7 +192,7 @@ async fn counts_rows_a_statement_changed() {
 
 #[tokio::test]
 async fn statements_share_one_session() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "create temporary table scratch (v int)").await;
     run(&backend, "insert into scratch values (1)").await;
 
@@ -229,7 +201,7 @@ async fn statements_share_one_session() {
 
 #[tokio::test]
 async fn reports_an_error_and_keeps_working() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let error = backend
         .execute("select nope", NO_CAP, CancellationToken::new())
         .await
@@ -241,7 +213,7 @@ async fn reports_an_error_and_keeps_working() {
 
 #[tokio::test]
 async fn stops_at_the_row_cap_and_says_so() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let result = backend
         .execute(
             "select generate_series(1, 1000)",
@@ -257,7 +229,7 @@ async fn stops_at_the_row_cap_and_says_so() {
 
 #[tokio::test]
 async fn cancelling_mid_query_stops_it() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let cancel = CancellationToken::new();
 
     let stopper = cancel.clone();
@@ -275,14 +247,14 @@ async fn cancelling_mid_query_stops_it() {
 
 #[tokio::test]
 async fn quotes_identifiers_for_the_dialect() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     assert_eq!(backend.quote_ident("plain"), "\"plain\"");
     assert_eq!(backend.quote_ident("od\"d"), "\"od\"\"d\"");
 }
 
 #[tokio::test]
 async fn lists_its_schemas() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let schemas = backend.schemas().await.expect("schemas should load");
 
     assert!(
@@ -304,7 +276,7 @@ async fn lists_its_schemas() {
 
 #[tokio::test]
 async fn lists_tables_and_views() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "listed").await;
     run(
         &backend,
@@ -332,7 +304,7 @@ async fn lists_tables_and_views() {
 
 #[tokio::test]
 async fn lists_functions_and_procedures_apart() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "drop function if exists listed_fn(int)").await;
     run(&backend, "drop function if exists listed_fn(text)").await;
     run(&backend, "drop procedure if exists listed_proc()").await;
@@ -371,7 +343,7 @@ async fn lists_functions_and_procedures_apart() {
 
 #[tokio::test]
 async fn lists_columns_in_their_declared_order() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "described").await;
 
     let columns = backend
@@ -396,7 +368,7 @@ async fn lists_columns_in_their_declared_order() {
 
 #[tokio::test]
 async fn marks_the_result_columns_that_are_keys() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "drop table if exists keyed_child cascade").await;
     run(&backend, "drop table if exists keyed_parent cascade").await;
     run(
@@ -431,7 +403,7 @@ async fn marks_the_result_columns_that_are_keys() {
 
 #[tokio::test]
 async fn a_result_column_that_is_an_expression_is_not_a_key() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "drop table if exists keyed_expr cascade").await;
     run(&backend, "create table keyed_expr (id int primary key)").await;
 
@@ -449,7 +421,7 @@ async fn a_result_column_that_is_an_expression_is_not_a_key() {
 
 #[tokio::test]
 async fn a_result_column_is_classified_by_its_type() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let result = run(
         &backend,
         "select 'x'::text as words, 1::int4 as count, now() as at,
@@ -473,7 +445,7 @@ async fn a_result_column_is_classified_by_its_type() {
 
 #[tokio::test]
 async fn a_drawer_column_names_what_it_references() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "drop table if exists fk_child cascade").await;
     run(&backend, "drop table if exists fk_parent cascade").await;
     run(&backend, "create table fk_parent (id int primary key)").await;
@@ -500,13 +472,13 @@ async fn a_drawer_column_names_what_it_references() {
 
 #[tokio::test]
 async fn a_relation_that_is_not_there_has_no_columns() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     assert!(backend.columns(SCHEMA, "absent").await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn an_explain_is_a_column_of_plan_lines() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "explained").await;
 
     // One row a line, which is what lets the result window show the plan as text.
@@ -537,7 +509,7 @@ fn text(value: &str) -> Cell {
 
 #[tokio::test]
 async fn a_write_returning_rows_shows_them_and_counts_them() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "pg_returning").await;
 
     let inserted = run(
@@ -564,7 +536,7 @@ async fn a_write_returning_rows_shows_them_and_counts_them() {
 
 #[tokio::test]
 async fn a_transaction_spans_statements_run_one_at_a_time() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "pg_tx").await;
 
     run(&backend, "begin").await;
@@ -584,7 +556,7 @@ async fn a_transaction_spans_statements_run_one_at_a_time() {
 
 #[tokio::test]
 async fn an_upsert_counts_the_row_it_touched() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "pg_upsert").await;
     run(
         &backend,
@@ -622,7 +594,7 @@ async fn an_upsert_counts_the_row_it_touched() {
 
 #[tokio::test]
 async fn schema_changes_are_seen_by_the_drawer() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "pg_ddl").await;
     run(
         &backend,
@@ -656,7 +628,7 @@ async fn schema_changes_are_seen_by_the_drawer() {
 
 #[tokio::test]
 async fn a_do_block_and_a_procedure_call_run() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "pg_called").await;
     run(
         &backend,
@@ -678,7 +650,7 @@ async fn a_do_block_and_a_procedure_call_run() {
 
 #[tokio::test]
 async fn a_setting_changed_with_set_is_read_back_with_show() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "set application_name = 'sqmeow test'").await;
 
     let shown = run(&backend, "show application_name").await;
@@ -688,7 +660,7 @@ async fn a_setting_changed_with_set_is_read_back_with_show() {
 
 #[tokio::test]
 async fn common_table_expressions_and_window_functions() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let result = run(
         &backend,
         "with recursive n(x) as (select 1 union all select x + 1 from n where x < 3)
@@ -705,7 +677,7 @@ async fn common_table_expressions_and_window_functions() {
 
 #[tokio::test]
 async fn arrays_and_special_values_decode() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let result = run(
         &backend,
         "select array[true, false] as flags, array[1.5::float8] as floats,
@@ -747,7 +719,7 @@ async fn arrays_and_special_values_decode() {
 
 #[tokio::test]
 async fn lists_materialized_views_and_partitioned_tables() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "drop materialized view if exists pg_mv").await;
     run(&backend, "drop table if exists pg_parted cascade").await;
     run(&backend, "create materialized view pg_mv as select 1 as x").await;
@@ -766,7 +738,7 @@ async fn lists_materialized_views_and_partitioned_tables() {
 
 #[tokio::test]
 async fn a_select_from_one_table_is_edited_through_its_primary_key() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "pg_edited").await;
     run(
         &backend,
@@ -819,7 +791,7 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
 
 #[tokio::test]
 async fn a_composite_key_finds_its_row_by_every_part() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "drop table if exists pg_pair").await;
     run(
         &backend,
@@ -851,7 +823,7 @@ async fn a_composite_key_finds_its_row_by_every_part() {
 
 #[tokio::test]
 async fn a_column_added_after_its_table_was_read_can_be_edited() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "pg_altered").await;
     run(
         &backend,
@@ -894,7 +866,7 @@ async fn a_column_added_after_its_table_was_read_can_be_edited() {
 
 #[tokio::test]
 async fn a_failing_statement_rolls_back_the_ones_before_it() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "pg_rollback").await;
     run(
         &backend,
@@ -923,7 +895,7 @@ async fn a_failing_statement_rolls_back_the_ones_before_it() {
 
 #[tokio::test]
 async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     fixture(&backend, "pg_vanished").await;
     run(
         &backend,
@@ -956,7 +928,7 @@ async fn an_edit_to_a_row_deleted_since_is_reported_and_rolled_back() {
 
 #[tokio::test]
 async fn a_cancelled_query_leaves_the_connection_ready_for_the_next() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let cancel = CancellationToken::new();
 
     let stopper = cancel.clone();
@@ -985,7 +957,7 @@ async fn a_cancelled_query_leaves_the_connection_ready_for_the_next() {
 
 #[tokio::test]
 async fn a_cancelled_apply_stops_waiting_on_a_lock_and_rolls_back() {
-    let url = server!();
+    let url = server!("SQMEOW_TEST_POSTGRES_URL");
     let backend = connect(&url).await;
     fixture(&backend, "apply_locked").await;
     run(
@@ -1033,7 +1005,7 @@ async fn a_cancelled_apply_stops_waiting_on_a_lock_and_rolls_back() {
 
 #[tokio::test]
 async fn a_copy_to_stdout_answers_rather_than_hanging() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         backend.execute(
@@ -1049,7 +1021,7 @@ async fn a_copy_to_stdout_answers_rather_than_hanging() {
 
 #[tokio::test]
 async fn each_side_of_a_self_join_is_written_through_its_own_key() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "drop table if exists pg_nodes").await;
     run(
         &backend,
@@ -1083,7 +1055,7 @@ async fn each_side_of_a_self_join_is_written_through_its_own_key() {
 
 #[tokio::test]
 async fn a_join_is_edited_through_each_table_key() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(
         &backend,
         "drop table if exists pg_members, pg_teams cascade",
@@ -1153,7 +1125,7 @@ async fn a_join_is_edited_through_each_table_key() {
 
 #[tokio::test]
 async fn a_filtered_result_stays_editable() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "drop table if exists pg_filtered").await;
     run(
         &backend,
@@ -1198,7 +1170,7 @@ async fn a_filtered_result_stays_editable() {
 
 #[tokio::test]
 async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "drop table if exists tagged_unique").await;
     run(
         &backend,
@@ -1254,7 +1226,9 @@ async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
 
 #[tokio::test]
 async fn a_read_only_connection_is_refused_writes_by_the_server() {
-    let backend = Backend::connect_to(&server!(), None, true).await.unwrap();
+    let backend = Backend::connect_to(&server!("SQMEOW_TEST_POSTGRES_URL"), None, true)
+        .await
+        .unwrap();
     run(&backend, "select 1").await;
     let error = backend
         .execute(
@@ -1269,7 +1243,9 @@ async fn a_read_only_connection_is_refused_writes_by_the_server() {
 
 #[tokio::test]
 async fn a_read_only_connection_stays_read_only_after_set_config() {
-    let backend = Backend::connect_to(&server!(), None, true).await.unwrap();
+    let backend = Backend::connect_to(&server!("SQMEOW_TEST_POSTGRES_URL"), None, true)
+        .await
+        .unwrap();
     run(
         &backend,
         "select set_config('default_transaction_read_only', 'off', false)",
@@ -1288,7 +1264,7 @@ async fn a_read_only_connection_stays_read_only_after_set_config() {
 
 #[tokio::test]
 async fn a_table_without_a_key_is_edited_by_every_column() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "drop table if exists keyless_rows").await;
     run(
         &backend,
@@ -1336,7 +1312,7 @@ async fn a_table_without_a_key_is_edited_by_every_column() {
 
 #[tokio::test]
 async fn the_drawer_is_not_held_up_by_a_long_query() {
-    let backend = std::sync::Arc::new(connect(&server!()).await);
+    let backend = std::sync::Arc::new(connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await);
     let running = std::sync::Arc::clone(&backend);
     let query = tokio::spawn(async move {
         running
@@ -1353,7 +1329,7 @@ async fn the_drawer_is_not_held_up_by_a_long_query() {
 
 #[tokio::test]
 async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(
         &backend,
         "drop table if exists det_child, det_parent cascade",
@@ -1412,7 +1388,7 @@ async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
 
 #[tokio::test]
 async fn sequences_are_listed_and_roles_are_read() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&backend, "create sequence if not exists listed_seq").await;
     let relations = backend.relations(SCHEMA).await.unwrap();
     assert_eq!(

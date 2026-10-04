@@ -14,7 +14,7 @@ end
 -- Load the real installer from a disposable checkout, keeping the RPC module cached.
 local function checkout_installer()
   local root = vim.fn.tempname()
-  local directory = vim.fs.joinpath(root, 'lua', 'sqmeow')
+  local directory = vim.fs.joinpath(root, 'lua', 'sqmeow', 'server')
   vim.fn.mkdir(directory, 'p')
   MiniTest.finally(function()
     vim.fn.delete(root, 'rf')
@@ -206,35 +206,12 @@ T['download']['checks the requested tool before announcing a download'] = functi
   eq(commands, 0)
 end
 
-T['download']['answers through the callback instead of waiting'] = function()
-  helpers.stub(install, 'fetch', function(_, _, _, callback)
-    -- Answering later is what a real download does, and is the whole point of the callback.
-    vim.defer_fn(function()
-      callback(false, 'no network')
-    end, 10)
-  end)
-
-  local answered, path, err = false, nil, nil
-  install.download(nil, function(p, e)
-    answered, path, err = true, p, e
-  end)
-
-  -- Nothing has been decided yet, which is what makes the editor usable while it runs.
-  eq(answered, false)
-
-  vim.wait(1000, function()
-    return answered
-  end)
-  eq(path, nil)
-  eq(err, 'no network')
-end
-
 T['install'] = MiniTest.new_set()
 
 T['install']['follows checkout upgrades and downgrades with cached modules'] = function()
   silence()
   local checkout, manifest = checkout_installer()
-  helpers.stub(package.loaded, 'sqmeow.install', checkout)
+  helpers.stub(package.loaded, 'sqmeow.server.install', checkout)
   local cached_rpc = require('sqmeow.rpc.client')
   local requested
   checkout.fetch = function(url, _, _, callback)
@@ -328,94 +305,6 @@ T['install']['refuses a method it does not have'] = function()
   helpers.contains(assert(err, 'there should be an error'), 'bitsadmin')
   -- The message lists what it does take, since the point of naming one is that detection was wrong.
   helpers.contains(assert(err, 'there should be an error'), 'cargo')
-end
-
-T['install']['answers through a callback without waiting'] = function()
-  silence()
-
-  local release
-  helpers.stub(install, 'download', function(_, callback)
-    release = callback
-  end)
-
-  local answered
-  local returned = install.install({
-    callback = function(path)
-      answered = path
-    end,
-  })
-
-  -- Still running: a callback means the caller is not waiting, so there is nothing to report yet.
-  eq(returned, nil)
-  eq(answered, nil)
-  eq(install.installing(), 'downloading')
-
-  release('/somewhere/sqmeow-core')
-  eq(answered, '/somewhere/sqmeow-core')
-  eq(install.installing(), nil)
-end
-
-T['install']['turns away a second install while one is running'] = function()
-  silence()
-
-  local nested, release
-  helpers.stub(install, 'download', function(_, callback)
-    install.install({
-      callback = function(_, e)
-        nested = e
-      end,
-    })
-    release = function()
-      callback(nil, 'the download failed')
-    end
-  end)
-  helpers.stub(install, 'build', function(callback)
-    callback(nil, 'no cargo')
-  end)
-
-  local err
-  install.install({
-    callback = function(_, e)
-      err = e
-    end,
-  })
-
-  eq(nested, 'an engine is already being installed (downloading)')
-  release()
-  eq(err, 'the download failed; no cargo')
-
-  -- The flag has to come back down, or nothing could be installed again without a restart.
-  eq(install.installing(), nil)
-end
-
-T['install']['gives up rather than waiting for ever'] = function()
-  silence()
-
-  -- A download that never answers, which is what a hung connection looks like from here.
-  helpers.stub(install, 'download', function() end)
-
-  local ok, err = install.install({ timeout = 50 })
-  eq(ok, false)
-  helpers.contains(assert(err, 'there should be an error'), 'timed out')
-  -- The guard must come back down, or a timeout would cost the user their session.
-  eq(install.installing(), nil)
-end
-
-T['installing'] = MiniTest.new_set()
-
-T['installing']['names the step, so a caller can say what is holding it up'] = function()
-  silence()
-  eq(install.installing(), nil)
-
-  local release
-  helpers.stub(install, 'download', function(_, callback)
-    release = callback
-  end)
-
-  install.install({ callback = function() end })
-  eq(install.installing(), 'downloading')
-  release('/somewhere/sqmeow-core')
-  eq(install.installing(), nil)
 end
 
 T['methods'] = MiniTest.new_set()

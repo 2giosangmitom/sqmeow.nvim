@@ -1,44 +1,15 @@
 //! The PostgreSQL adapter against a real CockroachDB server.
 
-use sqmeow_adapters::Backend;
 use sqmeow_db::adapter::Dialect;
 use sqmeow_db::edit::Changes;
 use sqmeow_db::edit::Source;
 use sqmeow_db::error::Error;
 use sqmeow_db::node::RelationKind;
-use sqmeow_db::result::ResultSet;
 use sqmeow_db::value::Cell;
-use tokio_util::sync::CancellationToken;
 
-const NO_CAP: usize = usize::MAX;
+include!("common/harness.rs");
 
 const SCHEMA: &str = "public";
-
-/// The server URL, or a note explaining why the test did nothing.
-macro_rules! server {
-    () => {
-        match std::env::var("SQMEOW_TEST_COCKROACH_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("skipped: set SQMEOW_TEST_COCKROACH_URL, or run `just db-up`");
-                return;
-            }
-        }
-    };
-}
-
-async fn connect(url: &str) -> Backend {
-    Backend::connect(url)
-        .await
-        .expect("the test server should accept a connection")
-}
-
-async fn run(backend: &Backend, sql: &str) -> ResultSet {
-    backend
-        .execute(sql, NO_CAP, CancellationToken::new())
-        .await
-        .unwrap_or_else(|error| panic!("{sql} should run: {error}"))
-}
 
 async fn fixture(backend: &Backend, table: &str) {
     run(backend, &format!("drop table if exists {table} cascade")).await;
@@ -55,7 +26,7 @@ fn text(value: &str) -> Cell {
 
 #[tokio::test]
 async fn the_server_really_is_cockroach() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_COCKROACH_URL")).await;
     assert_eq!(backend.dialect(), Dialect::Postgres);
     let result = run(&backend, "select version()").await;
     let version = result.cell(0, 0).unwrap().text("").into_owned();
@@ -64,7 +35,7 @@ async fn the_server_really_is_cockroach() {
 
 #[tokio::test]
 async fn lists_schemas_tables_and_columns() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_COCKROACH_URL")).await;
     fixture(&backend, "crdb_listed").await;
 
     let schemas = backend.schemas().await.expect("schemas should load");
@@ -89,7 +60,7 @@ async fn lists_schemas_tables_and_columns() {
 
 #[tokio::test]
 async fn a_select_from_one_table_is_edited_through_its_primary_key() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_COCKROACH_URL")).await;
     fixture(&backend, "crdb_edited").await;
     run(
         &backend,
@@ -137,7 +108,7 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
 
 #[tokio::test]
 async fn cancelling_mid_query_stops_it_and_keeps_the_connection() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_COCKROACH_URL")).await;
     let cancel = CancellationToken::new();
     let stopper = cancel.clone();
     tokio::spawn(async move {
@@ -155,7 +126,9 @@ async fn cancelling_mid_query_stops_it_and_keeps_the_connection() {
 
 #[tokio::test]
 async fn a_read_only_connection_is_refused_writes_by_the_server() {
-    let backend = Backend::connect_to(&server!(), None, true).await.unwrap();
+    let backend = Backend::connect_to(&server!("SQMEOW_TEST_COCKROACH_URL"), None, true)
+        .await
+        .unwrap();
     assert!(!backend.read_only_unenforced());
     run(
         &backend,

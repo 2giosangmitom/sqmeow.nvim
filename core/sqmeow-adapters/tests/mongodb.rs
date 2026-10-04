@@ -1,43 +1,14 @@
 //! The MongoDB adapter against a real server.
 
-use sqmeow_adapters::Backend;
 use sqmeow_db::edit::Changes;
 use sqmeow_db::edit::Source;
 use sqmeow_db::error::Error;
 use sqmeow_db::node::RelationKind;
-use sqmeow_db::result::ResultSet;
 use sqmeow_db::value::Cell;
-use tokio_util::sync::CancellationToken;
 
-const NO_CAP: usize = usize::MAX;
-
-/// The server URL, or a note explaining why the test did nothing.
-macro_rules! server {
-    () => {
-        match std::env::var("SQMEOW_TEST_MONGODB_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("skipped: set SQMEOW_TEST_MONGODB_URL, or run `just db-up`");
-                return;
-            }
-        }
-    };
-}
+include!("common/harness.rs");
 
 // The tests share one database and run in parallel.
-
-async fn connect(url: &str) -> Backend {
-    Backend::connect(url)
-        .await
-        .expect("the test server should accept a connection")
-}
-
-async fn run(backend: &Backend, command: &str) -> ResultSet {
-    backend
-        .execute(command, NO_CAP, CancellationToken::new())
-        .await
-        .unwrap_or_else(|error| panic!("{command} should run: {error}"))
-}
 
 async fn empty(backend: &Backend, collection: &str) {
     run(
@@ -53,7 +24,7 @@ fn names(result: &ResultSet) -> Vec<&str> {
 
 #[tokio::test]
 async fn connects_and_reports_its_dialect() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     assert_eq!(backend.dialect().name(), "mongodb");
 }
 
@@ -67,7 +38,7 @@ async fn refuses_a_server_that_is_not_there() {
 
 #[tokio::test]
 async fn reads_back_documents_it_inserted() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     empty(&backend, "insert_find").await;
 
     let inserted = run(
@@ -90,7 +61,7 @@ async fn reads_back_documents_it_inserted() {
 
 #[tokio::test]
 async fn aggregates() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     empty(&backend, "aggregate").await;
     run(
         &backend,
@@ -113,7 +84,7 @@ async fn aggregates() {
 
 #[tokio::test]
 async fn use_switches_database_and_db_does_not() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     run(&backend, "use sqmeow_other").await;
     empty(&backend, "moved").await;
     run(&backend, r#"{"insert": "moved", "documents": [{"x": 1}]}"#).await;
@@ -130,7 +101,7 @@ async fn use_switches_database_and_db_does_not() {
 
 #[tokio::test]
 async fn stops_at_the_row_cap_and_says_so() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     empty(&backend, "capped").await;
     let documents: Vec<String> = (1..=20).map(|n| format!(r#"{{"n": {n}}}"#)).collect();
     run(
@@ -152,7 +123,7 @@ async fn stops_at_the_row_cap_and_says_so() {
 
 #[tokio::test]
 async fn reports_an_error_and_keeps_working() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     let error = backend
         .execute(r#"{"nope": 1}"#, NO_CAP, CancellationToken::new())
         .await
@@ -168,7 +139,7 @@ async fn reports_an_error_and_keeps_working() {
 
 #[tokio::test]
 async fn lists_databases_collections_and_fields() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     empty(&backend, "drawer_fields").await;
     run(
         &backend,
@@ -204,7 +175,7 @@ async fn lists_databases_collections_and_fields() {
 
 #[tokio::test]
 async fn a_url_without_a_database_lists_every_database() {
-    let url = server!();
+    let url = server!("SQMEOW_TEST_MONGODB_URL");
     let (root, _) = url.rsplit_once('/').expect("the test URL names a database");
     let root = format!("{root}/");
 
@@ -251,7 +222,7 @@ fn column(result: &ResultSet, name: &str) -> usize {
 
 #[tokio::test]
 async fn count_and_distinct_answer_in_one_document() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     seed(
         &backend,
         "counted",
@@ -279,7 +250,7 @@ async fn count_and_distinct_answer_in_one_document() {
 
 #[tokio::test]
 async fn updates_upserts_and_deletes_count_what_they_changed() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     seed(
         &backend,
         "written",
@@ -318,7 +289,7 @@ async fn updates_upserts_and_deletes_count_what_they_changed() {
 
 #[tokio::test]
 async fn find_and_modify_answers_with_the_document() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     seed(&backend, "modified", r#"[{"_id": 1, "n": 1}]"#).await;
 
     let result = run(
@@ -334,7 +305,7 @@ async fn find_and_modify_answers_with_the_document() {
 
 #[tokio::test]
 async fn a_cursor_is_read_past_its_first_batch() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     let documents: Vec<String> = (0..250).map(|n| format!(r#"{{"n": {n}}}"#)).collect();
     seed(&backend, "batched", &format!("[{}]", documents.join(","))).await;
 
@@ -351,7 +322,7 @@ async fn a_cursor_is_read_past_its_first_batch() {
 
 #[tokio::test]
 async fn an_aggregate_joins_unwinds_and_projects() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     seed(
         &backend,
         "join_authors",
@@ -387,7 +358,7 @@ async fn an_aggregate_joins_unwinds_and_projects() {
 
 #[tokio::test]
 async fn creates_and_lists_indexes_and_collections() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     seed(&backend, "indexed", r#"[{"email": "a@x"}]"#).await;
     run(&backend, r#"{"dropIndexes": "indexed", "index": "*"}"#).await;
     run(
@@ -424,7 +395,7 @@ async fn creates_and_lists_indexes_and_collections() {
 
 #[tokio::test]
 async fn creates_renames_and_drops_a_collection() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     run(&backend, r#"{"drop": "made"}"#).await;
     run(&backend, r#"{"drop": "renamed"}"#).await;
     run(&backend, r#"{"create": "made"}"#).await;
@@ -451,7 +422,7 @@ async fn creates_renames_and_drops_a_collection() {
 
 #[tokio::test]
 async fn documents_found_by_object_id_are_edited_added_and_removed() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     // No `_id` is given, so the server makes each an ObjectId.
     seed(
         &backend,
@@ -494,7 +465,7 @@ async fn documents_found_by_object_id_are_edited_added_and_removed() {
 
 #[tokio::test]
 async fn only_a_find_keeping_its_ids_can_be_edited() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     seed(&backend, "projected", r#"[{"_id": 1, "v": 1}]"#).await;
 
     let kept = run(&backend, r#"{"find": "projected", "projection": {"v": 1}}"#).await;
@@ -521,7 +492,7 @@ async fn only_a_find_keeping_its_ids_can_be_edited() {
 
 #[tokio::test]
 async fn a_write_the_server_refuses_fails_the_apply() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     seed(&backend, "refused", r#"[{"_id": 1}]"#).await;
     let found = run(&backend, r#"{"find": "refused"}"#).await;
 
@@ -539,7 +510,7 @@ async fn a_write_the_server_refuses_fails_the_apply() {
 
 #[tokio::test]
 async fn an_edit_to_a_document_deleted_since_is_reported() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     seed(&backend, "vanished", r#"[{"_id": "gone", "v": 1}]"#).await;
     let found = run(&backend, r#"{"find": "vanished"}"#).await;
     empty(&backend, "vanished").await;
@@ -561,7 +532,7 @@ async fn an_edit_to_a_document_deleted_since_is_reported() {
 
 #[tokio::test]
 async fn cancelling_a_slow_command_stops_it_and_keeps_working() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     seed(&backend, "slow", r#"[{"x": 1}]"#).await;
     let cancel = CancellationToken::new();
 
@@ -594,7 +565,7 @@ async fn cancelling_a_slow_command_stops_it_and_keeps_working() {
 
 #[tokio::test]
 async fn extended_json_values_are_stored_and_read_back_as_their_types() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     seed(
         &backend,
         "typed",
@@ -649,7 +620,7 @@ async fn extended_json_values_are_stored_and_read_back_as_their_types() {
 
 #[tokio::test]
 async fn server_and_database_commands_answer_one_row() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
 
     let info = run(&backend, r#"{"buildInfo": 1}"#).await;
     assert!(
@@ -687,7 +658,7 @@ async fn server_and_database_commands_answer_one_row() {
 
 #[tokio::test]
 async fn lists_a_collections_indexes() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     run(&backend, r#"{"drop": "indexed_docs"}"#).await;
     run(
         &backend,
@@ -718,7 +689,7 @@ async fn lists_a_collections_indexes() {
 
 #[tokio::test]
 async fn cancelling_a_command_stops_it_on_the_server() {
-    let backend = std::sync::Arc::new(connect(&server!()).await);
+    let backend = std::sync::Arc::new(connect(&server!("SQMEOW_TEST_MONGODB_URL")).await);
     run(&backend, r#"{"drop": "slow_docs"}"#).await;
     run(
         &backend,
@@ -769,7 +740,7 @@ async fn cancelling_a_command_stops_it_on_the_server() {
 
 #[tokio::test]
 async fn a_collection_describes_its_validator_and_its_fields_follow_it() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     run(&backend, r#"{"drop": "validated_docs"}"#).await;
     run(
         &backend,
@@ -813,7 +784,7 @@ const DUPLICATE_INSERTS: [&str; 2] = [
 
 #[tokio::test]
 async fn an_aggregate_that_only_filters_is_editable() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     run(&backend, r#"{"drop": "aggregated_docs"}"#).await;
     run(
         &backend,
@@ -837,7 +808,7 @@ async fn an_aggregate_that_only_filters_is_editable() {
 
 #[tokio::test]
 async fn a_standalone_server_applies_commands_in_turn() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_MONGODB_URL")).await;
     run(&backend, r#"{"drop": "in_turn_docs"}"#).await;
     run(&backend, r#"{"create": "in_turn_docs"}"#).await;
 
