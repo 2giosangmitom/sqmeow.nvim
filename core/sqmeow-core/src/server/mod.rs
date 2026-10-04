@@ -10,26 +10,34 @@
 //! individual operations. Protocol failures become RPC errors, while failures
 //! after acceptance are reported by the operation's event stream.
 
-mod calls;
-mod connections;
-mod edits;
-mod exports;
-mod params;
-mod project;
-mod schema;
-mod summary;
+pub mod archive;
+pub mod args;
+pub mod calls;
+pub mod connections;
+pub mod edits;
+pub mod exports;
+pub mod nvim;
+pub mod params;
+pub mod payload;
+pub mod project;
+pub mod schema;
+pub mod session;
+pub mod summary;
+pub mod template;
+pub mod tunnel;
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::server::nvim::Nvim;
 use rmpv::Value;
-use sqmeow_rpc::{Handler, Nvim, Reply};
+use sqmeow_rpc::handler::{Handler, Reply};
 use tokio::sync::Notify;
 
-use crate::args::Args;
-use crate::session::{OptionsPatch, Session};
-use crate::value::{map, strings};
+use crate::server::args::Args;
+use crate::server::payload::{map, strings};
+use crate::server::session::{OptionsPatch, Session};
 
 /// Work a method leaves running after it has answered.
 type Work = Pin<Box<dyn Future<Output = ()> + Send>>;

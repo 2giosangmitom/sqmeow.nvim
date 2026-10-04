@@ -41,16 +41,14 @@ impl Connection {
     /// Dispatches frames until the peer hangs up.
     ///
     /// Reads from the inbound queue and routes requests and notifications to
-    /// `handler`, and responses to the waiting [`Client`] calls. Returns
-    /// when the channel closes.
+    /// `handler`. The engine never calls the peer, so a response has no waiter
+    /// and is only logged. Returns when the channel closes.
     pub async fn serve<H: Handler>(mut self, handler: Arc<H>) {
         while let Some(message) = self.incoming.recv().await {
             match message {
-                Message::Response {
-                    msgid,
-                    error,
-                    result,
-                } => self.client.resolve(msgid, error, result),
+                Message::Response { msgid, .. } => {
+                    tracing::warn!(msgid, "response with no waiter, ignoring");
+                }
                 Message::Request {
                     msgid,
                     method,
@@ -66,6 +64,5 @@ impl Connection {
         }
 
         tracing::debug!("peer hung up");
-        self.client.close();
     }
 }

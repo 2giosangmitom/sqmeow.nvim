@@ -158,31 +158,31 @@ M.plug = {
   ['sqmeow-toggle'] = {
     desc = 'Open every sqmeow window, or close them',
     run = function()
-      require('sqmeow.api').toggle()
+      require('sqmeow.api.view').toggle()
     end,
   },
   ['sqmeow-execute'] = {
     desc = 'Run the current buffer',
     run = function()
-      require('sqmeow.api').execute_buffer()
+      require('sqmeow.api.query').execute_buffer()
     end,
   },
   ['sqmeow-execute-selection'] = {
     desc = 'Run the selection',
     run = function()
-      require('sqmeow.api').execute_selection()
+      require('sqmeow.api.query').execute_selection()
     end,
   },
   ['sqmeow-result-float'] = {
     desc = 'Show the result in a float, or back in its split',
     run = function()
-      require('sqmeow.api').toggle_float()
+      require('sqmeow.api.view').toggle_float()
     end,
   },
   ['sqmeow-cancel'] = {
     desc = 'Stop the running query',
     run = function()
-      require('sqmeow.api').cancel()
+      require('sqmeow.api.query').cancel()
     end,
   },
   ['sqmeow-add-connection'] = {
@@ -194,7 +194,7 @@ M.plug = {
   ['sqmeow-scratch'] = {
     desc = 'Create a scratchpad',
     run = function()
-      require('sqmeow.api').scratchpad()
+      require('sqmeow.api.view').scratchpad()
     end,
   },
 }

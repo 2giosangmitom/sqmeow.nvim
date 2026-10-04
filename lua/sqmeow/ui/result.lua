@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 local Table = require('sqmeow.ui.table')
 
 local buf = nil
@@ -168,7 +168,7 @@ end
 --- holds as written once it has been filtered.
 ---@return { filters: table[], sort: table[], hidden: table<integer, boolean>, where: string, order_by: string, base: string|nil }
 function M.spec()
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   local id = call and call.call_id
   if not id then
     return fresh()
@@ -299,7 +299,7 @@ function M.describe(summary, highlight)
   end
   if summary.elapsed_ms then
     local elapsed = M.format_duration(summary.elapsed_ms)
-    local icon, group = require('sqmeow.icons').get('elapsed')
+    local icon, group = require('sqmeow.core.icons').get('elapsed')
     if icon ~= '' then
       icon = highlight and ('%%#%s#%s%%*'):format(group, icon) or icon
       elapsed = icon .. ' ' .. elapsed
@@ -315,16 +315,7 @@ function M.describe(summary, highlight)
 end
 
 local function scratch(name, filetype)
-  local handle = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(handle, name)
-
-  vim.bo[handle].buftype = 'nofile'
-  vim.bo[handle].bufhidden = 'hide'
-  vim.bo[handle].swapfile = false
-  vim.bo[handle].filetype = filetype
-  vim.bo[handle].modifiable = false
-
-  return handle
+  return require('sqmeow.ui.buffer').scratch(name, filetype, false)
 end
 
 --- The buffer the grid is drawn into.
@@ -341,7 +332,7 @@ function M.buffer()
     group = group,
     buffer = buf,
     callback = function()
-      M.update_winbar(require('sqmeow.state').call)
+      M.update_winbar(require('sqmeow.core.state').call)
       update_sticky()
     end,
   })
@@ -419,7 +410,7 @@ end
 ---@return table[]
 local function measure(columns, hidden)
   local config = require('sqmeow.config').get()
-  local icons = require('sqmeow.icons')
+  local icons = require('sqmeow.core.icons')
 
   local cap = math.max(config.ui.result.max_column_width, 1)
   local null_text = config.ui.result.null_text
@@ -488,7 +479,7 @@ local function plan_lines(call)
   end
   -- DuckDB puts its whole plan in the second column of one row.
   if names == 'explain_key,explain_value' then
-    local row = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = 0 })
+    local row = require('sqmeow.rpc.client').request('row', { call_id = call.call_id, row = 0 })
     if row and row[2] and not row[2].is_null then
       return vim.split(row[2].value, '\n', { plain = true })
     end
@@ -499,7 +490,7 @@ local function plan_lines(call)
 
   -- A plan in one value, such as MySQL's `FORMAT=TREE`, spans lines the grid's rows flatten.
   if call.rows == 1 then
-    local row = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = 0 })
+    local row = require('sqmeow.rpc.client').request('row', { call_id = call.call_id, row = 0 })
     if row and row[1] and not row[1].is_null then
       return vim.split(row[1].value, '\n', { plain = true })
     end
@@ -512,7 +503,7 @@ end
 
 --- Draw the rows this window is showing, with the changes staged against them.
 local function draw()
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   local edit = require('sqmeow.ui.edit')
   local handle = M.buffer()
 
@@ -704,7 +695,7 @@ end
 --- Draw the page on screen again, after something about how it is shown changed.
 function M.redraw()
   draw()
-  M.update_winbar(require('sqmeow.state').call)
+  M.update_winbar(require('sqmeow.core.state').call)
   update_sticky()
 end
 
@@ -712,7 +703,7 @@ end
 ---@param offset integer Where in the view the page should start.
 ---@return boolean drawn
 function M.show_page(offset)
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local call = state.call
   if not (call and call.call_id) then
     return false
@@ -724,7 +715,7 @@ function M.show_page(offset)
   local last = math.max(math.ceil(total / size) - 1, 0) * size
   offset = math.max(math.min(offset, last), 0)
 
-  local reply, err = require('sqmeow.rpc').request('rows', {
+  local reply, err = require('sqmeow.rpc.client').request('rows', {
     call_id = call.call_id,
     offset = offset,
     limit = size,
@@ -738,7 +729,7 @@ function M.show_page(offset)
       and vim.uv.fs_stat(call.archive)
     then
       local connection = state.connections[call.conn_id]
-      require('sqmeow.api').restore({
+      require('sqmeow.api.view').restore({
         result = call.archive,
         statement = call.statement,
         connection = connection and connection.name or call.connection,
@@ -764,7 +755,7 @@ end
 --- Ask the engine to filter and sort the current result as its view says.
 ---@return boolean sent
 function M.send_view()
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if not (call and call.call_id) then
     return false
   end
@@ -772,7 +763,7 @@ function M.send_view()
   local spec = M.spec()
   -- A result filtered by its query arrives narrowed, so only held rows take the condition here.
   local held = not M.queried(call)
-  local _, err = require('sqmeow.rpc').request('view', {
+  local _, err = require('sqmeow.rpc.client').request('view', {
     call_id = call.call_id,
     filters = spec.filters,
     sort = spec.sort,
@@ -792,7 +783,7 @@ function M.on_view(payload)
   if payload.error then
     return utils.notify(payload.error, vim.log.levels.WARN)
   end
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if call and call.call_id == payload.call_id then
     M.show_page(0)
   end
@@ -803,7 +794,9 @@ end
 ---@param call sqmeow.CallSummary|nil
 ---@return boolean
 function M.queried(call)
-  local connection = call and call.conn_id and require('sqmeow.state').connections[call.conn_id]
+  local connection = call
+    and call.conn_id
+    and require('sqmeow.core.state').connections[call.conn_id]
   return connection ~= nil
     and connection.dialect ~= nil
     and not vim.tbl_contains({ 'redis', 'scylla', 'surrealdb' }, connection.dialect)
@@ -839,7 +832,9 @@ end
 ---@param call sqmeow.CallSummary|nil
 ---@return string|nil
 function M.dialect(call)
-  local connection = call and call.conn_id and require('sqmeow.state').connections[call.conn_id]
+  local connection = call
+    and call.conn_id
+    and require('sqmeow.core.state').connections[call.conn_id]
   return connection and connection.dialect or (call and call.dialect)
 end
 
@@ -847,7 +842,7 @@ end
 ---@param name string
 ---@return string
 function M.quote(name)
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local connection = state.call and state.call.conn_id and state.connections[state.call.conn_id]
   if connection and connection.dialect == 'mysql' then
     return '`' .. (name:gsub('`', '``')) .. '`'
@@ -856,7 +851,7 @@ function M.quote(name)
     return vim.json.encode(name)
   end
   if connection and connection.dialect == 'surrealdb' then
-    return require('sqmeow.sql').quote('surrealdb', name)
+    return require('sqmeow.core.sql').quote('surrealdb', name)
   end
   return '"' .. (name:gsub('"', '""')) .. '"'
 end
@@ -866,7 +861,7 @@ end
 ---@param keep boolean|nil Open the new result at the same page and cursor, with the rows inserts returned.
 ---@return boolean started
 function M.rerun(view, keep)
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if not (call and call.call_id and call.conn_id) then
     return false
   end
@@ -886,7 +881,7 @@ function M.rerun(view, keep)
     or nil
   -- A filter on held rows is applied again once the new result arrives.
   local queried = M.queried(call)
-  local started = require('sqmeow.api').execute(spec.base, {
+  local started = require('sqmeow.api.query').execute(spec.base, {
     conn_id = call.conn_id,
     history = false,
     where = queried and spec.where or nil,
@@ -921,7 +916,7 @@ end
 ---@param order_by string An ORDER BY list, or empty for none.
 ---@return boolean started
 function M.filter(where, order_by)
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if M.queried(call) then
     return M.rerun({ where = where, order_by = order_by, sort = {} })
   end
@@ -995,7 +990,7 @@ end
 --- The columns the grid shows, zero-based and in order, or nil when none is hidden.
 ---@return integer[]|nil
 function M.visible_columns()
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   local spec = M.spec()
   if not (call and call.columns) or vim.tbl_isempty(spec.hidden) then
     return nil
@@ -1016,7 +1011,7 @@ end
 ---@param call? table Summary or state call.
 ---@return { column: integer, name: string, line: integer }|nil # `column` zero-based.
 local function cursor_column(call)
-  call = call or require('sqmeow.state').call
+  call = call or require('sqmeow.core.state').call
   if not (win and utils.shows(win, buf) and call and call.columns and tbl) then
     return nil
   end
@@ -1159,7 +1154,7 @@ function M.open_float()
   if cursor then
     pcall(vim.api.nvim_win_set_cursor, win, cursor)
   end
-  M.update_winbar(require('sqmeow.state').call)
+  M.update_winbar(require('sqmeow.core.state').call)
   update_sticky()
   return win
 end
@@ -1186,7 +1181,7 @@ end
 --- Whether the keys that change rows may do so on this result, saying why not when they may not.
 ---@return boolean
 local function editing()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local call = state.call
   local connection = call and call.conn_id and state.connections[call.conn_id]
   if connection and connection.read_only then
@@ -1208,7 +1203,7 @@ end
 
 --- Order the rows by a column: in the query when it can run again, otherwise in the engine.
 local function sort_by(column, add)
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   local spec = M.spec()
   local sort = vim.deepcopy(spec.sort)
   local at
@@ -1269,19 +1264,19 @@ end
 M.actions = {}
 
 function M.actions.next_page()
-  require('sqmeow.api').next_page()
+  require('sqmeow.api.query').next_page()
 end
 
 function M.actions.prev_page()
-  require('sqmeow.api').prev_page()
+  require('sqmeow.api.query').prev_page()
 end
 
 function M.actions.first_page()
-  require('sqmeow.api').first_page()
+  require('sqmeow.api.query').first_page()
 end
 
 function M.actions.last_page()
-  require('sqmeow.api').last_page()
+  require('sqmeow.api.query').last_page()
 end
 
 function M.actions.next_column()
@@ -1298,7 +1293,7 @@ end
 
 --- Write the whole result to a file.
 function M.actions.export()
-  require('sqmeow.api').export()
+  require('sqmeow.api.export').export()
 end
 
 --- Write the rows the visual selection covers to a file.
@@ -1315,7 +1310,7 @@ function M.actions.export_selection()
   if last < first then
     return
   end
-  require('sqmeow.api').export({ offset = page.offset + first - 1, limit = last - first + 1 })
+  require('sqmeow.api.export').export({ offset = page.offset + first - 1, limit = last - first + 1 })
 end
 
 --- Show the row under the cursor as a list of columns and values.
@@ -1355,7 +1350,7 @@ end
 
 --- Show the structure of the table the column under the cursor comes from.
 function M.actions.structure()
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if not call then
     return
   end
@@ -1382,7 +1377,7 @@ end
 --- Show another statement's result from the same run.
 ---@param step integer
 local function switch(step)
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local call = state.call
   local results = call and call.results
   if not (call and results and #results > 1) then
@@ -1424,10 +1419,10 @@ function M.actions.filter_cell()
     return
   end
 
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if call and M.filterable(call) then
     local queried = M.queried(call)
-    local condition, err = require('sqmeow.rpc').request('condition', {
+    local condition, err = require('sqmeow.rpc.client').request('condition', {
       call_id = call.call_id,
       row = cell.row,
       column = cell.column,
@@ -1478,7 +1473,7 @@ function M.actions.sort_add()
 end
 
 function M.actions.hide_column()
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   local here = cursor_column()
   if not (call and here) then
     return
@@ -1498,7 +1493,7 @@ end
 
 --- Clear the filters, sort and hidden columns, and show every row again.
 function M.actions.reset_view()
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if not (call and call.call_id) then
     return
   end
@@ -1523,7 +1518,7 @@ function M.actions.set_expression()
   if not cell then
     return
   end
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local dialect = (state.call and state.connections[state.call.conn_id] or {}).dialect
   if dialect == 'redis' or dialect == 'mongodb' then
     return utils.notify(('%s takes no SQL expression'):format(dialect), vim.log.levels.WARN)
@@ -1536,7 +1531,7 @@ function M.actions.set_null()
   if not cell then
     return
   end
-  local column = require('sqmeow.state').call.columns[cell.column + 1]
+  local column = require('sqmeow.core.state').call.columns[cell.column + 1]
   if not (column and column.editable) then
     return utils.notify(('`%s` cannot be edited'):format(cell.name), vim.log.levels.WARN)
   end
@@ -1549,7 +1544,7 @@ function M.actions.duplicate_row()
   if not (cell and cell.row) then
     return
   end
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if not (call and call.source and call.columns) then
     return
   end
@@ -1559,7 +1554,8 @@ function M.actions.duplicate_row()
       vim.log.levels.WARN
     )
   end
-  local row, err = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = cell.row })
+  local row, err =
+    require('sqmeow.rpc.client').request('row', { call_id = call.call_id, row = cell.row })
   if not row then
     return utils.notify(err or 'that row is not there', vim.log.levels.WARN)
   end
@@ -1586,7 +1582,7 @@ function M.actions.add_row()
   if not editing() then
     return
   end
-  if not require('sqmeow.state').call.source.insertable then
+  if not require('sqmeow.core.state').call.source.insertable then
     return utils.notify(
       'a row cannot be added to a result that shows more than one table',
       vim.log.levels.WARN
@@ -1614,7 +1610,7 @@ function M.actions.delete_selection()
 end
 
 function M.actions.cancel()
-  if not require('sqmeow.api').cancel() then
+  if not require('sqmeow.api.query').cancel() then
     utils.notify('there is nothing running to stop')
   end
 end
@@ -1682,7 +1678,7 @@ function M.open()
   if vim.api.nvim_win_is_valid(previous) then
     vim.api.nvim_set_current_win(previous)
   end
-  M.update_winbar(require('sqmeow.state').call)
+  M.update_winbar(require('sqmeow.core.state').call)
   update_sticky()
   return win
 end
@@ -1730,7 +1726,7 @@ function M.update_winbar(summary)
   end
 
   -- The connection the result came from, not the active one.
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   ---@type { name: string, dialect: string|nil }|nil
   local connection = summary and summary.conn_id and state.connections[summary.conn_id]
   if not connection and summary and summary.connection then
@@ -1753,7 +1749,7 @@ function M.update_winbar(summary)
           and call.columns[cell.column + 1]
           and call.columns[cell.column + 1].type_name
         or ''
-      local icon = require('sqmeow.icons').get('column')
+      local icon = require('sqmeow.core.icons').get('column')
       local icon_str = (icon and icon ~= '') and (icon .. ' ') or '󰠵 '
       local name_escaped = cell.name:gsub('%%', '%%%%')
       col_info = ('  %%#SqmeowSignAdded#%s%s%%*'):format(icon_str, name_escaped)

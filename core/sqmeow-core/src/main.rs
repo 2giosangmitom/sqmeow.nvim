@@ -9,20 +9,15 @@
 //! frames and tracing goes to stderr. Closing the editor channel or requesting
 //! `shutdown` ends the server; saved result archives are managed separately.
 
-mod archive;
-mod args;
-mod core;
-mod session;
-mod template;
-mod tunnel;
-mod value;
+mod server;
 
 use std::sync::Arc;
 
-use sqmeow_rpc::{Connection, Nvim};
+use crate::server::nvim::Nvim;
+use sqmeow_rpc::connection::Connection;
 use tracing_subscriber::EnvFilter;
 
-use crate::core::Core;
+use crate::server::Core;
 
 fn main() -> std::process::ExitCode {
     // `--version` lets the installer check a binary it did not download, without the cost and the

@@ -1,6 +1,7 @@
 //! Shared buffer boundary regressions through every backend and protocol variant.
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Dialect, sql};
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::sql;
 use tokio_util::sync::CancellationToken;
 
 async fn check(url: &str) {

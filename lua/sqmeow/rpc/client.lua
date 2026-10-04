@@ -30,7 +30,7 @@ local expected_exit = {}
 M.log_limit = 200
 
 local function warn(message)
-  require('sqmeow.utils').notify(message, vim.log.levels.WARN)
+  require('sqmeow.core.utils').notify(message, vim.log.levels.WARN)
 end
 
 local function drain_events()
@@ -103,7 +103,7 @@ function M.start()
     return channel
   end
 
-  local install = require('sqmeow.install')
+  local install = require('sqmeow.server.install')
   local config = require('sqmeow.config').get()
 
   local path, source = install.resolve()
@@ -161,7 +161,7 @@ function M.start()
 
   info = handshake
   -- A new engine numbers its calls from one again, so nothing kept by call id still holds.
-  require('sqmeow.ui.result').forget()
+  require('sqmeow.rpc.events').on_engine_restart()
   M.configure()
   return channel
 end

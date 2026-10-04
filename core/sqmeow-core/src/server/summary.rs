@@ -1,10 +1,11 @@
 //! Describing results to the editor.
 
 use rmpv::Value;
-use sqmeow_db::{Cell, Source};
+use sqmeow_db::edit::Source;
+use sqmeow_db::value::Cell;
 
-use crate::session::Call;
-use crate::value::map;
+use crate::server::payload::map;
+use crate::server::session::Call;
 
 /// One cell, as the value it really is rather than as text.
 pub(super) fn cell_value(cell: &Cell) -> Value {

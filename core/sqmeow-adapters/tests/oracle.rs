@@ -1,10 +1,12 @@
 //! The Oracle Database adapter against a real server.
 
-use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Changes, Error, RelationKind, ResultSet, Source};
-use tokio_util::sync::CancellationToken;
+use sqmeow_db::edit::Changes;
+use sqmeow_db::edit::Source;
+use sqmeow_db::error::Error;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::value::Cell;
 
-const NO_CAP: usize = usize::MAX;
+include!("common/harness.rs");
 
 // Introspection reads the catalog. Unquoted Oracle names are upper case.
 const SCHEMA: &str = "SQMEOW";
@@ -48,34 +50,9 @@ async fn drop_table(backend: &Backend, table: &str) {
 }
 
 /// The server URL, or a note explaining why the test did nothing.
-macro_rules! server {
-    () => {
-        match std::env::var("SQMEOW_TEST_ORACLE_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("skipped: set SQMEOW_TEST_ORACLE_URL, or run `just db-up`");
-                return;
-            }
-        }
-    };
-}
-
-async fn connect(url: &str) -> Backend {
-    Backend::connect(url)
-        .await
-        .expect("the test server should accept a connection")
-}
-
-async fn run(backend: &Backend, sql: &str) -> ResultSet {
-    backend
-        .execute(sql, NO_CAP, CancellationToken::new())
-        .await
-        .unwrap_or_else(|error| panic!("{sql} should run: {error}"))
-}
-
 #[tokio::test]
 async fn connects_and_reports_its_dialect() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     assert_eq!(backend.dialect().name(), "oracle");
 }
 
@@ -89,7 +66,7 @@ async fn refuses_a_server_that_is_not_there() {
 
 #[tokio::test]
 async fn selects_rows_with_their_columns() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     let result = run(&backend, "select 1 as id, 'alice' as name from dual").await;
 
     let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
@@ -100,7 +77,7 @@ async fn selects_rows_with_their_columns() {
 
 #[tokio::test]
 async fn decodes_the_types_a_real_schema_holds() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_kinds").await;
     run(
         &backend,
@@ -164,7 +141,7 @@ async fn decodes_the_types_a_real_schema_holds() {
 
 #[tokio::test]
 async fn a_null_decodes_in_every_column() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     let result = run(
         &backend,
         "select cast(null as number), cast(null as varchar2(1)), cast(null as date) from dual",
@@ -178,7 +155,7 @@ async fn a_null_decodes_in_every_column() {
 
 #[tokio::test]
 async fn counts_rows_a_statement_changed() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_counted").await;
     run(&backend, "create table ora_counted (v number)").await;
     let result = run(&backend, "insert into ora_counted values (1)").await;
@@ -196,7 +173,7 @@ async fn counts_rows_a_statement_changed() {
 
 #[tokio::test]
 async fn reports_an_error_and_keeps_working() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     let error = backend
         .execute("select nope from dual", NO_CAP, CancellationToken::new())
         .await
@@ -211,7 +188,7 @@ async fn reports_an_error_and_keeps_working() {
 
 #[tokio::test]
 async fn stops_at_the_row_cap_and_says_so() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     let result = backend
         .execute(
             "select level from dual connect by level <= 1000",
@@ -227,7 +204,7 @@ async fn stops_at_the_row_cap_and_says_so() {
 
 #[tokio::test]
 async fn cancelling_returns_at_once() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     let cancel = CancellationToken::new();
 
     let stopper = cancel.clone();
@@ -252,14 +229,14 @@ async fn cancelling_returns_at_once() {
 
 #[tokio::test]
 async fn quotes_identifiers_for_the_dialect() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     assert_eq!(backend.quote_ident("plain"), "\"plain\"");
     assert_eq!(backend.quote_ident("od\"d"), "\"od\"\"d\"");
 }
 
 #[tokio::test]
 async fn lists_its_schemas() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     let schemas = backend.schemas().await.expect("schemas should load");
 
     let current = schemas
@@ -271,7 +248,7 @@ async fn lists_its_schemas() {
 
 #[tokio::test]
 async fn lists_tables_views_and_sequences() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     fixture(&backend, "ora_listed").await;
     run(
         &backend,
@@ -312,7 +289,7 @@ async fn lists_tables_views_and_sequences() {
 
 #[tokio::test]
 async fn lists_functions_and_procedures_apart() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     run(
         &backend,
         "create or replace function ora_fn(x number) return number as begin return x; end;",
@@ -341,9 +318,18 @@ async fn lists_functions_and_procedures_apart() {
             .collect::<Vec<_>>()
     };
 
-    assert_eq!(kinds("ORA_FN"), vec![sqmeow_db::RoutineKind::Function]);
-    assert_eq!(kinds("ORA_PROC"), vec![sqmeow_db::RoutineKind::Procedure]);
-    assert_eq!(kinds("ORA_PACK"), vec![sqmeow_db::RoutineKind::Package]);
+    assert_eq!(
+        kinds("ORA_FN"),
+        vec![sqmeow_db::node::RoutineKind::Function]
+    );
+    assert_eq!(
+        kinds("ORA_PROC"),
+        vec![sqmeow_db::node::RoutineKind::Procedure]
+    );
+    assert_eq!(
+        kinds("ORA_PACK"),
+        vec![sqmeow_db::node::RoutineKind::Package]
+    );
     run(&backend, "drop function ora_fn").await;
     run(&backend, "drop procedure ora_proc").await;
     run(&backend, "drop package ora_pack").await;
@@ -351,7 +337,7 @@ async fn lists_functions_and_procedures_apart() {
 
 #[tokio::test]
 async fn creates_a_trigger_naming_new_and_old() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     // Start clean: an earlier aborted run may have left objects behind.
     for sql in [
         "drop trigger ora_audit_probe_trg",
@@ -416,7 +402,7 @@ async fn creates_a_trigger_naming_new_and_old() {
 
 #[tokio::test]
 async fn lists_columns_in_their_declared_order() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     fixture(&backend, "ora_described").await;
 
     let columns = backend
@@ -441,7 +427,7 @@ async fn lists_columns_in_their_declared_order() {
 
 #[tokio::test]
 async fn char_semantics_columns_show_character_lengths() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_chars").await;
     run(
         &backend,
@@ -465,7 +451,7 @@ async fn char_semantics_columns_show_character_lengths() {
 
 #[tokio::test]
 async fn a_select_from_one_table_is_edited_through_its_primary_key() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     fixture(&backend, "ora_edited").await;
     run(&backend, "insert into ora_edited values (1, 'a', null)").await;
     run(&backend, "insert into ora_edited values (2, 'b', 'x')").await;
@@ -511,7 +497,7 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
 
 #[tokio::test]
 async fn a_rollback_to_a_missing_savepoint_errors_from_the_server() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     // A full API rollback would succeed silently; the statement must reach
     // Oracle to keep its meaning.
     let error = backend
@@ -527,7 +513,7 @@ async fn a_rollback_to_a_missing_savepoint_errors_from_the_server() {
 
 #[tokio::test]
 async fn a_failing_statement_rolls_back_the_ones_before_it() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     fixture(&backend, "ora_rollback").await;
     run(
         &backend,
@@ -560,7 +546,7 @@ async fn a_failing_statement_rolls_back_the_ones_before_it() {
 
 #[tokio::test]
 async fn a_table_describes_its_triggers_when_clauses_and_status() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_trg").await;
     run(
         &backend,
@@ -606,7 +592,7 @@ async fn a_table_describes_its_triggers_when_clauses_and_status() {
 
 #[tokio::test]
 async fn a_sequence_describes_itself() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_seq").await;
     run(
         &backend,
@@ -639,7 +625,7 @@ async fn a_sequence_describes_itself() {
 
 #[tokio::test]
 async fn connects_as_sysdba_and_by_tns_alias() {
-    let server = server!();
+    let server = server!("SQMEOW_TEST_ORACLE_URL");
     // Same server, SYS with the same password the container sets for both.
     let (scheme, rest) = server.split_once("://").expect("a scheme");
     let (login, host) = rest.split_once('@').expect("a login");
@@ -698,7 +684,7 @@ async fn connects_as_sysdba_and_by_tns_alias() {
 
 #[tokio::test]
 async fn a_bogus_wallet_and_a_descriptor_switch_fail_cleanly() {
-    let server = server!();
+    let server = server!("SQMEOW_TEST_ORACLE_URL");
     let (scheme, rest) = server.split_once("://").expect("a scheme");
     let (login, host) = rest.split_once('@').expect("a login");
     let (_, password) = login.split_once(':').unwrap_or((login, ""));
@@ -719,7 +705,7 @@ async fn a_bogus_wallet_and_a_descriptor_switch_fail_cleanly() {
 
 #[tokio::test]
 async fn explain_plan_reads_the_plan_back() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_exp").await;
     run(
         &backend,
@@ -747,7 +733,7 @@ async fn explain_plan_reads_the_plan_back() {
 
 #[tokio::test]
 async fn a_native_ref_cursor_block_returns_typed_rows_and_honors_the_cap() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     run(
         &backend,
         "create or replace procedure ora_cursor_rows(n number, result out sys_refcursor) as
@@ -784,7 +770,7 @@ async fn a_native_ref_cursor_block_returns_typed_rows_and_honors_the_cap() {
 
 #[tokio::test]
 async fn native_implicit_results_keep_their_order_and_execute_once() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_implicit").await;
     run(&backend, "create table ora_implicit (n number)").await;
     run(
@@ -817,7 +803,7 @@ async fn native_implicit_results_keep_their_order_and_execute_once() {
         assert!(results.iter().all(|result| result.source().is_none()));
     }
     // A new session proves per-statement commit as well as no replay.
-    let other = connect(&server!()).await;
+    let other = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     assert_eq!(
         run(&other, "select count(*) from ora_implicit")
             .await
@@ -856,7 +842,7 @@ async fn native_implicit_results_keep_their_order_and_execute_once() {
 /// the test user needs READ on the directory object.
 #[tokio::test]
 async fn a_bfile_can_be_read_server_side_through_a_ref_cursor() {
-    let server = server!();
+    let server = server!("SQMEOW_TEST_ORACLE_URL");
     let Ok(directory) = std::env::var("SQMEOW_TEST_ORACLE_BFILE_DIRECTORY") else {
         eprintln!("skipped: set SQMEOW_TEST_ORACLE_BFILE_DIRECTORY with a BFILE fixture");
         return;
@@ -917,7 +903,7 @@ async fn a_bfile_can_be_read_server_side_through_a_ref_cursor() {
 
 #[tokio::test]
 async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_det_child").await;
     drop_table(&backend, "ora_det_parent").await;
     run(
@@ -970,7 +956,7 @@ async fn a_table_describes_its_comments_keys_checks_triggers_and_definition() {
 
 #[tokio::test]
 async fn indexes_name_their_direction_and_expressions() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_idx").await;
     run(
         &backend,
@@ -1009,7 +995,7 @@ async fn indexes_name_their_direction_and_expressions() {
 
 #[tokio::test]
 async fn columns_survive_a_default_ending_in_a_newline() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_nl").await;
     drop_table(&backend, "ora_next").await;
     // A `CURRENT_TIMESTAMP` default followed by a newline lands in
@@ -1051,7 +1037,7 @@ async fn columns_survive_a_default_ending_in_a_newline() {
 
 #[tokio::test]
 async fn a_materialized_view_describes_its_definition() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     drop_table(&backend, "ora_mv").await;
     run(
         &backend,
@@ -1067,7 +1053,7 @@ async fn a_materialized_view_describes_its_definition() {
 
 #[tokio::test]
 async fn roles_are_read() {
-    let backend = connect(&server!()).await;
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     let roles = backend.roles().await.unwrap();
     assert!(
         roles.iter().any(|role| role.name == SCHEMA),
@@ -1077,7 +1063,9 @@ async fn roles_are_read() {
 
 #[tokio::test]
 async fn a_read_only_connection_is_only_checked_by_the_engine() {
-    let backend = Backend::connect_to(&server!(), None, true).await.unwrap();
+    let backend = Backend::connect_to(&server!("SQMEOW_TEST_ORACLE_URL"), None, true)
+        .await
+        .unwrap();
     assert!(backend.read_only_unenforced());
     run(&backend, "select 1 from dual").await;
 }

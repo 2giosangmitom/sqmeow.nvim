@@ -3,7 +3,6 @@ local MiniTest = require('mini.test')
 
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local api = require('sqmeow.api')
 local config = require('sqmeow.config')
 
 local notes = {}
@@ -76,7 +75,7 @@ end
 
 T['with no subcommand, opens everything'] = function()
   local opened = false
-  helpers.stub(api, 'open_all', function()
+  helpers.stub(require('sqmeow.api.view'), 'open_all', function()
     opened = true
   end)
   vim.cmd('Sqmeow')
@@ -90,7 +89,7 @@ end
 
 T['execute runs the words it is given as one statement'] = function()
   local ran
-  helpers.stub(api, 'execute', function(sql)
+  helpers.stub(require('sqmeow.api.query'), 'execute', function(sql)
     ran = sql
     return 1
   end)
@@ -100,10 +99,10 @@ end
 
 T['execute without words runs the buffer, or the lines a range covers'] = function()
   local called = {}
-  helpers.stub(api, 'execute_buffer', function()
+  helpers.stub(require('sqmeow.api.query'), 'execute_buffer', function()
     table.insert(called, 'buffer')
   end)
-  helpers.stub(api, 'execute_range', function(first, last)
+  helpers.stub(require('sqmeow.api.query'), 'execute_range', function(first, last)
     table.insert(called, { first, last })
   end)
 
@@ -117,7 +116,7 @@ end
 
 T['export writes a file, or copies with clipboard as the path'] = function()
   local seen = {}
-  helpers.stub(api, 'export', function(opts)
+  helpers.stub(require('sqmeow.api.export'), 'export', function(opts)
     table.insert(seen, opts)
   end)
   vim.cmd('Sqmeow export csv out.csv')
@@ -127,11 +126,11 @@ end
 
 T['save stores a name and url given, and needs a connection otherwise'] = function()
   local saved
-  helpers.stub(api, 'save', function(name, url)
+  helpers.stub(require('sqmeow.api.connection'), 'save', function(name, url)
     saved = { name, url }
     return true
   end)
-  helpers.stub(require('sqmeow.state'), 'current_connection', function()
+  helpers.stub(require('sqmeow.core.state'), 'current_connection', function()
     return nil
   end)
 
@@ -142,13 +141,13 @@ T['save stores a name and url given, and needs a connection otherwise'] = functi
 end
 
 T['says when there is nothing to act on'] = function()
-  helpers.stub(api, 'cancel', function()
+  helpers.stub(require('sqmeow.api.query'), 'cancel', function()
     return false
   end)
-  helpers.stub(api, 'connections', function()
+  helpers.stub(require('sqmeow.api.connection'), 'connections', function()
     return {}
   end)
-  helpers.stub(require('sqmeow.rpc'), 'messages', function()
+  helpers.stub(require('sqmeow.rpc.client'), 'messages', function()
     return {}
   end)
 
@@ -186,7 +185,7 @@ end
 
 T['log clear forgets the query log'] = function()
   local cleared = false
-  helpers.stub(require('sqmeow.history'), 'clear', function()
+  helpers.stub(require('sqmeow.server.history'), 'clear', function()
     cleared = true
   end)
   helpers.stub(require('sqmeow.ui.drawer'), 'render', function() end)
@@ -197,18 +196,22 @@ T['log clear forgets the query log'] = function()
 end
 
 T['a notice from connecting is shown as a warning'] = function()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local id = state.next_connection_id()
   state.add_connection({ id = id, name = 'quest', url = 'postgres://quest', state = 'connecting' })
 
-  require('sqmeow.events').on_connection({ id = id, state = 'connected', notice = 'no sessions' })
+  require('sqmeow.rpc.events').on_connection({
+    id = id,
+    state = 'connected',
+    notice = 'no sessions',
+  })
 
   eq(notes, { { message = 'sqmeow: quest: no sessions', level = vim.log.levels.WARN } })
   state.remove_connection(id)
 end
 
 T['use activates an open connection'] = function()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local id = state.next_connection_id()
   state.add_connection({ id = id, name = 'first', url = 'sqlite://first.db', state = 'connected' })
   MiniTest.finally(function()
@@ -221,7 +224,7 @@ T['use activates an open connection'] = function()
 end
 
 T['use connects and activates a child connection of an open cluster'] = function()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local cluster_id = state.next_connection_id()
   state.add_connection({
     id = cluster_id,
@@ -231,7 +234,7 @@ T['use connects and activates a child connection of an open cluster'] = function
   })
   local child_id = state.next_connection_id()
 
-  helpers.stub(api, 'connect', function(url, opts)
+  helpers.stub(require('sqmeow.api.connection'), 'connect', function(url, opts)
     eq(url, 'postgres://cluster/')
     eq(opts.name, 'cluster/testdb')
     eq(opts.parent, cluster_id)
@@ -258,7 +261,7 @@ T['use connects and activates a child connection of an open cluster'] = function
 end
 
 T['use reuses an existing child connection that is connecting'] = function()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local cluster_id = state.next_connection_id()
   state.add_connection({
     id = cluster_id,
@@ -277,7 +280,7 @@ T['use reuses an existing child connection that is connecting'] = function()
   })
 
   local connected_called = false
-  helpers.stub(api, 'connect', function()
+  helpers.stub(require('sqmeow.api.connection'), 'connect', function()
     connected_called = true
   end)
 
@@ -293,7 +296,7 @@ T['use reuses an existing child connection that is connecting'] = function()
 end
 
 T['use on cluster prompts for database and activates selection'] = function()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local cluster_id = state.next_connection_id()
   state.add_connection({
     id = cluster_id,
@@ -303,7 +306,7 @@ T['use on cluster prompts for database and activates selection'] = function()
   })
   local child_id = state.next_connection_id()
 
-  helpers.stub(api, 'databases', function(conn_id, cb)
+  helpers.stub(require('sqmeow.api.connection'), 'databases', function(conn_id, cb)
     eq(conn_id, cluster_id)
     cb({ 'analytics', 'testdb' })
   end)
@@ -319,7 +322,7 @@ T['use on cluster prompts for database and activates selection'] = function()
     return true
   end)
 
-  helpers.stub(api, 'connect', function(url, opts)
+  helpers.stub(require('sqmeow.api.connection'), 'connect', function(url, opts)
     state.add_connection({
       id = child_id,
       name = opts.name,
@@ -343,7 +346,7 @@ T['use on cluster prompts for database and activates selection'] = function()
 end
 
 T['completes child databases when cluster has databases'] = function()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local cluster_id = state.next_connection_id()
   state.add_connection({
     id = cluster_id,

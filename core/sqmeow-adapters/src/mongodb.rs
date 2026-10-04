@@ -12,11 +12,21 @@ use mongodb::bson::{self, Bson, Document, doc};
 use mongodb::options::ClientOptions;
 use mongodb::results::CollectionType;
 use mongodb::{Client, Database};
+use sqmeow_db::adapter::Adapter;
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::Changes;
+use sqmeow_db::edit::Source;
 use sqmeow_db::edit::{self, check_column, check_row};
-use sqmeow_db::{
-    Adapter, Cell, Changes, Column, ColumnNode, Dialect, Error, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode, Source,
-};
+use sqmeow_db::error::Error;
+use sqmeow_db::error::Result;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
+use sqmeow_db::result::Column;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 /// How many documents a collection's fields are read from.
@@ -373,7 +383,7 @@ impl Adapter for MongoAdapter {
     }
 
     /// How many documents a collection holds, and the validator it was created with.
-    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::node::Details> {
         let reply = self
             .client
             .database(schema)
@@ -385,14 +395,18 @@ impl Adapter for MongoAdapter {
             serde_json::to_string_pretty(&Bson::Document(validator).into_relaxed_extjson())
                 .unwrap_or_default()
         });
-        Ok(sqmeow_db::Details {
+        Ok(sqmeow_db::node::Details {
             properties: vec![("documents".to_owned(), documents.to_string())],
             definition,
-            ..sqmeow_db::Details::default()
+            ..sqmeow_db::node::Details::default()
         })
     }
 
-    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+    async fn indexes(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::IndexNode>> {
         let mut cursor = self
             .client
             .database(schema)
@@ -407,7 +421,7 @@ impl Adapter for MongoAdapter {
             let options = model.options.unwrap_or_default();
             let name = options.name.unwrap_or_default();
             let primary = name == "_id_";
-            indexes.push(sqmeow_db::IndexNode {
+            indexes.push(sqmeow_db::node::IndexNode {
                 // An ascending key is named alone, and any other kind with its direction or type.
                 columns: model
                     .keys
@@ -893,7 +907,7 @@ fn cell(value: Bson) -> Cell {
 mod tests {
     use mongodb::bson::oid::ObjectId;
     use mongodb::bson::{DateTime, Decimal128};
-    use sqmeow_db::TypeClass;
+    use sqmeow_db::types::TypeClass;
 
     use super::*;
 

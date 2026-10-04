@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 local popup = nil
 
@@ -15,7 +15,7 @@ local TYPE_WIDTH = 16
 ---@return NuiLine[]
 function M.lines(columns, width)
   local Line = require('nui.line')
-  local truncate = require('sqmeow.utils').truncate
+  local truncate = require('sqmeow.core.utils').truncate
   local config = require('sqmeow.config').get()
   local ellipsis = config.icons.grid.ellipsis
 
@@ -56,22 +56,17 @@ end
 --- Show one row of the current result.
 ---@param row integer Zero-based row index within the whole result.
 function M.open(row)
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if not (call and call.call_id) then
     return
   end
 
-  local columns, err = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = row })
+  local columns, err =
+    require('sqmeow.rpc.client').request('row', { call_id = call.call_id, row = row })
   if not columns then
     utils.notify(err or 'that row is not there', vim.log.levels.WARN)
     return
   end
-
-  local nui, nui_err = utils.nui({ 'popup' }, 'the row detail')
-  if not nui then
-    return utils.notify(nui_err, vim.log.levels.ERROR)
-  end
-  local Popup = nui.Popup
 
   -- Which columns are keys is known from the result, not from the row, so it is read from there.
   for index, column in ipairs(columns) do
@@ -81,48 +76,19 @@ function M.open(row)
 
   M.close()
   local width = math.floor(vim.o.columns * 0.8)
-  popup = Popup({
-    enter = true,
-    focusable = true,
-    relative = 'editor',
-    position = '50%',
-    size = {
-      width = width,
-      height = math.max(math.min(#columns, math.floor(vim.o.lines * 0.8)), 1),
-    },
-    zindex = 50,
-    border = {
-      style = require('sqmeow.config').border(),
-      text = { top = ' Row details ', top_align = 'center' },
-    },
-    buf_options = {
-      buftype = 'nofile',
-      bufhidden = 'wipe',
-      swapfile = false,
-      filetype = 'sqmeow-row',
-    },
-    win_options = { cursorline = true, wrap = false, number = false, relativenumber = false },
-  })
-  popup:mount()
-  popup:map('n', 'q', M.close, { nowait = true })
-  popup:map('n', '<Esc>', M.close, { nowait = true })
-  popup:on('BufLeave', M.close, { once = true })
-
   local lines = M.lines(columns, width)
-  local namespace = vim.api.nvim_create_namespace('sqmeow.detail')
-  vim.api.nvim_buf_set_lines(
-    popup.bufnr,
-    0,
-    -1,
-    false,
-    vim.tbl_map(function(line)
-      return line:content()
-    end, lines)
-  )
-  for index, line in ipairs(lines) do
-    line:highlight(popup.bufnr, namespace, index)
+  local opened, open_err = require('sqmeow.ui.popup').open({
+    title = ' Row details ',
+    lines = lines,
+    width = width,
+    height = math.max(math.min(#columns, math.floor(vim.o.lines * 0.8)), 1),
+    filetype = 'sqmeow-row',
+    on_close = M.close,
+  })
+  if not opened then
+    return utils.notify(open_err or 'could not open the popup', vim.log.levels.ERROR)
   end
-  vim.bo[popup.bufnr].modifiable = false
+  popup = opened
 end
 
 --- Close the popup.

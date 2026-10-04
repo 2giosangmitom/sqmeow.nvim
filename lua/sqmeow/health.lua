@@ -13,7 +13,7 @@ end
 
 local function check_config()
   vim.health.start('configuration')
-  vim.health.info('files are kept in ' .. require('sqmeow.paths').root())
+  vim.health.info('files are kept in ' .. require('sqmeow.core.paths').root())
   local errors = require('sqmeow.config').validate(require('sqmeow').user_config or {})
   local keymaps = require('sqmeow.keymap').problems()
 
@@ -33,8 +33,8 @@ end
 local function check_engine()
   vim.health.start('engine')
 
-  local install = require('sqmeow.install')
-  local rpc = require('sqmeow.rpc')
+  local install = require('sqmeow.server.install')
+  local rpc = require('sqmeow.rpc.client')
   local path, source = install.resolve()
 
   if not path then
@@ -100,10 +100,10 @@ local function check_sources()
     return
   end
 
-  local adapters = require('sqmeow.rpc').info()
+  local adapters = require('sqmeow.rpc.client').info()
   adapters = adapters and adapters.adapters or {}
 
-  local url = require('sqmeow.url')
+  local url = require('sqmeow.core.url')
   for _, connection in ipairs(connections) do
     local scheme = connection.url:match('^(%w[%w%+%-%.]*)') or ''
     local dialect = M.dialect_of(scheme)
@@ -124,7 +124,7 @@ local function check_sources()
 end
 
 local function check_open()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local open = state.connection_list()
   if #open == 0 then
     return
@@ -168,7 +168,7 @@ end
 ---@param scheme string
 ---@return string|nil
 function M.dialect_of(scheme)
-  return require('sqmeow.dialects').from_scheme(scheme)
+  return require('sqmeow.core.dialects').from_scheme(scheme)
 end
 
 --- Entry point for `:checkhealth sqmeow`.

@@ -1,6 +1,6 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
-local sql = require('sqmeow.sql')
+local sql = require('sqmeow.core.sql')
 
 local T = MiniTest.new_set()
 

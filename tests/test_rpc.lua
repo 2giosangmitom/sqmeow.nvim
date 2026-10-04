@@ -1,7 +1,7 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local rpc = require('sqmeow.rpc')
+local rpc = require('sqmeow.rpc.client')
 
 local T = MiniTest.new_set({
   hooks = {
@@ -136,7 +136,7 @@ T['events']['stop'] = MiniTest.new_set({ parametrize = { { false }, { true } } }
 
 T['events']['stop']['discards events before a scheduled drain'] = function(exited)
   local on_exit
-  helpers.stub(require('sqmeow.install'), 'resolve', function()
+  helpers.stub(require('sqmeow.server.install'), 'resolve', function()
     return '/fake/engine', 'development'
   end)
   helpers.stub(vim.fn, 'jobstart', function(_, opts)

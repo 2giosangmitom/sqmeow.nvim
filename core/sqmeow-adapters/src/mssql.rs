@@ -7,11 +7,26 @@ use std::time::Instant;
 
 use futures_util::TryStreamExt;
 use percent_encoding::percent_decode_str;
-use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Details, Dialect, Error, ForeignKey, ForeignKeyNode,
-    IndexNode, KeyKind, RelationKind, RelationNode, Result, ResultSet, RoleNode, RoutineNode,
-    SchemaNode, TableBinder, TableName,
-};
+use sqmeow_db::adapter::Adapter;
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::TableBinder;
+use sqmeow_db::edit::TableName;
+use sqmeow_db::error::Error;
+use sqmeow_db::error::Result;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::Details;
+use sqmeow_db::node::ForeignKeyNode;
+use sqmeow_db::node::IndexNode;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoleNode;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
+use sqmeow_db::result::Column;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::types::ForeignKey;
+use sqmeow_db::types::KeyKind;
+use sqmeow_db::value::Cell;
 use tiberius::{AuthMethod, Client, ColumnData, Config, EncryptionLevel, QueryItem, Row, ToSql};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -424,7 +439,7 @@ async fn describe(client: &mut Connection, sql: &str, result: &mut ResultSet) ->
     for (i, row) in metadata.iter().enumerate() {
         let column = &mut result.columns_mut()[i];
         column.type_name = text(row, 1);
-        column.class = sqmeow_db::TypeClass::from_type_name(&column.type_name);
+        column.class = sqmeow_db::types::TypeClass::from_type_name(&column.type_name);
         column.generated =
             row.get::<bool, _>(5).unwrap_or(false) || !row.get::<bool, _>(6).unwrap_or(false);
         let schema = text(row, 2);
@@ -494,7 +509,7 @@ async fn index_rows(client: &mut Connection, schema: &str, table: &str) -> Resul
 }
 
 impl Adapter for MsSqlAdapter {
-    fn plan(&self, result: &ResultSet, changes: &sqmeow_db::Changes) -> Result<Vec<String>> {
+    fn plan(&self, result: &ResultSet, changes: &sqmeow_db::edit::Changes) -> Result<Vec<String>> {
         for (index, _) in changes
             .live_updates()
             .flat_map(|(_, cells)| cells)

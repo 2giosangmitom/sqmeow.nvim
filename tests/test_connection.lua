@@ -68,7 +68,7 @@ T['create']['asks for a name and offers none'] = function()
   -- The name is what everything else will call this database.
   require('sqmeow.ui.form').open({
     title = 'New PostgreSQL connection',
-    fields = require('sqmeow.dialects').fields('postgres'),
+    fields = require('sqmeow.core.dialects').fields('postgres'),
     on_submit = function() end,
   })
 
@@ -89,7 +89,7 @@ T['from a url'] = MiniTest.new_set()
 
 T['from a url']['saves the url as typed and connects'] = function()
   local connected
-  helpers.stub(require('sqmeow.api'), 'connect', function(url, opts)
+  helpers.stub(require('sqmeow.api.connection'), 'connect', function(url, opts)
     connected = { url = url, name = opts.name }
   end)
 
@@ -108,7 +108,7 @@ end
 
 T['from a url']['saves the SSH host a connection goes through'] = function()
   local connected
-  helpers.stub(require('sqmeow.api'), 'connect', function(_, opts)
+  helpers.stub(require('sqmeow.api.connection'), 'connect', function(_, opts)
     connected = opts.ssh
   end)
 

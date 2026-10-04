@@ -36,13 +36,15 @@ end
 
 --- Open a connection and wait for the engine to settle it.
 ---@param url string
----@param opts table|nil Passed to `api.connect`, such as `{ name = 'grid' }`.
+---@param opts table|nil Passed to `connect`, such as `{ name = 'grid' }`.
 ---@param timeout integer|nil Milliseconds. Defaults to 5000.
 ---@return integer id
 function M.connect(url, opts, timeout)
-  local api = require('sqmeow.api')
-  local state = require('sqmeow.state')
-  local id = assert(api.connect(url, opts), 'the engine should accept the connection')
+  local state = require('sqmeow.core.state')
+  local id = assert(
+    require('sqmeow.api.connection').connect(url, opts),
+    'the engine should accept the connection'
+  )
   M.wait_for('the connection should settle', function()
     local connection = state.connections[id]
     return connection == nil or connection.state ~= 'connecting'
@@ -52,15 +54,15 @@ end
 
 --- Run SQL and wait for the engine to finish with it.
 ---@param sql string
----@param opts table|nil Passed to `api.execute`.
+---@param opts table|nil Passed to `execute`.
 ---@param timeout integer|nil Milliseconds. Defaults to 5000.
 ---@return table summary The call the engine reported.
 function M.run(sql, opts, timeout)
-  local api = require('sqmeow.api')
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   -- Tests drop and delete freely, so nothing asks first.
   opts = vim.tbl_extend('keep', opts or {}, { confirmed = true })
-  local call_id = assert(api.execute(sql, opts), 'the query should be accepted: ' .. sql)
+  local call_id =
+    assert(require('sqmeow.api.query').execute(sql, opts), 'the query should be accepted: ' .. sql)
   M.wait_for('the query should settle: ' .. sql, function()
     return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
   end, timeout)

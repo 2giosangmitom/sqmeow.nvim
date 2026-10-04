@@ -6,9 +6,9 @@ use rmpv::Value;
 use sqmeow_adapters::Backend;
 
 use super::{Core, Started};
-use crate::args::Args;
-use crate::session::{ConnId, Connection};
-use crate::value::map;
+use crate::server::args::Args;
+use crate::server::payload::map;
+use crate::server::session::{ConnId, Connection};
 
 impl Core {
     /// An open connection, or the error for one that is not.
@@ -46,7 +46,7 @@ impl Core {
         self.emit_connection(id, "connecting", vec![("name", Value::from(name.as_str()))]);
 
         // The expanded URL holds the password and never leaves this function.
-        let url = match crate::template::expand(&url).await {
+        let url = match crate::server::template::expand(&url).await {
             Ok(url) => url,
             Err(error) => {
                 return self.emit_connection(
@@ -58,7 +58,7 @@ impl Core {
         };
 
         let (url, tunnel) = match ssh {
-            Some(via) => match crate::tunnel::open("ssh", &url, via.trim()).await {
+            Some(via) => match crate::server::tunnel::open("ssh", &url, via.trim()).await {
                 Ok((url, tunnel)) => (url, Some(tunnel)),
                 Err(error) => {
                     return self.emit_connection(

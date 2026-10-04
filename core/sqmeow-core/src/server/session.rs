@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use rmpv::Value;
 use sqmeow_adapters::Backend;
-use sqmeow_db::ResultSet;
+use sqmeow_db::result::ResultSet;
 use tokio_util::sync::CancellationToken;
 
 /// The id the plugin gave a connection.
@@ -103,7 +103,7 @@ pub struct Connection {
     /// Runs only statements that read, and takes no edits.
     pub read_only: bool,
     /// The SSH tunnel the connection goes through, held so it closes with the connection.
-    pub _tunnel: Option<crate::tunnel::Tunnel>,
+    pub _tunnel: Option<crate::server::tunnel::Tunnel>,
 }
 
 /// A finished result, kept so its rows can be read and reopened.
@@ -235,7 +235,7 @@ impl Session {
         connections
             .iter()
             .map(|connection| {
-                crate::value::map(vec![
+                crate::server::payload::map(vec![
                     ("id", Value::from(connection.id)),
                     ("name", Value::from(connection.name.as_str())),
                     ("dialect", Value::from(connection.backend.dialect().name())),
@@ -333,7 +333,8 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use sqmeow_db::{Cell, Column};
+    use sqmeow_db::result::Column;
+    use sqmeow_db::value::Cell;
 
     use super::*;
 

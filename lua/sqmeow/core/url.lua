@@ -133,7 +133,7 @@ function M.split(url)
     return nil
   end
 
-  local dialect = require('sqmeow.dialects').from_scheme(scheme)
+  local dialect = require('sqmeow.core.dialects').from_scheme(scheme)
   if not dialect then
     return nil
   end
@@ -206,7 +206,7 @@ end
 ---@return string|nil url
 ---@return string|nil error
 function M.build(dialect, values)
-  local spec = require('sqmeow.dialects').get(dialect)
+  local spec = require('sqmeow.core.dialects').get(dialect)
   if not spec then
     return nil, ('there is no `%s` database'):format(tostring(dialect))
   end

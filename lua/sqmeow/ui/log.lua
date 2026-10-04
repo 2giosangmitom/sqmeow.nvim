@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 --- How long ago something ran, in words.
 ---@param at integer|nil Seconds since the epoch.
@@ -58,20 +58,19 @@ end
 ---@param opts table|nil `connection` narrows to one name, `limit` caps the list.
 ---@return table[]
 function M.entries(opts)
-  return require('sqmeow.history').entries(opts)
+  return require('sqmeow.server.history').entries(opts)
 end
 
 --- Show what one entry returned.
 ---@param entry table
 function M.reopen(entry)
-  local history = require('sqmeow.history')
-  local api = require('sqmeow.api')
+  local history = require('sqmeow.server.history')
 
   if history.reopenable(entry) then
-    return api.reopen(entry.call_id)
+    return require('sqmeow.api.view').reopen(entry.call_id)
   end
   if history.saved(entry) then
-    return api.restore(entry)
+    return require('sqmeow.api.view').restore(entry)
   end
 
   if entry.state == 'done' and (entry.rows or 0) > 0 then
@@ -79,7 +78,7 @@ function M.reopen(entry)
   end
 
   -- A failure, a cancellation, or a statement that changed rows rather than returning any.
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local result = require('sqmeow.ui.result')
   local connection = entry.connection and state.connection_by_name(entry.connection)
 

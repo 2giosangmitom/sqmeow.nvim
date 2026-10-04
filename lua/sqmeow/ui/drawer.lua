@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 local buf = nil
 local win = nil
@@ -59,7 +59,7 @@ end
 --- The open nodes of top-level connections, by connection name.
 ---@return { connection: string, path: string[] }[]
 function M.expanded_paths()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local paths = {}
   for key, open in pairs(expanded) do
     local conn_id, path = key_parts(key)
@@ -102,7 +102,7 @@ function M.load(conn_id, path, async)
     if cache[key] ~= pending then
       return
     end
-    local _, err = require('sqmeow.rpc').request(
+    local _, err = require('sqmeow.rpc.client').request(
       'introspect',
       { conn_id = conn_id, path = path, pattern = patterns[conn_id] }
     )
@@ -201,7 +201,7 @@ end
 --- Turn one node into the line the drawer draws for it.
 local function prepare_node(node)
   local parts = assert(nui())
-  local icons = require('sqmeow.icons')
+  local icons = require('sqmeow.core.icons')
   local line = parts.Line()
 
   line:append(('  '):rep(node:get_depth() - 1))
@@ -253,7 +253,7 @@ end
 ---@return table[]
 local function schema_nodes(conn_id, path)
   local parts = assert(nui())
-  local icons = require('sqmeow.icons')
+  local icons = require('sqmeow.core.icons')
   local entry = cache[node_key(conn_id, path)]
   if not entry then
     return {}
@@ -285,7 +285,7 @@ local function schema_nodes(conn_id, path)
     if open and node.kind == 'database' then
       -- One database of a cluster is a connection of its own, opened when it was expanded, and what
       -- it holds is that connection's tree.
-      local opened = require('sqmeow.state').child_connection(conn_id, node.name)
+      local opened = require('sqmeow.core.state').child_connection(conn_id, node.name)
       if opened and opened.state == 'connected' then
         -- A MongoDB or SurrealDB database is its own only schema.
         local own = opened.dialect == 'mongodb' or opened.dialect == 'surrealdb'
@@ -482,7 +482,7 @@ end
 --- Every connection the drawer draws.
 ---@return table[]
 function M.connection_rows()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local drawn = {}
   local open = {}
 
@@ -506,7 +506,7 @@ function M.connection_rows()
       table.insert(drawn, {
         name = spec.name,
         url = spec.url,
-        dialect = require('sqmeow.dialects').of_url(spec.url),
+        dialect = require('sqmeow.core.dialects').of_url(spec.url),
         note = 'saved',
         status = state.failures[spec.name] and 'error' or 'disconnected',
         connected = false,
@@ -528,7 +528,7 @@ function M.render()
     return utils.notify(err, vim.log.levels.ERROR)
   end
 
-  local icons = require('sqmeow.icons')
+  local icons = require('sqmeow.core.icons')
   local nodes = {}
 
   for _, connection in ipairs(M.connection_rows()) do
@@ -606,13 +606,13 @@ function M.current_node()
 end
 
 local function dialect_of(conn_id)
-  local connection = require('sqmeow.state').connections[conn_id]
+  local connection = require('sqmeow.core.state').connections[conn_id]
   return connection and connection.dialect or nil
 end
 
 --- The connection opened for the database row under the cursor, if it is open.
 local function opened_database(node)
-  return require('sqmeow.state').child_connection(node.conn_id, node.name)
+  return require('sqmeow.core.state').child_connection(node.conn_id, node.name)
 end
 
 --- Expand or collapse one database of a cluster, opening a connection for it the first time.
@@ -624,9 +624,9 @@ local function toggle_database(node)
     return M.render()
   end
 
-  local parent = require('sqmeow.state').connections[node.conn_id]
+  local parent = require('sqmeow.core.state').connections[node.conn_id]
   expanded[key] = true
-  local id = require('sqmeow.api').connect(parent.url, {
+  local id = require('sqmeow.api.connection').connect(parent.url, {
     name = ('%s/%s'):format(parent.name, node.name),
     parent = parent.id,
     database = node.name,
@@ -681,7 +681,7 @@ end
 --- The statement that shows what a relation holds.
 ---@param limit integer|nil The most rows it may read, or nil for every row.
 local function preview_statement(node, limit)
-  local sql = require('sqmeow.sql')
+  local sql = require('sqmeow.core.sql')
   local dialect = dialect_of(node.conn_id)
   if dialect == 'redis' then
     return sql.read_key(node.path[2], node.path[#node.path], limit)
@@ -705,7 +705,7 @@ function M.actions.toggle()
 
   -- This key opens things and nothing else.
   if node.kind == 'connection' and not node.conn_id then
-    return require('sqmeow.api').connect_named(node.name)
+    return require('sqmeow.api.connection').connect_named(node.name)
   end
 
   if not node.expandable then
@@ -801,7 +801,7 @@ function M.actions.refresh()
 
   -- The databases opened from a server are connections of their own, drawn inside this one.
   if #path == 0 then
-    for _, connection in pairs(require('sqmeow.state').connections) do
+    for _, connection in pairs(require('sqmeow.core.state').connections) do
       if connection.parent == node.conn_id then
         reload(connection.id, {})
       end
@@ -910,7 +910,7 @@ function M.actions.preview()
     vim.bo[target_buf].modified = false
     vim.b[target_buf].sqmeow_preview_statement = text
 
-    local state = require('sqmeow.state')
+    local state = require('sqmeow.core.state')
     local conn = state.connections[node.conn_id]
     local conn_name = conn and conn.name
 
@@ -934,9 +934,8 @@ function M.actions.preview()
     source_buf = target_buf
   end
 
-  local api = require('sqmeow.api')
-  api.use(node.conn_id)
-  api.execute(
+  require('sqmeow.api.connection').use(node.conn_id)
+  require('sqmeow.api.query').execute(
     statement,
     -- Written by the plugin, not by anyone at the keyboard, so it stays out of the query log.
     { history = false, source_buf = source_buf }
@@ -960,7 +959,7 @@ function M.actions.yank_name()
     return
   end
 
-  local name = require('sqmeow.sql').qualify(dialect_of(node.conn_id), sql_parts(node.path))
+  local name = require('sqmeow.core.sql').qualify(dialect_of(node.conn_id), sql_parts(node.path))
   vim.fn.setreg(vim.v.register or '"', name)
   utils.notify('yanked ' .. name)
 end
@@ -990,10 +989,10 @@ function M.actions.rename()
       end
       -- A connection that was saved under the old name is renamed with it.
       if require('sqmeow.sources').find(node.name) then
-        require('sqmeow.api').edit(node.name, { name = name })
+        require('sqmeow.api.connection').edit(node.name, { name = name })
         return
       end
-      require('sqmeow.api').rename(node.conn_id, name)
+      require('sqmeow.api.connection').rename(node.conn_id, name)
     end)
   end
 
@@ -1043,7 +1042,7 @@ function M.actions.use()
     local opened = opened_database(node)
     node = { kind = 'connection', name = node.name, conn_id = opened and opened.id }
   elseif node and node.conn_id then
-    local state = require('sqmeow.state')
+    local state = require('sqmeow.core.state')
     local conn = state.connections[node.conn_id]
     node = { kind = 'connection', name = conn and conn.name or node.name, conn_id = node.conn_id }
   end
@@ -1054,7 +1053,7 @@ function M.actions.use()
     return utils.notify(('`%s` is not open yet'):format(node.name), vim.log.levels.WARN)
   end
 
-  local connection = require('sqmeow.api').use(node.conn_id)
+  local connection = require('sqmeow.api.connection').use(node.conn_id)
   if connection then
     local editor = require('sqmeow.ui.editor')
     local ed_buf = nil
@@ -1108,7 +1107,7 @@ function M.actions.new_scratchpad()
       prefix = dir .. '/'
     end
   end
-  require('sqmeow.api').scratchpad(nil, prefix)
+  require('sqmeow.api.view').scratchpad(nil, prefix)
 end
 
 --- Edit the connection under the cursor.
@@ -1156,7 +1155,7 @@ local function delete_connection(node)
       return
     end
 
-    if not require('sqmeow.api').remove(node.name) then
+    if not require('sqmeow.api.connection').remove(node.name) then
       return
     end
 
@@ -1181,7 +1180,7 @@ function M.actions.delete()
         if answer ~= 'yes' then
           return
         end
-        require('sqmeow.history').clear()
+        require('sqmeow.server.history').clear()
         utils.notify('the query log is empty')
         M.render()
       end

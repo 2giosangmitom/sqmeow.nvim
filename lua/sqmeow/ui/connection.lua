@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 --- The box every connection dialog ends with.
 local READ_ONLY = { key = 'read_only', label = 'Read only', checkbox = true }
@@ -24,12 +24,12 @@ end
 ---@return fun(values: table<string, string>): string|nil
 local function validator(dialect, existing)
   return function(values)
-    local url, err = require('sqmeow.url').build(dialect, values)
+    local url, err = require('sqmeow.core.url').build(dialect, values)
     if not url then
       return err
     end
 
-    for _, field in ipairs(require('sqmeow.dialects').fields(dialect)) do
+    for _, field in ipairs(require('sqmeow.core.dialects').fields(dialect)) do
       if not field.optional and vim.trim(values[field.key] or '') == '' then
         return ('%s cannot be empty'):format(field.label)
       end
@@ -48,11 +48,12 @@ end
 ---@param values table<string, string> What the fields start as.
 ---@param existing string|nil The name of the saved connection being changed, if it is one.
 local function form(dialect, values, existing)
-  local spec = assert(require('sqmeow.dialects').get(dialect), 'the menu offers known dialects')
+  local spec =
+    assert(require('sqmeow.core.dialects').get(dialect), 'the menu offers known dialects')
   local opened, err = require('sqmeow.ui.form').open({
     title = existing and ('Edit %s'):format(existing) or ('New %s connection'):format(spec.label),
     fields = vim.list_extend(
-      require('sqmeow.dialects').fields(dialect),
+      require('sqmeow.core.dialects').fields(dialect),
       spec.port and { SSH, READ_ONLY } or { READ_ONLY }
     ),
     values = vim.tbl_extend('keep', values, { read_only = 'no' }),
@@ -61,13 +62,12 @@ local function form(dialect, values, existing)
     validate = validator(dialect, existing),
     on_submit = function(answers)
       -- The form refuses to submit until `validator` accepts the answers, so this cannot fail.
-      local url = assert(require('sqmeow.url').build(dialect, answers))
+      local url = assert(require('sqmeow.core.url').build(dialect, answers))
       local name = vim.trim(answers.name)
       local read_only = answers.read_only == 'yes'
 
-      local api = require('sqmeow.api')
       if existing then
-        api.edit(
+        require('sqmeow.api.connection').edit(
           existing,
           { name = name, url = url, read_only = read_only, ssh = tunnel(answers) or '' }
         )
@@ -75,8 +75,11 @@ local function form(dialect, values, existing)
       end
 
       local ssh = tunnel(answers)
-      if api.save(name, url, { read_only = read_only, ssh = ssh }) then
-        api.connect(url, { name = name, read_only = read_only, ssh = ssh })
+      if require('sqmeow.api.connection').save(name, url, { read_only = read_only, ssh = ssh }) then
+        require('sqmeow.api.connection').connect(
+          url,
+          { name = name, read_only = read_only, ssh = ssh }
+        )
       end
     end,
   })
@@ -104,7 +107,7 @@ function M.from_url(values)
       if name == '' then
         return 'Name cannot be empty'
       end
-      if not require('sqmeow.dialects').of_url(url) then
+      if not require('sqmeow.core.dialects').of_url(url) then
         return 'the URL has to start with a database the plugin speaks, such as postgres://'
       end
       if require('sqmeow.sources').find(name) then
@@ -115,10 +118,12 @@ function M.from_url(values)
     on_submit = function(answers)
       local name, url = vim.trim(answers.name), vim.trim(answers.url)
       local read_only = answers.read_only == 'yes'
-      local api = require('sqmeow.api')
       local ssh = tunnel(answers)
-      if api.save(name, url, { read_only = read_only, ssh = ssh }) then
-        api.connect(url, { name = name, read_only = read_only, ssh = ssh })
+      if require('sqmeow.api.connection').save(name, url, { read_only = read_only, ssh = ssh }) then
+        require('sqmeow.api.connection').connect(
+          url,
+          { name = name, read_only = read_only, ssh = ssh }
+        )
       end
     end,
   })
@@ -130,12 +135,12 @@ end
 
 --- Ask which database, then ask for its details.
 function M.create()
-  local icons = require('sqmeow.icons')
+  local icons = require('sqmeow.core.icons')
 
   local items = vim.tbl_map(function(dialect)
     local icon, highlight = icons.get(dialect.id)
     return { label = dialect.label, icon = icon, highlight = highlight, value = dialect.id }
-  end, require('sqmeow.dialects').list)
+  end, require('sqmeow.core.dialects').list)
   -- Last, for someone holding a URL who would rather paste it than take it apart into fields.
   local icon, highlight = icons.get('connection')
   table.insert(
@@ -163,7 +168,7 @@ end
 ---@param spec sqmeow.ConnectionSpec
 ---@return boolean opened
 function M.edit(spec)
-  local values = require('sqmeow.url').parse(spec.url)
+  local values = require('sqmeow.core.url').parse(spec.url)
   if not values then
     return false
   end

@@ -11,11 +11,11 @@ function source:get_trigger_characters()
 end
 
 function source:is_available()
-  local ok, api = pcall(require, 'sqmeow.api')
+  local ok = pcall(require, 'sqmeow.api.connection')
   if not ok then
     return false
   end
-  local conn = api.target(0)
+  local conn = require('sqmeow.api.connection').target(0)
   return conn ~= nil
 end
 

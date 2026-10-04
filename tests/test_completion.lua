@@ -2,8 +2,7 @@ local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local completion = require('sqmeow.completion')
 local drawer = require('sqmeow.ui.drawer')
-local api = require('sqmeow.api')
-local rpc = require('sqmeow.rpc')
+local rpc = require('sqmeow.rpc.client')
 local helpers = dofile('tests/helpers.lua')
 local connection, calls, buf, target, request
 
@@ -66,7 +65,7 @@ local T = MiniTest.new_set({
       drawer.reset()
       calls = {}
       connection = { id = 1 }
-      target = helpers.swap(api, 'target', function()
+      target = helpers.swap(require('sqmeow.api.connection'), 'target', function()
         return connection
       end)
       request = helpers.swap(rpc, 'request', function(method, params)
@@ -77,7 +76,7 @@ local T = MiniTest.new_set({
       buf = vim.api.nvim_create_buf(false, true)
     end,
     post_case = function()
-      helpers.swap(api, 'target', target)
+      helpers.swap(require('sqmeow.api.connection'), 'target', target)
       flush()
       helpers.swap(rpc, 'request', request)
       vim.api.nvim_buf_delete(buf, { force = true })

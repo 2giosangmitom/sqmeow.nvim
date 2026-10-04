@@ -53,7 +53,7 @@ end
 ---@return table[] items
 ---@return boolean incomplete
 function M.items(bufnr, line, col, row)
-  local conn = require('sqmeow.api').target(bufnr)
+  local conn = require('sqmeow.api.connection').target(bufnr)
   if not conn then
     return {}, false
   end

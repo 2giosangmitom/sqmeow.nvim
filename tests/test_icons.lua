@@ -1,6 +1,6 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
-local icons = require('sqmeow.icons')
+local icons = require('sqmeow.core.icons')
 local config = require('sqmeow.config')
 local highlights = require('sqmeow.ui.highlights').links
 

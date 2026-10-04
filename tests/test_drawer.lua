@@ -3,13 +3,12 @@ local MiniTest = require('mini.test')
 
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local api = require('sqmeow.api')
-local rpc = require('sqmeow.rpc')
-local state = require('sqmeow.state')
+local rpc = require('sqmeow.rpc.client')
+local state = require('sqmeow.core.state')
 local drawer = require('sqmeow.ui.drawer')
 local editor = require('sqmeow.ui.editor')
 local file = require('sqmeow.sources.file')
-local history = require('sqmeow.history')
+local history = require('sqmeow.server.history')
 
 local run = helpers.run
 
@@ -92,11 +91,11 @@ local T = MiniTest.new_set({
              author_id integer references people(id),
              title text
            )]])
-      api.open_drawer()
+      require('sqmeow.api.view').open_drawer()
     end,
     post_once = function()
       drawer.close()
-      api.close()
+      require('sqmeow.api.view').close()
       rpc.stop()
       state.reset()
       drawer.reset()
@@ -485,7 +484,7 @@ end
 T['the active connection'] = MiniTest.new_set({
   hooks = {
     pre_case = function()
-      api.connect('sqlite::memory:', { name = 'other' })
+      require('sqmeow.api.connection').connect('sqlite::memory:', { name = 'other' })
       helpers.wait_for('the connection should be listed', function()
         return state.connection_by_name('other') ~= nil
       end, TIMEOUT)
@@ -494,7 +493,7 @@ T['the active connection'] = MiniTest.new_set({
     post_case = function()
       local other = state.connection_by_name('other')
       if other then
-        api.disconnect(other.id)
+        require('sqmeow.api.connection').disconnect(other.id)
       end
       drawer.render()
     end,
@@ -509,7 +508,7 @@ T['the active connection']['moves when another is chosen'] = function()
 end
 
 T['the active connection']['does not move when a row is only opened'] = function()
-  api.use(state.connection_by_name('scratch').id)
+  require('sqmeow.api.connection').use(state.connection_by_name('scratch').id)
   drawer.render()
 
   goto_line('other')
@@ -572,7 +571,7 @@ end
 
 T['the active connection']['moves when a descendant row is chosen'] = function()
   open_relation('Tables', 'people')
-  api.use(state.connection_by_name('other').id)
+  require('sqmeow.api.connection').use(state.connection_by_name('other').id)
   eq(state.current, state.connection_by_name('other').id)
 
   goto_line('people')
@@ -608,7 +607,7 @@ end
 
 T['saved connections']['open when chosen'] = function()
   local opened
-  helpers.stub(api, 'connect_named', function(name)
+  helpers.stub(require('sqmeow.api.connection'), 'connect_named', function(name)
     opened = name
   end)
 
@@ -676,7 +675,7 @@ T['saved connections']['can be tried again after failing to open'] = function()
   eq(marks_on(number)[2].group, 'SqmeowConnectionError')
 
   local opened
-  helpers.stub(api, 'connect_named', function(name)
+  helpers.stub(require('sqmeow.api.connection'), 'connect_named', function(name)
     opened = name
   end)
 
@@ -919,7 +918,7 @@ T['connections']['are renamed from the row that shows them'] = function()
     on_confirm('local sqlite')
   end)
   MiniTest.finally(function()
-    api.rename(state.current, 'scratch')
+    require('sqmeow.api.connection').rename(state.current, 'scratch')
     drawer.render()
   end)
 

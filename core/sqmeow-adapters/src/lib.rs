@@ -1,6 +1,6 @@
 //! Provides database adapters for sqmeow.nvim.
 //!
-//! Each adapter implements [`sqmeow_db::Adapter`] for one dialect. The
+//! Each adapter implements [`sqmeow_db::adapter::Adapter`] for one dialect. The
 //! [`Backend`] enum erases the concrete type so the engine can hold a
 //! heterogenous set of connections.
 //!
@@ -22,10 +22,20 @@ pub mod sqlite;
 mod stream;
 pub mod surrealdb;
 
-use sqmeow_db::{
-    Adapter, Changes, ColumnNode, Details, Dialect, Error, IndexNode, RelationNode, Result,
-    ResultSet, RoleNode, RoutineKind, RoutineNode, SchemaNode,
-};
+use sqmeow_db::adapter::Adapter;
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::Changes;
+use sqmeow_db::error::Error;
+use sqmeow_db::error::Result;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::Details;
+use sqmeow_db::node::IndexNode;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoleNode;
+use sqmeow_db::node::RoutineKind;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
+use sqmeow_db::result::ResultSet;
 use tokio_util::sync::CancellationToken;
 
 /// How long to keep trying to open a connection before giving up.

@@ -1,7 +1,7 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local config = require('sqmeow.config')
-local paths = require('sqmeow.paths')
+local paths = require('sqmeow.core.paths')
 
 local T = MiniTest.new_set({
   hooks = {
@@ -32,10 +32,10 @@ end
 
 T['move everything that reads them'] = function()
   config.apply({ core = { path = '/srv/sqmeow' } })
-  local install = require('sqmeow.install')
+  local install = require('sqmeow.server.install')
   local file = require('sqmeow.sources.file')
   local editor = require('sqmeow.ui.editor')
-  local history = require('sqmeow.history')
+  local history = require('sqmeow.server.history')
 
   eq(install.managed_path(), '/srv/sqmeow/bin/' .. install.binary)
   eq(file.default_path(), '/srv/sqmeow/connections.json')

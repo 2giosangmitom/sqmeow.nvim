@@ -3,9 +3,8 @@ local MiniTest = require('mini.test')
 
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local api = require('sqmeow.api')
-local rpc = require('sqmeow.rpc')
-local state = require('sqmeow.state')
+local rpc = require('sqmeow.rpc.client')
+local state = require('sqmeow.core.state')
 local result = require('sqmeow.ui.result')
 
 local TIMEOUT = 5000
@@ -149,11 +148,11 @@ T['querying']['saves the result of every statement, and restores them together']
   helpers.wait_for('both results should be saved', function()
     return vim.uv.fs_stat(earlier) ~= nil and vim.uv.fs_stat(summary.archive) ~= nil
   end, TIMEOUT)
-  local entry = require('sqmeow.history').entries({ limit = 1 })[1]
+  local entry = require('sqmeow.server.history').entries({ limit = 1 })[1]
   eq(entry.results, { earlier })
 
   local before = state.call.call_id
-  api.restore(entry)
+  require('sqmeow.api.view').restore(entry)
   helpers.wait_for('the run should be restored', function()
     return state.call.call_id ~= before and state.call.state == 'done'
   end, TIMEOUT)
@@ -185,8 +184,8 @@ T['querying']['does not split on a semicolon inside a string'] = function()
 end
 
 T['querying']['refuses an empty query'] = function()
-  eq(api.execute('   \n  '), nil)
-  eq(api.execute('-- just a comment'), nil)
+  eq(require('sqmeow.api.query').execute('   \n  '), nil)
+  eq(require('sqmeow.api.query').execute('-- just a comment'), nil)
 end
 
 T['querying']['leaves the buffer unmodifiable between paints'] = function()
@@ -289,34 +288,34 @@ T['paging']['shows only a page of rows at a time'] = function()
 end
 
 T['paging']['moves forward'] = function()
-  local summary = page(api.next_page)
+  local summary = page(require('sqmeow.api.query').next_page)
   eq(summary.page, 2)
   eq(lines()[1], '  5')
 end
 
 T['paging']['moves back'] = function()
-  page(api.next_page)
-  local summary = page(api.prev_page)
+  page(require('sqmeow.api.query').next_page)
+  local summary = page(require('sqmeow.api.query').prev_page)
   eq(summary.page, 1)
   eq(lines()[1], '  1')
 end
 
 T['paging']['stops at the last page rather than emptying the view'] = function()
-  local summary = page(api.last_page)
+  local summary = page(require('sqmeow.api.query').last_page)
   eq(summary.page, 3)
   -- Ten rows over pages of four leaves two on the last page.
   eq(#lines(), 2)
 end
 
 T['paging']['stops at the first page going back'] = function()
-  api.prev_page()
+  require('sqmeow.api.query').prev_page()
   eq(result.offset(), 0)
 end
 
 T['paging']['keeps column widths steady across pages'] = function()
   -- The whole reason the engine measures over every row rather than over the page on screen.
   local first = header()
-  page(api.next_page)
+  page(require('sqmeow.api.query').next_page)
   eq(header(), first)
 end
 
@@ -485,7 +484,7 @@ T['statement under the cursor'] = MiniTest.new_set({
 --- Put the cursor on a line, run what it is in, and answer with the column that came back.
 local function statement_at(line)
   vim.api.nvim_win_set_cursor(0, { line, 0 })
-  local call_id = assert(api.execute_statement())
+  local call_id = assert(require('sqmeow.api.query').execute_statement())
   helpers.wait_for('the statement should run', function()
     return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
   end, TIMEOUT)
@@ -508,7 +507,7 @@ end
 
 T['statement under the cursor']['runs one statement, not the whole buffer'] = function()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
-  local call_id = assert(api.execute_statement())
+  local call_id = assert(require('sqmeow.api.query').execute_statement())
   helpers.wait_for('the statement should run', function()
     return state.call ~= nil and state.call.call_id == call_id and state.call.state ~= 'executing'
   end, TIMEOUT)
@@ -533,7 +532,7 @@ T['errors in a buffer']['show in the result buffer rather than as diagnostics'] 
   local buf = vim.api.nvim_get_current_buf()
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'select 1;', 'select nope_at_all;' })
 
-  local call_id = assert(api.execute_buffer())
+  local call_id = assert(require('sqmeow.api.query').execute_buffer())
   helpers.wait_for('the error should arrive', function()
     return state.call ~= nil and state.call.call_id == call_id and state.call.state == 'error'
   end, TIMEOUT)
@@ -544,7 +543,7 @@ T['errors in a buffer']['show in the result buffer rather than as diagnostics'] 
 
   -- A query that works replaces the error with its rows.
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'select 1 as ok;' })
-  local ok_id = assert(api.execute_buffer())
+  local ok_id = assert(require('sqmeow.api.query').execute_buffer())
   helpers.wait_for('the query should settle', function()
     return state.call ~= nil and state.call.call_id == ok_id and state.call.state == 'done'
   end, TIMEOUT)
@@ -581,7 +580,13 @@ end
 
 T['exporting']['writes only the rows asked for, without a header'] = function()
   local path = vim.fn.tempname() .. '.csv'
-  api.export({ format = 'csv', path = path, headers = false, offset = 1, limit = 1 })
+  require('sqmeow.api.export').export({
+    format = 'csv',
+    path = path,
+    headers = false,
+    offset = 1,
+    limit = 1,
+  })
   eq(written(path), '2,bob\n')
   vim.fn.delete(path)
 end
@@ -622,7 +627,7 @@ T['exporting']['the dialog follows the format and asks before overwriting'] = fu
     return vim.api.nvim_buf_get_lines(0, 0, -1, false)
   end
 
-  api.export()
+  require('sqmeow.api.export').export()
   -- Named after the table the query reads from.
   eq(drawn()[2]:match('people_%d+_%d+%.csv$') ~= nil, true)
   eq(drawn()[4]:match('%[x%]$') ~= nil, true)
@@ -655,7 +660,7 @@ end
 
 T['exporting']['writes the whole result to a file'] = function()
   local path = vim.fn.tempname() .. '.json'
-  api.export({ format = 'json', path = path })
+  require('sqmeow.api.export').export({ format = 'json', path = path })
 
   local decoded = vim.json.decode(written(path))
   eq(#decoded, 3)
@@ -670,7 +675,7 @@ T['exporting']['reports a path it cannot write'] = function()
   helpers.stub(vim, 'notify', function(message)
     table.insert(messages, message)
   end)
-  api.export({ format = 'csv', path = '/nonexistent/dir/out.csv' })
+  require('sqmeow.api.export').export({ format = 'csv', path = '/nonexistent/dir/out.csv' })
   -- Nothing is written and nothing crashes; the failure arrives as a notification.
   helpers.wait_for('the failure should be reported', function()
     return table.concat(messages, '\n'):find('could not write', 1, true) ~= nil
@@ -732,7 +737,7 @@ T['choosing a connection'] = MiniTest.new_set({
       second = helpers.connect('sqlite::memory:', { name = 'second' })
     end,
     post_case = function()
-      api.disconnect(second)
+      require('sqmeow.api.connection').disconnect(second)
       state.current = primary
       -- Back to a buffer that names no connection.
       if not vim.api.nvim_buf_is_valid(home) then
@@ -751,7 +756,7 @@ local function run_bound(name, sql)
   vim.b[buf].sqmeow_connection = name
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { sql })
 
-  local call_id = api.execute_buffer()
+  local call_id = require('sqmeow.api.query').execute_buffer()
   if not call_id then
     return nil
   end
@@ -763,16 +768,16 @@ local function run_bound(name, sql)
 end
 
 T['choosing a connection']['falls to the active one when the buffer names none'] = function()
-  api.use(second)
-  eq(api.target().id, second)
+  require('sqmeow.api.connection').use(second)
+  eq(require('sqmeow.api.connection').target().id, second)
 
-  api.use(primary)
-  eq(api.target().id, primary)
+  require('sqmeow.api.connection').use(primary)
+  eq(require('sqmeow.api.connection').target().id, primary)
 end
 
 T['choosing a connection']['prefers what the buffer names'] = function()
   -- The active connection is the first one, and the query still goes to the second.
-  api.use(primary)
+  require('sqmeow.api.connection').use(primary)
   local summary = assert(run_bound('second', 'select 1 as one'))
 
   eq(summary.state, 'done')
@@ -783,16 +788,16 @@ T['choosing a connection']['refuses a buffer tied to something that is not open'
   local summary = run_bound('gone', 'select 1 as one')
   eq(summary, nil)
 
-  local _, err = api.target()
+  local _, err = require('sqmeow.api.connection').target()
   eq(err, '`gone` is not open')
 end
 
 T['choosing a connection']['names the result after the connection it came from'] = function()
-  api.use(second)
+  require('sqmeow.api.connection').use(second)
   run('select 1 as one')
 
   -- Switching afterwards must not relabel a grid that came from somewhere else.
-  api.use(primary)
+  require('sqmeow.api.connection').use(primary)
   result.update_winbar(state.call)
 
   local winbar = vim.wo[result.open()].winbar

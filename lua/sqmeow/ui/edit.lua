@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 --- `updates[row][column]` is the new value: a string, `vim.NIL` for `NULL`, or `{ sql = expression }`.
 --- Zero-based indices.
@@ -261,7 +261,8 @@ local function current_text(call, target, column)
   end
 
   -- The full value, line breaks and all, rather than the flattened one the grid holds.
-  local row = require('sqmeow.rpc').request('row', { call_id = call.call_id, row = target.row })
+  local row =
+    require('sqmeow.rpc.client').request('row', { call_id = call.call_id, row = target.row })
   local cell = row and row[column + 1]
   if not cell or cell.is_null then
     return nil
@@ -299,7 +300,7 @@ local FOOTER = {
 ---@param target { row: integer|nil, insert: integer|nil, column: integer, name: string }
 ---@param sql boolean|nil Take a SQL expression, such as `now()`, rather than a value.
 function M.edit_cell(target, sql)
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   local described = call and call.columns and call.columns[target.column + 1]
   if not (call and described and described.editable) then
     return utils.notify(('`%s` cannot be edited'):format(target.name), vim.log.levels.WARN)
@@ -411,7 +412,7 @@ end
 
 --- The filetype planned statements are shown with.
 local function filetype(call)
-  local connection = require('sqmeow.state').connections[call.conn_id]
+  local connection = require('sqmeow.core.state').connections[call.conn_id]
   local dialect = connection and connection.dialect
   if dialect == 'mongodb' then
     return 'json'
@@ -436,7 +437,7 @@ end
 ---@param call { conn_id: integer, call_id: integer }
 ---@param statements string[]
 function M.apply(call, statements)
-  local _, err = require('sqmeow.rpc').request(
+  local _, err = require('sqmeow.rpc.client').request(
     'apply',
     { conn_id = call.conn_id, call_id = call.call_id, statements = statements }
   )
@@ -461,7 +462,7 @@ function M.on_applied(payload)
     ('applied %d statement%s'):format(payload.statements, payload.statements == 1 and '' or 's')
   )
 
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if call and call.conn_id == payload.conn_id then
     require('sqmeow.ui.result').rerun(nil, true)
   end
@@ -469,7 +470,7 @@ end
 
 --- Show the statements the staged changes plan into, and apply them on `<C-s>`.
 function M.review()
-  local call = require('sqmeow.state').call
+  local call = require('sqmeow.core.state').call
   if M.count() == 0 then
     return utils.notify('there are no changes to review')
   end
@@ -478,7 +479,7 @@ function M.review()
   end
 
   local statements, err =
-    require('sqmeow.rpc').request('plan', { call_id = call.call_id, changes = M.changes() })
+    require('sqmeow.rpc.client').request('plan', { call_id = call.call_id, changes = M.changes() })
   if not statements then
     return utils.notify(err or 'the changes could not be planned', vim.log.levels.ERROR)
   end
@@ -494,44 +495,30 @@ function M.review()
   end
 
   close()
-  popup = nui.Popup({
-    enter = true,
-    focusable = true,
-    relative = 'editor',
-    position = '50%',
-    size = {
-      width = math.floor(vim.o.columns * 0.7),
-      height = math.max(math.min(#lines, math.floor(vim.o.lines * 0.6)), 1),
-    },
+  local opened, open_err = require('sqmeow.ui.popup').open({
+    title = (' Review %d change%s '):format(M.count(), M.count() == 1 and '' or 's'),
+    bottom = ' <C-s> apply   q back ',
+    lines = lines,
+    width = math.floor(vim.o.columns * 0.7),
+    height = math.max(math.min(#lines, math.floor(vim.o.lines * 0.6)), 1),
+    filetype = filetype(call),
     zindex = 60,
-    border = {
-      style = require('sqmeow.config').border(),
-      text = {
-        top = (' Review %d change%s '):format(M.count(), M.count() == 1 and '' or 's'),
-        top_align = 'center',
-        bottom = ' <C-s> apply   q back ',
-        bottom_align = 'center',
+    on_close = close,
+    extra_maps = {
+      {
+        mode = 'n',
+        lhs = '<C-s>',
+        handler = function()
+          close()
+          M.apply(call, statements)
+        end,
       },
     },
-    buf_options = {
-      buftype = 'nofile',
-      bufhidden = 'wipe',
-      swapfile = false,
-      filetype = filetype(call),
-    },
-    win_options = { wrap = false, number = false, relativenumber = false },
   })
-  popup:mount()
-  vim.api.nvim_buf_set_lines(popup.bufnr, 0, -1, false, lines)
-  vim.bo[popup.bufnr].modifiable = false
-
-  popup:map('n', '<C-s>', function()
-    close()
-    M.apply(call, statements)
-  end, { nowait = true })
-  popup:map('n', 'q', close, { nowait = true })
-  popup:map('n', '<Esc>', close, { nowait = true })
-  popup:on('BufLeave', close, { once = true })
+  if not opened then
+    return utils.notify(open_err or 'could not open the popup', vim.log.levels.ERROR)
+  end
+  popup = opened
 end
 
 return M

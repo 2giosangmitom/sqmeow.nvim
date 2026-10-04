@@ -2,7 +2,7 @@
 
 local M = {}
 
-local utils = require('sqmeow.utils')
+local utils = require('sqmeow.core.utils')
 
 local popup = nil
 --- The table asked for last, so an answer for an earlier one is dropped.
@@ -130,7 +130,7 @@ end
 ---@param relation string
 function M.open(conn_id, schema, relation)
   wanted = { conn_id = conn_id, schema = schema, relation = relation }
-  local _, err = require('sqmeow.rpc').request('structure', wanted)
+  local _, err = require('sqmeow.rpc.client').request('structure', wanted)
   if err then
     wanted = nil
     utils.notify(err, vim.log.levels.ERROR)
@@ -155,11 +155,6 @@ function M.on_done(payload)
     return utils.notify(payload.error, vim.log.levels.ERROR)
   end
 
-  local nui, err = utils.nui({ 'popup' }, 'the structure view')
-  if not nui then
-    return utils.notify(err, vim.log.levels.ERROR)
-  end
-
   local lines = M.lines(payload)
   local width = 0
   for _, line in ipairs(lines) do
@@ -167,52 +162,21 @@ function M.on_done(payload)
   end
 
   M.close()
-  popup = nui.Popup({
-    enter = true,
-    focusable = true,
-    relative = 'editor',
-    position = '50%',
-    size = {
-      width = math.min(math.max(width + 2, 40), math.floor(vim.o.columns * 0.9)),
-      height = math.max(math.min(#lines, math.floor(vim.o.lines * 0.8)), 1),
-    },
-    zindex = 50,
-    border = {
-      style = require('sqmeow.config').border(),
-      text = {
-        top = (' %s '):format(
-          payload.schema == '' and payload.relation or (payload.schema .. '.' .. payload.relation)
-        ),
-        top_align = 'center',
-      },
-    },
-    buf_options = {
-      buftype = 'nofile',
-      bufhidden = 'wipe',
-      swapfile = false,
-      filetype = 'sqmeow-structure',
-    },
-    win_options = { cursorline = true, wrap = false, number = false, relativenumber = false },
-  })
-  popup:mount()
-  popup:map('n', 'q', M.close, { nowait = true })
-  popup:map('n', '<Esc>', M.close, { nowait = true })
-  popup:on('BufLeave', M.close, { once = true })
-
-  local namespace = vim.api.nvim_create_namespace('sqmeow.structure')
-  vim.api.nvim_buf_set_lines(
-    popup.bufnr,
-    0,
-    -1,
-    false,
-    vim.tbl_map(function(line)
-      return line:content()
-    end, lines)
+  local title = (' %s '):format(
+    payload.schema == '' and payload.relation or (payload.schema .. '.' .. payload.relation)
   )
-  for index, line in ipairs(lines) do
-    line:highlight(popup.bufnr, namespace, index)
+  local opened, open_err = require('sqmeow.ui.popup').open({
+    title = title,
+    lines = lines,
+    width = math.min(math.max(width + 2, 40), math.floor(vim.o.columns * 0.9)),
+    height = math.max(math.min(#lines, math.floor(vim.o.lines * 0.8)), 1),
+    filetype = 'sqmeow-structure',
+    on_close = M.close,
+  })
+  if not opened then
+    return utils.notify(open_err or 'could not open the popup', vim.log.levels.ERROR)
   end
-  vim.bo[popup.bufnr].modifiable = false
+  popup = opened
 end
 
 --- Close the popup.

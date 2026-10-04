@@ -1,7 +1,14 @@
 // Cases every CQL server must pass.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::{Cell, Changes, Error, KeyKind, RelationKind, ResultSet, Source, Table};
+use sqmeow_db::value::Cell;
+use sqmeow_db::edit::Changes;
+use sqmeow_db::error::Error;
+use sqmeow_db::types::KeyKind;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::edit::Source;
+use sqmeow_db::edit::Table;
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -246,13 +253,13 @@ async fn lists_a_tables_secondary_indexes() {
     assert_eq!(
         backend.indexes("sqmeow", "indexed").await.unwrap(),
         vec![
-            sqmeow_db::IndexNode {
+            sqmeow_db::node::IndexNode {
                 name: "PRIMARY KEY".into(),
                 columns: vec!["pk".into()],
                 unique: true,
                 primary: true,
             },
-            sqmeow_db::IndexNode {
+            sqmeow_db::node::IndexNode {
                 name: "indexed_v".into(),
                 columns: vec!["v".into()],
                 unique: false,

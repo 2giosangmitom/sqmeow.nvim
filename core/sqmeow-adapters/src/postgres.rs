@@ -13,10 +13,22 @@ use sqlx::{
     Connection, Decode, Executor as _, Pool, Postgres, Row, Statement as _, Type, TypeInfo,
     ValueRef, types,
 };
-use sqmeow_db::{
-    Adapter, Cell, Column, ColumnNode, Dialect, Error, KeyKind, RelationKind, RelationNode, Result,
-    ResultSet, RoutineNode, SchemaNode, Source, TableBinder, TableName,
-};
+use sqmeow_db::adapter::Adapter;
+use sqmeow_db::adapter::Dialect;
+use sqmeow_db::edit::Source;
+use sqmeow_db::edit::TableBinder;
+use sqmeow_db::edit::TableName;
+use sqmeow_db::error::Error;
+use sqmeow_db::error::Result;
+use sqmeow_db::node::ColumnNode;
+use sqmeow_db::node::RelationKind;
+use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RoutineNode;
+use sqmeow_db::node::SchemaNode;
+use sqmeow_db::result::Column;
+use sqmeow_db::result::ResultSet;
+use sqmeow_db::types::KeyKind;
+use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 use crate::stream::{self, SqlxAdapter, foreign_key, prepare, result_columns};
@@ -744,7 +756,11 @@ impl Adapter for PostgresAdapter {
             .collect())
     }
 
-    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<sqmeow_db::IndexNode>> {
+    async fn indexes(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::IndexNode>> {
         let rows = sqlx::query_as::<_, (String, Vec<String>, bool, bool)>(
             "select i.relname::text,
                     array(select pg_get_indexdef(ix.indexrelid, k, true)
@@ -765,16 +781,18 @@ impl Adapter for PostgresAdapter {
 
         Ok(rows
             .into_iter()
-            .map(|(name, columns, unique, primary)| sqmeow_db::IndexNode {
-                name,
-                columns,
-                unique,
-                primary,
-            })
+            .map(
+                |(name, columns, unique, primary)| sqmeow_db::node::IndexNode {
+                    name,
+                    columns,
+                    unique,
+                    primary,
+                },
+            )
             .collect())
     }
 
-    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::Details> {
+    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::node::Details> {
         let Some((oid, kind)) = sqlx::query_as::<_, (Oid, i8)>(
             "select c.oid, c.relkind from pg_catalog.pg_class c
              join pg_catalog.pg_namespace n on n.oid = c.relnamespace
@@ -786,7 +804,7 @@ impl Adapter for PostgresAdapter {
         .await
         .map_err(Error::driver)?
         else {
-            return Ok(sqmeow_db::Details::default());
+            return Ok(sqmeow_db::node::Details::default());
         };
 
         let comment =
@@ -826,7 +844,7 @@ impl Adapter for PostgresAdapter {
         .await
         .map_err(Error::driver)?
         .into_iter()
-        .map(|(name, columns, target, referenced)| sqmeow_db::ForeignKeyNode {
+        .map(|(name, columns, target, referenced)| sqmeow_db::node::ForeignKeyNode {
             name,
             columns,
             target,
@@ -872,7 +890,7 @@ impl Adapter for PostgresAdapter {
             _ => self.table_definition(oid, schema, relation).await?,
         };
 
-        Ok(sqmeow_db::Details {
+        Ok(sqmeow_db::node::Details {
             properties: comment
                 .map(|comment| ("comment".to_owned(), comment))
                 .into_iter()
@@ -885,7 +903,7 @@ impl Adapter for PostgresAdapter {
         })
     }
 
-    async fn roles(&self) -> Result<Vec<sqmeow_db::RoleNode>> {
+    async fn roles(&self) -> Result<Vec<sqmeow_db::node::RoleNode>> {
         let rows = sqlx::query_as::<_, (String, bool, bool, bool, bool)>(
             "select rolname::text, rolsuper, rolcanlogin, rolcreatedb, rolcreaterole
              from pg_catalog.pg_roles where rolname !~ '^pg_' order by rolname",
@@ -896,7 +914,7 @@ impl Adapter for PostgresAdapter {
         Ok(rows
             .into_iter()
             .map(
-                |(name, superuser, login, create_db, create_role)| sqmeow_db::RoleNode {
+                |(name, superuser, login, create_db, create_role)| sqmeow_db::node::RoleNode {
                     name,
                     attributes: [
                         (superuser, "superuser"),

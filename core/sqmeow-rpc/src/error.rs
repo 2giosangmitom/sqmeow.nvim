@@ -2,24 +2,13 @@ use rmpv::Value;
 
 /// Represents an error produced by the transport, the codec, or the peer.
 ///
-/// Covers malformed frames, I/O failures, and remote error payloads.
+/// Covers malformed frames and remote error payloads. I/O and codec failures
+/// are logged where they happen instead of travelling as errors.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A message did not have the shape msgpack-rpc requires.
     #[error("malformed rpc message: {0}")]
     Protocol(String),
-
-    /// The underlying stream failed.
-    #[error("rpc io error: {0}")]
-    Io(#[from] std::io::Error),
-
-    /// A value could not be decoded from the stream.
-    #[error("rpc decode error: {0}")]
-    Decode(#[from] rmpv::decode::Error),
-
-    /// A value could not be encoded onto the stream.
-    #[error("rpc encode error: {0}")]
-    Encode(#[from] rmpv::encode::Error),
 
     /// The peer answered a request with an error payload.
     #[error("peer returned an error: {0}")]

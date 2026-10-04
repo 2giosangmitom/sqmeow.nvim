@@ -11,12 +11,12 @@ local pending = {}
 local restored = false
 
 local function path()
-  return vim.fs.joinpath(require('sqmeow.paths').root(), 'session.json')
+  return vim.fs.joinpath(require('sqmeow.core.paths').root(), 'session.json')
 end
 
 --- Saves the current session to disk.
 function M.save()
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   local sources = require('sqmeow.sources')
   local connections = {}
   for _, connection in ipairs(state.connection_list()) do
@@ -32,7 +32,7 @@ function M.save()
     current = current and current.name or nil,
     expanded = require('sqmeow.ui.drawer').expanded_paths(),
   }
-  vim.fn.mkdir(require('sqmeow.paths').root(), 'p')
+  vim.fn.mkdir(require('sqmeow.core.paths').root(), 'p')
   vim.fn.writefile({ vim.json.encode(session) }, path())
 end
 
@@ -59,10 +59,10 @@ function M.restore()
     table.insert(pending[entry.connection], entry.path)
   end
 
-  local state = require('sqmeow.state')
+  local state = require('sqmeow.core.state')
   for _, name in ipairs(session.connections or {}) do
     local open = state.connection_by_name(name)
-    local id = open and open.id or require('sqmeow.api').connect_named(name)
+    local id = open and open.id or require('sqmeow.api.connection').connect_named(name)
     if id and name == session.current then
       state.current = id
     end

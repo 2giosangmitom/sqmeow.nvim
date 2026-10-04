@@ -31,7 +31,7 @@ local function connection(name, fields, root)
   if vim.trim(name) == '' then
     return nil, 'a connection needs a non-empty name'
   end
-  local dialects = require('sqmeow.dialects')
+  local dialects = require('sqmeow.core.dialects')
   local dialect = type(fields.type) == 'string' and dialects.get(fields.type)
   if not dialect then
     return nil, 'type must name a supported database dialect'
@@ -72,7 +72,7 @@ local function connection(name, fields, root)
     end
     values.path = vim.fs.normalize(path)
   end
-  local url, err = require('sqmeow.url').build(fields.type, values)
+  local url, err = require('sqmeow.core.url').build(fields.type, values)
   if not url then
     return nil, err
   end
@@ -93,7 +93,7 @@ function M.load()
   if not ok then
     return {}, ('could not read %s'):format(path)
   end
-  local decoded, err = require('sqmeow.rpc').request('project_connections', {
+  local decoded, err = require('sqmeow.rpc.client').request('project_connections', {
     contents = table.concat(lines, '\n'),
   })
   if not decoded then

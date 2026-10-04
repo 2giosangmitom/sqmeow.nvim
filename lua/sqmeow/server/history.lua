@@ -18,7 +18,7 @@ local named = 0
 --- Returns the path to the log file.
 ---@return string
 function M.path()
-  return require('sqmeow.paths').history()
+  return require('sqmeow.core.paths').history()
 end
 
 --- Returns a new unique path for the engine to save one result in.
@@ -26,7 +26,7 @@ end
 function M.result_path()
   named = named + 1
   return vim.fs.joinpath(
-    require('sqmeow.paths').results(),
+    require('sqmeow.core.paths').results(),
     ('%d-%d-%d.msgpack'):format(os.time(), vim.uv.os_getpid(), named)
   )
 end
@@ -38,7 +38,7 @@ local function owned(path)
   if type(path) ~= 'string' then
     return false
   end
-  local directory = require('sqmeow.paths').results() .. '/'
+  local directory = require('sqmeow.core.paths').results() .. '/'
   return vim.fs.normalize(path):sub(1, #directory) == directory
 end
 
@@ -172,7 +172,7 @@ function M.append(summary)
   end
 
   local query = require('sqmeow.config').get().query
-  local connection = require('sqmeow.state').connections[summary.conn_id]
+  local connection = require('sqmeow.core.state').connections[summary.conn_id]
 
   -- The engine saves a result only once it has finished with columns to save.
   local kept = summary.state == 'done'
@@ -240,7 +240,7 @@ function M.reopenable(entry)
     return false
   end
 
-  for _, call in ipairs(require('sqmeow.state').calls) do
+  for _, call in ipairs(require('sqmeow.core.state').calls) do
     if call.call_id == entry.call_id then
       return true
     end
@@ -260,7 +260,7 @@ end
 function M.clear()
   local path = M.path()
   local cleared = pcall(vim.fn.delete, path)
-  pcall(vim.fn.delete, require('sqmeow.paths').results(), 'rf')
+  pcall(vim.fn.delete, require('sqmeow.core.paths').results(), 'rf')
   cache = { path = path, entries = {}, stamp = stamp(path) }
   return cleared
 end

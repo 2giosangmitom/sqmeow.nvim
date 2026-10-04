@@ -1,9 +1,8 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
-local api = require('sqmeow.api')
-local state = require('sqmeow.state')
-local rpc = require('sqmeow.rpc')
+local state = require('sqmeow.core.state')
+local rpc = require('sqmeow.rpc.client')
 
 local T = MiniTest.new_set({
   hooks = {
@@ -76,7 +75,7 @@ for name, spec in pairs(adapters) do
       end,
       post_case = function()
         if id then
-          api.disconnect(id)
+          require('sqmeow.api.connection').disconnect(id)
         end
         if buf then
           pcall(vim.api.nvim_buf_delete, buf, { force = true })
@@ -91,8 +90,8 @@ for name, spec in pairs(adapters) do
   T[name] = group
 
   group['visual key executes only unsaved selection'] = function()
-    local execute, accepted = api.execute, nil
-    helpers.stub(api, 'execute', function(sql, opts)
+    local execute, accepted = require('sqmeow.api.query').execute, nil
+    helpers.stub(require('sqmeow.api.query'), 'execute', function(sql, opts)
       accepted = execute(sql, opts)
       return accepted
     end)
@@ -104,8 +103,8 @@ for name, spec in pairs(adapters) do
   end
 
   group['explicit range executes unsaved requested lines'] = function()
-    local execute, accepted = api.execute, nil
-    helpers.stub(api, 'execute', function(sql, opts)
+    local execute, accepted = require('sqmeow.api.query').execute, nil
+    helpers.stub(require('sqmeow.api.query'), 'execute', function(sql, opts)
       accepted = execute(sql, opts)
       return accepted
     end)
@@ -116,7 +115,7 @@ for name, spec in pairs(adapters) do
 
   group['whole buffer uses unsaved content'] = function()
     vim.api.nvim_buf_set_lines(0, 0, -1, false, { query })
-    wait(assert(api.execute_buffer()))
+    wait(assert(require('sqmeow.api.query').execute_buffer()))
     eq(state.call.statement, query)
   end
 end
@@ -128,16 +127,16 @@ T['mssql keeps variables within GO batches'] = function()
   end
   local id = helpers.connect(url, { name = 'mssql_batches' }, 15000)
   MiniTest.finally(function()
-    api.disconnect(id)
+    require('sqmeow.api.connection').disconnect(id)
   end)
   local buf =
     helpers.temp_buf({ 'DECLARE @n int = 7;', 'SELECT @n AS n;', 'GO', 'SELECT 99 AS n;' })
   vim.api.nvim_set_current_buf(buf)
   vim.api.nvim_win_set_cursor(0, { 2, 0 })
-  wait(assert(api.execute_statement()))
+  wait(assert(require('sqmeow.api.query').execute_statement()))
   local row = assert(rpc.request('row', { call_id = state.call.call_id, row = 0 }))
   eq(row[1].value, '7')
-  wait(assert(api.execute_buffer()))
+  wait(assert(require('sqmeow.api.query').execute_buffer()))
   row = assert(rpc.request('row', { call_id = state.call.call_id, row = 0 }))
   eq(row[1].value, '99')
   eq(#state.call.results, 2)
@@ -150,16 +149,23 @@ T['mssql read-only checks filter fragments before execution'] = function()
   end
   local id = helpers.connect(url, { name = 'mssql_readonly', read_only = true }, 15000)
   MiniTest.finally(function()
-    api.disconnect(id)
+    require('sqmeow.api.connection').disconnect(id)
   end)
-  local call, err = api.execute('SELECT 1 AS n', {
+  local call, err = require('sqmeow.api.query').execute('SELECT 1 AS n', {
     conn_id = id,
     confirmed = true,
     where = '1=1; DELETE FROM sqmeow_should_never_be_executed',
   })
   eq(call, nil)
   helpers.contains(err, 'read-only')
-  wait(assert(api.execute('SELECT 1 AS n', { conn_id = id, confirmed = true, where = 'n=1' })))
+  wait(
+    assert(
+      require('sqmeow.api.query').execute(
+        'SELECT 1 AS n',
+        { conn_id = id, confirmed = true, where = 'n=1' }
+      )
+    )
+  )
 end
 
 return T
