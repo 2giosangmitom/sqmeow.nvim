@@ -1,34 +1,39 @@
 name: Bug report
-description: Report something that is not working as expected
+description: Report a bug in sqmeow.nvim
 labels: [bug]
 body:
   - type: textarea
     id: description
     attributes:
       label: What happened?
-      description: Describe the problem and what you expected instead.
+      description: What did sqmeow.nvim do, and what did you expect?
     validations:
       required: true
   - type: textarea
     id: reproduction
     attributes:
       label: Steps to reproduce
-      description: Include a minimal query or configuration if relevant. Remove passwords and other secrets.
+      description: Give the steps, query, and config needed to reproduce the bug. Remove credentials and private data.
       placeholder: |
-        1. Open Neovim with...
-        2. Run :Sqmeow...
-        3. Observe...
+        1. Connect to...
+        2. Run this query...
+        3. Press...
     validations:
       required: true
   - type: textarea
     id: environment
     attributes:
       label: Environment
-      description: Include your OS, Neovim version, sqmeow.nvim version or commit, and database type/version if relevant.
+      description: Include the database version for connection or query bugs.
+      placeholder: |
+        OS:
+        Neovim version:
+        sqmeow.nvim tag or commit:
+        Database and version:
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
       label: Logs or screenshots
-      description: Add relevant output from :checkhealth sqmeow or :Sqmeow messages. Redact credentials and private data.
+      description: Paste output from :checkhealth sqmeow or :Sqmeow messages, or attach a screenshot. Remove credentials and private data.

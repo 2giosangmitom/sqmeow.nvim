@@ -1,13 +1,19 @@
 ## Summary
 
-Describe the change and link any related issue.
+What changed, and why? Link the issue if there is one.
+
+## Breaking changes
+
+What must users change when upgrading? Write "None" if nothing changes.
 
 ## Local testing
 
-List the commands you ran and any manual checks, including affected databases or UI workflows. If a check could not run, explain why.
+List commands and results, plus any database or Neovim workflows you checked.
+Explain any skipped checks, including `just`.
 
 ## Checklist
 
-- [ ] I have reviewed and tested these changes locally before submitting, including any code written with AI coding tools.
-- [ ] I have added or updated tests and documentation where applicable.
-- [ ] I have run `just`, or explained which checks I could not run above.
+- [ ] I reviewed the diff, including AI-assisted code.
+- [ ] I tested the changes locally and listed the results above.
+- [ ] I updated tests and docs where needed.
+- [ ] I ran `just` or explained why I skipped it.

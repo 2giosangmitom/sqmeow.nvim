@@ -6,18 +6,18 @@ body:
     id: problem
     attributes:
       label: What problem would this solve?
-      description: Describe the workflow or limitation you are facing.
+      description: What are you trying to do, and where do you get stuck?
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed behavior
-      description: Describe what you would like sqmeow.nvim to do.
+      label: What should sqmeow.nvim do?
+      description: Give an example query, command, or interaction.
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives or context
-      description: Share workarounds, example queries, or affected databases if relevant.
+      label: Workarounds and affected databases
+      description: How do you handle this now? Which databases do you use for this task?
