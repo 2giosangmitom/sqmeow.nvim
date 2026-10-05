@@ -18,15 +18,6 @@ database = "defaultdb"
 user = "root"
 options = "sslmode=disable"
 
-[questdb]
-type = "postgres"
-host = "127.0.0.1"
-port = 58812
-database = "qdb"
-user = "admin"
-password = "quest"
-options = "sslmode=disable"
-
 [mysql]
 type = "mysql"
 host = "127.0.0.1"

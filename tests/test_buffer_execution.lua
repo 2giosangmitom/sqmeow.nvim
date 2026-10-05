@@ -31,7 +31,6 @@ local adapters = {
   scylla = { query = 'SELECT cluster_name FROM system.local;' },
   cassandra = { query = 'SELECT cluster_name FROM system.local;' },
   cockroach = {},
-  questdb = {},
 }
 
 local function wait(id)

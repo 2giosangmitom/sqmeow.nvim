@@ -110,4 +110,3 @@ server_case!(scylla, "SQMEOW_TEST_SCYLLA_URL");
 server_case!(cassandra, "SQMEOW_TEST_CASSANDRA_URL");
 server_case!(surrealdb, "SQMEOW_TEST_SURREALDB_URL");
 server_case!(cockroach, "SQMEOW_TEST_COCKROACH_URL");
-server_case!(questdb, "SQMEOW_TEST_QUESTDB_URL");

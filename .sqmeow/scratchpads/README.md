@@ -1,7 +1,7 @@
 # Local adapter smoke tests
 
 These disposable fixtures cover every connection in `.sqmeow/connections.toml`:
-PostgreSQL, CockroachDB, QuestDB, MySQL, MSSQL, ClickHouse, Redis, Dragonfly,
+PostgreSQL, CockroachDB, MySQL, MSSQL, ClickHouse, Redis, Dragonfly,
 MongoDB, ScyllaDB, Cassandra, SurrealDB, Oracle, SQLite, and DuckDB.
 
 ## Run a test
@@ -43,10 +43,6 @@ database or a whole Redis instance. Confirm destructive-operation prompts.
 - SQLite and DuckDB are in-memory: reconnecting loses the fixture.
 - ClickHouse uses a MergeTree table and synchronous mutations for updates/deletes;
   its sorting key is not a uniqueness constraint.
-- QuestDB uses a WAL table. Writes may take a moment to appear; re-run `03_read`
-  until visible before continuing. QuestDB has no row-level `DELETE`: the delete
-  example drops the dedicated `2026-01-01` partition containing only Carol.
-  This tests partition removal, not row deletion. Other fixtures are dated Jan 2.
 - ScyllaDB/Cassandra use `sqmeow_quicktest.sqmeow_crud` with fully qualified CQL.
   The read example uses primary-key lookup instead of SQL-style filtering or
   arbitrary ordering. Cleanup leaves the empty dedicated keyspace for reuse.
