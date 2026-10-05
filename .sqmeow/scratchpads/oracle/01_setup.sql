@@ -1,0 +1,7 @@
+CREATE TABLE sqmeow_crud (
+  id NUMBER(10) PRIMARY KEY,
+  name VARCHAR2(80) NOT NULL,
+  score NUMBER(10) NOT NULL,
+  active NUMBER(1) NOT NULL,
+  note VARCHAR2(200)
+);

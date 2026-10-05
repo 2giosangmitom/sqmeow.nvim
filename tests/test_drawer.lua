@@ -13,6 +13,7 @@ local history = require('sqmeow.server.history')
 local run = helpers.run
 
 local TIMEOUT = 5000
+local project_path = require('sqmeow.core.paths').project
 
 --- Every extmark on a line, as a list of `{ group, from, to }`, in column order.
 local function marks_on(number)
@@ -47,6 +48,7 @@ end
 local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
+      helpers.swap(require('sqmeow.core.paths'), 'project', function() end)
       -- Pinned to plain characters.
       require('sqmeow').setup({
         -- A directory of its own.
@@ -94,6 +96,7 @@ local T = MiniTest.new_set({
       require('sqmeow.api.view').open_drawer()
     end,
     post_once = function()
+      helpers.swap(require('sqmeow.core.paths'), 'project', project_path)
       drawer.close()
       require('sqmeow.api.view').close()
       rpc.stop()
@@ -798,6 +801,83 @@ T['history']['empties on request'] = function()
   drawer.actions.delete()
   eq(answered, true)
   eq(history.entries(), {})
+end
+
+T['local scratchpads'] = MiniTest.new_set()
+
+T['local scratchpads']['groups, opens, creates, renames and deletes project files'] = function()
+  local root = vim.fn.tempname()
+  local queries = vim.fs.joinpath(root, 'scratchpads')
+  helpers.writefile(vim.fs.joinpath(queries, 'reports', 'monthly.sql'), { 'select 1' })
+  helpers.writefile(vim.fs.joinpath(queries, 'reports', '2026', 'revenue.sql'), { 'select 2' })
+  helpers.writefile(editor.path('global.sql'), { 'select 3' })
+  helpers.stub(require('sqmeow.core.paths'), 'project', function()
+    return root
+  end)
+  MiniTest.finally(function()
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.startswith(vim.api.nvim_buf_get_name(buf), queries .. '/') then
+        vim.api.nvim_buf_delete(buf, { force = true })
+      end
+    end
+    vim.fn.delete(root, 'rf')
+    vim.fn.delete(editor.path('global.sql'))
+    vim.schedule(drawer.render)
+  end)
+
+  drawer.render()
+  expand('scratchpads')
+  eq(lines()[line_matching('scratchpads')], 'v + scratchpads  3')
+  eq(lines()[line_matching('local scratchpads')], '  > + local scratchpads  2')
+  line_matching('global.sql')
+  collapse('scratchpads')
+  eq(table.concat(lines(), '\n'):find('local scratchpads', 1, true), nil)
+  expand('scratchpads')
+  expand('local scratchpads')
+  collapse('local scratchpads')
+  eq(table.concat(lines(), '\n'):find('monthly.sql', 1, true), nil)
+  expand('local scratchpads')
+  line_matching('reports')
+  line_matching('2026')
+  goto_line('monthly.sql')
+  drawer.actions.toggle()
+  eq(vim.api.nvim_buf_get_name(0), vim.fs.joinpath(queries, 'reports', 'monthly.sql'))
+  eq(vim.bo.filetype, 'sql')
+  eq(vim.b.sqmeow_editor, true)
+  eq(vim.b.sqmeow_connection, nil)
+
+  goto_line('reports')
+  helpers.stub(vim.ui, 'input', function(opts, confirm)
+    eq(opts.default, 'reports/')
+    confirm('reports/new.sql')
+  end)
+  drawer.actions.new_scratchpad()
+  eq(vim.api.nvim_buf_get_name(0), vim.fs.joinpath(queries, 'reports', 'new.sql'))
+  eq(vim.uv.fs_stat(editor.path('reports/new.sql')), nil)
+
+  goto_line('new.sql')
+  helpers.stub(vim.ui, 'input', function(_, confirm)
+    confirm('reports/renamed.sql')
+  end)
+  drawer.actions.rename()
+  eq(vim.uv.fs_stat(vim.fs.joinpath(queries, 'reports', 'new.sql')), nil)
+  goto_line('renamed.sql')
+  helpers.stub(vim.ui, 'select', function(_, _, confirm)
+    confirm('yes')
+  end)
+  drawer.actions.delete()
+  eq(vim.uv.fs_stat(vim.fs.joinpath(queries, 'reports', 'renamed.sql')), nil)
+
+  goto_line('reports')
+  helpers.stub(vim.ui, 'input', function(_, confirm)
+    confirm('archive')
+  end)
+  drawer.actions.rename()
+  eq(vim.uv.fs_stat(vim.fs.joinpath(queries, 'archive', '2026', 'revenue.sql')) ~= nil, true)
+  goto_line('archive')
+  drawer.actions.delete()
+  eq(vim.uv.fs_stat(vim.fs.joinpath(queries, 'archive')), nil)
+  collapse('scratchpads')
 end
 
 T['scratchpads'] = MiniTest.new_set({

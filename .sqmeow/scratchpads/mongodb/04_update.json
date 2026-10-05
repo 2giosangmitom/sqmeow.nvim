@@ -1,0 +1,6 @@
+{
+  "update": "sqmeow_crud",
+  "updates": [
+    {"q": {"_id": 2}, "u": {"$set": {"score": 25, "note": "updated"}}, "multi": false}
+  ]
+}

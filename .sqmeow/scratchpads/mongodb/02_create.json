@@ -1,0 +1,8 @@
+{
+  "insert": "sqmeow_crud",
+  "documents": [
+    {"_id": 1, "name": "Alice", "score": 10, "active": 1, "note": "first row"},
+    {"_id": 2, "name": "Bob", "score": 20, "active": 0, "note": null},
+    {"_id": 3, "name": "Carol", "score": 30, "active": 1, "note": "delete me"}
+  ]
+}

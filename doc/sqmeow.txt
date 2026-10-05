@@ -1129,11 +1129,12 @@ Return ~
 
 ------------------------------------------------------------------------------
                                                   *sqmeow.api.view.scratchpad()*
-                `sqmeow.api.view.scratchpad`({name}, {default})
+            `sqmeow.api.view.scratchpad`({name}, {default}, {store})
 Create a scratchpad, asking what to call it. `/` in the name makes folders.
 Parameters ~
 {name} `(string|nil)` Raw name with extension (e.g. `report.sql`, `cache.redis`, `reports/monthly.sql`). If given, it is created directly; otherwise the user is prompted.
 {default} `(string|nil)` Prefilled prompt when asking, such as a folder followed by `/`.
+{store} `(table|nil)` Internal file operations for the selected drawer section.
 
 ------------------------------------------------------------------------------
                                                  *sqmeow.api.view.open_drawer()*
