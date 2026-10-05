@@ -22,6 +22,7 @@ local M = {}
 ---@field state 'executing'|'done'|'error'|'cancelled'
 ---@field rows integer|nil How many rows the engine is holding.
 ---@field view_rows integer|nil How many rows the current view holds.
+---@field capabilities { query: boolean, memory: boolean, filter: boolean }|nil Local views are always available; `query` indicates the original connection is open for refresh.
 ---@field columns sqmeow.ResultColumn[]|nil One per column, in order.
 ---@field affected integer|nil
 ---@field truncated boolean|nil

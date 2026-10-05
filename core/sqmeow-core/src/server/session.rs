@@ -121,6 +121,8 @@ pub struct Call {
     pub result: ResultSet,
     /// The rows the editor is paging through, when it filtered or sorted them.
     pub view: Mutex<Option<Arc<Vec<usize>>>>,
+    /// Orders view requests independently of their computation/completion order.
+    view_generation: Mutex<u64>,
 }
 
 impl Call {
@@ -131,6 +133,7 @@ impl Call {
             dialect: None,
             result,
             view: Mutex::default(),
+            view_generation: Mutex::default(),
         }
     }
 
@@ -142,6 +145,27 @@ impl Call {
     /// The rows the editor pages through: the view when there is one.
     pub fn view(&self) -> Option<Arc<Vec<usize>>> {
         self.view.lock().expect("view poisoned").clone()
+    }
+
+    pub fn begin_view(&self) -> u64 {
+        let mut generation = self
+            .view_generation
+            .lock()
+            .expect("view generation poisoned");
+        *generation += 1;
+        *generation
+    }
+
+    /// Commit and notify together, excluding newer requests until both are finished.
+    /// Stale successes and errors must not change the view or its Lua specification.
+    pub fn finish_view(&self, generation: u64, finish: impl FnOnce()) {
+        let current = self
+            .view_generation
+            .lock()
+            .expect("view generation poisoned");
+        if *current == generation {
+            finish();
+        }
     }
 }
 
@@ -335,8 +359,17 @@ impl Session {
 
     /// Read a stored result.
     pub fn with_call<T>(&self, id: CallId, read: impl FnOnce(&Call) -> T) -> Option<T> {
-        let history = self.calls.lock().expect("calls poisoned");
-        history.calls.get(&id).map(|call| read(call))
+        self.call(id).map(|call| read(&call))
+    }
+
+    /// Retain a handle without holding the history lock while reading or building a view.
+    pub fn call(&self, id: CallId) -> Option<Arc<Call>> {
+        self.calls
+            .lock()
+            .expect("calls poisoned")
+            .calls
+            .get(&id)
+            .cloned()
     }
 }
 
@@ -360,6 +393,24 @@ mod tests {
         let session = Session::default();
         assert_eq!(session.next_call_id(), CallId(1));
         assert_eq!(session.next_call_id(), CallId(2));
+    }
+
+    #[test]
+    fn a_reset_supersedes_an_older_view_and_its_notification() {
+        let call = call(1, 3);
+        let old = call.begin_view();
+        let reset = call.begin_view();
+        call.finish_view(reset, || *call.view.lock().unwrap() = None);
+        let mut notified = false;
+        call.finish_view(old, || {
+            *call.view.lock().unwrap() = Some(Arc::new(vec![2]));
+            notified = true;
+        });
+        assert!(call.view().is_none());
+        assert!(!notified);
+        // Errors from the older computation are discarded by the same completion gate.
+        call.finish_view(old, || notified = true);
+        assert!(!notified);
     }
 
     #[test]

@@ -26,10 +26,9 @@ function M.review()
   require('sqmeow.ui.edit').review()
 end
 
---- Filter and order the current result with a WHERE condition and an ORDER BY list, which an open
---- SQL or MongoDB connection runs in the query; Redis, ScyllaDB, SurrealDB or a closed connection
---- uses Polars SQL on the rows held. Empty strings clear them. Polars SQL supports a different
---- subset and type coercions than the database's dialect.
+--- Filter and order retained rows with a Polars SQL WHERE condition and ORDER BY list.
+--- Every adapter uses the same syntax, including disconnected and restored historical results.
+--- No query is rerun. Empty strings clear the clauses; only retained rows can be matched.
 ---@param view { where: string|nil, order_by: string|nil }
 ---@return boolean started
 ---@usage >lua
@@ -51,7 +50,11 @@ function M.view(view)
   local spec = result.spec()
   spec.filters = view.filters or spec.filters
   spec.sort = view.sort or spec.sort
-  result.send_view({ structured = true })
+  if view.sort then
+    -- An explicit structured sort replaces the bar's ordering, not its predicate.
+    spec.order_by = ''
+  end
+  result.send_view()
 end
 
 --- Open the result window.

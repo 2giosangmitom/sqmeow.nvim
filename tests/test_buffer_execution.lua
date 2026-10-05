@@ -26,11 +26,21 @@ local adapters = {
   clickhouse = {},
   redis = { query = 'ECHO "a;b"' },
   dragonfly = { query = 'ECHO "a;b"' },
-  mongodb = { query = '{"ping":1}' },
+  mongodb = {
+    query = '{"ping":1}',
+    view_query = [[{"aggregate":1,"pipeline":[{"$documents":[
+      {"id":1,"name":"alice","active":true},
+      {"id":2,"name":"bob","active":false},
+      {"id":3,"name":"carol","active":true}
+    ]}],"cursor":{}}]],
+  },
   surrealdb = { query = "RETURN 'a;b';" },
   scylla = { query = 'SELECT cluster_name FROM system.local;' },
   cassandra = { query = 'SELECT cluster_name FROM system.local;' },
-  cockroach = {},
+  cockroach = {
+    view_query = [[SELECT * FROM (VALUES (1::INT8, 'alice'), (2::INT8, 'bob'),
+      (3::INT8, 'carol')) AS people(id, name)]],
+  },
 }
 
 local function wait(id)
@@ -114,6 +124,59 @@ for name, spec in pairs(adapters) do
     vim.api.nvim_buf_set_lines(0, 0, -1, false, { query })
     wait(assert(require('sqmeow.api.query').execute_buffer()))
     eq(state.call.statement, query)
+  end
+
+  group['Polars SQL filters and sorts retained rows before and after disconnecting'] = function()
+    local result = require('sqmeow.ui.result')
+    wait(assert(require('sqmeow.api.query').execute(spec.view_query or query, { conn_id = id })))
+    local call_id, total = state.call.call_id, state.call.rows
+    local column_name = result.filter_names(state.call)[1]
+    local order = result.quote(column_name) .. ' DESC NULLS LAST'
+    local views = 0
+    local unsub = rpc.on('call:view', function(payload)
+      if payload.call_id == call_id then
+        eq(payload.error, nil)
+        views = views + 1
+      end
+    end)
+    MiniTest.finally(unsub)
+    local request = rpc.request
+    helpers.stub(rpc, 'request', function(method, args)
+      if method == 'execute' then
+        error('filtering must not run another query')
+      end
+      return request(method, args)
+    end)
+    eq(result.filter('1 = 0', order), true)
+    helpers.wait_for('the empty local view arrives', function()
+      return views == 1
+    end)
+    eq(state.call.view_rows, 0)
+    eq(result.filter('1 = 1', order), true)
+    helpers.wait_for('the sorted original rows return', function()
+      return views == 2
+    end)
+    eq(state.call.call_id, call_id)
+    eq(state.call.rows, total)
+    if spec.view_query then
+      eq(rpc.request('rows', { call_id = call_id, offset = 0, limit = 10 }).indices, { 2, 1, 0 })
+      eq(result.filter("name ILIKE '%AL%'", 'id DESC'), true)
+      helpers.wait_for('the common SQL predicate arrives', function()
+        return views == 3
+      end)
+      eq(rpc.request('rows', { call_id = call_id, offset = 0, limit = 10 }).indices, { 0 })
+    end
+    require('sqmeow.api.connection').disconnect(id)
+    helpers.wait_for('the database connection closes', function()
+      return state.connections[id] == nil
+    end)
+    local before = views
+    eq(result.filter('1 = 1', order), true)
+    helpers.wait_for('the disconnected local view arrives', function()
+      return views == before + 1
+    end)
+    eq(state.call.call_id, call_id)
+    eq(rpc.request('rows', { call_id = call_id, offset = 0, limit = total }).total, total)
   end
 end
 

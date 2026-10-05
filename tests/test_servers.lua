@@ -184,7 +184,7 @@ for _, server in ipairs({ 'redis', 'dragonfly' }) do
     run('HGETALL lua:filtered')
     result.open()
 
-    eq(result.filter('value >= 5', 'value desc'), true)
+    eq(result.filter('CAST(value AS DOUBLE) >= 5', 'CAST(value AS DOUBLE) DESC'), true)
     helpers.wait_for('the held rows should narrow', function()
       return state.call.view_rows == 2
     end, TIMEOUT)
@@ -345,7 +345,7 @@ T['mongodb'] = MiniTest.new_set({
   },
 })
 
-T['mongodb']['filters and sorts a find in the server'] = function()
+T['mongodb']['filters and sorts a find locally with SQL'] = function()
   run('{"delete": "lua_filtered", "deletes": [{"q": {}, "limit": 0}]}')
   run(
     '{"insert": "lua_filtered", "documents": [{"_id": 1, "n": 1}, {"_id": 2, "n": 5}, {"_id": 3, "n": 9}]}'
@@ -354,12 +354,13 @@ T['mongodb']['filters and sorts a find in the server'] = function()
   result.open()
 
   local before = state.call.call_id
-  eq(result.filter('{"n": {"$gte": 5}}', '{"n": -1}'), true)
-  helpers.wait_for('the filtered find should arrive', function()
-    return state.call.call_id ~= before and state.call.state ~= 'executing'
+  eq(result.filter('n >= 5', 'n DESC'), true)
+  helpers.wait_for('the filtered view should arrive', function()
+    return state.call.view_rows == 2
   end, TIMEOUT)
   eq(state.call.state, 'done')
-  eq(state.call.rows, 2)
+  eq(state.call.call_id, before)
+  eq(state.call.rows, 3)
   helpers.contains(lines()[1], '9')
 end
 
@@ -574,7 +575,7 @@ T['clickhouse']['connects and reports its dialect'] = function()
   eq(state.current_connection().dialect, 'clickhouse')
 end
 
-T['clickhouse']['filters and sorts a table on the server'] = function()
+T['clickhouse']['filters and sorts a table locally'] = function()
   run('drop table if exists lua_filtered')
   run('create table lua_filtered (id Int32, n Int32) engine = MergeTree order by id')
   run('insert into lua_filtered values (1, 1), (2, 5), (3, 9)')
@@ -583,11 +584,12 @@ T['clickhouse']['filters and sorts a table on the server'] = function()
 
   local before = state.call.call_id
   eq(result.filter('n >= 5', 'n desc'), true)
-  helpers.wait_for('the filtered query should arrive', function()
-    return state.call.call_id ~= before and state.call.state ~= 'executing'
+  helpers.wait_for('the filtered view should arrive', function()
+    return state.call.view_rows == 2
   end, TIMEOUT)
   eq(state.call.state, 'done')
-  eq(state.call.rows, 2)
+  eq(state.call.call_id, before)
+  eq(state.call.rows, 3)
   helpers.contains(lines()[1], '9')
 end
 
@@ -656,7 +658,7 @@ T['oracle']['displays native ref cursor blocks and multiple results'] = function
   run('drop procedure lua_cursor')
 end
 
-T['oracle']['filters and sorts a table on the server'] = function()
+T['oracle']['filters and sorts a table locally'] = function()
   run('drop table lua_filtered')
   run('create table lua_filtered (id number(10), n number(10))')
   run('insert into lua_filtered values (1, 1)')
@@ -666,12 +668,14 @@ T['oracle']['filters and sorts a table on the server'] = function()
   result.open()
 
   local before = state.call.call_id
-  eq(result.filter('n >= 5', 'n desc'), true)
-  helpers.wait_for('the filtered query should arrive', function()
-    return state.call.call_id ~= before and state.call.state ~= 'executing'
+  -- Polars matches the returned column names, not Oracle's case-folding rules.
+  eq(result.filter('"N" >= 5', '"N" DESC'), true)
+  helpers.wait_for('the filtered view should arrive', function()
+    return state.call.view_rows == 2
   end, TIMEOUT)
   eq(state.call.state, 'done')
-  eq(state.call.rows, 2)
+  eq(state.call.call_id, before)
+  eq(state.call.rows, 3)
   helpers.contains(lines()[1], '9')
   run('drop table lua_filtered')
 end
