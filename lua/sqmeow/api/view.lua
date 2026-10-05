@@ -127,12 +127,14 @@ end
 --- Create a scratchpad, asking what to call it. `/` in the name makes folders.
 ---@param name string|nil Raw name with extension (e.g. `report.sql`, `cache.redis`, `reports/monthly.sql`). If given, it is created directly; otherwise the user is prompted.
 ---@param default string|nil Prefilled prompt when asking, such as a folder followed by `/`.
-function M.scratchpad(name, default)
+---@param store table|nil Internal file operations for the selected drawer section.
+function M.scratchpad(name, default, store)
   require('sqmeow.rpc.events').ensure()
+  store = store or require('sqmeow.ui.editor')
 
   -- ` :Sqmeow scratch <name>` passes the desired name directly.
   if name and vim.trim(name) ~= '' then
-    local _, err = require('sqmeow.ui.editor').create(name)
+    local _, err = store.create(name)
     if err then
       return notify(err, vim.log.levels.ERROR)
     end
@@ -144,7 +146,7 @@ function M.scratchpad(name, default)
     if not input or vim.trim(input) == '' then
       return
     end
-    local _, err = require('sqmeow.ui.editor').create(input)
+    local _, err = store.create(input)
     if err then
       return notify(err, vim.log.levels.ERROR)
     end

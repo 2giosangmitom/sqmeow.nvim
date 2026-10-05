@@ -1,0 +1,2 @@
+HSET sqmeow:crud:2 score 25 note updated
+HGETALL sqmeow:crud:2

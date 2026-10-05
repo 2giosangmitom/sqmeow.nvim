@@ -1,0 +1,3 @@
+HGETALL sqmeow:crud:1
+HGETALL sqmeow:crud:2
+HGETALL sqmeow:crud:3

@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS sqmeow_crud (
+  id INTEGER PRIMARY KEY,
+  name VARCHAR(80) NOT NULL,
+  score INTEGER NOT NULL,
+  active INTEGER NOT NULL,
+  note VARCHAR(200)
+);

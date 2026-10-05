@@ -245,6 +245,24 @@ To disable discovery, configure `sources = { { type = 'file' }, { type = 'env' }
 
 Project files support `env` and `file` templates but reject `exec` directives. If an open connection's name matches a changed definition, disconnect it before reconnecting; its URL, read-only setting, and SSH host must match for reuse.
 
+### Local scratchpads
+
+Keep reusable queries in `.sqmeow/scratchpads/`, grouped in any number of nested folders:
+
+```text
+.sqmeow/scratchpads/
+├── users.sql
+└── reports/
+    ├── monthly.sql
+    └── revenue.sql
+```
+
+The drawer discovers the nearest `.sqmeow` directory from the current working directory upward, even without `connections.toml`. Expand **scratchpads**, then its **local scratchpads** group, and press `<CR>` to open a scratchpad. Supported extensions are `.sql`, `.redis`, `.json`, and `.surql`.
+
+Press `a` on the local group or a folder inside it to create a scratchpad there; names such as `reports/monthly.sql` create parent folders, and `reports/` creates an empty group. `R` renames or moves files and folders; `d` deletes them after confirmation. Queries run against the selected connection, just like global scratchpads. Global files remain in their existing storage and appear alongside the local group; `a` on the scratchpads heading still creates a global scratchpad. Create `.sqmeow/` yourself to enable the local group; refresh the drawer after adding files externally or changing directories.
+
+For local development, this repository includes [numbered CRUD smoke-test scratchpads](.sqmeow/scratchpads/README.md) for every connection in `.sqmeow/connections.toml`, with setup and cleanup scripts.
+
 ### Environment connections
 
 Set `SQMEOW_CONNECTIONS` to a JSON array to load connections from the environment. Templates let you keep passwords out of the URL itself:

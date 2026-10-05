@@ -1,0 +1,3 @@
+HSET sqmeow:crud:1 id 1 name Alice score 10 active 1 note "first row"
+HSET sqmeow:crud:2 id 2 name Bob score 20 active 0
+HSET sqmeow:crud:3 id 3 name Carol score 30 active 1 note "delete me"

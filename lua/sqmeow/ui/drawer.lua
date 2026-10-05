@@ -329,11 +329,10 @@ local SCRATCHPADS = 'scratchpads'
 
 --- The saved scratchpads, grouped by folder like a directory tree, under a heading of
 --- their own. A `reports/monthly.sql` scratchpad is drawn inside a `reports` folder.
-local function scratchpad_node()
+local function scratchpad_node(editor, section, label, project)
   local parts = assert(nui())
-  local editor = require('sqmeow.ui.editor')
   local pads = editor.list()
-  local open = expanded[SCRATCHPADS] == true
+  local open = expanded[section] == true
 
   -- Folders by relative dir, each holding the scratchpads directly inside it. Seeded
   -- from the filesystem, so empty folders show too.
@@ -369,13 +368,14 @@ local function scratchpad_node()
       name = vim.fn.fnamemodify(pad.name, ':t'),
       rel = pad.name,
       file = pad.path,
+      store = editor,
       expandable = false,
     })
   end
 
   -- Folders open on first sight, so a new folder does not hide what was just created.
   local function folder_node(dir)
-    local id = 'pads:' .. dir
+    local id = section .. ':' .. editor.directory() .. ':' .. dir
     if not seen_pads[id] then
       seen_pads[id] = true
       if expanded[id] == nil then
@@ -403,6 +403,7 @@ local function scratchpad_node()
       name = vim.fn.fnamemodify(dir, ':t'),
       rel = dir,
       file = vim.fs.joinpath(editor.directory(), dir),
+      store = editor,
       note = tostring(#children),
       expandable = true,
     }, children)
@@ -424,11 +425,21 @@ local function scratchpad_node()
     table.insert(children, leaf(pad))
   end
 
+  local count = #pads
+  if project then
+    table.insert(
+      children,
+      scratchpad_node(project, 'project:' .. project.directory(), 'local scratchpads')
+    )
+    count = count + #project.list()
+  end
+
   local node = parts.Tree.Node({
-    id = SCRATCHPADS,
+    id = section,
     kind = 'scratchpads',
-    name = 'scratchpads',
-    note = #pads == 0 and 'none saved' or tostring(#pads),
+    name = label,
+    store = editor,
+    note = count == 0 and 'none saved' or tostring(count),
     expandable = true,
   }, children)
 
@@ -566,7 +577,8 @@ function M.render()
     )
   end
 
-  table.insert(nodes, scratchpad_node())
+  local editor = require('sqmeow.ui.editor')
+  table.insert(nodes, scratchpad_node(editor, SCRATCHPADS, 'scratchpads', editor.project()))
   table.insert(nodes, history_node())
 
   -- One tree for the life of the buffer, fed new nodes rather than rebuilt.
@@ -712,10 +724,9 @@ function M.actions.toggle()
     return
   end
 
-  -- Matched on identity: any other node that happens to share the section's kind must
-  -- toggle itself rather than the section.
-  if node.id == SCRATCHPADS then
-    expanded[SCRATCHPADS] = not expanded[SCRATCHPADS] or nil
+  -- Each file section toggles independently; folder nodes have their own kind.
+  if node.kind == 'scratchpads' then
+    expanded[node.id] = not expanded[node.id] or nil
     return M.render()
   end
   if node.id == HISTORY then
@@ -1006,14 +1017,12 @@ function M.actions.rename()
         return
       end
 
-      local renamed, err = require('sqmeow.ui.editor').rename_dir(node.file, name)
+      local renamed, err = node.store.rename_dir(node.file, name)
       if not renamed then
         return utils.notify(err or 'the folder could not be renamed', vim.log.levels.ERROR)
       end
 
-      utils.notify(
-        ('renamed %s to %s'):format(node.rel, require('sqmeow.ui.editor').relative(renamed))
-      )
+      utils.notify(('renamed %s to %s'):format(node.rel, node.store.relative(renamed)))
       M.render()
     end)
   end
@@ -1028,12 +1037,12 @@ function M.actions.rename()
       return
     end
 
-    local renamed, err = require('sqmeow.ui.editor').rename(node.file, name)
+    local renamed, err = node.store.rename(node.file, name)
     if not renamed then
       return utils.notify(err or 'the scratchpad could not be renamed', vim.log.levels.ERROR)
     end
 
-    local editor = require('sqmeow.ui.editor')
+    local editor = node.store
     utils.notify(('renamed %s to %s'):format(current, editor.relative(renamed)))
     M.render()
   end)
@@ -1111,7 +1120,7 @@ function M.actions.new_scratchpad()
       prefix = dir .. '/'
     end
   end
-  require('sqmeow.api.view').scratchpad(nil, prefix)
+  require('sqmeow.api.view').scratchpad(nil, prefix, node and node.store)
 end
 
 --- Edit the connection under the cursor.
@@ -1212,7 +1221,7 @@ function M.actions.delete()
         return
       end
 
-      local removed, err = require('sqmeow.ui.editor').remove_dir(node.file)
+      local removed, err = node.store.remove_dir(node.file)
       if not removed then
         return utils.notify(err or 'the folder could not be deleted', vim.log.levels.ERROR)
       end
@@ -1233,7 +1242,7 @@ function M.actions.delete()
       return
     end
 
-    local removed, err = require('sqmeow.ui.editor').remove(node.file)
+    local removed, err = node.store.remove(node.file)
     if not removed then
       return utils.notify(err or 'the scratchpad could not be deleted', vim.log.levels.ERROR)
     end

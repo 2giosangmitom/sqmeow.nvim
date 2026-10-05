@@ -1,9 +1,27 @@
 --- Resolves filesystem paths under `core.path`.
 ---
---- All persistent state — the engine binary, saved connections, scratchpads,
---- and the query log — lives under one root.
+--- Global persistent state — the engine binary, saved connections, scratchpads,
+--- and the query log — lives under one root. Local scratchpads live in `.sqmeow/scratchpads`.
 
 local M = {}
+
+--- The nearest project directory, starting at the window's working directory.
+---@return string|nil
+function M.project()
+  local directory = vim.fn.getcwd()
+  while directory do
+    local path = vim.fs.joinpath(directory, '.sqmeow')
+    local stat = vim.uv.fs_stat(path)
+    if stat and stat.type == 'directory' then
+      return path
+    end
+    local parent = vim.fs.dirname(directory)
+    if parent == directory then
+      break
+    end
+    directory = parent
+  end
+end
 
 --- Returns the normalized root directory.
 ---@return string # Absolute path to `core.path`.
