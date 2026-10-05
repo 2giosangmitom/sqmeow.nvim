@@ -14,6 +14,7 @@ local run = helpers.run
 
 local TIMEOUT = 5000
 local project_path = require('sqmeow.core.paths').project
+local project_source_path = require('sqmeow.sources.project').path
 
 --- Every extmark on a line, as a list of `{ group, from, to }`, in column order.
 local function marks_on(number)
@@ -49,11 +50,11 @@ local T = MiniTest.new_set({
   hooks = {
     pre_once = function()
       helpers.swap(require('sqmeow.core.paths'), 'project', function() end)
+      helpers.swap(require('sqmeow.sources.project'), 'path', function() end)
       -- Pinned to plain characters.
       require('sqmeow').setup({
         -- A directory of its own.
         core = { path = vim.fn.tempname() },
-        sources = { { type = 'file' } },
         icons = {
           connection = '#',
           schema = '@',
@@ -97,6 +98,7 @@ local T = MiniTest.new_set({
     end,
     post_once = function()
       helpers.swap(require('sqmeow.core.paths'), 'project', project_path)
+      helpers.swap(require('sqmeow.sources.project'), 'path', project_source_path)
       drawer.close()
       require('sqmeow.api.view').close()
       rpc.stop()
@@ -120,11 +122,6 @@ T['completion loads columns without expanding the drawer'] = function()
   helpers.stub(require('sqmeow.sources.project'), 'path', function()
     return path
   end)
-  helpers.stub(
-    require('sqmeow.config').get(),
-    'sources',
-    { { type = 'project' }, { type = 'file' } }
-  )
   MiniTest.finally(function()
     vim.schedule(drawer.render)
   end)
@@ -354,12 +351,13 @@ T['actions']['show the columns and indexes of a table'] = function()
   eq(vim.api.nvim_win_is_valid(win), false)
 end
 
-T['actions']['preview a relation into the result window'] = function()
+T['actions']['P previews a relation in an editor and the result window'] = function()
   local ed_win = require('sqmeow.ui.layout').editing_window()
   local prev_buf = vim.api.nvim_win_get_buf(ed_win)
   open_relation('Tables', 'people')
   goto_line('people')
-  drawer.actions.preview()
+  vim.api.nvim_set_current_win(drawer.open())
+  vim.api.nvim_feedkeys('P', 'mx', false)
 
   helpers.wait_for('the preview should finish', function()
     return state.call ~= nil and state.call.state == 'done'
@@ -378,17 +376,22 @@ T['actions']['preview a relation into the result window'] = function()
   eq(vim.b[buf].sqmeow_editor, true)
 end
 
-T['actions']['preview without editor buffer executes directly when disabled'] = function()
-  helpers.stub(require('sqmeow.config').get().ui.drawer, 'preview_in_editor', false)
+T['actions']['p previews directly without changing the editor buffer'] = function()
+  local ed_win = require('sqmeow.ui.layout').editing_window()
+  local prev_buf = vim.api.nvim_win_get_buf(ed_win)
+  -- An unrelated buffer binding must not override the relation's connection.
+  helpers.stub(vim.b[prev_buf], 'sqmeow_connection', 'not-the-preview-connection')
   open_relation('Tables', 'people')
   goto_line('people')
-  drawer.actions.preview()
+  vim.api.nvim_set_current_win(drawer.open())
+  vim.api.nvim_feedkeys('p', 'mx', false)
 
   helpers.wait_for('the preview should finish', function()
     return state.call ~= nil and state.call.state == 'done'
   end, TIMEOUT)
 
   eq(drawer.preview_buffer(), nil)
+  eq(vim.api.nvim_win_get_buf(ed_win), prev_buf)
   eq(helpers.result_lines()[1], ' K id | t name | n score')
 end
 
@@ -398,7 +401,7 @@ T['actions']['preview respects ui.result.page_size limit'] = function()
   helpers.stub(require('sqmeow.config').get().ui.result, 'page_size', 50)
   open_relation('Tables', 'people')
   goto_line('people')
-  drawer.actions.preview()
+  drawer.actions.preview_editor()
 
   helpers.wait_for('the preview should finish', function()
     return state.call ~= nil and state.call.state == 'done'
@@ -418,7 +421,7 @@ T['actions']['previewing distinct relations creates separate buffers'] = functio
   local prev_buf = vim.api.nvim_win_get_buf(ed_win)
   open_relation('Tables', 'people')
   goto_line('people')
-  drawer.actions.preview()
+  drawer.actions.preview_editor()
 
   helpers.wait_for('the first preview should finish', function()
     return state.call ~= nil and state.call.state == 'done'
@@ -429,7 +432,7 @@ T['actions']['previewing distinct relations creates separate buffers'] = functio
 
   open_relation('Tables', 'posts')
   goto_line('posts')
-  drawer.actions.preview()
+  drawer.actions.preview_editor()
 
   helpers.wait_for('the second preview should finish', function()
     return state.call ~= nil and state.call.state == 'done'
@@ -452,7 +455,7 @@ T['actions']['previewing modified relation buffer opens fresh buffer without dat
   local prev_buf = vim.api.nvim_win_get_buf(ed_win)
   open_relation('Tables', 'people')
   goto_line('people')
-  drawer.actions.preview()
+  drawer.actions.preview_editor()
 
   helpers.wait_for('the preview should finish', function()
     return state.call ~= nil and state.call.state == 'done'
@@ -465,7 +468,7 @@ T['actions']['previewing modified relation buffer opens fresh buffer without dat
 
   -- Preview people again while buf1 is modified
   goto_line('people')
-  drawer.actions.preview()
+  drawer.actions.preview_editor()
 
   helpers.wait_for('the second preview should finish', function()
     return state.call ~= nil and state.call.state == 'done'

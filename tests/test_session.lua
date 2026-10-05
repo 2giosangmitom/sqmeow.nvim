@@ -13,7 +13,6 @@ local T = MiniTest.new_set({
       require('sqmeow').setup({
         core = { path = vim.fn.tempname() },
         ui = { persist_session = true },
-        sources = { { type = 'file' } },
       })
       package.loaded['sqmeow.session'] = nil
     end,

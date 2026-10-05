@@ -124,17 +124,15 @@
 
 --- Connection sources ~
 ---
---- Sources are read in configured order. The defaults are `project`, `file`,
---- then `env`. A duplicate name reports a conflict and the first entry wins.
+--- Project definitions and saved connections are always loaded, in that order.
+--- A duplicate name reports a conflict and the project entry wins.
 --- A failing source reports a problem without hiding other sources' entries.
 --- Loading definitions does not connect to their databases.
 ---
 ---   project   Nearest .sqmeow/connections.toml; see |sqmeow-project|.
----   file      JSON array in core.path/connections.json; optional `path`.
----   env       JSON array in SQMEOW_CONNECTIONS; optional `var`.
----   command   JSON array printed to stdout; requires `command`.
+---   file      JSON array in core.path/connections.json.
 ---
---- JSON sources share this format: >json
+--- Saved connections use this format: >json
 ---   [
 ---     {
 ---       "name": "dev",
@@ -145,23 +143,12 @@
 ---   ]
 --- <
 --- Only `name` and `url` are required. `read_only` defaults to false; omit `ssh`
---- for a direct connection. Customize source order and locations with: >lua
----   require('sqmeow').setup({
----     sources = {
----       { type = 'project' },
----       { type = 'file', path = '/absolute/path/connections.json' },
----       { type = 'env', var = 'MY_DATABASES' },
----       { type = 'command', command = { 'my-db-tool', 'connections' } },
----     },
----   })
---- <
---- A list command executes directly; a string runs through Neovim's shell.
---- Command sources load asynchronously and cache their output. The first read
---- may be empty; completion redraws the drawer. To rerun them on the next read:
---- `require('sqmeow.sources.command').reload()`.
+--- for a direct connection. Set `core.path` to relocate saved connections along
+--- with the plugin's other persistent files. Source order is not configurable.
 ---
---- Adding and saving write to the first configured `file` source, or the default
---- JSON file if no file source is configured. They never rewrite project TOML.
+--- Adding and saving write to `core.path/connections.json`. They never rewrite
+--- project TOML. Environment and command connection sources are not supported;
+--- credential templates such as `{{ env "PGPASSWORD" }}` still work.
 ---@tag sqmeow-sources
 ---@toc_entry Connection sources
 
@@ -212,8 +199,7 @@
 --- Project files reject `exec` templates; `env` and `file` templates are supported.
 --- If a same-named open connection has different URL, read-only, or SSH settings,
 --- disconnect it before connecting to the current project's definition.
---- Edit these connections directly in TOML. To disable project discovery, set
---- `sources = { { type = 'file' }, { type = 'env' } }` in |sqmeow.setup()|.
+--- Edit these connections directly in TOML. Project discovery is always enabled.
 ---@tag sqmeow-project
 ---@toc_entry Project connections
 

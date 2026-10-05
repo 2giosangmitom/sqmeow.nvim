@@ -7,11 +7,7 @@ local config = require('sqmeow.config')
 local health = require('sqmeow.health')
 local rpc = require('sqmeow.rpc.client')
 local state = require('sqmeow.core.state')
-
---- Read connections from the environment, and nothing else.
-local function use_env()
-  config.apply({ sources = { { type = 'env' } } })
-end
+local project_load
 
 --- Run the check, and answer with each section's lines as `level: message`, keyed by section.
 local function report()
@@ -36,9 +32,16 @@ end
 
 local T = MiniTest.new_set({
   hooks = {
+    pre_case = function()
+      config.apply({ core = { path = vim.fn.tempname() } })
+      project_load = helpers.swap(require('sqmeow.sources.project'), 'load', function()
+        return {}
+      end)
+    end,
     post_case = function()
+      helpers.swap(require('sqmeow.sources.project'), 'load', project_load)
+      vim.fn.delete(require('sqmeow.core.paths').connections())
       config.apply({})
-      vim.env.SQMEOW_CONNECTIONS = nil
       rpc.stop()
       state.reset()
     end,
@@ -71,11 +74,10 @@ T['reports the engine, its adapters, the configuration and nui.nvim'] = function
 end
 
 T['flags a connection no adapter handles'] = function()
-  vim.env.SQMEOW_CONNECTIONS = vim.json.encode({
+  require('sqmeow.sources.file').save({
     { name = 'fine', url = 'sqlite://fine.db' },
     { name = 'odd', url = 'unknown://host/space' },
   })
-  use_env()
 
   local connections = report().connections
   eq(#connections, 2)
@@ -85,11 +87,11 @@ T['flags a connection no adapter handles'] = function()
 end
 
 T['warns about a source that cannot be read'] = function()
-  vim.env.SQMEOW_CONNECTIONS = 'not json'
-  use_env()
+  helpers.writefile(require('sqmeow.core.paths').connections(), { 'not json' })
 
   local connections = report().connections
-  eq(starts(connections[1], 'warn: SQMEOW_CONNECTIONS does not hold valid JSON'), true)
+  eq(starts(connections[1], 'warn:'), true)
+  helpers.contains(connections[1], 'does not hold valid JSON')
   eq(connections[2], 'info: no connections are configured; `:Sqmeow add` makes one')
 end
 

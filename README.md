@@ -239,9 +239,9 @@ The nearest file is discovered from Neovim's current working directory upward wh
 - Optional `password` and `ssh` fields are supported, including password templates such as `password = '{{ env "PGPASSWORD" }}'`.
 - SQLite and DuckDB use `path`, resolved relative to the project (or `:memory:`).
 
-Project connections load before saved and environment connections by default. Duplicate names report a conflict and the first source wins. Edit project connections in the TOML file.
+Project connections always load before saved connections. Duplicate names report a conflict and the project definition wins. Edit project connections in the TOML file.
 
-To disable discovery, configure `sources = { { type = 'file' }, { type = 'env' } }`. Reading TOML requires the matching engine binary.
+Project discovery is always enabled. Reading TOML requires the matching engine binary.
 
 Project files support `env` and `file` templates but reject `exec` directives. If an open connection's name matches a changed definition, disconnect it before reconnecting; its URL, read-only setting, and SSH host must match for reuse.
 
@@ -262,14 +262,6 @@ The drawer discovers the nearest `.sqmeow` directory from the current working di
 Press `a` on the local group or a folder inside it to create a scratchpad there; names such as `reports/monthly.sql` create parent folders, and `reports/` creates an empty group. `R` renames or moves files and folders; `d` deletes them after confirmation. Queries run against the selected connection, just like global scratchpads. Global files remain in their existing storage and appear alongside the local group; `a` on the scratchpads heading still creates a global scratchpad. Create `.sqmeow/` yourself to enable the local group; refresh the drawer after adding files externally or changing directories.
 
 For local development, this repository includes [numbered CRUD smoke-test scratchpads](.sqmeow/scratchpads/README.md) for every connection in `.sqmeow/connections.toml`, with setup and cleanup scripts.
-
-### Environment connections
-
-Set `SQMEOW_CONNECTIONS` to a JSON array to load connections from the environment. Templates let you keep passwords out of the URL itself:
-
-```sh
-export SQMEOW_CONNECTIONS='[{"name": "dev", "url": "postgres://app:{{ env \"PGPASSWORD\" }}@localhost/dev"}]'
-```
 
 ### Safety
 
@@ -359,6 +351,7 @@ cmp.register_source('sqmeow', require('sqmeow.completion.cmp').new())
 | `<CR>`, `o` | Expand or collapse node                    |
 | `u`         | Run queries against this connection        |
 | `p`         | Preview relation's first page              |
+| `P`         | Preview relation in an editor and results  |
 | `K`         | Show table's or key's structure            |
 | `f`         | Show only Redis keys matching a glob       |
 | `r`         | Reload subtree                             |
@@ -432,9 +425,13 @@ Joined rows update each table by its own key. Deleting a row affects the table o
 
 Calling `setup()` is optional. This is the default configuration; override only the settings you need:
 
+Project TOML and saved JSON connections are always enabled. Remove the old `sources`
+and `ui.drawer.preview_in_editor` options from existing configurations. Environment
+and command connection sources have been removed; environment credential templates
+still work. Use drawer `p` for results only or `P` to open the preview query in an editor.
+
 ```lua
 require('sqmeow').setup({
-  sources = { { type = 'project' }, { type = 'file' }, { type = 'env' } }, -- connection sources
   core = {
     path = vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow'), -- engine, saved connections, scratchpads, and history
     log_level = 'warn',

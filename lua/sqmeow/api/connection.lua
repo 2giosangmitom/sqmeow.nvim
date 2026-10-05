@@ -96,7 +96,7 @@ end
 --- Read configured sources without connecting to their databases.
 --- Entries are returned in source order, with duplicate names removed. The
 --- problems list includes source failures and conflicts; usable entries remain.
---- Project parsing can start the engine; command sources may still be loading.
+--- Project parsing can start the engine. Credential templates resolve only when connecting.
 ---@return sqmeow.ConnectionSpec[] connections
 ---@return string[] problems
 function M.available()

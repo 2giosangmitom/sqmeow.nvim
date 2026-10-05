@@ -794,8 +794,6 @@ function M.actions.refresh()
   end
   -- Scratchpads are read from the directory on every draw, so redrawing is the whole refresh.
   if not node.conn_id then
-    -- A command source runs again, and redraws once it has.
-    require('sqmeow.sources.command').reload()
     return M.render()
   end
   -- A database of a cluster is refreshed as the connection it was opened as.
@@ -840,7 +838,7 @@ function M.actions.filter_keys()
 end
 
 --- Run a `SELECT` over the relation under the cursor.
-function M.actions.preview()
+local function preview(in_editor)
   local node = M.current_node()
   if not node or not is_relation(node.kind) then
     return
@@ -858,10 +856,9 @@ function M.actions.preview()
     return
   end
 
-  local preview_in_editor = config.ui.drawer.preview_in_editor ~= false
   local source_buf = nil
 
-  if preview_in_editor then
+  if in_editor then
     local dialect = dialect_of(node.conn_id)
     local ft = dialect_filetype(dialect)
     local text = (ft == 'sql' or ft == 'surql') and (statement .. ';') or statement
@@ -949,8 +946,18 @@ function M.actions.preview()
   require('sqmeow.api.query').execute(
     statement,
     -- Written by the plugin, not by anyone at the keyboard, so it stays out of the query log.
-    { history = false, source_buf = source_buf }
+    { conn_id = node.conn_id, history = false, source_buf = source_buf }
   )
+end
+
+--- Preview the relation directly in the result window.
+function M.actions.preview()
+  preview(false)
+end
+
+--- Open the preview query in an editor and show its result.
+function M.actions.preview_editor()
+  preview(true)
 end
 
 --- Show the structure of the relation or key under the cursor.

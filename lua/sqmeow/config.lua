@@ -2,8 +2,8 @@
 ---
 --- Pass only the options you want to change to |sqmeow.setup()|. Each setup
 --- starts from the defaults, rather than extending the previous setup call.
---- Nested option tables are merged; a `sources` list replaces the default list.
---- See |sqmeow-sources| before replacing it, and |sqmeow-keymaps| for mappings.
+--- Nested option tables are merged. See |sqmeow-sources| for connection discovery
+--- and |sqmeow-keymaps| for mappings.
 ---
 --- The most useful limits are `query.max_rows` (retained rows),
 --- `ui.result.page_size` (displayed rows per page), and `query.timeout_ms`
@@ -19,14 +19,6 @@ local M = {}
 --- no need to copy the whole table. Icon values are display glyphs, not behavior.
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 M.defaults = {
-  -- Where connections are loaded from, in order: `project` (.sqmeow/connections.toml), `file`,
-  -- `env`, or `command`, which runs `command` and reads the JSON array of connections it prints.
-  sources = {
-    { type = 'project' },
-    { type = 'file' },
-    { type = 'env' },
-  },
-
   core = {
     -- The directory the plugin keeps its files in.
     path = vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow'),
@@ -39,8 +31,6 @@ M.defaults = {
       -- Where the drawer is anchored: 'left' or 'right'.
       position = 'left',
       width = 36,
-      -- Open relation preview in an in-memory editor buffer.
-      preview_in_editor = true,
     },
     result = {
       height = 16,
@@ -173,7 +163,6 @@ M.current = vim.deepcopy(M.defaults)
 
 -- Options whose shape is the user's to decide, so only "is it a table" is checked.
 local freeform = {
-  ['sources'] = true,
   ['keymaps'] = true,
   -- Keyed by whatever the database calls its types, so the keys cannot be known in advance.
   ['icons.type_names'] = true,

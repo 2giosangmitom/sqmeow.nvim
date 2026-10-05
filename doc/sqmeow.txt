@@ -142,17 +142,15 @@ For Redis Cluster or Sentinel, use a URL source with `redis+cluster://` or
                                                                 *sqmeow-sources*
 Connection sources ~
 
-Sources are read in configured order. The defaults are `project`, `file`,
-then `env`. A duplicate name reports a conflict and the first entry wins.
+Project definitions and saved connections are always loaded, in that order.
+A duplicate name reports a conflict and the project entry wins.
 A failing source reports a problem without hiding other sources' entries.
 Loading definitions does not connect to their databases.
 
   project   Nearest .sqmeow/connections.toml; see |sqmeow-project|.
-  file      JSON array in core.path/connections.json; optional `path`.
-  env       JSON array in SQMEOW_CONNECTIONS; optional `var`.
-  command   JSON array printed to stdout; requires `command`.
+  file      JSON array in core.path/connections.json.
 
-JSON sources share this format: >json
+Saved connections use this format: >json
   [
     {
       "name": "dev",
@@ -163,23 +161,12 @@ JSON sources share this format: >json
   ]
 <
 Only `name` and `url` are required. `read_only` defaults to false; omit `ssh`
-for a direct connection. Customize source order and locations with: >lua
-  require('sqmeow').setup({
-    sources = {
-      { type = 'project' },
-      { type = 'file', path = '/absolute/path/connections.json' },
-      { type = 'env', var = 'MY_DATABASES' },
-      { type = 'command', command = { 'my-db-tool', 'connections' } },
-    },
-  })
-<
-A list command executes directly; a string runs through Neovim's shell.
-Command sources load asynchronously and cache their output. The first read
-may be empty; completion redraws the drawer. To rerun them on the next read:
-`require('sqmeow.sources.command').reload()`.
+for a direct connection. Set `core.path` to relocate saved connections along
+with the plugin's other persistent files. Source order is not configurable.
 
-Adding and saving write to the first configured `file` source, or the default
-JSON file if no file source is configured. They never rewrite project TOML.
+Adding and saving write to `core.path/connections.json`. They never rewrite
+project TOML. Environment and command connection sources are not supported;
+credential templates such as `{{ env "PGPASSWORD" }}` still work.
 
 ------------------------------------------------------------------------------
                                                                 *sqmeow-project*
@@ -230,8 +217,7 @@ Reading TOML starts the engine if needed, so use a matching engine build.
 Project files reject `exec` templates; `env` and `file` templates are supported.
 If a same-named open connection has different URL, read-only, or SSH settings,
 disconnect it before connecting to the current project's definition.
-Edit these connections directly in TOML. To disable project discovery, set
-`sources = { { type = 'file' }, { type = 'env' } }` in |sqmeow.setup()|.
+Edit these connections directly in TOML. Project discovery is always enabled.
 
 ------------------------------------------------------------------------------
                                                             *sqmeow-credentials*
@@ -463,8 +449,8 @@ Configuration defaults and validation.
 
 Pass only the options you want to change to |sqmeow.setup()|. Each setup
 starts from the defaults, rather than extending the previous setup call.
-Nested option tables are merged; a `sources` list replaces the default list.
-See |sqmeow-sources| before replacing it, and |sqmeow-keymaps| for mappings.
+Nested option tables are merged. See |sqmeow-sources| for connection discovery
+and |sqmeow-keymaps| for mappings.
 
 The most useful limits are `query.max_rows` (retained rows),
 `ui.result.page_size` (displayed rows per page), and `query.timeout_ms`
@@ -479,14 +465,6 @@ Complete default configuration. Override selected fields in setup; there is
 no need to copy the whole table. Icon values are display glyphs, not behavior.
 >lua
   sqmeow.config.defaults = {
-    -- Where connections are loaded from, in order: `project` (.sqmeow/connections.toml), `file`,
-    -- `env`, or `command`, which runs `command` and reads the JSON array of connections it prints.
-    sources = {
-      { type = 'project' },
-      { type = 'file' },
-      { type = 'env' },
-    },
-
     core = {
       -- The directory the plugin keeps its files in.
       path = vim.fs.joinpath(vim.fn.stdpath('data'), 'sqmeow'),
@@ -499,8 +477,6 @@ no need to copy the whole table. Icon values are display glyphs, not behavior.
         -- Where the drawer is anchored: 'left' or 'right'.
         position = 'left',
         width = 36,
-        -- Open relation preview in an in-memory editor buffer.
-        preview_in_editor = true,
       },
       result = {
         height = 16,
@@ -712,10 +688,11 @@ Built-in mappings, per surface.
 drawer
  <CR>, o   Expand or collapse the node
  p         Show the first page of this relation
+ P         Preview this relation in an editor
  K         Show the structure of this table or key
  f         Show only the Redis keys matching a pattern
  r         Reload this subtree
- y         Yank the qualified name
+ y         Yank the qualified name or history command
  s         Yank a SELECT for this relation
  R         Rename the connection or scratchpad under the cursor
  u         Run queries against this connection
@@ -869,7 +846,7 @@ Return ~
 Read configured sources without connecting to their databases.
 Entries are returned in source order, with duplicate names removed. The
 problems list includes source failures and conflicts; usable entries remain.
-Project parsing can start the engine; command sources may still be loading.
+Project parsing can start the engine. Credential templates resolve only when connecting.
 Return ~
 `(sqmeow.ConnectionSpec[])` connections
 Return ~
@@ -1077,8 +1054,9 @@ Show the statements the changes staged in the result plan into, to apply with `<
                                                       *sqmeow.api.view.filter()*
                         `sqmeow.api.view.filter`({view})
 Filter and order the current result with a WHERE condition and an ORDER BY list, which an open
-SQL or MongoDB connection runs in the query and Redis, ScyllaDB, SurrealDB or a closed connection
-runs on the rows held. Empty strings clear them.
+SQL or MongoDB connection runs in the query; Redis, ScyllaDB, SurrealDB or a closed connection
+uses Polars SQL on the rows held. Empty strings clear them. Polars SQL supports a different
+subset and type coercions than the database's dialect.
 Parameters ~
 {view} `({ where: string|nil, order_by: string|nil })`
 Return ~

@@ -15,8 +15,6 @@ local M = {}
 --- The sources that ship with the plugin.
 ---@type table<string, { load: fun(opts: table|nil): sqmeow.ConnectionSpec[], string|nil }>
 M.builtin = {
-  command = require('sqmeow.sources.command'),
-  env = require('sqmeow.sources.env'),
   file = require('sqmeow.sources.file'),
   project = require('sqmeow.sources.project'),
 }
@@ -29,50 +27,43 @@ local function valid(entry)
     and entry.url ~= ''
 end
 
---- Read every configured source.
+--- Read project definitions, then saved connections. Both sources are always enabled.
 --- The first valid entry for a name wins. Invalid entries and source failures
 --- are collected as problems without discarding entries from other sources.
----@return sqmeow.ConnectionSpec[] connections In configured order, names unique.
+---@return sqmeow.ConnectionSpec[] connections In source order, names unique.
 ---@return string[] problems Everything that went wrong.
 function M.load()
-  local config = require('sqmeow.config').get()
   local connections = {}
   local problems = {}
   local seen = {}
 
-  for _, spec in ipairs(config.sources) do
-    local source = M.builtin[spec.type]
+  for _, name in ipairs({ 'project', 'file' }) do
+    local found, err = M.builtin[name].load()
+    if err then
+      table.insert(problems, err)
+    end
 
-    if not source then
-      table.insert(problems, ('unknown source type `%s`'):format(tostring(spec.type)))
-    else
-      local found, err = source.load(spec)
-      if err then
-        table.insert(problems, err)
-      end
-
-      for _, entry in ipairs(found or {}) do
-        if not valid(entry) then
-          table.insert(problems, ('%s: a connection needs a name and a url'):format(spec.type))
-        elseif seen[entry.name] then
-          table.insert(
-            problems,
-            ('two connections are named `%s`, from %s and %s'):format(
-              entry.name,
-              seen[entry.name],
-              spec.type
-            )
+    for _, entry in ipairs(found or {}) do
+      if not valid(entry) then
+        table.insert(problems, ('%s: a connection needs a name and a url'):format(name))
+      elseif seen[entry.name] then
+        table.insert(
+          problems,
+          ('two connections are named `%s`, from %s and %s'):format(
+            entry.name,
+            seen[entry.name],
+            name
           )
-        else
-          seen[entry.name] = spec.type
-          table.insert(connections, {
-            name = entry.name,
-            url = entry.url,
-            read_only = entry.read_only == true or nil,
-            ssh = type(entry.ssh) == 'string' and entry.ssh ~= '' and entry.ssh or nil,
-            source = spec.type,
-          })
-        end
+        )
+      else
+        seen[entry.name] = name
+        table.insert(connections, {
+          name = entry.name,
+          url = entry.url,
+          read_only = entry.read_only == true or nil,
+          ssh = type(entry.ssh) == 'string' and entry.ssh ~= '' and entry.ssh or nil,
+          source = name,
+        })
       end
     end
   end
@@ -93,16 +84,6 @@ function M.find(name)
   return nil
 end
 
---- The options of the configured file source.
-local function writable()
-  for _, spec in ipairs(require('sqmeow.config').get().sources) do
-    if spec.type == 'file' then
-      return spec
-    end
-  end
-  return nil
-end
-
 --- Save a connection to the file source.
 ---@param connection sqmeow.ConnectionSpec
 ---@return boolean written
@@ -113,7 +94,7 @@ function M.save(connection)
     url = connection.url,
     read_only = connection.read_only,
     ssh = connection.ssh,
-  }, writable())
+  })
 end
 
 --- Update a file-source entry by its existing name, preserving other entries.
@@ -128,7 +109,7 @@ function M.update(name, connection)
   if spec and spec.source ~= 'file' then
     return false, ('`%s` comes from %s, so it cannot be edited'):format(name, spec.source)
   end
-  return require('sqmeow.sources.file').update(name, connection, writable())
+  return require('sqmeow.sources.file').update(name, connection)
 end
 
 --- Delete a saved connection, by the name it is saved under. Only the file source is writable,
@@ -144,7 +125,7 @@ function M.remove(name)
   if spec.source ~= 'file' then
     return false, ('`%s` comes from %s, so it cannot be deleted'):format(name, spec.source)
   end
-  return require('sqmeow.sources.file').remove(name, writable())
+  return require('sqmeow.sources.file').remove(name)
 end
 
 return M

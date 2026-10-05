@@ -13,7 +13,7 @@ local T = MiniTest.new_set({
       root = vim.fn.tempname()
       vim.fn.mkdir(root, 'p')
       vim.api.nvim_set_current_dir(root)
-      config.apply({ sources = { { type = 'project' } } })
+      config.apply({ core = { path = vim.fs.joinpath(root, 'data') } })
     end,
     post_case = function()
       vim.api.nvim_set_current_dir(cwd)
@@ -190,20 +190,17 @@ end
 
 T['keeps other sources available after a project error'] = function()
   write('[broken')
-  helpers.stub(vim.env, 'SQMEOW_CONNECTIONS', '[{"name":"env","url":"sqlite::memory:"}]')
-  config.apply({ sources = { { type = 'project' }, { type = 'env' } } })
+  require('sqmeow.sources.file').add({ name = 'saved', url = 'sqlite::memory:' })
   local found, problems = sources.load()
-  eq(found[1].name, 'env')
+  eq(found[1].name, 'saved')
   eq(#problems, 1)
 end
 
 T['project is enabled first by default and cannot edit a shadowed saved connection'] = function()
   write('[dev]\ntype = "postgres"')
-  eq(config.defaults.sources[1].type, 'project')
-  local saved = vim.fs.joinpath(root, 'saved.json')
+  local saved = require('sqmeow.core.paths').connections()
   local file = require('sqmeow.sources.file')
   file.save({ { name = 'dev', url = 'mysql://localhost/' } }, { path = saved })
-  config.apply({ sources = { { type = 'project' }, { type = 'file', path = saved } } })
   local found, problems = sources.load()
   eq(#found, 1)
   eq(found[1].source, 'project')

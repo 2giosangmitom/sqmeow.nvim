@@ -6,6 +6,7 @@ local config = require('sqmeow.config')
 local file = require('sqmeow.sources.file')
 
 local scratch = vim.fs.joinpath(vim.fn.tempname(), 'connections.json')
+local project_load
 
 --- The dialog's lines, without the padding that lines the values up.
 ---@return string[]
@@ -33,9 +34,13 @@ local T = MiniTest.new_set({
       if not require('sqmeow.ui.form').available() then
         MiniTest.skip('nui.nvim is not installed')
       end
-      config.apply({ sources = { { type = 'file', path = scratch } } })
+      config.apply({ core = { path = vim.fs.dirname(scratch) } })
+      project_load = helpers.swap(require('sqmeow.sources.project'), 'load', function()
+        return {}
+      end)
     end,
     post_case = function()
+      helpers.swap(require('sqmeow.sources.project'), 'load', project_load)
       helpers.close_floats()
       config.apply({})
       pcall(vim.fn.delete, scratch)

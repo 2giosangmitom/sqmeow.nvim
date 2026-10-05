@@ -7,6 +7,7 @@ local config = require('sqmeow.config')
 
 local notes = {}
 local original_notify
+local project_load
 
 --- What the cases have told the user so far, in order.
 local function messages()
@@ -21,22 +22,26 @@ end
 
 --- Configure one saved connection, named `ci`, and nothing else.
 local function saved_ci()
-  vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'ci', url = 'sqlite://ci.db' } })
-  config.apply({ sources = { { type = 'env' } } })
+  require('sqmeow.sources.file').add({ name = 'ci', url = 'sqlite://ci.db' })
 end
 
 local T = MiniTest.new_set({
   hooks = {
     pre_case = function()
+      config.apply({ core = { path = vim.fn.tempname() } })
+      project_load = helpers.swap(require('sqmeow.sources.project'), 'load', function()
+        return {}
+      end)
       notes = {}
       original_notify = helpers.swap(vim, 'notify', function(message, level)
         table.insert(notes, { message = message, level = level or vim.log.levels.INFO })
       end)
     end,
     post_case = function()
+      helpers.swap(require('sqmeow.sources.project'), 'load', project_load)
       vim.notify = original_notify
+      vim.fn.delete(require('sqmeow.core.paths').connections())
       config.apply({})
-      vim.env.SQMEOW_CONNECTIONS = nil
       vim.b.sqmeow_connection = nil
     end,
   },
