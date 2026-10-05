@@ -20,7 +20,7 @@ function M.on_connection(payload)
   connection.current_database = payload.current_database or connection.current_database
   connection.error = payload.error
 
-  -- Forgotten before the drawer is drawn.
+  -- Remove closed or failed connections before redrawing the drawer.
   if payload.state == 'error' or payload.state == 'closed' then
     state.remove_connection(payload.id)
     pcall(function()
@@ -41,7 +41,7 @@ function M.on_connection(payload)
     vim.schedule(function()
       local drawer = require('sqmeow.ui.drawer')
       drawer.load(payload.id, {})
-      -- A MongoDB or SurrealDB database is drawn with its groups where its only schema row would be.
+      -- Load groups directly for MongoDB and SurrealDB's single-schema databases.
       local own = connection.dialect == 'mongodb' or connection.dialect == 'surrealdb'
       if own and connection.database then
         drawer.load(payload.id, { connection.database })
@@ -52,7 +52,6 @@ function M.on_connection(payload)
   require('sqmeow.ui.drawer').render()
   require('sqmeow.ui.editor').update_winbar()
 
-  -- Connecting says nothing.
   if payload.state == 'error' then
     notify(
       ('could not connect to %s: %s'):format(connection.name, payload.error),
@@ -70,7 +69,7 @@ function M.on_call(payload)
   local state = require('sqmeow.core.state')
   local result = require('sqmeow.ui.result')
 
-  -- Merge rather than replace: the SQL text is the plugin's own record of this call, and the engine has no reason to send them back.
+  -- Preserve the locally recorded SQL when merging updates for the same call.
   local previous = state.call or {}
   if previous.call_id == payload.call_id then
     state.call = vim.tbl_extend('force', previous, payload)
@@ -78,7 +77,7 @@ function M.on_call(payload)
     state.call = payload
   end
 
-  -- An error gets no message of its own: the result buffer shows it.
+  -- The result buffer displays query errors; notify only for cancellation.
   if payload.state == 'cancelled' then
     notify('query cancelled', vim.log.levels.WARN)
   end
@@ -98,13 +97,12 @@ function M.on_call(payload)
     require('sqmeow.ui.editor').update_winbar()
   end
 
-  -- Drawing comes after the state above is settled.
   result.render(state.call)
 
   if payload.state ~= 'executing' then
     state.record_call(state.call)
     require('sqmeow.server.history').append(state.call)
-    -- The drawer lists the log, so a finished query shows up there without anyone asking.
+    -- Refresh the drawer's query log after recording the result.
     require('sqmeow.ui.drawer').render()
   end
 end
@@ -162,8 +160,7 @@ function M.ensure()
       require('sqmeow.ui.structure').on_done(payload)
     end)
   end)
-  -- Both of these ask the engine for more, and the engine can send them before Neovim has read its
-  -- answer to the request that started them.
+  -- These handlers issue RPC requests. Defer them until Neovim has read the initiating reply.
   rpc.on('call:view', function(payload)
     vim.schedule(function()
       require('sqmeow.ui.result').on_view(payload)

@@ -152,7 +152,7 @@ function M.forget(conn_id)
   patterns[conn_id] = nil
 end
 
---- Kinds whose name says nothing the row above it has not already said.
+--- Node kinds already identified by their parent group.
 local implied = {
   database = true,
   schema = true,
@@ -168,7 +168,7 @@ local implied = {
 
 ---@param pattern string|nil The glob a Redis connection lists its keys by.
 local function annotate(node, pattern)
-  -- A group heading carries how many things it holds, marked when the list stopped at its cap.
+  -- Append '+' when a group's count is capped.
   if node.count then
     local count = ('(%d%s)'):format(node.count, node.capped and '+' or '')
     if pattern and node.kind == 'keys' then
@@ -184,7 +184,7 @@ local function annotate(node, pattern)
     return implied[node.kind] and '' or node.kind
   end
 
-  -- A key says so in two letters beside its type, the same way the row detail does.
+  -- Use the same PK/FK suffixes as the row details popup.
   local key = node.primary_key and ' (PK)' or node.references and ' (FK)' or ''
   local parts = { node.type_name .. key }
   if not node.primary_key and not node.nullable then
@@ -218,8 +218,7 @@ local function prepare_node(node)
   if node.expandable or node.show_marker then
     marker = node:is_expanded() and marks.open or marks.closed
   end
-  -- A leaf's marker is a space, and a highlight over nothing is one more thing for the editor to
-  -- keep track of on every row of a long tree.
+  -- Avoid highlight spans for blank leaf markers.
   if marker:match('%S') then
     line:append(parts.Text(marker, 'SqmeowMarker'))
   else
@@ -276,15 +275,14 @@ local function schema_nodes(conn_id, path)
 
   local nodes = {}
   for _, node in ipairs(entry.nodes or {}) do
-    -- The engine's own word for the node.
+    -- Use the engine's node key when it differs from the display name.
     local child = vim.list_extend(vim.list_slice(path, 1, #path), { node.key or node.name })
     local expandable = node.expandable == true
     local open = expandable and M.is_expanded(conn_id, child)
 
     local children = nil
     if open and node.kind == 'database' then
-      -- One database of a cluster is a connection of its own, opened when it was expanded, and what
-      -- it holds is that connection's tree.
+      -- Expanded databases use their child connection's schema tree.
       local opened = require('sqmeow.core.state').child_connection(conn_id, node.name)
       if opened and opened.state == 'connected' then
         -- A MongoDB or SurrealDB database is its own only schema.
@@ -396,8 +394,7 @@ local function scratchpad_node(editor, section, label, project)
 
     local built = parts.Tree.Node({
       id = id,
-      -- Its own kind, so toggling a folder never toggles the section the way
-      -- matching on `kind == 'scratchpads'` once did.
+      -- A distinct kind keeps folder toggles separate from section toggles.
       kind = 'scratchpad_group',
       icon_kind = 'scratchpads',
       name = vim.fn.fnamemodify(dir, ':t'),

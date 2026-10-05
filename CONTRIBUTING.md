@@ -1,8 +1,8 @@
 # Contributing to sqmeow.nvim
 
-Thanks for helping make sqmeow.nvim better! 🐈 Bug reports, ideas, documentation fixes, and code contributions are all welcome.
+Thanks for helping make sqmeow.nvim better! 🐈
 
-**In short:** keep changes focused, test them locally, and tell us what you checked.
+Keep changes focused, test them locally, and tell us what you checked.
 
 ## Before you begin
 
@@ -10,7 +10,7 @@ Thanks for helping make sqmeow.nvim better! 🐈 Bug reports, ideas, documentati
 2. For a larger change, open an issue to discuss the approach first.
 3. Note which database adapters or Neovim workflows your change affects.
 
-Want to understand how the plugin fits together before making changes? Browse the [sqmeow.nvim architecture on DeepWiki](https://deepwiki.com/2giosangmitom/sqmeow.nvim).
+For an overview of the plugin, see the [sqmeow.nvim architecture on DeepWiki](https://deepwiki.com/2giosangmitom/sqmeow.nvim).
 
 ## Set up your environment
 
@@ -22,7 +22,7 @@ nix develop
 
 The shell includes Rust, rustfmt, Clippy, [just](https://just.systems), StyLua, Selene, lua-language-server, Neovim, SQLite, and the DuckDB CLI and library. For server-backed integration tests, install Docker with Compose separately.
 
-**Without Nix?** Run `mise install` to install the tools in `mise.toml`, then install Neovim and the DuckDB library separately. Releases build with plain cargo (`cross` for Linux); Nix is only the development environment.
+Without Nix, run `mise install` to install the tools in `mise.toml`, then install Neovim and the DuckDB library separately. Releases build with plain cargo (`cross` for Linux); Nix is only the development environment.
 
 ## Run the checks
 
@@ -45,7 +45,7 @@ Updating the toolchain? `flake.lock` pins Rust and system dependencies. After `n
 
 ## Using AI coding tools
 
-AI tools are welcome, but **you are responsible for the code you submit**. Read and understand the changes, check for unintended edits, and **test them locally before opening a pull request**. A tool saying that something works is not a substitute for running the checks yourself.
+You are responsible for code submitted with AI tools. Read the changes, check for unintended edits, and run the checks locally before opening a pull request.
 
 ## Open a pull request
 

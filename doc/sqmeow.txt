@@ -286,14 +286,14 @@ Filtering and sorting ~
 without the clause keyword; <CR> applies them. `=` filters by the current
 cell, `s` cycles column sorting, and `S` adds another sort column.
 Every adapter uses Polars SQL on retained rows, including MongoDB and other
-NoSQL results, disconnected connections, and restored history. No query is
-rerun and staged edits are preserved. All retained pages are filtered, but
-rows beyond the original query or `query.max_rows` cannot be recovered.
+NoSQL results, disconnected connections, and restored history. Filtering
+preserves staged edits without rerunning the database query. It covers every
+retained page but cannot recover rows omitted by the query or `query.max_rows`.
 `R` clears filters, sorting, and hidden columns, restoring the snapshot.
 Run the original query again for fresh data. Refreshing after applying edits
 reapplies the local view to the new result.
 
-Example bar contents (the labels are supplied; type only the expressions): >
+The bar supplies the labels; type only the expressions: >
   WHERE     age >= 18 AND status = 'active'
   ORDER BY  age DESC NULLS LAST, id ASC
 <
@@ -305,8 +305,8 @@ are not accepted. Invalid conditions preserve the previous view. `s`/`S`
 place nulls last; ORDER BY expressions can specify NULLS FIRST or NULLS LAST.
 Integers and booleans are typed. Numeric-looking strings remain strings;
 use CAST(value AS DOUBLE) for numeric comparison/sorting of Redis strings.
-Exact decimals, temporal values and nested
-JSON remain text. Explicit casts can enable numeric/temporal comparisons;
+Exact decimals, temporal values, and nested JSON remain text.
+Explicit casts can enable numeric/temporal comparisons;
 floating-point casts can lose precision. Nested JSON fields are not flattened.
 
 Editing ~

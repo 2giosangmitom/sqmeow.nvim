@@ -59,7 +59,7 @@ local function check_engine()
   end
   vim.health.ok(('sqmeow-core %s (%s)\n%s'):format(version, source, path))
 
-  -- A checkout build that is not the one running is worth saying out loud.
+  -- Warn if the selected engine differs from the checkout build.
   local dev = install.dev_path()
   if dev and dev ~= path then
     local other = install.version(dev)

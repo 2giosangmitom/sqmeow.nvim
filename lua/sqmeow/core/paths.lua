@@ -1,7 +1,7 @@
 --- Resolves filesystem paths under `core.path`.
 ---
---- Global persistent state — the engine binary, saved connections, scratchpads,
---- and the query log — lives under one root. Local scratchpads live in `.sqmeow/scratchpads`.
+--- The engine binary, saved connections, global scratchpads, and query log share
+--- this root. Local scratchpads live in `.sqmeow/scratchpads`.
 
 local M = {}
 
