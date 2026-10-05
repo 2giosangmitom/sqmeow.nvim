@@ -9,6 +9,30 @@ use sqmeow_db::view::{Filter, Op, Sort};
 use crate::server::args::Args;
 use crate::server::session::{CallId, ConnId};
 
+/// Query inputs are strings until the engine validates each declared type.
+pub(super) fn query_values(
+    value: Option<&Value>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut values = std::collections::HashMap::new();
+    match value {
+        None | Some(Value::Nil) => return Ok(values),
+        Some(Value::Array(items)) if items.is_empty() => return Ok(values),
+        Some(Value::Map(pairs)) => {
+            for (name, value) in pairs {
+                let name = name.as_str().ok_or("parameter names must be strings")?;
+                let value = value
+                    .as_str()
+                    .ok_or_else(|| format!("parameter `{name}` must be a string"))?;
+                if values.insert(name.to_owned(), value.to_owned()).is_some() {
+                    return Err(format!("parameter `{name}` was supplied twice"));
+                }
+            }
+        }
+        Some(_) => return Err("parameters must be a map of names to input strings".into()),
+    }
+    Ok(values)
+}
+
 impl Args {
     /// The required `call_id`.
     pub fn call_id(&self) -> Result<CallId, String> {
@@ -131,4 +155,35 @@ pub(super) fn changes(value: Option<&Value>) -> Result<Changes, String> {
             .map(|insert| cells(Some(insert)))
             .collect::<Result<_, String>>()?,
     })
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+
+    #[test]
+    fn query_inputs_are_strict_and_errors_do_not_include_values() {
+        let values = Value::Map(vec![(Value::from("name"), Value::from("secret"))]);
+        assert_eq!(query_values(Some(&values)).unwrap()["name"], "secret");
+        for malformed in [
+            Value::from("secret"),
+            Value::Map(vec![(Value::from("name"), Value::from(42))]),
+        ] {
+            let error = query_values(Some(&malformed)).unwrap_err();
+            assert!(!error.contains("secret"));
+            assert!(!error.contains("42"));
+        }
+        assert!(
+            query_values(Some(&Value::Map(vec![
+                (Value::from("name"), Value::from("a")),
+                (Value::from("name"), Value::from("b"))
+            ])))
+            .is_err()
+        );
+        assert!(
+            query_values(Some(&Value::Array(vec![])))
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

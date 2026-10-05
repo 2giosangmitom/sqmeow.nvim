@@ -281,6 +281,38 @@ retained rows the grid displays per page; increasing it does not fetch rows
 beyond the cap. `query.timeout_ms` cancels long-running work; 0 disables it.
 <C-c> or `:Sqmeow cancel` requests cancellation manually.
 
+Parameterized scratchpads ~
+SQLite, PostgreSQL/CockroachDB and MySQL/MariaDB accept named values such as
+`:user_id`. The usual statement, selection and buffer actions prompt once
+per distinct name. Cancel any prompt to leave the current result and edits
+alone. Parameter names are case-sensitive and contain ASCII letters, digits
+and underscores, beginning with a letter or underscore.
+
+Names default to text. Header comments declare a type and optional default: >sql
+  -- @param user_id int = 42
+  -- @param status text = active
+  SELECT * FROM users WHERE id = :user_id AND status = :status;
+<
+Types are `text`, `int` (signed 64-bit), `float` (finite), and `bool`
+(`true`/`false`). Input `NULL` binds a typed null; empty text stays empty.
+For literal text such as NULL, use a JSON string: `"NULL"`. Values bind through
+the driver, never through SQL interpolation. Parameters cannot replace table
+or column names, and cannot mix with native positional placeholders.
+Strings, quoted identifiers, comments and PostgreSQL casts are left alone.
+Inside PostgreSQL array subscripts, parenthesize inputs: `items[(:index)]`;
+an unparenthesized colon is treated as a slice separator.
+Selection/range actions use declarations from the source buffer's header.
+
+Lua callers can skip prompts with raw input strings: >lua
+  require('sqmeow.api.query').execute(sql, { parameters = { user_id = '42' } })
+<
+An empty parameter map uses declared defaults; missing required values fail
+before any statement runs. Live-result refreshes reuse the values in memory.
+Supplied values are not saved with query history, but returned rows may still
+be archived. After restart or result eviction, rerun from the scratchpad to
+enter values again. Keep secrets out of defaults, which are part of the SQL.
+Other adapters do not yet support parameterized scratchpads.
+
 Filtering and sorting ~
 `gf` opens WHERE and `go` opens ORDER BY above the grid. Enter expressions
 without the clause keyword; <CR> applies them. `=` filters by the current
@@ -1001,6 +1033,7 @@ Parameters ~
 buffer used for binding lookup; `line` selects a statement by zero-based line.
 `where` and `order_by` wrap a single query; `history = false` skips logging
 and archiving; `confirmed = true` bypasses the destructive-statement prompt.
+`parameters` maps names to raw input strings, bypassing parameter prompts.
 Return ~
 `(integer|nil)` call_id Accepted run id; nil if rejected or awaiting input.
 Return ~

@@ -12,6 +12,7 @@ use sqmeow_db::error::Error as DbError;
 use sqmeow_db::guard;
 use sqmeow_db::result::ResultSet;
 use sqmeow_db::sql;
+use sqmeow_db::sql::parameters::{self as query_parameters, Bound};
 use sqmeow_db::value::Cell;
 use sqmeow_db::view;
 
@@ -20,8 +21,17 @@ use super::{Core, Started, params};
 use crate::server::archive;
 use crate::server::args::Args;
 use crate::server::payload::{map, optional, strings};
-use crate::server::session::{Call, CallId, ConnId, Connection};
+use crate::server::session::{Call, CallId, ConnId, Connection, QueryParameters};
 use tokio_util::sync::CancellationToken;
+
+struct Run {
+    statements: Vec<sql::Statement>,
+    bound: Vec<Bound>,
+    parameters: QueryParameters,
+    wrapped: Option<String>,
+    archive: Option<PathBuf>,
+    inserted: bool,
+}
 
 /// Trips a call's token once `query.timeout_ms` passes, and stops when dropped.
 pub(super) struct Deadline {
@@ -84,15 +94,29 @@ impl Core {
             return Err("result_view: the connection does not belong to this result".to_owned());
         }
         let (answer, work) = if query {
+            let retained = self
+                .session
+                .call(call_id)
+                .ok_or_else(|| format!("result {call_id} is no longer held"))?;
+            let sql = args.string("sql")?;
+            let dialect = self.connection(conn_id)?.backend.dialect();
+            if retained.parameters.definitions.is_empty()
+                && !query_parameters::describe(dialect, &sql, &[&sql])?.is_empty()
+            {
+                return Err("parameter values are no longer held; rerun from the scratchpad to enter them again".into());
+            }
+            if !retained.parameters.definitions.is_empty() && sql != retained.result.statement() {
+                return Err("rerun an edited parameterized query from the scratchpad".into());
+            }
             let refresh = Args::from_params(&[map(vec![
                 ("conn_id", Value::from(conn_id)),
-                ("sql", Value::from(args.string("sql")?)),
+                ("sql", Value::from(sql)),
                 (
                     "inserted",
                     Value::from(args.opt_bool("inserted").unwrap_or(false)),
                 ),
             ])])?;
-            self.execute(&refresh)?
+            self.execute_with_parameters(&refresh, Some(retained.parameters.clone()))?
         } else {
             self.view(args)?
         };
@@ -130,11 +154,98 @@ impl Core {
 
     /// Run a buffer's statements, answering with the call id before they start.
     pub(super) fn execute(self: Arc<Self>, args: &Args) -> Started {
+        self.execute_with_parameters(args, None)
+    }
+
+    /// Discover only inputs used by the selected statements; buffer headers supply defaults.
+    pub(super) fn query_parameters(&self, args: &Args) -> Result<Value, String> {
+        let connection = self.connection(args.conn_id("conn_id")?)?;
+        let source = args.string("sql")?;
+        let statements = chosen(
+            connection.backend.dialect(),
+            &source,
+            args.opt_usize("line"),
+        )?;
+        let selected: Vec<&str> = statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect();
+        let parameter_source = args
+            .opt_string("parameter_source")
+            .unwrap_or_else(|| source.clone());
+        let parameters =
+            query_parameters::describe(connection.backend.dialect(), &parameter_source, &selected)?;
+        Ok(Value::Array(
+            parameters
+                .into_iter()
+                .map(|parameter| {
+                    let mut fields = vec![
+                        ("name", Value::from(parameter.name)),
+                        ("kind", Value::from(parameter.kind.name())),
+                    ];
+                    if let Some(default) = parameter.default {
+                        fields.push(("default", Value::from(default)));
+                    }
+                    map(fields)
+                })
+                .collect(),
+        ))
+    }
+
+    fn execute_with_parameters(
+        self: Arc<Self>,
+        args: &Args,
+        replay: Option<QueryParameters>,
+    ) -> Started {
         let conn_id = args.conn_id("conn_id")?;
         let source = args.string("sql")?;
         let connection = self.connection(conn_id)?;
         let dialect = connection.backend.dialect();
         let statements = chosen(dialect, &source, args.opt_usize("line"))?;
+        let parameters = match replay {
+            Some(parameters) if !parameters.definitions.is_empty() => parameters,
+            _ => {
+                let selected: Vec<&str> = statements
+                    .iter()
+                    .map(|statement| statement.sql.as_str())
+                    .collect();
+                QueryParameters {
+                    definitions: query_parameters::describe(
+                        dialect,
+                        &args
+                            .opt_string("parameter_source")
+                            .unwrap_or_else(|| source.clone()),
+                        &selected,
+                    )?,
+                    values: params::query_values(args.get("parameters"))?,
+                }
+            }
+        };
+        for name in parameters.values.keys() {
+            if !parameters
+                .definitions
+                .iter()
+                .any(|parameter| &parameter.name == name)
+            {
+                return Err(format!("query does not use parameter `{name}`"));
+            }
+        }
+        // Validate every statement before accepting any work, including later inputs in a batch.
+        let bound = if parameters.definitions.is_empty() {
+            Vec::new()
+        } else {
+            statements
+                .iter()
+                .map(|statement| {
+                    query_parameters::compile(
+                        dialect,
+                        &statement.sql,
+                        &parameters.definitions,
+                        &parameters.values,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
         if connection.read_only
             && statements
                 .iter()
@@ -171,6 +282,11 @@ impl Core {
                     .ok_or("only a query that returns rows can be filtered")?
             })
         };
+        if wrapped.is_some() && !bound.is_empty() {
+            return Err(
+                "parameterized queries use retained-result filters, not query wrappers".into(),
+            );
+        }
         // Filter/order fragments are editable SQL too. Check the actual request,
         // not just the original query, before sending it to an unenforced backend.
         if connection.read_only
@@ -187,7 +303,18 @@ impl Core {
         // After applying edits, rows the inserts returned are shown even where the query leaves them out.
         let inserted = args.opt_bool("inserted").unwrap_or(false);
         let call_id = self.session.next_call_id();
-        let work = self.run(call_id, connection, statements, wrapped, archive, inserted);
+        let work = self.run(
+            call_id,
+            connection,
+            Run {
+                statements,
+                bound,
+                parameters,
+                wrapped,
+                archive,
+                inserted,
+            },
+        );
         Ok((Value::from(call_id), Box::pin(work)))
     }
 
@@ -205,15 +332,15 @@ impl Core {
     }
 
     /// Run statements, or the one query `wrapped` filters.
-    async fn run(
-        self: Arc<Self>,
-        call_id: CallId,
-        connection: Arc<Connection>,
-        statements: Vec<sql::Statement>,
-        wrapped: Option<String>,
-        archive: Option<PathBuf>,
-        inserted: bool,
-    ) {
+    async fn run(self: Arc<Self>, call_id: CallId, connection: Arc<Connection>, run: Run) {
+        let Run {
+            statements,
+            bound,
+            parameters,
+            wrapped,
+            archive,
+            inserted,
+        } = run;
         let conn_id = connection.id;
         let options = self.session.options();
         let running = self.session.begin_call(call_id);
@@ -245,17 +372,30 @@ impl Core {
         let mut kept: Vec<Call> = Vec::new();
         let mut earlier: Vec<Value> = Vec::new();
         let mut saves: Vec<(usize, PathBuf)> = Vec::new();
-        for statement in &statements {
+        for (index, statement) in statements.iter().enumerate() {
             let run = wrapped.as_deref().unwrap_or(&statement.sql);
-            let outcome = connection
-                .backend
-                .execute_results(run, &statement.sql, options.max_rows, running.token())
-                .await;
+            let outcome =
+                if let Some(bound) = bound.get(index).filter(|bound| !bound.values.is_empty()) {
+                    connection
+                        .backend
+                        .execute_bound(&bound.sql, &bound.values, options.max_rows, running.token())
+                        .await
+                        .map(|mut result| {
+                            result.set_statement(&statement.sql);
+                            vec![result]
+                        })
+                } else {
+                    connection
+                        .backend
+                        .execute_results(run, &statement.sql, options.max_rows, running.token())
+                        .await
+                };
             match outcome {
                 Ok(results) => {
                     for result in results {
                         if let Some(previous) = last.replace(result) {
                             let (call, mut summary) = self.keep(conn_id, previous, None);
+                            let call = call.with_parameters(parameters.clone());
                             if let Some(path) = archive
                                 .as_deref()
                                 .filter(|_| !call.result.columns().is_empty())
@@ -312,8 +452,9 @@ impl Core {
             0
         };
 
-        let call =
-            Call::new(call_id, conn_id, result).with_dialect(Some(connection.backend.dialect()));
+        let call = Call::new(call_id, conn_id, result)
+            .with_dialect(Some(connection.backend.dialect()))
+            .with_parameters(parameters);
         let mut payload = summarize(&call, true);
         payload.extend(elapsed(started));
         if appended > 0 {

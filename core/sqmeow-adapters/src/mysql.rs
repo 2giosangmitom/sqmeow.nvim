@@ -293,6 +293,16 @@ impl Adapter for MySqlAdapter {
         stream::run(self, statement, statement, max_rows, &cancel).await
     }
 
+    async fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[sqmeow_db::sql::parameters::Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        stream::run_bound(self, statement, values, max_rows, &cancel).await
+    }
+
     async fn execute_wrapped(
         &self,
         statement: &str,

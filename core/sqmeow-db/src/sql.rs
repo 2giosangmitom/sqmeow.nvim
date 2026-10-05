@@ -1,6 +1,7 @@
 //! Splits SQL buffers into statements.
 
 mod mssql;
+pub mod parameters;
 mod sides;
 
 pub use sides::{Side, Sides};

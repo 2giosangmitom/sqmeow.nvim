@@ -119,6 +119,8 @@ pub struct Call {
     /// The source dialect also survives a closed connection for local-view capabilities.
     pub dialect: Option<Dialect>,
     pub result: ResultSet,
+    /// Bound inputs stay in memory, never in summaries or result archives.
+    pub parameters: QueryParameters,
     /// The rows the editor is paging through, when it filtered or sorted them.
     pub view: Mutex<Option<Arc<Vec<usize>>>>,
     /// Orders view requests independently of their computation/completion order.
@@ -132,6 +134,7 @@ impl Call {
             conn_id,
             dialect: None,
             result,
+            parameters: QueryParameters::default(),
             view: Mutex::default(),
             view_generation: Mutex::default(),
         }
@@ -139,6 +142,11 @@ impl Call {
 
     pub fn with_dialect(mut self, dialect: Option<Dialect>) -> Self {
         self.dialect = dialect;
+        self
+    }
+
+    pub fn with_parameters(mut self, parameters: QueryParameters) -> Self {
+        self.parameters = parameters;
         self
     }
 
@@ -167,6 +175,12 @@ impl Call {
             finish();
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct QueryParameters {
+    pub definitions: Vec<sqmeow_db::sql::parameters::Parameter>,
+    pub values: HashMap<String, String>,
 }
 
 /// The state one editor session owns.

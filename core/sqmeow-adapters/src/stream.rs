@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use futures_util::{Stream, StreamExt};
 use sqlx::{
-    AssertSqlSafe, ColumnIndex, Database, Decode, Either, Executor, Pool, Row, SqlSafeStr, Type,
-    TypeInfo,
+    Arguments, AssertSqlSafe, ColumnIndex, Database, Decode, Either, Encode, Executor,
+    IntoArguments, Pool, Row, SqlSafeStr, Type, TypeInfo,
 };
 use sqmeow_db::edit::Source;
 use sqmeow_db::edit::TableBinder;
@@ -18,6 +18,7 @@ use sqmeow_db::error::Result;
 use sqmeow_db::result::Column;
 use sqmeow_db::result::ResultSet;
 use sqmeow_db::sql::Sides;
+use sqmeow_db::sql::parameters::{Kind, Value};
 use sqmeow_db::types::ForeignKey;
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::value::Cell;
@@ -75,6 +76,14 @@ pub(crate) trait SqlxAdapter: Sync {
         statement: &str,
     ) -> impl Future<Output = (Vec<Column>, Option<Source>)> + Send;
 
+    fn describe_bound(
+        &self,
+        statement: &str,
+        _values: &[Value],
+    ) -> impl Future<Output = (Vec<Column>, Option<Source>)> + Send {
+        self.describe(statement)
+    }
+
     fn decode(row: &<Self::Db as Database>::Row, index: usize) -> Cell;
 
     fn affected(outcome: &<Self::Db as Database>::QueryResult) -> u64;
@@ -99,16 +108,97 @@ pub(crate) async fn run<A: SqlxAdapter>(
 ) -> Result<ResultSet>
 where
     for<'c> &'c mut <A::Db as Database>::Connection: Executor<'c, Database = A::Db>,
+    <A::Db as Database>::Arguments: IntoArguments<A::Db>,
 {
-    let (columns, source) = adapter.describe(origin).await;
-    let outcome = execute(
-        adapter.pool(),
+    run_with(adapter, statement, origin, max_rows, cancel, None, &[]).await
+}
+
+/// The bound path shares metadata, cancellation and row draining with ordinary execution.
+pub(crate) async fn run_bound<A: SqlxAdapter>(
+    adapter: &A,
+    statement: &str,
+    values: &[Value],
+    max_rows: usize,
+    cancel: &CancellationToken,
+) -> Result<ResultSet>
+where
+    for<'c> &'c mut <A::Db as Database>::Connection: Executor<'c, Database = A::Db>,
+    <A::Db as Database>::Arguments: IntoArguments<A::Db>,
+    for<'q> Option<String>: Encode<'q, A::Db> + Type<A::Db>,
+    for<'q> Option<i64>: Encode<'q, A::Db> + Type<A::Db>,
+    for<'q> Option<f64>: Encode<'q, A::Db> + Type<A::Db>,
+    for<'q> Option<bool>: Encode<'q, A::Db> + Type<A::Db>,
+{
+    let mut arguments = <A::Db as Database>::Arguments::default();
+    for value in values {
+        match value {
+            Value::Text(value) => arguments.add(Some(value.clone())),
+            Value::Int(value) => arguments.add(Some(*value)),
+            Value::Float(value) => arguments.add(Some(*value)),
+            Value::Bool(value) => arguments.add(Some(*value)),
+            Value::Null(Kind::Text) => arguments.add(None::<String>),
+            Value::Null(Kind::Int) => arguments.add(None::<i64>),
+            Value::Null(Kind::Float) => arguments.add(None::<f64>),
+            Value::Null(Kind::Bool) => arguments.add(None::<bool>),
+        }
+        .map_err(Error::driver)?;
+    }
+    run_with(
+        adapter,
         statement,
-        columns,
+        statement,
+        max_rows,
+        cancel,
+        Some(arguments),
+        values,
+    )
+    .await
+}
+
+/// Both protocols share metadata, timing, row limits and cancellation cleanup.
+async fn run_with<A: SqlxAdapter>(
+    adapter: &A,
+    statement: &str,
+    origin: &str,
+    max_rows: usize,
+    cancel: &CancellationToken,
+    arguments: Option<<A::Db as Database>::Arguments>,
+    values: &[Value],
+) -> Result<ResultSet>
+where
+    for<'c> &'c mut <A::Db as Database>::Connection: Executor<'c, Database = A::Db>,
+    <A::Db as Database>::Arguments: IntoArguments<A::Db>,
+{
+    let (columns, source) = if arguments.is_some() {
+        adapter.describe_bound(origin, values).await
+    } else {
+        adapter.describe(origin).await
+    };
+    let started = Instant::now();
+    let width = columns.len();
+    let mut result = ResultSet::new(statement, columns);
+
+    let stream = match arguments {
+        Some(arguments) => adapter.pool().fetch_many(sqlx::query_with::<A::Db, _>(
+            AssertSqlSafe(statement.to_owned()),
+            arguments,
+        )),
+        None => sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(adapter.pool()),
+    };
+
+    let outcome = drain(
+        stream,
+        &mut result,
         max_rows,
         cancel,
         A::affected,
-        A::decode,
+        |row| result_columns(row.columns()),
+        |row| {
+            // A row can be wider than preparing predicted.
+            (0..width.max(row.len()))
+                .map(|index| A::decode(row, index))
+                .collect()
+        },
     )
     .await;
     if matches!(outcome, Err(Error::Cancelled)) {
@@ -117,49 +207,10 @@ where
     if may_change_schema(statement) {
         adapter.forget();
     }
-    let mut result = outcome?;
-    result.set_source(source);
-    Ok(result)
-}
-
-/// Run one statement and read what it produced into a result set.
-async fn execute<DB>(
-    pool: &Pool<DB>,
-    statement: &str,
-    columns: Vec<Column>,
-    max_rows: usize,
-    cancel: &CancellationToken,
-    affected: impl Fn(&DB::QueryResult) -> u64,
-    decode: impl Fn(&DB::Row, usize) -> Cell,
-) -> Result<ResultSet>
-where
-    DB: Database,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-{
-    let started = Instant::now();
-    let width = columns.len();
-    let mut result = ResultSet::new(statement, columns);
-
-    // The SQL is whatever the user typed into their own editor, against their own database.
-    let stream = sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(pool);
-
-    drain(
-        stream,
-        &mut result,
-        max_rows,
-        cancel,
-        affected,
-        |row| result_columns(row.columns()),
-        |row| {
-            // A row can be wider than preparing predicted.
-            (0..width.max(row.len()))
-                .map(|index| decode(row, index))
-                .collect()
-        },
-    )
-    .await?;
+    outcome?;
 
     result.set_elapsed(started.elapsed());
+    result.set_source(source);
     Ok(result)
 }
 

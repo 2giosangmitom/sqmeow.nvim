@@ -81,6 +81,11 @@ pub struct ResultSet {
 }
 
 impl ResultSet {
+    /// Keep the parameterized source rather than the driver's rewritten placeholders.
+    pub fn set_statement(&mut self, statement: impl Into<String>) {
+        self.statement = statement.into();
+    }
+
     /// Start an empty result for a statement with these columns.
     pub fn new(statement: impl Into<String>, columns: Vec<Column>) -> Self {
         Self {

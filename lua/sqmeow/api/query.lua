@@ -32,6 +32,7 @@ end
 --- buffer used for binding lookup; `line` selects a statement by zero-based line.
 --- `where` and `order_by` wrap a single query; `history = false` skips logging
 --- and archiving; `confirmed = true` bypasses the destructive-statement prompt.
+--- `parameters` maps names to raw input strings, bypassing parameter prompts.
 ---@return integer|nil call_id Accepted run id; nil if rejected or awaiting input.
 ---@return string|nil error Failure reason, or an explanation of deferred work.
 function M.execute(sql, opts)
@@ -52,6 +53,56 @@ function M.execute(sql, opts)
   end
   if sql:match('^%s*$') then
     return nil, 'there is nothing to run'
+  end
+  -- Selections still use parameter declarations from their scratchpad header.
+  local parameter_source = opts.parameter_source
+  if not parameter_source and opts.source_buf and vim.api.nvim_buf_is_valid(opts.source_buf) then
+    parameter_source = table.concat(vim.api.nvim_buf_get_lines(opts.source_buf, 0, -1, false), '\n')
+  end
+  -- The engine understands dialect tokens; this only avoids an extra RPC for
+  -- the usual unparameterized query. Never rewrite the SQL with input values.
+  if opts.parameters == nil and (sql:find(':', 1, true) or sql:find('@param', 1, true)) then
+    local definitions, err = engine().request('query_parameters', {
+      conn_id = connection.id,
+      sql = sql,
+      line = opts.line,
+      parameter_source = parameter_source,
+    })
+    if not definitions then
+      notify(err or 'could not discover query parameters', vim.log.levels.ERROR)
+      return nil, err
+    end
+    if #definitions > 0 then
+      local pending = vim.tbl_extend('force', opts, {
+        conn_id = connection.id,
+        parameter_source = parameter_source,
+      })
+      local parameters = {}
+      local function prompt(index)
+        local definition = definitions[index]
+        if not definition then
+          pending.parameters = parameters
+          M.execute(sql, pending)
+          return
+        end
+        if parameters[definition.name] ~= nil then
+          prompt(index + 1)
+          return
+        end
+        vim.ui.input({
+          prompt = ('%s (%s): '):format(definition.name, definition.kind),
+          default = definition.default or '',
+        }, function(value)
+          if value == nil then
+            return
+          end
+          parameters[definition.name] = value
+          prompt(index + 1)
+        end)
+      end
+      prompt(1)
+      return nil, 'waiting for parameter values'
+    end
   end
   -- A new result would drop them.
   if require('sqmeow.ui.edit').settle(function()
@@ -98,6 +149,8 @@ function M.execute(sql, opts)
     order_by = opts.order_by,
     columns = opts.columns,
     inserted = opts.inserted,
+    parameters = opts.parameters,
+    parameter_source = parameter_source,
   })
   if not call_id then
     notify(err or 'the query was refused', vim.log.levels.ERROR)

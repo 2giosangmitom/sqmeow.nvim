@@ -124,6 +124,7 @@ impl Core {
             "result_view_route" => self.result_view_route(args),
             "condition" => self.condition(args),
             "inspect" => self.inspect(args),
+            "query_parameters" => self.query_parameters(args),
             "plan" => self.plan(args),
             "export_preview" => self.export_preview(args),
             "connections" => Ok(Value::Array(self.session.describe_connections())),
