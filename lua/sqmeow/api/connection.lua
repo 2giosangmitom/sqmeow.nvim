@@ -172,8 +172,7 @@ function M.edit(name, changes)
     end
   end
 
-  -- A URL that changed reaches an open connection only on the next connect, and saying so beats
-  -- leaving the user to wonder why their query still goes to the old server.
+  -- Saved settings take effect on reconnect; notify users while the old settings remain active.
   local url_changed = changes.url and changes.url ~= spec.url
   local flag_changed = changes.read_only ~= nil and changes.read_only ~= (spec.read_only == true)
   local tunnel_changed = changes.ssh ~= nil and wanted.ssh ~= spec.ssh

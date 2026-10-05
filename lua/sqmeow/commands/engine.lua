@@ -14,7 +14,6 @@ M.subcommands = {
       end, require('sqmeow.server.install').methods)
     end,
     run = function(args)
-      -- Nothing is said here, and nothing is waited for.
       local method = args[1]
       require('sqmeow.server.install').install({
         method = method ~= '' and method or nil,
@@ -24,7 +23,7 @@ M.subcommands = {
             return
           end
 
-          -- The old engine is still running, and the new one cannot start until it has gone.
+          -- Stop the running engine before using the newly installed binary.
           require('sqmeow.rpc.client').stop()
           require('sqmeow.core.state').reset()
           require('sqmeow.ui.drawer').reset()
@@ -73,7 +72,7 @@ M.subcommands = {
     desc = 'Restart the engine',
     run = function()
       local channel, err = require('sqmeow.rpc.client').restart()
-      -- The engine's session went with it, so the mirrored state is no longer true.
+      -- Restarting discards the engine session; clear its Lua state too.
       require('sqmeow.core.state').reset()
       require('sqmeow.ui.drawer').reset()
       if channel then

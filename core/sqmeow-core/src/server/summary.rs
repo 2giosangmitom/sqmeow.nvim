@@ -16,7 +16,7 @@ pub(super) fn capabilities(connected: bool) -> Value {
     ])
 }
 
-/// One cell, as the value it really is rather than as text.
+/// Encode nulls, booleans, integers, and floats as MessagePack values; send other cells as text.
 pub(super) fn cell_value(cell: &Cell) -> Value {
     match cell {
         Cell::Null => Value::Nil,
@@ -47,7 +47,7 @@ pub(super) fn summarize(call: &Call, connected: bool) -> Vec<(&'static str, Valu
                 ("nulls", Value::from(stats.nulls)),
                 ("numeric", Value::from(stats.numeric)),
             ];
-            // Left out rather than sent as nil or false.
+            // Omit the key field for non-key columns.
             if let Some(key) = column.key.name() {
                 pairs.push(("key", Value::from(key)));
             }

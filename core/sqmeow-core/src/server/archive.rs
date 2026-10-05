@@ -15,10 +15,10 @@ use sqmeow_db::value::Cell;
 
 use crate::server::payload::map;
 
-/// What the header says the file is, so a file that is not one is refused rather than misread.
+/// Archive format identifier checked before decoding rows.
 const FORMAT: &str = "sqmeow-result";
 
-/// Bumped when the layout changes in a way an older reader would get wrong.
+/// Increment for layout changes incompatible with older readers.
 const VERSION: u64 = 1;
 
 /// Save a result to `path` using the versioned MessagePack archive format.

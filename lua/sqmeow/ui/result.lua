@@ -747,8 +747,7 @@ function M.show_page(offset)
     return false
   end
 
-  -- How many rows the view holds is the engine's to say, and a count equal to the result's is no
-  -- view worth mentioning.
+  -- Show the engine's view count only when it differs from the retained row count.
   call.view_rows = reply.total ~= call.rows and reply.total or nil
   page = { offset = offset, rows = reply.rows or {}, indices = reply.indices or {} }
   draw()
@@ -757,7 +756,7 @@ function M.show_page(offset)
   return true
 end
 
---- Ask the engine to filter and sort the current result as its view says.
+--- Apply the current result's filter and sort specification in the engine.
 ---@return boolean sent
 function M.send_view(opts)
   opts = opts or {}
@@ -874,7 +873,7 @@ function M.filterable(call)
   return flags.filter == true, flags.filter ~= true and 'this result cannot be filtered' or nil
 end
 
---- The names Polars knows the result's columns by, with repeated names numbered.
+--- Polars column names, with numeric suffixes for duplicates.
 ---@param call sqmeow.CallSummary
 ---@return string[]
 function M.filter_names(call)
@@ -891,7 +890,7 @@ function M.filter_names(call)
   return names
 end
 
---- What the connection a result came from speaks.
+--- The result's source dialect, retained after disconnecting.
 ---@param call sqmeow.CallSummary|nil
 ---@return string|nil
 function M.dialect(call)
@@ -1212,7 +1211,7 @@ function M.toggle_float()
   pcall(vim.api.nvim_win_set_cursor, win, cursor)
 end
 
---- Whether the keys that change rows may do so on this result, saying why not when they may not.
+--- Check whether the result can be edited and report the reason if it cannot.
 ---@return boolean
 local function editing()
   local state = require('sqmeow.core.state')

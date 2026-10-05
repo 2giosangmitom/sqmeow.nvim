@@ -1,4 +1,4 @@
---- One row, read down the page instead of across it, in a popup.
+--- Displays a result row vertically in a popup.
 
 local M = {}
 
@@ -6,7 +6,7 @@ local utils = require('sqmeow.core.utils')
 
 local popup = nil
 
--- Room for most type names. A longer one is cut short rather than pushing every value out.
+-- Cap type-name width to leave room for values.
 local TYPE_WIDTH = 16
 
 --- Lay a row out as lines, each value on one line and cut to fit.
@@ -22,7 +22,7 @@ function M.lines(columns, width)
   local types = {}
   local name_width, type_width = 0, 0
   for index, column in ipairs(columns) do
-    -- A key says so in two letters, kept whole when a long type name is cut to make room for them.
+    -- Reserve space for the PK/FK suffix before truncating the type name.
     local key = ({ primary_key = ' (PK)', foreign_key = ' (FK)' })[column.key] or ''
     local declared = column.declared_type or column.type_name or ''
     types[index] = truncate(declared, TYPE_WIDTH - #key, ellipsis) .. key
@@ -43,7 +43,7 @@ function M.lines(columns, width)
     if column.is_null then
       line:append(config.ui.result.null_text, 'SqmeowNull')
     else
-      -- Line breaks are flattened, so every column stays on one line under the one before it.
+      -- Keep each value on one line.
       local value = column.value:gsub('[\r\n]', ' ')
       line:append(truncate(value, value_width, ellipsis))
     end
@@ -68,7 +68,7 @@ function M.open(row)
     return
   end
 
-  -- Which columns are keys is known from the result, not from the row, so it is read from there.
+  -- Copy key metadata from the result's column definitions.
   for index, column in ipairs(columns) do
     local described = call.columns and call.columns[index]
     column.key = described and described.key
@@ -93,7 +93,7 @@ end
 
 --- Close the popup.
 function M.close()
-  -- Forgotten before unmounting, since unmounting fires the `BufLeave` that calls this again.
+  -- Clear popup before unmounting: BufLeave can call close() again.
   local closing = popup
   popup = nil
   if closing then
