@@ -73,9 +73,6 @@ test-rust:
     if [ -n "$(docker compose ps --status running --quiet cockroach 2>/dev/null)" ]; then
         export SQMEOW_TEST_COCKROACH_URL="postgres://root@127.0.0.1:56257/defaultdb"
     fi
-    if [ -n "$(docker compose ps --status running --quiet questdb 2>/dev/null)" ]; then
-        export SQMEOW_TEST_QUESTDB_URL="postgres://admin:quest@127.0.0.1:58812/qdb"
-    fi
     cargo test {{cargo_flags}}
 
 # Start the database servers used by the integration tests.
@@ -102,9 +99,6 @@ test-lua: build-debug
     fi
     if [ -n "$(docker compose ps --status running --quiet cockroach 2>/dev/null)" ]; then
         export SQMEOW_TEST_COCKROACH_URL="postgres://root@127.0.0.1:56257/defaultdb"
-    fi
-    if [ -n "$(docker compose ps --status running --quiet questdb 2>/dev/null)" ]; then
-        export SQMEOW_TEST_QUESTDB_URL="postgres://admin:quest@127.0.0.1:58812/qdb"
     fi
     # Each server is checked on its own: one of them being down should skip its own cases, not
     # point the other dialect's tests at a port with nothing behind it.
