@@ -10,6 +10,13 @@ use crate::server::args::Args;
 use crate::server::payload::map;
 use crate::server::session::{ConnId, Connection};
 
+struct OpenOptions {
+    database: Option<String>,
+    read_only: bool,
+    ssh: Option<String>,
+    env_file: Option<std::path::PathBuf>,
+}
+
 impl Core {
     /// An open connection, or the error for one that is not.
     pub(super) fn connection(&self, id: ConnId) -> Result<Arc<Connection>, String> {
@@ -29,24 +36,41 @@ impl Core {
         let read_only = args.opt_bool("read_only").unwrap_or(false);
         // `user@host[:port]` to reach the database through an SSH tunnel.
         let ssh = args.opt_string("ssh").filter(|via| !via.trim().is_empty());
+        let env_file = match args.get("env_file") {
+            None | Some(Value::Nil) => None,
+            Some(_) => Some(std::path::PathBuf::from(args.string("env_file")?)),
+        };
 
-        let work = self.open(id, name, url, database, read_only, ssh);
+        let work = self.open(
+            id,
+            name,
+            url,
+            OpenOptions {
+                database,
+                read_only,
+                ssh,
+                env_file,
+            },
+        );
         Ok((Value::from(id), Box::pin(work)))
     }
 
-    async fn open(
-        self: Arc<Self>,
-        id: ConnId,
-        name: String,
-        url: String,
-        database: Option<String>,
-        read_only: bool,
-        ssh: Option<String>,
-    ) {
+    async fn open(self: Arc<Self>, id: ConnId, name: String, url: String, options: OpenOptions) {
+        let OpenOptions {
+            database,
+            read_only,
+            ssh,
+            env_file,
+        } = options;
         self.emit_connection(id, "connecting", vec![("name", Value::from(name.as_str()))]);
 
         // The expanded URL holds the password and never leaves this function.
-        let url = match crate::server::template::expand(&url).await {
+        let templated = url.contains("{{");
+        let expanded = match env_file.as_deref() {
+            Some(path) => crate::server::template::expand_with_env_file(&url, Some(path)).await,
+            None => crate::server::template::expand(&url).await,
+        };
+        let url = match expanded {
             Ok(url) => url,
             Err(error) => {
                 return self.emit_connection(
@@ -103,7 +127,14 @@ impl Core {
                 "error",
                 vec![
                     ("name", Value::from(name)),
-                    ("error", Value::from(error.to_string())),
+                    (
+                        "error",
+                        Value::from(if templated {
+                            error.to_string().replace(&url, "[resolved URL]")
+                        } else {
+                            error.to_string()
+                        }),
+                    ),
                 ],
             ),
         }

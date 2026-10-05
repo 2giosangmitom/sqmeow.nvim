@@ -14,6 +14,7 @@ end
 ---@param url string A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
 ---@param opts table|nil `name` labels it; `database` and `parent` identify a child
 --- database; `read_only` rejects writes; `ssh` selects an SSH host or alias.
+--- Project sources carry an `env_file` path for project-local credential templates.
 ---@return integer|nil id The connection id, or nil if the engine refused the request.
 ---@return string|nil error
 ---@usage >lua
@@ -37,6 +38,7 @@ function M.connect(url, opts)
     database = opts.database,
     read_only = opts.read_only,
     ssh = opts.ssh,
+    env_file = opts.env_file,
   })
   require('sqmeow.ui.drawer').render()
 
@@ -47,6 +49,7 @@ function M.connect(url, opts)
     database = opts.database,
     read_only = opts.read_only,
     ssh = opts.ssh,
+    env_file = opts.env_file,
   })
   if not accepted then
     state.remove_connection(id)
@@ -79,6 +82,7 @@ function M.connect_named(name)
       existing.url ~= spec.url
       or (existing.read_only == true) ~= (spec.read_only == true)
       or (existing.ssh or '') ~= (spec.ssh or '')
+      or existing.env_file ~= spec.env_file
     then
       local message = ('connection `%s` has different settings; close it before reconnecting'):format(
         name
@@ -90,7 +94,10 @@ function M.connect_named(name)
     return existing.id
   end
 
-  return M.connect(spec.url, { name = spec.name, read_only = spec.read_only, ssh = spec.ssh })
+  return M.connect(
+    spec.url,
+    { name = spec.name, read_only = spec.read_only, ssh = spec.ssh, env_file = spec.env_file }
+  )
 end
 
 --- Read configured sources without connecting to their databases.

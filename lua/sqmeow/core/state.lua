@@ -14,6 +14,7 @@ local M = {}
 ---@field current_database string|nil For MongoDB, the database commands run on.
 ---@field read_only boolean|nil Runs only statements that read.
 ---@field ssh string|nil The `user@host` an SSH tunnel to the database goes through.
+---@field env_file string|nil Project-local dotenv path used for this connection.
 
 ---@class sqmeow.CallSummary
 ---@field call_id integer|nil Absent for an entry from the log that has no rows to read.

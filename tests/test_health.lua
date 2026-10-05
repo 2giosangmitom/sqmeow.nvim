@@ -95,6 +95,13 @@ T['warns about a source that cannot be read'] = function()
   eq(connections[2], 'info: no connections are configured; `:Sqmeow add` makes one')
 end
 
+T['defers adapter detection for full URL templates without resolving secrets'] = function()
+  require('sqmeow.sources.file').save({ { name = 'templated', url = "{{ env 'DATABASE_URL' }}" } })
+  local connections = report().connections
+  eq(starts(connections[1], 'info: templated'), true)
+  helpers.contains(connections[1], 'URL template resolves when connecting')
+end
+
 T['knows the dialect of every scheme the engine accepts'] = function()
   -- The same aliases the engine reads a URL by, so the check never calls a working URL broken.
   local schemes = {

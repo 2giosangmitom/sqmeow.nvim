@@ -10,7 +10,10 @@
 //! user's machine with that user's environment, filesystem, and shell permissions; connection
 //! definitions containing directives must therefore be treated as executable trusted input.
 
-/// Expand every `{{ ... }}` directive in a string.
+use std::collections::HashMap;
+use std::path::Path;
+
+/// Expand every `{{ ... }}` directive using the process environment.
 ///
 /// `env` reads an environment variable, `file` reads a UTF-8 file (with `~/` expanded), and
 /// `exec` runs the contents through the platform shell. Each directive is evaluated in source
@@ -23,9 +26,24 @@
 /// Returns an error for malformed or unknown directives, unavailable environment variables or
 /// files, and commands that time out, cannot start, or exit unsuccessfully.
 pub async fn expand(input: &str) -> Result<String, String> {
+    expand_with_env_file(input, None).await
+}
+
+/// Expand directives with an optional project-local `.env` file as a fallback.
+///
+/// Process variables win. The file is reread for each connection, never loaded into
+/// the process environment, and its values are never recursively evaluated.
+/// Missing files are optional; other I/O and parse failures are reported without
+/// including dotenv source lines, which may contain credentials.
+pub async fn expand_with_env_file(input: &str, env_file: Option<&Path>) -> Result<String, String> {
     if !input.contains("{{") {
         return Ok(input.to_owned());
     }
+
+    let local = match env_file {
+        Some(path) => environment(path)?,
+        None => HashMap::new(),
+    };
 
     let mut out = String::with_capacity(input.len());
     let mut rest = input;
@@ -38,7 +56,7 @@ pub async fn expand(input: &str) -> Result<String, String> {
             .find("}}")
             .ok_or_else(|| "a `{{` directive is never closed with `}}`".to_owned())?;
 
-        out.push_str(&evaluate(after[..close].trim()).await?);
+        out.push_str(&evaluate(after[..close].trim(), &local).await?);
         rest = &after[close + 2..];
     }
 
@@ -46,11 +64,41 @@ pub async fn expand(input: &str) -> Result<String, String> {
     Ok(out)
 }
 
-async fn evaluate(directive: &str) -> Result<String, String> {
+/// Parse dotenv without mutating the multi-threaded engine's global environment.
+fn environment(path: &Path) -> Result<HashMap<String, String>, String> {
+    let entries = match dotenvy::from_path_iter(path) {
+        Ok(entries) => entries,
+        Err(dotenvy::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(HashMap::new());
+        }
+        Err(_) => {
+            return Err(format!(
+                "`{}` could not be read as a dotenv file",
+                path.display()
+            ));
+        }
+    };
+    let mut values = HashMap::new();
+    for entry in entries {
+        let (name, value) = entry
+            .map_err(|_| format!("`{}` could not be parsed as a dotenv file", path.display()))?;
+        // Like dotenvy's non-overriding loader, the first definition wins.
+        values.entry(name).or_insert(value);
+    }
+    Ok(values)
+}
+
+async fn evaluate(directive: &str, local: &HashMap<String, String>) -> Result<String, String> {
     let (name, argument) = split(directive)?;
 
     match name {
         "env" => std::env::var(&argument)
+            .or_else(|_| {
+                local
+                    .get(&argument)
+                    .cloned()
+                    .ok_or(std::env::VarError::NotPresent)
+            })
             .map_err(|_| format!("the environment variable `{argument}` is not set")),
         "exec" => run(&argument).await,
         "file" => read(&argument),
@@ -73,7 +121,7 @@ fn split(directive: &str) -> Result<(&str, String), String> {
     let quote = rest
         .chars()
         .next()
-        .filter(|character| *character == '"' || *character == '`')
+        .filter(|character| matches!(*character, '"' | '\'' | '`'))
         .ok_or_else(|| format!("the argument to `{name}` must be quoted"))?;
 
     let body = rest
@@ -150,6 +198,123 @@ async fn shell(command: &str) -> std::io::Result<std::process::Output> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Project(std::path::PathBuf);
+
+    impl Project {
+        fn new(contents: &str) -> Self {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "sqmeow-dotenv-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join(".env"), contents).unwrap();
+            Self(path)
+        }
+
+        fn env_file(&self) -> std::path::PathBuf {
+            self.0.join(".env")
+        }
+    }
+
+    impl Drop for Project {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn dotenv_values_are_scoped_and_do_not_modify_the_environment() {
+        let one =
+            Project::new("SQMEOW_DOTENV_URL='sqlite::memory:'\nSQMEOW_DOTENV_NOTE=\"two words\"\n");
+        let two = Project::new("SQMEOW_DOTENV_URL=duckdb::memory:\n");
+        let input = "{{ env 'SQMEOW_DOTENV_URL' }}";
+        assert_eq!(
+            expand_with_env_file(input, Some(&one.env_file()))
+                .await
+                .unwrap(),
+            "sqlite::memory:"
+        );
+        assert_eq!(
+            expand_with_env_file(input, Some(&two.env_file()))
+                .await
+                .unwrap(),
+            "duckdb::memory:"
+        );
+        assert!(std::env::var("SQMEOW_DOTENV_URL").is_err());
+        assert!(expand(input).await.is_err());
+        assert_eq!(
+            expand_with_env_file("{{ env `SQMEOW_DOTENV_NOTE` }}", Some(&one.env_file()))
+                .await
+                .unwrap(),
+            "two words"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_variables_take_precedence_over_dotenv() {
+        let (name, value) = std::env::vars()
+            .next()
+            .expect("the test process has an environment");
+        let project = Project::new(&format!("{name}=dotenv-must-not-win\n"));
+        let input = format!("{{{{ env \"{name}\" }}}}");
+        assert_eq!(
+            expand_with_env_file(&input, Some(&project.env_file()))
+                .await
+                .unwrap(),
+            value
+        );
+        std::fs::remove_file(project.env_file()).unwrap();
+        assert_eq!(
+            expand_with_env_file(&input, Some(&project.env_file()))
+                .await
+                .unwrap(),
+            value
+        );
+    }
+
+    #[tokio::test]
+    async fn dotenv_is_reread_and_values_are_not_recursively_expanded() {
+        let project = Project::new("SQMEOW_DOTENV_CHANGE=first\n");
+        let input = "{{ env 'SQMEOW_DOTENV_CHANGE' }}";
+        assert_eq!(
+            expand_with_env_file(input, Some(&project.env_file()))
+                .await
+                .unwrap(),
+            "first"
+        );
+        std::fs::write(
+            project.env_file(),
+            "SQMEOW_DOTENV_CHANGE='{{ exec \"echo secret\" }}'\n",
+        )
+        .unwrap();
+        assert_eq!(
+            expand_with_env_file(input, Some(&project.env_file()))
+                .await
+                .unwrap(),
+            "{{ exec \"echo secret\" }}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dotenv_errors_do_not_expose_secret_lines() {
+        let project = Project::new("SECRET='private-secret\n");
+        let error = expand_with_env_file("{{ env 'SECRET' }}", Some(&project.env_file()))
+            .await
+            .unwrap_err();
+        assert!(error.contains(".env"), "{error}");
+        assert!(!error.contains("private-secret"), "{error}");
+        std::fs::remove_file(project.env_file()).unwrap();
+        let error = expand_with_env_file(
+            "{{ env 'SQMEOW_DOTENV_MISSING' }}",
+            Some(&project.env_file()),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("SQMEOW_DOTENV_MISSING"), "{error}");
+    }
 
     #[tokio::test]
     async fn text_without_directives_is_unchanged() {

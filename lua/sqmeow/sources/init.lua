@@ -11,6 +11,7 @@ local M = {}
 ---@field read_only boolean|nil Runs only statements that read.
 ---@field ssh string|nil The `user@host` an SSH tunnel to the database goes through.
 ---@field source string|nil Which source it came from.
+---@field env_file string|nil Project-local dotenv path, resolved only in the engine.
 
 --- The sources that ship with the plugin.
 ---@type table<string, { load: fun(opts: table|nil): sqmeow.ConnectionSpec[], string|nil }>
@@ -63,6 +64,7 @@ function M.load()
           read_only = entry.read_only == true or nil,
           ssh = type(entry.ssh) == 'string' and entry.ssh ~= '' and entry.ssh or nil,
           source = name,
+          env_file = entry.env_file,
         })
       end
     end
