@@ -5,6 +5,7 @@ use sqmeow_db::edit::Source;
 use sqmeow_db::error::Error;
 use sqmeow_db::node::RelationKind;
 use sqmeow_db::node::RoutineKind;
+use sqmeow_db::sql::parameters::{Kind, Value};
 use sqmeow_db::types::ForeignKey;
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::types::TypeClass;
@@ -138,6 +139,117 @@ async fn decodes_the_types_a_real_schema_holds() {
     for (index, want) in expected.iter().enumerate() {
         let column = &result.columns()[index].name;
         assert_eq!(result.cell(0, index), Some(want), "column `{column}`");
+    }
+}
+
+#[tokio::test]
+async fn bound_text_stays_data_and_a_native_placeholder_can_repeat() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    let value = "it's \\ data; ' OR true -- $1 ?";
+    let result = backend
+        .execute_bound(
+            "select $1::text as first, $1::text as repeated",
+            &[Value::Text(value.into())],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("the bound text should remain data");
+
+    assert_eq!(result.row_count(), 1);
+    for column in 0..2 {
+        assert_eq!(result.cell(0, column), Some(&Cell::Text(value.into())));
+    }
+}
+
+#[tokio::test]
+async fn bound_scalars_and_typed_nulls_keep_their_result_types() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    let result = backend
+        .execute_bound(
+            "select $1 as whole, $2 as flag, $3 as fraction,
+                    $4 as words, $5 as null_int, $6 as null_bool,
+                    $7 as null_float, $8 as null_text",
+            &[
+                Value::Int(-42),
+                Value::Bool(true),
+                Value::Float(1.5),
+                Value::Text("words".into()),
+                Value::Null(Kind::Int),
+                Value::Null(Kind::Bool),
+                Value::Null(Kind::Float),
+                Value::Null(Kind::Text),
+            ],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("the typed binds should run");
+
+    let expected = [
+        Cell::Int(-42),
+        Cell::Bool(true),
+        Cell::Float(1.5),
+        Cell::Text("words".into()),
+        Cell::Null,
+        Cell::Null,
+        Cell::Null,
+        Cell::Null,
+    ];
+    let classes = [
+        TypeClass::Number,
+        TypeClass::Boolean,
+        TypeClass::Number,
+        TypeClass::Text,
+    ];
+    assert_eq!(result.row_count(), 1);
+    assert_eq!(result.columns().len(), expected.len());
+    for (index, want) in expected.iter().enumerate() {
+        assert_eq!(result.cell(0, index), Some(want), "column {index}");
+        assert_eq!(result.columns()[index].class, classes[index % 4]);
+    }
+}
+
+#[tokio::test]
+async fn a_bound_select_keeps_editable_provenance_even_when_empty() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    fixture(&backend, "pg_bound").await;
+    run(&backend, "insert into pg_bound values (1, 'a', null)").await;
+
+    for id in [1, 99] {
+        let result = backend
+            .execute_bound(
+                "select id, label as name, optional from pg_bound where id = $1 and $2 is null",
+                &[Value::Int(id), Value::Null(Kind::Int)],
+                NO_CAP,
+                CancellationToken::new(),
+            )
+            .await
+            .expect("the bound table select should run");
+        assert_eq!(result.row_count(), usize::from(id == 1));
+        let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["id", "name", "optional"]);
+        let Some(Source::Tables(tables)) = result.source() else {
+            panic!("expected a table source, got {:?}", result.source());
+        };
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].schema.as_deref(), Some(SCHEMA));
+        assert_eq!(tables[0].name, "pg_bound");
+        assert_eq!(tables[0].key, vec![0]);
+        assert_eq!(tables[0].column(1), Some("label"));
+        assert_eq!(result.columns()[0].key, KeyKind::Primary);
+        if id == 1 {
+            assert_eq!(result.cell(0, 1), Some(&Cell::Text("a".into())));
+            backend
+                .plan(
+                    &result,
+                    &Changes {
+                        updates: vec![(0, vec![(1, "changed".into())])],
+                        ..Changes::default()
+                    },
+                )
+                .expect("the bound result should remain editable");
+        }
     }
 }
 

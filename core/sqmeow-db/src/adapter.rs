@@ -129,6 +129,25 @@ pub trait Adapter: Send + Sync {
         cancel: CancellationToken,
     ) -> impl Future<Output = Result<ResultSet>> + Send;
 
+    /// Execute one statement using native bound values, never SQL interpolation.
+    fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[crate::sql::parameters::Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> impl Future<Output = Result<ResultSet>> + Send {
+        async move {
+            if values.is_empty() {
+                self.execute(statement, max_rows, cancel).await
+            } else {
+                Err(crate::error::Error::driver(
+                    "this adapter does not support query parameters",
+                ))
+            }
+        }
+    }
+
     /// Executes `statement` as a wrapper around `origin`.
     ///
     /// Tracing of columns to their source tables uses `origin`, the unwrapped

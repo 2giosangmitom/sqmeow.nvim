@@ -10,8 +10,8 @@ use sqlx::postgres::{
     PgColumn, PgConnectOptions, PgConnection, PgHasArrayType, PgPool, PgPoolOptions, PgRow,
 };
 use sqlx::{
-    Connection, Decode, Executor as _, Pool, Postgres, Row, Statement as _, Type, TypeInfo,
-    ValueRef, types,
+    AssertSqlSafe, Connection, Decode, Executor as _, Pool, Postgres, Row, SqlSafeStr,
+    Statement as _, Type, TypeInfo, ValueRef, types,
 };
 use sqmeow_db::adapter::Adapter;
 use sqmeow_db::adapter::Dialect;
@@ -218,11 +218,19 @@ impl PostgresAdapter {
         let Some(prepared) = prepare(&self.meta, statement).await else {
             return (Vec::new(), None);
         };
-        let mut columns = result_columns(prepared.columns());
-        self.mark_keys(prepared.columns(), &mut columns).await;
+        self.described_columns(statement, prepared.columns()).await
+    }
+
+    async fn described_columns(
+        &self,
+        statement: &str,
+        prepared: &[PgColumn],
+    ) -> (Vec<Column>, Option<Source>) {
+        let mut columns = result_columns(prepared);
+        self.mark_keys(prepared, &mut columns).await;
         let plain = sqmeow_db::sql::plain(Dialect::Postgres, statement);
         let sides = sqmeow_db::sql::Sides::read(Dialect::Postgres, statement);
-        let source = self.source(prepared.columns(), plain, sides).await;
+        let source = self.source(prepared, plain, sides).await;
         (columns, source)
     }
 
@@ -547,6 +555,31 @@ impl SqlxAdapter for PostgresAdapter {
         self.columns(statement).await
     }
 
+    async fn describe_bound(
+        &self,
+        statement: &str,
+        values: &[sqmeow_db::sql::parameters::Value],
+    ) -> (Vec<Column>, Option<Source>) {
+        use sqmeow_db::sql::parameters::{Kind, Value};
+        let types: Vec<_> = values
+            .iter()
+            .map(|value| match value {
+                Value::Text(_) | Value::Null(Kind::Text) => <String as Type<Postgres>>::type_info(),
+                Value::Int(_) | Value::Null(Kind::Int) => <i64 as Type<Postgres>>::type_info(),
+                Value::Float(_) | Value::Null(Kind::Float) => <f64 as Type<Postgres>>::type_info(),
+                Value::Bool(_) | Value::Null(Kind::Bool) => <bool as Type<Postgres>>::type_info(),
+            })
+            .collect();
+        let sql = AssertSqlSafe(statement.to_owned()).into_sql_str();
+        match self.meta.prepare_with(sql, &types).await {
+            Ok(prepared) => self.described_columns(statement, prepared.columns()).await,
+            Err(error) => {
+                tracing::debug!(%error, "could not prepare a bound statement to read its columns");
+                (Vec::new(), None)
+            }
+        }
+    }
+
     fn decode(row: &PgRow, index: usize) -> Cell {
         decode_cell(row, index)
     }
@@ -603,6 +636,16 @@ impl Adapter for PostgresAdapter {
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
         stream::run(self, statement, statement, max_rows, &cancel).await
+    }
+
+    async fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[sqmeow_db::sql::parameters::Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        stream::run_bound(self, statement, values, max_rows, &cancel).await
     }
 
     async fn execute_wrapped(
