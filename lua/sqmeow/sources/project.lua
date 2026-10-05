@@ -31,6 +31,23 @@ local function connection(name, fields, root)
   if vim.trim(name) == '' then
     return nil, 'a connection needs a non-empty name'
   end
+  if fields.url ~= nil then
+    if type(fields.url) ~= 'string' or vim.trim(fields.url) == '' then
+      return nil, 'url must be a non-empty string'
+    end
+    for key, value in pairs(fields) do
+      if key ~= 'url' and key ~= 'read_only' and key ~= 'ssh' then
+        return nil, ('`url` cannot be combined with `%s`'):format(key)
+      end
+      if key == 'read_only' and type(value) ~= 'boolean' then
+        return nil, 'read_only must be a boolean'
+      end
+      if key == 'ssh' and type(value) ~= 'string' then
+        return nil, 'ssh must be a string'
+      end
+    end
+    return { name = name, url = fields.url, read_only = fields.read_only, ssh = fields.ssh }
+  end
   local dialects = require('sqmeow.core.dialects')
   local dialect = type(fields.type) == 'string' and dialects.get(fields.type)
   if not dialect then
@@ -107,6 +124,8 @@ function M.load()
     if not entry then
       return {}, ('%s [%s]: %s'):format(path, name, problem)
     end
+    -- Carry the path, never the file's secret values, to the engine at connect time.
+    entry.env_file = vim.fs.joinpath(root, '.env')
     table.insert(connections, entry)
   end
   return connections

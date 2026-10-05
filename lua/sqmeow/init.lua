@@ -172,9 +172,24 @@
 ---   path = ".sqmeow/test.db"
 --- <
 --- Each section supplies the connection name; quote names containing dots, as
---- in `["app.dev"]`. `type` is required and must be one of:
+--- in `["app.dev"]`. Choose either a complete `url` or `type` with dialect fields.
+--- Supported types are:
 ---   postgres, mysql, mssql, sqlite, duckdb, redis, mongodb, scylla,
 ---   surrealdb, clickhouse, oracle.
+---
+--- URL entries need no `type` and may also set `read_only` and `ssh`. Do not mix
+--- `url` with `type`, `host`, `path`, or other connection fields: >toml
+---   [dev_url]
+---   url = "{{ env 'DATABASE_URL' }}"
+---   read_only = true
+--- <
+--- The engine reads `.env` beside `.sqmeow/` when connecting, using dotenvy.
+--- Process variables take precedence over the file; a missing file is ignored.
+--- Dotenv values are scoped to that connection, never added to the process
+--- environment or sent back to Neovim. Single, double, and backtick quotes work
+--- in `env` directives. This also supports field-level credential templates.
+--- Reconnect after changing `.env`, and keep it out of version control. Dotenv
+--- files are plaintext, not encrypted secrets storage.
 ---
 --- Fields follow the chosen dialect's form:
 ---   host, database, user, password   Strings; host defaults to localhost.

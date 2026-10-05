@@ -239,6 +239,32 @@ The nearest file is discovered from Neovim's current working directory upward wh
 - Optional `password` and `ssh` fields are supported, including password templates such as `password = '{{ env "PGPASSWORD" }}'`.
 - SQLite and DuckDB use `path`, resolved relative to the project (or `:memory:`).
 
+Alternatively, use a complete `url` instead of `type` and connection fields:
+
+```toml
+[dev_db]
+url = "{{ env 'DATABASE_URL' }}"
+read_only = true
+```
+
+Put the value in `.env` at the project root (beside `.sqmeow/`, not inside it):
+
+```dotenv
+DATABASE_URL=postgres://dev_user:local-password@localhost:5432/my_app_dev
+```
+
+The engine uses [dotenvy](https://github.com/allan2/dotenvy) to read that project's
+`.env` when connecting. Existing process environment variables take precedence;
+a missing `.env` is fine. Values stay scoped to the project connection and do not
+modify Neovim's or the engine's environment. The same fallback works for credential
+templates in individual fields, such as `password = "{{ env 'PGPASSWORD' }}"`.
+Disconnect and reconnect after editing `.env`. Keep it out of version control;
+it is a plaintext secrets file, not encrypted storage.
+
+URL entries may also set `read_only` and `ssh`, but cannot mix `url` with `type`,
+`host`, or other connection fields. URLs and templates remain unresolved when
+listed in the drawer; the engine resolves them only when opening a connection.
+
 Project connections always load before saved connections. Duplicate names report a conflict and the project definition wins. Edit project connections in the TOML file.
 
 Project discovery is always enabled. Reading TOML requires the matching engine binary.

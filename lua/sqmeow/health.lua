@@ -113,7 +113,9 @@ local function check_sources()
       connection.source
     )
 
-    if not dialect then
+    if connection.url:match('^%s*{{') then
+      vim.health.info(shown .. '\nURL template resolves when connecting')
+    elseif not dialect then
       vim.health.error(shown .. '\nno adapter handles the `' .. scheme .. '` scheme')
     elseif #adapters > 0 and not vim.tbl_contains(adapters, dialect) then
       vim.health.error(shown .. '\nthis engine was not built with the ' .. dialect .. ' adapter')

@@ -644,6 +644,7 @@ local function toggle_database(node)
     database = node.name,
     read_only = parent.read_only,
     ssh = parent.ssh,
+    env_file = parent.env_file,
   })
   -- Marked open, the way a connection someone expanded is, so a refresh reloads what it holds.
   if id then

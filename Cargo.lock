@@ -5699,6 +5699,7 @@ dependencies = [
 name = "sqmeow-core"
 version = "2.5.0"
 dependencies = [
+ "dotenvy",
  "rmpv",
  "sqmeow-adapters",
  "sqmeow-db",

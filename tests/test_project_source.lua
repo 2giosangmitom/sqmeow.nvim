@@ -47,11 +47,17 @@ database = "my_app_staging"
   local found, problems = sources.load()
   eq(problems, {})
   eq(found, {
-    { name = 'dev_db', url = 'postgres://dev_user@localhost:5432/my_app_dev', source = 'project' },
+    {
+      name = 'dev_db',
+      url = 'postgres://dev_user@localhost:5432/my_app_dev',
+      source = 'project',
+      env_file = vim.fs.joinpath(root, '.env'),
+    },
     {
       name = 'staging_db',
       url = 'mysql://staging.example.com:3306/my_app_staging',
       source = 'project',
+      env_file = vim.fs.joinpath(root, '.env'),
     },
   })
 end
@@ -103,6 +109,7 @@ ssh = 'user@bastion'
     read_only = true,
     ssh = 'user@bastion',
     source = 'project',
+    env_file = vim.fs.joinpath(root, '.env'),
   })
 end
 
@@ -111,10 +118,130 @@ T['preserves password templates'] = function()
   eq(sources.load()[1].url, 'postgres://:{{ env "PGPASSWORD" }}@localhost/')
 end
 
+T['accepts URL-only entries and preserves full URL templates'] = function()
+  write([=[
+[literal]
+url = "sqlite::memory:"
+[templated]
+url = "{{ env 'SQMEOW_PROJECT_DATABASE_URL' }}"
+read_only = true
+ssh = "user@bastion"
+]=])
+  local found, problems = sources.load()
+  eq(problems, {})
+  eq(found[1].url, 'sqlite::memory:')
+  eq(found[2].url, "{{ env 'SQMEOW_PROJECT_DATABASE_URL' }}")
+  eq(found[2].read_only, true)
+  eq(found[2].ssh, 'user@bastion')
+  eq(found[2].env_file, vim.fs.joinpath(root, '.env'))
+end
+
+T['loads project dotenv only in the engine when connecting and rereads on reconnect'] = function()
+  local api = require('sqmeow.api.connection')
+  local state = require('sqmeow.core.state')
+  write([=[ [dev]
+url = "{{ env 'SQMEOW_PROJECT_DATABASE_URL' }}"
+]=])
+  vim.fn.writefile({ 'SQMEOW_PROJECT_DATABASE_URL=sqlite::memory:' }, vim.fs.joinpath(root, '.env'))
+  vim.fn.mkdir(vim.fs.joinpath(root, 'src'))
+  vim.api.nvim_set_current_dir(vim.fs.joinpath(root, 'src'))
+  local ids = {}
+  MiniTest.finally(function()
+    for _, id in ipairs(ids) do
+      api.disconnect(id)
+    end
+    helpers.wait_for('project connections close', function()
+      for _, id in ipairs(ids) do
+        if state.connections[id] then
+          return false
+        end
+      end
+      return true
+    end)
+  end)
+  local id = assert(api.connect_named('dev'))
+  table.insert(ids, id)
+  helpers.wait_for('dotenv URL connects', function()
+    return state.connections[id].state ~= 'connecting'
+  end)
+  eq(state.connections[id].state, 'connected')
+  eq(state.connections[id].dialect, 'sqlite')
+  eq(state.connections[id].url, "{{ env 'SQMEOW_PROJECT_DATABASE_URL' }}")
+  eq(vim.env.SQMEOW_PROJECT_DATABASE_URL, nil)
+  api.disconnect(id)
+  helpers.wait_for('first project connection closes', function()
+    return state.connections[id] == nil
+  end)
+  vim.fn.writefile({ 'SQMEOW_PROJECT_DATABASE_URL=duckdb::memory:' }, vim.fs.joinpath(root, '.env'))
+  id = assert(api.connect_named('dev'))
+  table.insert(ids, id)
+  helpers.wait_for('changed dotenv URL reconnects', function()
+    return state.connections[id].state ~= 'connecting'
+  end)
+  eq(state.connections[id].state, 'connected')
+  eq(state.connections[id].dialect, 'duckdb')
+  eq(vim.env.SQMEOW_PROJECT_DATABASE_URL, nil)
+end
+
+T['does not reuse the same URL template from another project'] = function()
+  local state = require('sqmeow.core.state')
+  helpers.stub(state, 'connections', {})
+  helpers.stub(state, 'current', nil)
+  write([=[ [dev]
+url = "{{ env 'DATABASE_URL' }}"
+]=])
+  local spec = assert(sources.find('dev'))
+  state.add_connection({
+    id = 321,
+    name = 'dev',
+    url = spec.url,
+    env_file = spec.env_file,
+    state = 'connected',
+  })
+  eq(require('sqmeow.api.connection').connect_named('dev'), 321)
+  local nested = vim.fs.joinpath(root, 'other')
+  write(
+    [=[ [dev]
+url = "{{ env 'DATABASE_URL' }}"
+]=],
+    nested
+  )
+  vim.api.nvim_set_current_dir(nested)
+  local id, err = require('sqmeow.api.connection').connect_named('dev')
+  eq(id, nil)
+  helpers.contains(err, 'close it before reconnecting')
+end
+
+T['does not expose dotenv secrets in connection failures'] = MiniTest.new_set({
+  parametrize = {
+    { "SQMEOW_PROJECT_FAILURE_URL='private-secret\n", 'dotenv file' },
+    { 'SQMEOW_PROJECT_FAILURE_URL=private-secret\n', 'unsupported database URL' },
+  },
+})
+T['does not expose dotenv secrets in connection failures']['rejects safely'] = function(
+  contents,
+  message
+)
+  local state = require('sqmeow.core.state')
+  helpers.stub(state, 'failures', {})
+  write([=[ [dev]
+url = "{{ env 'SQMEOW_PROJECT_FAILURE_URL' }}"
+]=])
+  vim.fn.writefile(vim.split(contents, '\n'), vim.fs.joinpath(root, '.env'))
+  local id = assert(require('sqmeow.api.connection').connect_named('dev'))
+  helpers.wait_for('dotenv connection failure arrives', function()
+    return state.failures.dev ~= nil
+  end)
+  eq(state.connections[id], nil)
+  helpers.contains(state.failures.dev, message)
+  helpers.absent(state.failures.dev, 'private-secret')
+end
+
 T['rejects project exec templates'] = MiniTest.new_set({
   parametrize = {
     { 'password', '{{ exec "echo private-secret" }}' },
     { 'ssh', '{{\texec\t"echo private-secret" }}' },
+    { 'url', '{{ exec "echo private-secret" }}' },
   },
 })
 T['rejects project exec templates']['without exposing commands'] = function(field, value)
@@ -135,7 +262,13 @@ T['refuses reuse after switching to a different same-named project definition'] 
   end)
   write('[dev]\ntype = "sqlite"\npath = "data.db"')
   local spec = assert(sources.find('dev'))
-  state.add_connection({ id = 123, name = 'dev', url = spec.url, state = 'connected' })
+  state.add_connection({
+    id = 123,
+    name = 'dev',
+    url = spec.url,
+    env_file = spec.env_file,
+    state = 'connected',
+  })
   eq(require('sqmeow.api.connection').connect_named('dev'), 123)
   local nested = vim.fs.joinpath(root, 'other')
   write('[dev]\ntype = "sqlite"\npath = "data.db"', nested)
@@ -170,6 +303,12 @@ T['reports invalid configs with the file path'] = MiniTest.new_set({
     { 'dev = "postgres"', 'connection table' },
     { '[dev]\ntype = "unknown"', 'supported database' },
     { '[dev]\ntype = "postgres"\nport = "5432"', 'port must be' },
+    { '[dev]\nurl = ""', 'non-empty string' },
+    { '[dev]\nurl = 42', 'non-empty string' },
+    { '[dev]\nurl = "sqlite::memory:"\ntype = "sqlite"', 'cannot be combined' },
+    { '[dev]\nurl = "sqlite::memory:"\nhost = "localhost"', 'cannot be combined' },
+    { '[dev]\nurl = "sqlite::memory:"\nread_only = "true"', 'must be a boolean' },
+    { '[dev]\nurl = "sqlite::memory:"\nssh = true', 'must be a string' },
   },
 })
 T['reports invalid configs with the file path']['rejects'] = function(contents, message)
