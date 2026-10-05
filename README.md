@@ -410,13 +410,43 @@ cmp.register_source('sqmeow', require('sqmeow.completion.cmp').new())
 
 Press `gf` or `go` to open the filter bar above the grid.
 
-- **SQL:** filters rerun the query as a subquery. `=` adds the selected cell's value to `WHERE`; `s` adds a sort expression to `ORDER BY`.
-- **MongoDB:** uses filter and sort documents.
-- **Redis, ScyllaDB, SurrealDB, and disconnected results:** filter in memory with `AND`/`OR`/`NOT`, `IS NULL`, `LIKE`/`ILIKE`, `IN`, and `BETWEEN`.
+Every adapter uses **Polars SQL on retained query rows**, including MongoDB,
+Redis, CockroachDB, disconnected results, and results reopened from history.
+Filtering and sorting never rerun the database query or discard staged edits.
+They apply to all retained rows, not just the visible page, but cannot recover
+rows omitted by the original query or `query.max_rows`.
+
+Enter fragments without `WHERE` or `ORDER BY`, for example:
+
+```text
+WHERE     age >= 18 AND status = 'active'
+ORDER BY  age DESC NULLS LAST, id ASC
+```
+
+The labels are supplied by the bar. Other predicates include
+`name ILIKE '%alice%'`, `age BETWEEN 18 AND 65`, `status IN ('pending', 'failed')`,
+and `deleted_at IS NULL`. Quote identifiers with double quotes (`"Customer Name"`)
+and strings with single quotes. Duplicate column names become `name`, `name_2`, etc.
+Column names are case-sensitive and must match the result (for example, Oracle's
+`"N"`, not `n`); column completion supplies the correct names.
+Only row conditions and ordering are accepted, not full queries or subqueries.
+This is Polars SQL, not the source database's dialect or MongoDB JSON syntax.
+
+`=` adds the selected cell's value to `WHERE`; `s`/`S` build `ORDER BY` with
+nulls last. `R` restores the original snapshot. Invalid filters leave the previous
+view intact. Run the original query again to fetch fresh data; refreshing after
+applying edits reapplies the local filter and sort to the new result.
+
+Integers and booleans retain their types. Numeric-looking strings remain strings
+(for example, `'001'` differs from `'1'`); use `CAST(value AS DOUBLE)` for numeric
+comparisons or ordering of Redis string values. Exact decimals, temporal values, and
+nested JSON remain text in the view; nested document fields are not automatically
+expanded into columns. Use explicit Polars SQL casts when numeric/temporal
+comparison is needed (casting decimals to floating point can lose precision).
 
 | Key               | Action                       |
 | ----------------- | ---------------------------- |
-| `<CR>`            | Run query with bar's content |
+| `<CR>`            | Apply local filter and sort  |
 | `q`, `<Esc>`      | Close bar without filtering  |
 | `<C-p>` / `<C-n>` | Older / newer filter         |
 | `<C-x><C-o>`      | Complete column name         |

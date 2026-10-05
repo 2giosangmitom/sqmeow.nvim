@@ -1,29 +1,18 @@
 //! Describing results to the editor.
 
 use rmpv::Value;
-use sqmeow_db::adapter::Dialect;
 use sqmeow_db::edit::Source;
 use sqmeow_db::value::Cell;
 
 use crate::server::payload::map;
 use crate::server::session::Call;
 
-/// The view operations a result can currently perform. Structured memory views work on every
-/// held result; free-form filter fragments on a disconnected MongoDB result do not.
-pub(super) fn capabilities(dialect: Option<Dialect>, connected: bool) -> Value {
-    let query = connected
-        && !matches!(
-            dialect,
-            None | Some(Dialect::Redis | Dialect::Scylla | Dialect::SurrealDb)
-        );
-    let memory = true;
+/// Every retained result can filter/sort locally. Only refresh requires a connection.
+pub(super) fn capabilities(connected: bool) -> Value {
     map(vec![
-        ("query", Value::from(query)),
-        ("memory", Value::from(memory)),
-        (
-            "filter",
-            Value::from(query || dialect != Some(Dialect::MongoDb)),
-        ),
+        ("query", Value::from(connected)),
+        ("memory", Value::from(true)),
+        ("filter", Value::from(true)),
     ])
 }
 
@@ -79,7 +68,7 @@ pub(super) fn summarize(call: &Call, connected: bool) -> Vec<(&'static str, Valu
         ("rows", Value::from(result.row_count() as u64)),
         ("sql", Value::from(result.statement())),
         ("truncated", Value::from(result.is_truncated())),
-        ("capabilities", capabilities(call.dialect, connected)),
+        ("capabilities", capabilities(connected)),
     ];
     if let Some(source) = result.source() {
         let mut described = vec![
@@ -136,17 +125,11 @@ mod tests {
                 .find(|(key, _)| key.as_str() == Some(name))
                 .and_then(|(_, value)| value.as_bool())
         };
-        let sqlite = capabilities(Some(Dialect::Sqlite), true);
-        assert_eq!(get(&sqlite, "query"), Some(true));
-        assert_eq!(get(&sqlite, "memory"), Some(true));
-        let redis = capabilities(Some(Dialect::Redis), true);
-        assert_eq!(get(&redis, "query"), Some(false));
-        assert_eq!(get(&redis, "memory"), Some(true));
-        let mongo = capabilities(Some(Dialect::MongoDb), false);
-        assert_eq!(get(&mongo, "filter"), Some(false));
-        assert_eq!(get(&mongo, "memory"), Some(true));
-        let mongo_open = capabilities(Some(Dialect::MongoDb), true);
-        assert_eq!(get(&mongo_open, "query"), Some(true));
-        assert_eq!(get(&mongo_open, "memory"), Some(true));
+        for connected in [true, false] {
+            let flags = capabilities(connected);
+            assert_eq!(get(&flags, "query"), Some(connected));
+            assert_eq!(get(&flags, "memory"), Some(true));
+            assert_eq!(get(&flags, "filter"), Some(true));
+        }
     }
 }

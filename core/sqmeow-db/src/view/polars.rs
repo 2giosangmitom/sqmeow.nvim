@@ -3,7 +3,7 @@
 
 use polars::prelude::{Column, DataFrame, DataType, Expr, IntoLazy, SortMultipleOptions, col, lit};
 use polars::sql::SQLContext;
-use sqlparser::ast::{SetExpr, Statement};
+use sqlparser::ast::{SetExpr, Statement, Visit, Visitor};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
@@ -34,9 +34,20 @@ impl Query {
         let SetExpr::Select(select) = query.body.as_ref() else {
             return Err("a filter takes one condition and one order".into());
         };
-        if query.limit_clause.is_some()
-            || select.from.len() != 1
-            || !select.from[0].joins.is_empty()
+        // Only WHERE and ORDER BY may differ from the fixed SELECT. Never allow
+        // extra clauses or subqueries/table functions to read outside the retained data.
+        let mut shape = query.clone();
+        shape.order_by = None;
+        let SetExpr::Select(shape_select) = shape.body.as_mut() else {
+            unreachable!()
+        };
+        shape_select.selection = None;
+        let baseline = Parser::parse_sql(&GenericDialect {}, &sql_text("", ""))
+            .expect("the fixed view query is valid SQL");
+        if Statement::Query(shape) != baseline[0]
+            || (!condition.is_empty() && select.selection.is_none())
+            || (!order.is_empty() && query.order_by.is_none())
+            || parsed[0].visit(&mut NoSubqueries::default()).is_break()
         {
             return Err("a filter takes one condition and one order".into());
         }
@@ -48,6 +59,25 @@ impl Query {
 
     fn orders(&self) -> bool {
         !self.order_by.is_empty()
+    }
+}
+
+/// The view accepts row expressions, not nested queries (including file-reading table functions).
+#[derive(Default)]
+struct NoSubqueries {
+    queries: usize,
+}
+
+impl Visitor for NoSubqueries {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, _query: &sqlparser::ast::Query) -> std::ops::ControlFlow<()> {
+        self.queries += 1;
+        if self.queries > 1 {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
     }
 }
 
@@ -90,24 +120,17 @@ pub fn select_with(
     let mut data = Vec::with_capacity(names.len() + 1);
     for (index, name) in names.iter().enumerate() {
         let cells = result.column_cells(index);
-        let kind = positions
-            .iter()
-            .filter_map(|&row| cells.get(row))
-            .find(|cell| !cell.is_null());
-        // Keep integer keys exact, including values outside f64's 53-bit integer range.
-        let integers = (kind.is_some() || result.columns()[index].class == TypeClass::Number)
-            && positions
+        let dtype = column_type(result, index, &positions);
+        if dtype == DataType::Boolean {
+            let values: Vec<Option<bool>> = positions
                 .iter()
-                .all(|&row| matches!(cells.get(row), Some(Cell::Int(_) | Cell::Null)));
-        // Redis and similar backends return numbers as text. If an entire column is
-        // numeric, let Polars compare and sort it numerically too.
-        let numeric = (kind.is_some() || result.columns()[index].class == TypeClass::Number)
-            && positions.iter().all(|&row| {
-                cells
-                    .get(row)
-                    .is_some_and(|cell| cell.is_null() || number(cell).is_some())
-            });
-        if integers {
+                .map(|&row| match cells.get(row) {
+                    Some(Cell::Bool(value)) => Some(*value),
+                    _ => None,
+                })
+                .collect();
+            data.push(Column::new(name.as_str().into(), values));
+        } else if dtype == DataType::Int64 {
             let values: Vec<Option<i64>> = positions
                 .iter()
                 .map(|&row| match cells.get(row) {
@@ -116,7 +139,7 @@ pub fn select_with(
                 })
                 .collect();
             data.push(Column::new(name.as_str().into(), values));
-        } else if numeric {
+        } else if dtype == DataType::Float64 {
             let values: Vec<Option<f64>> = positions
                 .iter()
                 .map(|&row| cells.get(row).and_then(number))
@@ -129,7 +152,7 @@ pub fn select_with(
                     cells
                         .get(row)
                         .filter(|cell| !cell.is_null())
-                        .map(|cell| cell.display("").into_owned())
+                        .map(|cell| cell.text("").into_owned())
                 })
                 .collect();
             data.push(Column::new(name.as_str().into(), values));
@@ -160,8 +183,13 @@ pub fn select_with(
     if let Some(query) = query {
         let mut context = SQLContext::new();
         context.register("sqmeow_view", frame.lazy());
+        let mut sql = sql_text(&query.where_clause, &query.order_by);
+        if query.orders() {
+            // Stable ties follow original row positions, independently of Polars' sort defaults.
+            sql.push_str(&format!("\n, \"{row_name}\" ASC"));
+        }
         frame = context
-            .execute(&sql_text(&query.where_clause, &query.order_by))
+            .execute(&sql)
             .and_then(|lazy| lazy.collect())
             .map_err(|error| error.to_string())?;
     }
@@ -196,6 +224,77 @@ pub fn select_with(
         .collect())
 }
 
+/// Choose one column type for both the frame and generated cell-match predicates.
+fn column_type(result: &ResultSet, index: usize, positions: &[usize]) -> DataType {
+    let cells = result.column_cells(index);
+    let populated = positions
+        .iter()
+        .any(|&row| cells.get(row).is_some_and(|cell| !cell.is_null()));
+    let class = result.columns()[index].class;
+    if (populated || class == TypeClass::Boolean)
+        && positions
+            .iter()
+            .all(|&row| matches!(cells.get(row), Some(Cell::Bool(_) | Cell::Null)))
+    {
+        DataType::Boolean
+    } else if (populated || class == TypeClass::Number)
+        && positions
+            .iter()
+            .all(|&row| matches!(cells.get(row), Some(Cell::Int(_) | Cell::Null)))
+    {
+        // Keep integer keys exact, including values outside f64's 53-bit integer range.
+        DataType::Int64
+    } else if (populated || class == TypeClass::Number)
+        && (class == TypeClass::Number
+            || positions
+                .iter()
+                .all(|&row| !matches!(cells.get(row), Some(Cell::Text(_)))))
+        && positions.iter().all(|&row| {
+            cells
+                .get(row)
+                .is_some_and(|cell| cell.is_null() || number(cell).is_some())
+        })
+    {
+        // Only declared numeric text may be coerced; string identities remain exact.
+        DataType::Float64
+    } else {
+        DataType::String
+    }
+}
+
+/// Match a cell using Polars column names and types, not its source database's dialect.
+pub fn condition(result: &ResultSet, row: usize, column: usize) -> Result<String, String> {
+    let names = super::names(result.columns());
+    let name = names.get(column).ok_or("no such column")?;
+    let cell = result.cell(row, column).ok_or("no such row")?;
+    let positions: Vec<usize> = (0..result.row_count()).collect();
+    let value = if cell.is_null() {
+        Cell::Null
+    } else {
+        match column_type(result, column, &positions) {
+            DataType::Float64 => {
+                let value = number(cell).expect("a numeric column has numeric cells");
+                if value.is_finite() {
+                    // Polars identifies float literals by the decimal point, not the exponent.
+                    let mut literal = format!("{value:e}");
+                    if !literal.contains('.') {
+                        let exponent = literal
+                            .find('e')
+                            .expect("scientific notation has an exponent");
+                        literal.insert_str(exponent, ".0");
+                    }
+                    return Ok(format!("\"{}\" = {literal}", name.replace('"', "\"\"")));
+                }
+                Cell::Float(value)
+            }
+            DataType::String => Cell::Text(cell.text("").into_owned()),
+            _ => cell.clone(),
+        }
+    };
+    crate::edit::condition(crate::adapter::Dialect::Postgres, name, &value)
+        .map_err(|error| error.to_string())
+}
+
 fn number(cell: &Cell) -> Option<f64> {
     match cell {
         Cell::Int(value) => Some(*value as f64),
@@ -220,7 +319,13 @@ fn predicate(column: Expr, dtype: Option<&DataType>, filter: &Filter) -> Expr {
             }
         }
         op => {
-            let right = if dtype == Some(&DataType::Int64) {
+            let right = if dtype == Some(&DataType::Boolean) {
+                filter
+                    .value
+                    .trim()
+                    .parse::<bool>()
+                    .map_or_else(|_| lit(filter.value.clone()), lit)
+            } else if dtype == Some(&DataType::Int64) {
                 filter.value.trim().parse::<i64>().map_or_else(
                     |_| {
                         filter
@@ -342,17 +447,177 @@ mod tests {
     }
 
     #[test]
+    fn a_view_accepts_only_row_predicates_and_sort_expressions() {
+        let result = people();
+        let names = super::super::names(result.columns());
+        for (condition, order) in [
+            ("true; DELETE FROM sqmeow_view", ""),
+            ("true GROUP BY id", ""),
+            ("true HAVING id > 1", ""),
+            ("true UNION SELECT * FROM sqmeow_view", ""),
+            ("id IN (SELECT id FROM sqmeow_view)", ""),
+            ("id IN (SELECT id FROM read_csv('/must/not/read.csv'))", ""),
+            ("", "id LIMIT 1"),
+            ("", "id OFFSET 1"),
+            ("", "id; DROP TABLE sqmeow_view"),
+        ] {
+            assert!(
+                Query::parse(condition, order, &names).is_err(),
+                "{condition} / {order}"
+            );
+        }
+    }
+
+    #[test]
+    fn sql_sort_is_stable_and_supports_explicit_null_placement() {
+        let result = people();
+        let names = super::super::names(result.columns());
+        let query = Query::parse("", "age DESC NULLS LAST", &names).unwrap();
+        assert_eq!(
+            select_with(&result, &[], &[], None, query.as_ref()).unwrap(),
+            vec![0, 3, 4, 2, 1]
+        );
+        let query =
+            Query::parse("name ILIKE '%AL%'", "age ASC -- ties stay stable", &names).unwrap();
+        assert_eq!(
+            select_with(&result, &[], &[], None, query.as_ref()).unwrap(),
+            vec![0, 3, 4]
+        );
+    }
+
+    #[test]
+    fn booleans_and_raw_text_have_matching_sql_and_structured_predicates() {
+        let mut result = ResultSet::new(
+            "typed",
+            vec![
+                ResultColumn::new("active", "BOOLEAN"),
+                ResultColumn::new("note", "TEXT"),
+            ],
+        );
+        result.push_row(vec![Cell::Bool(true), Cell::Text("o'alice\nnext".into())]);
+        result.push_row(vec![Cell::Bool(false), Cell::Text("other".into())]);
+        result.push_row(vec![Cell::Null, Cell::Null]);
+        let names = super::super::names(result.columns());
+        let query = Query::parse("active = TRUE", "", &names).unwrap();
+        assert_eq!(
+            select_with(&result, &[], &[], None, query.as_ref()).unwrap(),
+            vec![0]
+        );
+        let filter = Filter {
+            column: Some(0),
+            op: Op::Eq,
+            value: "false".into(),
+        };
+        assert_eq!(
+            select_with(&result, &[filter], &[], None, None).unwrap(),
+            vec![1]
+        );
+        for column in 0..2 {
+            let condition = condition(&result, 0, column).unwrap();
+            let query = Query::parse(&condition, "", &names).unwrap();
+            assert_eq!(
+                select_with(&result, &[], &[], None, query.as_ref()).unwrap(),
+                vec![0]
+            );
+        }
+    }
+
+    #[test]
+    fn generated_conditions_use_duplicate_names_and_preserve_decimal_text() {
+        let mut result = ResultSet::new(
+            "typed",
+            vec![
+                ResultColumn::new("amount", "NUMERIC"),
+                ResultColumn::new("amount", "NUMERIC"),
+            ],
+        );
+        result.push_row(vec![
+            Cell::Decimal("9007199254740993.01".into()),
+            Cell::Decimal("1.25".into()),
+        ]);
+        result.push_row(vec![
+            Cell::Decimal("9007199254740993.02".into()),
+            Cell::Decimal("2.25".into()),
+        ]);
+        let names = super::super::names(result.columns());
+        for column in 0..2 {
+            let condition = condition(&result, 0, column).unwrap();
+            let query = Query::parse(&condition, "", &names).unwrap();
+            assert_eq!(
+                select_with(&result, &[], &[], None, query.as_ref()).unwrap(),
+                vec![0]
+            );
+        }
+        assert_eq!(condition(&result, 0, 1).unwrap(), "\"amount_2\" = '1.25'");
+    }
+
+    #[test]
     fn numeric_text_values_can_be_filtered_as_polars_numbers() {
         let mut result = ResultSet::new("redis", vec![ResultColumn::new("value", "TEXT")]);
         for value in ["1", "10", "5"] {
             result.push_row(vec![Cell::Text(value.into())]);
         }
         let names = super::super::names(result.columns());
-        let query = Query::parse("value >= 5", "value DESC", &names).unwrap();
+        let query = Query::parse(
+            "CAST(value AS DOUBLE) >= 5",
+            "CAST(value AS DOUBLE) DESC",
+            &names,
+        )
+        .unwrap();
         assert_eq!(
             select_with(&result, &[], &[], None, query.as_ref()).unwrap(),
             vec![1, 2]
         );
+    }
+
+    #[test]
+    fn numeric_looking_strings_keep_their_identity() {
+        for type_name in ["TEXT", "VARCHAR", "unknown"] {
+            let mut result = ResultSet::new("codes", vec![ResultColumn::new("code", type_name)]);
+            for value in ["001", "1", "9007199254740992", "9007199254740993"] {
+                result.push_row(vec![Cell::Text(value.into())]);
+            }
+            let names = super::super::names(result.columns());
+            for row in 0..result.row_count() {
+                let condition = condition(&result, row, 0).unwrap();
+                let query = Query::parse(&condition, "", &names).unwrap();
+                assert_eq!(
+                    select_with(&result, &[], &[], None, query.as_ref()).unwrap(),
+                    vec![row]
+                );
+            }
+            let query = Query::parse("code = '001'", "", &names).unwrap();
+            assert_eq!(
+                select_with(&result, &[], &[], None, query.as_ref()).unwrap(),
+                vec![0]
+            );
+            let filter = Filter {
+                column: Some(0),
+                op: Op::Eq,
+                value: "001".into(),
+            };
+            assert_eq!(
+                select_with(&result, &[filter], &[], None, None).unwrap(),
+                vec![0]
+            );
+        }
+    }
+
+    #[test]
+    fn finite_float_cell_conditions_use_float_literals() {
+        let mut result = ResultSet::new("floats", vec![ResultColumn::new("n", "DOUBLE")]);
+        for value in [1e20, 2e20, -1e20, 1e-20, f64::MAX] {
+            result.push_row(vec![Cell::Float(value)]);
+        }
+        let names = super::super::names(result.columns());
+        for row in 0..result.row_count() {
+            let condition = condition(&result, row, 0).unwrap();
+            let query = Query::parse(&condition, "", &names).unwrap();
+            assert_eq!(
+                select_with(&result, &[], &[], None, query.as_ref()).unwrap(),
+                vec![row]
+            );
+        }
     }
 
     #[test]

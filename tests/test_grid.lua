@@ -107,17 +107,23 @@ T['the result view contract keeps the old view request available'] = function()
   eq(rpc.request('rows', { call_id = id, offset = 0, limit = 10 }).indices, { 1 })
 end
 
-T['the result view contract rejects unknown modes without losing the result'] = function()
+T['only an explicit refresh requires the original connection'] = function()
   local id = state.call.call_id
-  local _, err = rpc.request('result_view', { call_id = id, mode = 'unknown' })
-  helpers.contains(err, 'unknown mode')
+  local _, err = rpc.request('result_view', {
+    call_id = id,
+    refresh = true,
+    conn_id = -1,
+    sql = state.call.sql,
+  })
+  helpers.contains(err, 'does not belong')
   eq(rpc.request('rows', { call_id = id, offset = 0, limit = 1 }).indices, { 0 })
 end
 
-T['automatic view routing keeps structured rows and re-queries free-form SQL'] = function()
+T['all filters use retained rows and only refresh routes to a query'] = function()
   local id = state.call.call_id
-  eq(rpc.request('result_view_route', { call_id = id }), 'query')
+  eq(rpc.request('result_view_route', { call_id = id }), 'memory')
   eq(rpc.request('result_view_route', { call_id = id, structured = true }), 'memory')
+  eq(rpc.request('result_view_route', { call_id = id, refresh = true }), 'query')
   local memory = rpc.request('result_view', {
     call_id = id,
     structured = true,
@@ -129,26 +135,20 @@ T['automatic view routing keeps structured rows and re-queries free-form SQL'] =
   end)
   eq(rpc.request('rows', { call_id = id, offset = 0, limit = 1 }).indices, { 1 })
 
-  local _, mismatch = rpc.request('result_view', {
+  local memory_sql = rpc.request('result_view', {
     call_id = id,
     conn_id = -1,
-    sql = state.call.sql,
+    sql = 'invalid query that must not be executed',
     where = 'id = 1',
   })
-  helpers.contains(mismatch, 'does not belong')
+  eq(memory_sql, { route = 'memory', call_id = id })
+  wait('the SQL view should use the original rows', function()
+    return rpc.request('rows', { call_id = id, offset = 0, limit = 1 }).indices[1] == 0
+  end)
 end
 
---- Wait for the result that replaces the current one.
-local function next_result(what, condition)
-  local before = state.call.call_id
-  return function()
-    wait(what, function()
-      return state.call.call_id ~= before and state.call.state ~= 'executing' and condition()
-    end)
-  end
-end
-
-T['the filter bar docks above the grid and filters in the database'] = function()
+T['the filter bar docks above the grid and filters retained rows'] = function()
+  local id = state.call.call_id
   focus_result()
   result.actions.filter()
   local bar = vim.api.nvim_get_current_win()
@@ -157,11 +157,11 @@ T['the filter bar docks above the grid and filters in the database'] = function(
   eq(#floats(), 0)
 
   vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'age > 20 or age is null', 'id desc' })
-  local arrived = next_result('the filtered result should arrive', function()
-    return #rows() == 2
-  end)
   vim.api.nvim_feedkeys(vim.keycode('<CR>'), 'mx', false)
-  arrived()
+  wait('the filtered view should arrive', function()
+    return state.call.view_rows == 2
+  end)
+  eq(state.call.call_id, id)
 
   eq(vim.api.nvim_win_is_valid(bar), false)
   eq(rows()[1]:match('^%s*(%d)'), '2')
@@ -209,58 +209,75 @@ T['a result that cannot be queried again is filtered with Polars SQL'] = functio
   end)
 end
 
-T['= and s narrow and order in the database, and R runs the query as written'] = function()
+T['= and s narrow and order held rows, and R restores the snapshot'] = function()
+  local id = state.call.call_id
   local win = focus_result()
   vim.api.nvim_win_set_cursor(win, { 3, 0 })
   result.goto_column(2)
-  local arrived = next_result('the narrowed result should arrive', function()
-    return #rows() == 1
-  end)
   result.actions.filter_cell()
-  arrived()
+  wait('the narrowed view should arrive', function()
+    return state.call.view_rows == 1
+  end)
   eq(result.spec().where, [["name" = 'alice']])
 
-  arrived = next_result('every row should come back', function()
-    return #rows() == 3
-  end)
   result.actions.reset_view()
-  arrived()
+  wait('every original row should come back', function()
+    return state.call.view_rows == nil and #rows() == 3
+  end)
   eq(result.spec().where, '')
 
   vim.api.nvim_win_set_cursor(result.window(), { 3, 0 })
   result.goto_column(3)
-  arrived = next_result('the ordered result should arrive', function()
-    return #rows() == 3
-  end)
   result.actions.sort()
-  arrived()
-  eq(result.spec().order_by, '"age"')
-  -- SQLite puts NULL first when ascending.
-  eq(rows()[1]:match('^%s*(%d)'), '2')
+  wait('the ordered view should arrive', function()
+    return rows()[1]:match('^%s*(%d)') == '3'
+  end)
+  eq(result.spec().order_by, '"age" ASC NULLS LAST')
+  eq(rows()[3]:match('^%s*(%d)'), '2')
+  eq(state.call.call_id, id)
 end
 
 T['a filter tells apart columns of one name'] = function()
   run('select p.id, q.id from people p join people q on q.id = p.id order by p.id')
   eq(result.filter_names(state.call), { 'id', 'id_2' })
-  local arrived = next_result('the filtered result should arrive', function()
-    return true
-  end)
   eq(result.filter('id_2 > 1', ''), true)
-  arrived()
+  wait('the duplicate-column view should arrive', function()
+    return state.call.view_rows == 2
+  end)
+  local win = focus_result()
+  vim.api.nvim_win_set_cursor(win, { 3, 0 })
+  result.goto_column(2)
+  result.actions.filter_cell()
+  wait('the duplicate-column cell should match', function()
+    return state.call.view_rows == 1
+  end)
+  helpers.contains(result.spec().where, '"id_2" = 2')
   eq(state.call.state, 'done')
 end
 
-T['a condition the database refuses shows its error, and the bar opens with it'] = function()
+T['an invalid Polars condition keeps the previous view and reports its error'] = function()
   focus_result()
-  local arrived = next_result('the error should arrive', function()
-    return state.call.state == 'error'
+  local id = state.call.call_id
+  eq(result.filter('id = 2', ''), true)
+  wait('the valid view should arrive', function()
+    return state.call.view_rows == 1
+  end)
+  local messages = {}
+  helpers.stub(vim, 'notify', function(message)
+    table.insert(messages, message)
   end)
   eq(result.filter('nope > 1', ''), true)
-  arrived()
-  helpers.contains(table.concat(helpers.result_lines(), '\n'), 'nope')
+  wait('the invalid view should be rejected', function()
+    return #messages > 0
+  end)
+  helpers.contains(messages[1], 'nope')
+  eq(result.spec().where, 'id = 2')
+  eq(state.call.call_id, id)
+  eq(state.call.state, 'done')
+  eq(rpc.request('rows', { call_id = id, offset = 0, limit = 10 }).indices, { 1 })
 
   result.actions.filter()
-  eq(vim.api.nvim_get_current_line(), 'nope > 1')
+  eq(vim.api.nvim_get_current_line(), 'id = 2')
   require('sqmeow.ui.filter').close()
 end
 
@@ -273,7 +290,7 @@ T['staged changes are asked about before a new result replaces them'] = function
     on_choice(answer)
   end)
 
-  eq(result.filter('age > 1', ''), false)
+  eq(result.rerun(), false)
   helpers.contains(asked, '1 staged change would be lost')
   eq(edit.count(), 1)
 
@@ -289,19 +306,217 @@ T['staged changes are asked about before a new result replaces them'] = function
   eq(edit.count(), 0)
 end
 
-T['a deferred view keeps the requested filter after edits are discarded'] = function()
+T['filtering and sorting preserve staged changes without prompting'] = function()
   result.open()
   edit.set({ row = 0 }, 1, 'x')
-  helpers.stub(vim.ui, 'select', function(_, _, on_choice)
-    on_choice('Discard them')
+  helpers.stub(vim.ui, 'select', function()
+    error('a local view must not ask to discard edits')
   end)
-  local arrived = next_result('the deferred filter should arrive', function()
-    return #rows() == 1
-  end)
+  local id = state.call.call_id
   result.filter('id = 2', '')
-  arrived()
+  wait('the local filter should arrive', function()
+    return state.call.view_rows == 1
+  end)
+  eq(state.call.call_id, id)
+  eq(edit.count(), 1)
+  eq(edit.staged(0, 1), 'x')
   eq(result.spec().where, 'id = 2')
   eq(rows()[1]:match('^%s*(%d)'), '2')
+  result.actions.reset_view()
+  wait('the original rows should return', function()
+    return state.call.view_rows == nil
+  end)
+  helpers.contains(rows()[1], 'x')
+end
+
+T['filters ignore database changes until an explicit refresh reapplies the local view'] = function()
+  run('create table view_snapshot (id integer primary key, name text)')
+  MiniTest.finally(function()
+    run('drop table view_snapshot')
+  end)
+  run("insert into view_snapshot values (1, 'before'), (2, 'before')")
+  run('select id, name from view_snapshot order by id')
+  local id = assert(state.call.call_id, 'the snapshot result has an id')
+  run("insert into view_snapshot values (3, 'after')")
+  require('sqmeow.api.view').reopen(id)
+  eq(result.filter('id >= 2', 'id DESC'), true)
+  wait('only the original rows should be filtered', function()
+    return state.call.view_rows == 1
+  end)
+  eq(state.call.call_id, id)
+  eq(rpc.request('rows', { call_id = id, offset = 0, limit = 10 }).indices, { 1 })
+  eq(result.rerun(), true)
+  wait('refresh should reapply the filter to new data', function()
+    return state.call.call_id ~= id and state.call.state == 'done' and state.call.view_rows == 2
+  end)
+  eq(state.call.rows, 3)
+  eq(result.spec().where, 'id >= 2')
+  eq(
+    rpc.request('rows', { call_id = state.call.call_id, offset = 0, limit = 10 }).indices,
+    { 2, 1 }
+  )
+end
+
+T['SQL filters search all retained pages but never fetch beyond the row cap'] = function()
+  local max_rows = require('sqmeow.config').get().query.max_rows
+  MiniTest.finally(function()
+    rpc.request('configure', { max_rows = max_rows })
+  end)
+  rpc.request('configure', { max_rows = 13 })
+  run([[WITH RECURSIVE numbers(id) AS (
+    SELECT 1 UNION ALL SELECT id + 1 FROM numbers WHERE id < 25
+  ) SELECT id FROM numbers ORDER BY id]])
+  local id = state.call.call_id
+  eq(state.call.rows, 13)
+  eq(state.call.truncated, true)
+  eq(#rows(), 10)
+  eq(result.filter('id > 10', 'id DESC'), true)
+  wait('rows from the second retained page should match', function()
+    return state.call.view_rows == 3
+  end)
+  eq(rpc.request('rows', { call_id = id, offset = 0, limit = 10 }).indices, { 12, 11, 10 })
+  eq(result.filter('id > 20', ''), true)
+  wait('unretained rows must not be fetched', function()
+    return state.call.view_rows == 0
+  end)
+  eq(state.call.call_id, id)
+  result.actions.reset_view()
+  wait('reset restores only retained rows', function()
+    return state.call.view_rows == nil
+  end)
+  eq(rpc.request('rows', { call_id = id, offset = 0, limit = 30 }).total, 13)
+end
+
+T['applying edits refreshes original rows then reapplies the local filter and sort'] = function()
+  run('create table view_edit (id integer primary key, name text)')
+  MiniTest.finally(function()
+    run('drop table view_edit')
+  end)
+  run("insert into view_edit values (1, 'alice'), (2, 'bob'), (3, 'carol')")
+  run('select id, name from view_edit order by id')
+  local win = focus_result()
+  local id = state.call.call_id
+  eq(result.filter('id >= 2', 'id DESC'), true)
+  wait('the filtered rows should arrive', function()
+    return state.call.view_rows == 2
+  end)
+  vim.api.nvim_win_set_cursor(win, { 4, 0 })
+  eq(result.current_cell().row, 1)
+  edit.set({ row = 1 }, 1, 'changed')
+  local statements = rpc.request('plan', { call_id = id, changes = edit.changes() })
+  edit.apply(state.call, statements)
+  wait('the refreshed local view should arrive', function()
+    return state.call.call_id ~= id
+      and state.call.state == 'done'
+      and state.call.view_rows == 2
+      and edit.count() == 0
+  end)
+  eq(state.call.rows, 3)
+  eq(result.spec().where, 'id >= 2')
+  eq(result.spec().order_by, 'id DESC')
+  eq(
+    rpc.request('rows', { call_id = state.call.call_id, offset = 0, limit = 10 }).indices,
+    { 2, 1 }
+  )
+  helpers.contains(rows()[2], 'changed')
+  eq(vim.api.nvim_win_get_cursor(win)[1], 4)
+end
+
+T['numeric-looking text and large floats can be filtered by cell without changing identity'] = function()
+  for _, sql in ipairs({
+    "SELECT '001' AS value UNION ALL SELECT '1'",
+    'SELECT 1e20 AS value UNION ALL SELECT 2e20',
+  }) do
+    run(sql)
+    local win = focus_result()
+    vim.api.nvim_win_set_cursor(win, { 3, 0 })
+    result.actions.filter_cell()
+    wait('only the selected original value should match', function()
+      return state.call.view_rows == 1
+    end)
+    eq(rpc.request('rows', { call_id = state.call.call_id, offset = 0, limit = 10 }).indices, { 0 })
+  end
+end
+
+T['restored MongoDB history uses SQL filters and sorts without a connection'] = function()
+  local archive = vim.fn.tempname()
+  MiniTest.finally(function()
+    vim.fn.delete(archive)
+  end)
+  local id = assert(
+    require('sqmeow.api.query').execute(
+      "select 1 as id, 'alice' as name union all select 2, 'bob'",
+      { confirmed = true }
+    )
+  )
+  wait('the result should be archived', function()
+    return state.call.call_id == id
+      and state.call.state == 'done'
+      and state.call.archive ~= nil
+      and vim.uv.fs_stat(state.call.archive) ~= nil
+  end)
+  -- Copy a real typed archive; the origin dialect must not affect local SQL syntax.
+  vim.fn.writefile(vim.fn.readfile(state.call.archive, 'b'), archive, 'b')
+  local restored = assert(require('sqmeow.api.view').restore({
+    result = archive,
+    dialect = 'mongodb',
+    statement = '{"find":"people"}',
+  }))
+  wait('the historical rows should restore', function()
+    return state.call.state == 'done'
+  end)
+  eq(state.call.conn_id, 0)
+  local win = focus_result()
+  result.actions.filter()
+  local marks = vim.api.nvim_buf_get_extmarks(
+    0,
+    vim.api.nvim_create_namespace('sqmeow.filter'),
+    0,
+    -1,
+    { details = true }
+  )
+  eq(marks[1][4].virt_text[1][1], 'WHERE    ')
+  eq(require('sqmeow.ui.filter').complete(0, 'ILI'), { { word = 'ILIKE', kind = 'k' } })
+  require('sqmeow.ui.filter').close()
+  eq(result.filter("name ILIKE '%AL%'", 'id DESC'), true)
+  wait('the MongoDB snapshot should narrow', function()
+    return state.call.view_rows == 1
+  end)
+  eq(state.call.call_id, restored)
+  eq(rpc.request('rows', { call_id = restored, offset = 0, limit = 10 }).indices, { 0 })
+  vim.api.nvim_win_set_cursor(win, { 3, 0 })
+  result.goto_column(2)
+  result.actions.filter_cell()
+  wait('a MongoDB cell should add a SQL condition', function()
+    return result.spec().where:find('"name" = \'alice\'', 1, true) ~= nil
+  end)
+  helpers.absent(result.spec().where, '$and')
+  local _, err = rpc.request(
+    'result_view',
+    { call_id = restored, refresh = true, conn_id = 0, sql = '{"find":"people"}' }
+  )
+  helpers.contains(err, 'not open')
+end
+
+T['filter capability errors report the real failure instead of a MongoDB warning'] = function()
+  focus_result()
+  local request = rpc.request
+  helpers.stub(rpc, 'request', function(method, args)
+    if method == 'result_capabilities' then
+      return nil, 'result 999 is no longer held'
+    end
+    return request(method, args)
+  end)
+  local messages = {}
+  helpers.stub(vim, 'notify', function(message)
+    table.insert(messages, message)
+  end)
+  eq(result.filter('id = 1', ''), false)
+  helpers.contains(messages[1], 'no longer held')
+  helpers.absent(messages[1], 'MongoDB')
+  result.actions.filter()
+  helpers.contains(messages[2], 'no longer held')
+  eq(require('sqmeow.ui.filter').is_open(), false)
 end
 
 T['editing applies through a review'] = function()

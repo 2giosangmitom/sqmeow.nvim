@@ -3,7 +3,7 @@
 
 mod polars;
 
-pub use polars::{Query, select_with};
+pub use polars::{Query, condition, select_with};
 
 use crate::result::Column;
 

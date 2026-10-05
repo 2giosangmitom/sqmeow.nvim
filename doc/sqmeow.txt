@@ -285,9 +285,29 @@ Filtering and sorting ~
 `gf` opens WHERE and `go` opens ORDER BY above the grid. Enter expressions
 without the clause keyword; <CR> applies them. `=` filters by the current
 cell, `s` cycles column sorting, and `S` adds another sort column.
-SQL connections rerun the query as a subquery; MongoDB uses filter/sort
-documents. Redis, ScyllaDB, SurrealDB, and disconnected results filter only
-retained rows in memory. `R` clears filters, sorting, and hidden columns.
+Every adapter uses Polars SQL on retained rows, including MongoDB and other
+NoSQL results, disconnected connections, and restored history. No query is
+rerun and staged edits are preserved. All retained pages are filtered, but
+rows beyond the original query or `query.max_rows` cannot be recovered.
+`R` clears filters, sorting, and hidden columns, restoring the snapshot.
+Run the original query again for fresh data. Refreshing after applying edits
+reapplies the local view to the new result.
+
+Example bar contents (the labels are supplied; type only the expressions): >
+  WHERE     age >= 18 AND status = 'active'
+  ORDER BY  age DESC NULLS LAST, id ASC
+<
+Polars SQL supports `AND`/`OR`/`NOT`, `IS NULL`, `LIKE`/`ILIKE`, `IN`, and
+`BETWEEN`. Quote columns with double quotes and strings with single quotes.
+Names are case-sensitive and match the result; completion supplies them.
+Repeated column names become `name`, `name_2`, etc. Full queries and subqueries
+are not accepted. Invalid conditions preserve the previous view. `s`/`S`
+place nulls last; ORDER BY expressions can specify NULLS FIRST or NULLS LAST.
+Integers and booleans are typed. Numeric-looking strings remain strings;
+use CAST(value AS DOUBLE) for numeric comparison/sorting of Redis strings.
+Exact decimals, temporal values and nested
+JSON remain text. Explicit casts can enable numeric/temporal comparisons;
+floating-point casts can lose precision. Nested JSON fields are not flattened.
 
 Editing ~
 `i` or <CR> stages a cell edit, `X` stages NULL, and `dd` stages deletion.
@@ -1069,10 +1089,9 @@ Show the statements the changes staged in the result plan into, to apply with `<
 ------------------------------------------------------------------------------
                                                       *sqmeow.api.view.filter()*
                         `sqmeow.api.view.filter`({view})
-Filter and order the current result with a WHERE condition and an ORDER BY list, which an open
-SQL or MongoDB connection runs in the query; Redis, ScyllaDB, SurrealDB or a closed connection
-uses Polars SQL on the rows held. Empty strings clear them. Polars SQL supports a different
-subset and type coercions than the database's dialect.
+Filter and order retained rows with a Polars SQL WHERE condition and ORDER BY list.
+Every adapter uses the same syntax, including disconnected and restored historical results.
+No query is rerun. Empty strings clear the clauses; only retained rows can be matched.
 Parameters ~
 {view} `({ where: string|nil, order_by: string|nil })`
 Return ~

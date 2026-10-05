@@ -59,51 +59,40 @@ impl Drop for Deadline {
 }
 
 impl Core {
-    /// Choose the executor for a held result, not from Lua's connection snapshot.
-    fn query_view(&self, call_id: CallId, structured: bool) -> Result<bool, String> {
+    /// Only an explicit refresh executes a query. Views never depend on a live dialect.
+    fn query_view(&self, call_id: CallId, refresh: bool) -> Result<bool, String> {
         let conn_id = self
             .session
             .with_call(call_id, |call| call.conn_id)
             .ok_or_else(|| format!("result {call_id} is no longer held"))?;
-        let dialect = self
-            .session
-            .connection(conn_id)
-            .map(|conn| conn.backend.dialect());
-        Ok(view_queries(dialect, structured))
+        if refresh && self.session.connection(conn_id).is_none() {
+            return Err("the connection this result came from is not open".to_owned());
+        }
+        Ok(refresh)
     }
 
-    /// Automatic result view: retain original row indices for memory views; a query view
-    /// returns a new call id and the same call:state events as execute.
+    /// Filter/sort retained rows with Polars. An explicit refresh runs the original query
+    /// without local filters and returns a new call id; Lua reapplies its view afterward.
     pub(super) fn result_view(self: Arc<Self>, args: &Args) -> Started {
         let call_id = args.call_id()?;
-        let query = self.query_view(call_id, args.opt_bool("structured").unwrap_or(false))?;
-        let (conn_id, dialect) = self
+        let query = self.query_view(call_id, args.opt_bool("refresh").unwrap_or(false))?;
+        let conn_id = self
             .session
-            .with_call(call_id, |call| (call.conn_id, call.dialect))
+            .with_call(call_id, |call| call.conn_id)
             .ok_or_else(|| format!("result {call_id} is no longer held"))?;
         if query && args.conn_id("conn_id")? != conn_id {
             return Err("result_view: the connection does not belong to this result".to_owned());
         }
-        if !query
-            && !args.opt_bool("structured").unwrap_or(false)
-            && dialect == Some(Dialect::MongoDb)
-            && (args
-                .opt_string("where")
-                .is_some_and(|text| !text.is_empty())
-                || args
-                    .opt_string("order_by")
-                    .is_some_and(|text| !text.is_empty()))
-        {
-            return Err(
-                "a MongoDB result is filtered in its query, and its connection is closed"
-                    .to_owned(),
-            );
-        }
-        if !query && args.opt_bool("refresh").unwrap_or(false) {
-            return Err("the connection this result came from is not open".to_owned());
-        }
         let (answer, work) = if query {
-            self.execute(args)?
+            let refresh = Args::from_params(&[map(vec![
+                ("conn_id", Value::from(conn_id)),
+                ("sql", Value::from(args.string("sql")?)),
+                (
+                    "inserted",
+                    Value::from(args.opt_bool("inserted").unwrap_or(false)),
+                ),
+            ])])?;
+            self.execute(&refresh)?
         } else {
             self.view(args)?
         };
@@ -119,10 +108,7 @@ impl Core {
     /// The same routing policy used for the edit confirmation before a new result replaces one.
     pub(super) fn result_view_route(&self, args: &Args) -> Result<Value, String> {
         Ok(Value::from(
-            if self.query_view(
-                args.call_id()?,
-                args.opt_bool("structured").unwrap_or(false),
-            )? {
+            if self.query_view(args.call_id()?, args.opt_bool("refresh").unwrap_or(false))? {
                 "query"
             } else {
                 "memory"
@@ -496,29 +482,8 @@ impl Core {
         let column = args.opt_usize("column").unwrap_or(0);
         let gone = || format!("result {call_id} is no longer held");
 
-        let conn_id = self
-            .session
-            .with_call(call_id, |call| call.conn_id)
-            .ok_or_else(gone)?;
-        // A filter run on the rows held takes the SQL the filter bar reads, whatever the database.
-        let dialect =
-            if args.opt_bool("memory").unwrap_or(false) || !self.query_view(call_id, false)? {
-                Dialect::Postgres
-            } else {
-                self.connection(conn_id)?.backend.dialect()
-            };
         self.session
-            .with_call(call_id, |call| {
-                let result = &call.result;
-                let meta = result.columns().get(column).ok_or("no such column")?;
-                let cell = result.cell(row, column).ok_or("no such row")?;
-                let condition = if dialect == Dialect::MongoDb {
-                    sqmeow_adapters::mongodb::condition(&meta.name, &meta.type_name, cell)
-                } else {
-                    sqmeow_db::edit::condition(dialect, &meta.name, cell)
-                };
-                condition.map_err(|error| error.to_string())
-            })
+            .with_call(call_id, |call| view::condition(&call.result, row, column))
             .ok_or_else(gone)?
             .map(Value::from)
     }
@@ -573,15 +538,11 @@ impl Core {
     /// Capabilities are live: a saved result may lose its connection after its summary was sent.
     pub(super) fn result_capabilities(&self, args: &Args) -> Result<Value, String> {
         let call_id = args.call_id()?;
-        let (conn_id, saved_dialect) = self
+        let conn_id = self
             .session
-            .with_call(call_id, |call| (call.conn_id, call.dialect))
+            .with_call(call_id, |call| call.conn_id)
             .ok_or_else(|| format!("result {call_id} is no longer held"))?;
-        let open = self
-            .session
-            .connection(conn_id)
-            .map(|connection| connection.backend.dialect());
-        Ok(capabilities(open.or(saved_dialect), open.is_some()))
+        Ok(capabilities(self.session.connection(conn_id).is_some()))
     }
 
     /// Narrow and order the rows of a stored result, for the grid to page through.
@@ -593,49 +554,51 @@ impl Core {
         let condition = args.opt_string("where").unwrap_or_default();
         let order = args.opt_string("order_by").unwrap_or_default();
         // Compiled first, so a mistake in the filter is answered before any work starts.
-        let query = self
+        let call = self
             .session
-            .with_call(call_id, |call| {
-                view::Query::parse(&condition, &order, &view::names(call.result.columns()))
-            })
-            .ok_or_else(|| format!("result {call_id} is no longer held"))??;
+            .call(call_id)
+            .ok_or_else(|| format!("result {call_id} is no longer held"))?;
+        let query = view::Query::parse(&condition, &order, &view::names(call.result.columns()))?;
+        // Reserve ordering before returning the RPC reply, not when a worker starts.
+        let generation = call.begin_view();
 
         let work = async move {
-            let core = Arc::clone(&self);
+            // Clone the result handle under the history lock, then release it before Polars work.
+            let retained = Arc::clone(&call);
             let built = tokio::task::spawn_blocking(move || {
-                core.session.with_call(call_id, |call| {
-                    let narrowed = !filters.is_empty()
-                        || !sort.is_empty()
-                        || scope.is_some()
-                        || query.is_some();
-                    let view = if narrowed {
-                        Some(Arc::new(view::select_with(
-                            &call.result,
-                            &filters,
-                            &sort,
-                            scope.as_deref(),
-                            query.as_ref(),
-                        )?))
-                    } else {
-                        None
-                    };
-                    let rows = view
-                        .as_ref()
-                        .map_or(call.result.row_count(), |view| view.len());
-                    *call.view.lock().expect("view poisoned") = view;
-                    Ok::<_, String>(rows)
-                })
+                let call = retained;
+                let narrowed =
+                    !filters.is_empty() || !sort.is_empty() || scope.is_some() || query.is_some();
+                let view = if narrowed {
+                    Some(Arc::new(view::select_with(
+                        &call.result,
+                        &filters,
+                        &sort,
+                        scope.as_deref(),
+                        query.as_ref(),
+                    )?))
+                } else {
+                    None
+                };
+                Ok::<_, String>(view)
             })
             .await;
 
-            let mut payload = vec![("call_id", Value::from(call_id))];
-            match built {
-                Ok(Some(Ok(rows))) => payload.push(("rows", Value::from(rows as u64))),
-                Ok(Some(Err(error))) => payload.push(("error", Value::from(error))),
-                Ok(None) => payload.push(("error", Value::from("the result is no longer held"))),
-                Err(error) => payload.push(("error", Value::from(error.to_string()))),
-            }
-            self.emit("call:view", map(payload));
+            call.finish_view(generation, || {
+                let mut payload = vec![("call_id", Value::from(call_id))];
+                match built {
+                    Ok(Ok(view)) => {
+                        let rows = view
+                            .as_ref()
+                            .map_or(call.result.row_count(), |view| view.len());
+                        *call.view.lock().expect("view poisoned") = view;
+                        payload.push(("rows", Value::from(rows as u64)));
+                    }
+                    Ok(Err(error)) => payload.push(("error", Value::from(error))),
+                    Err(error) => payload.push(("error", Value::from(error.to_string()))),
+                }
+                self.emit("call:view", map(payload));
+            });
         };
         Ok((Value::from(call_id), Box::pin(work)))
     }
@@ -649,11 +612,6 @@ impl Core {
         pairs.extend(extra);
         self.emit("call:state", map(pairs));
     }
-}
-
-fn view_queries(dialect: Option<Dialect>, structured: bool) -> bool {
-    !structured
-        && matches!(dialect, Some(d) if !matches!(d, Dialect::Redis | Dialect::Scylla | Dialect::SurrealDb))
 }
 
 /// The statements a buffer holds, or only the one at `line`.
@@ -711,24 +669,4 @@ fn elapsed(started: Instant) -> Vec<(&'static str, Value)> {
         "elapsed_ms",
         Value::from(started.elapsed().as_millis() as u64),
     )]
-}
-
-#[cfg(test)]
-mod routing_tests {
-    use super::*;
-
-    #[test]
-    fn view_routes_by_live_dialect_and_intent() {
-        assert!(view_queries(Some(Dialect::Sqlite), false));
-        assert!(view_queries(Some(Dialect::MongoDb), false));
-        for dialect in [
-            None,
-            Some(Dialect::Redis),
-            Some(Dialect::Scylla),
-            Some(Dialect::SurrealDb),
-        ] {
-            assert!(!view_queries(dialect, false));
-        }
-        assert!(!view_queries(Some(Dialect::Sqlite), true));
-    }
 }

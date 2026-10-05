@@ -20,6 +20,8 @@ local page = { offset = 0, rows = {}, indices = {} }
 local specs = {}
 --- Previous free-form views awaiting asynchronous Polars validation, by call id.
 local pending_views = {}
+--- Page/cursor bookmarks awaiting local filtering after a refresh.
+local resuming_views = {}
 
 --- The call the grid was last drawn for, which tells a new result from the same one redrawn.
 local drawn = nil
@@ -766,14 +768,15 @@ function M.send_view(opts)
 
   local spec = M.spec()
   local rpc = require('sqmeow.rpc.client')
-  local source_id = call.view_source_id or call.call_id
+  local source_id = call.call_id
   -- Only a new query replaces the result and drops staged changes. Ask the same Rust
   -- router before prompting; the actual request rechecks if the connection changed.
-  if require('sqmeow.ui.edit').count() > 0 and not opts.structured then
+  if opts.refresh and require('sqmeow.ui.edit').count() > 0 then
     local requested = vim.deepcopy(spec)
-    local route, route_err = rpc.request('result_view_route', { call_id = source_id })
+    local route, route_err =
+      rpc.request('result_view_route', { call_id = source_id, refresh = true })
     if not route then
-      utils.notify(route_err, vim.log.levels.WARN)
+      utils.notify(route_err or 'the result cannot be refreshed', vim.log.levels.WARN)
       return false
     end
     if
@@ -789,18 +792,14 @@ function M.send_view(opts)
   local base = spec.base or call.sql
   local reply, err = rpc.request('result_view', {
     call_id = source_id,
-    structured = opts.structured,
     refresh = opts.refresh,
     conn_id = call.conn_id,
     sql = base,
-    columns = vim.tbl_map(function(column)
-      return column.name
-    end, call.columns or {}),
     inserted = opts.keep,
     filters = spec.filters,
     sort = spec.sort,
-    where = opts.structured and nil or spec.where,
-    order_by = opts.structured and nil or spec.order_by,
+    where = spec.where,
+    order_by = spec.order_by,
   })
   if err then
     utils.notify(err, vim.log.levels.WARN)
@@ -819,7 +818,6 @@ function M.send_view(opts)
       state = 'executing',
       statement = base,
       history = false,
-      view_source_id = source_id,
     }
     M.update_winbar(state.call)
   end
@@ -829,37 +827,54 @@ end
 --- The engine finished building a view.
 ---@param payload { call_id: integer, rows: integer|nil, error: string|nil }
 function M.on_view(payload)
+  local at = resuming_views[payload.call_id]
+  resuming_views[payload.call_id] = nil
   if payload.error then
     if pending_views[payload.call_id] then
       specs[payload.call_id] = pending_views[payload.call_id]
       M.update_winbar(require('sqmeow.core.state').call)
     end
     pending_views[payload.call_id] = nil
+    if at then
+      -- A refreshed schema can invalidate the old filter. Show the new original rows instead.
+      local spec = specs[payload.call_id]
+      spec.where, spec.order_by, spec.filters, spec.sort = '', '', {}, {}
+      local call = require('sqmeow.core.state').call
+      if call and call.call_id == payload.call_id then
+        M.show_page(at.offset)
+      end
+    end
     return utils.notify(payload.error, vim.log.levels.WARN)
   end
   pending_views[payload.call_id] = nil
   local call = require('sqmeow.core.state').call
   if call and call.call_id == payload.call_id then
-    M.show_page(0)
+    call.view_rows = payload.rows ~= call.rows and payload.rows or nil
+    M.show_page(at and at.offset or 0)
+    if at and at.cursor and M.window() then
+      pcall(vim.api.nvim_win_set_cursor, win, at.cursor)
+    end
   end
 end
 
---- Whether the filter bar can narrow a result in its query or with Polars SQL on held rows.
---- MongoDB free-form filters need an open connection.
+--- Whether a retained result can be filtered locally, preserving capability/RPC errors.
 ---@param call sqmeow.CallSummary|nil
 ---@return boolean
+---@return string|nil error
 function M.filterable(call)
   if not (call and call.call_id) then
-    return false
+    return false, 'there is no result to filter'
   end
-  local flags = require('sqmeow.rpc.client').request('result_capabilities', {
-    call_id = call.view_source_id or call.call_id,
+  local flags, err = require('sqmeow.rpc.client').request('result_capabilities', {
+    call_id = call.call_id,
   })
-  return flags ~= nil and flags.filter == true
+  if not flags then
+    return false, err or 'the result capabilities could not be read'
+  end
+  return flags.filter == true, flags.filter ~= true and 'this result cannot be filtered' or nil
 end
 
---- The names a filter knows the result's columns by, each repeated name numbered as the engine
---- numbers it in the query it filters.
+--- The names Polars knows the result's columns by, with repeated names numbered.
 ---@param call sqmeow.CallSummary
 ---@return string[]
 function M.filter_names(call)
@@ -886,21 +901,10 @@ function M.dialect(call)
   return connection and connection.dialect or (call and call.dialect)
 end
 
---- An identifier quoted for the current result's database.
+--- An identifier quoted for Polars SQL, independently of the original database.
 ---@param name string
 ---@return string
 function M.quote(name)
-  local state = require('sqmeow.core.state')
-  local connection = state.call and state.call.conn_id and state.connections[state.call.conn_id]
-  if connection and connection.dialect == 'mysql' then
-    return '`' .. (name:gsub('`', '``')) .. '`'
-  end
-  if connection and connection.dialect == 'mongodb' then
-    return vim.json.encode(name)
-  end
-  if connection and connection.dialect == 'surrealdb' then
-    return require('sqmeow.core.sql').quote('surrealdb', name)
-  end
   return '"' .. (name:gsub('"', '""')) .. '"'
 end
 
@@ -926,12 +930,17 @@ end
 --- Narrow held rows with Polars SQL, restoring the previous view if validation fails.
 ---@return boolean sent
 local function narrow(where, order_by, sort)
+  local call = require('sqmeow.core.state').call
+  local id = call and call.call_id
+  if not id then
+    return false
+  end
   local spec = M.spec()
-  local id = require('sqmeow.core.state').call.call_id
   local before = vim.deepcopy(spec)
   spec.where, spec.order_by, spec.sort = where, order_by, sort
   if M.send_view() then
-    if require('sqmeow.core.state').call.call_id == id then
+    local shown = require('sqmeow.core.state').call
+    if shown and shown.call_id == id then
       pending_views[id] = before
     end
     return true
@@ -940,18 +949,15 @@ local function narrow(where, order_by, sort)
   return false
 end
 
---- Filter and order the current result: rerun where its connection can, otherwise use Polars SQL
---- over the retained rows.
+--- Filter and order retained rows with Polars SQL, never rerunning the database query.
 ---@param where string A WHERE condition, or empty for none.
 ---@param order_by string An ORDER BY list, or empty for none.
 ---@return boolean started
 function M.filter(where, order_by)
   local call = require('sqmeow.core.state').call
-  if not M.filterable(call) then
-    utils.notify(
-      'a MongoDB result is filtered in its query, and its connection is closed',
-      vim.log.levels.WARN
-    )
+  local allowed, err = M.filterable(call)
+  if not allowed then
+    utils.notify(err or 'this result cannot be filtered', vim.log.levels.WARN)
     return false
   end
   return narrow(where, order_by, {})
@@ -982,7 +988,7 @@ function M.render(summary)
     carried = nil
   end
 
-  if not (summary and summary.call_id and summary.state == 'done') then
+  if not (summary and id and summary.state == 'done') then
     draw()
     M.update_winbar(summary)
     update_sticky()
@@ -992,6 +998,16 @@ function M.render(summary)
   local at
   if pending == id then
     pending, at, resume = nil, resume, nil
+    local spec = M.spec()
+    if spec.where ~= '' or spec.order_by ~= '' or #spec.filters > 0 or #spec.sort > 0 then
+      resuming_views[id] = at or { offset = 0 }
+      if M.send_view() then
+        draw()
+        M.update_winbar(summary)
+        return
+      end
+      resuming_views[id] = nil
+    end
   end
   M.show_page(at and at.offset or 0)
   if at and at.cursor and M.window() then
@@ -1219,9 +1235,8 @@ local function editing()
   return true
 end
 
---- Order the rows by a column: in the query when it can run again, otherwise in the engine.
+--- Order retained rows by a column, always using Polars SQL.
 local function sort_by(column, add)
-  local call = require('sqmeow.core.state').call
   local spec = M.spec()
   local sort = vim.deepcopy(spec.sort)
   local at
@@ -1248,27 +1263,17 @@ local function sort_by(column, add)
     sort = {}
   end
 
-  if not (call and M.filterable(call)) then
-    spec.sort = sort
-    M.send_view({ structured = true })
+  local call = require('sqmeow.core.state').call
+  if not (call and call.call_id) then
     return
   end
-  -- MongoDB sorts by a document, and SQL by a list.
-  local mongodb = M.dialect(call) == 'mongodb'
   local names = M.filter_names(call)
   local keys = {}
   for _, entry in ipairs(sort) do
     local name = M.quote(names[entry.column + 1] or '')
-    if mongodb then
-      table.insert(keys, ('%s: %d'):format(name, entry.descending and -1 or 1))
-    else
-      table.insert(keys, name .. (entry.descending and ' DESC' or ''))
-    end
+    table.insert(keys, name .. (entry.descending and ' DESC' or ' ASC') .. ' NULLS LAST')
   end
   local order_by = table.concat(keys, ', ')
-  if mongodb and order_by ~= '' then
-    order_by = '{' .. order_by .. '}'
-  end
   narrow(spec.where, order_by, sort)
 end
 
@@ -1434,7 +1439,7 @@ function M.actions.filter_cell()
   end
 
   local call = require('sqmeow.core.state').call
-  if call and M.filterable(call) then
+  if call and call.call_id then
     local condition, err = require('sqmeow.rpc.client').request('condition', {
       call_id = call.call_id,
       row = cell.row,
@@ -1444,18 +1449,10 @@ function M.actions.filter_cell()
       return utils.notify(err or 'the value could not be matched', vim.log.levels.WARN)
     end
     local spec = M.spec()
-    local both = M.dialect(call) == 'mongodb' and '{"$and": [%s, %s]}' or '(%s) AND %s'
-    local where = spec.where == '' and condition or both:format(spec.where, condition)
+    local where = spec.where == '' and condition or ('(%s) AND %s'):format(spec.where, condition)
     narrow(where, spec.order_by, spec.sort)
     return
   end
-
-  local filter = { column = cell.column, op = 'is_null' }
-  if cell.value ~= nil and cell.value ~= vim.NIL then
-    filter = { column = cell.column, op = 'eq', value = tostring(cell.value) }
-  end
-  table.insert(M.spec().filters, filter)
-  M.send_view()
 end
 
 function M.actions.filter()
