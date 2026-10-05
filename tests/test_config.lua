@@ -56,7 +56,19 @@ end
 
 T['validation']['leaves freeform options alone'] = function()
   eq(config.validate({ keymaps = { result = { next_page = '<C-n>' } } }), {})
-  eq(config.validate({ sources = { { type = 'file', path = '/tmp/connections.json' } } }), {})
+end
+
+T['validation']['rejects removed source and preview options'] = function()
+  eq(
+    config.validate({
+      sources = { { type = 'env' } },
+      ui = { drawer = { preview_in_editor = true } },
+    }),
+    {
+      'unknown option `sources`',
+      'unknown option `ui.drawer.preview_in_editor`',
+    }
+  )
 end
 
 T['validation']['refuses connections declared in setup'] = function()

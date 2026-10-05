@@ -7,10 +7,18 @@ local config = require('sqmeow.config')
 local state = require('sqmeow.core.state')
 
 local scratch = vim.fs.joinpath(vim.fn.tempname(), 'connections.json')
+local project_load
 
 local T = MiniTest.new_set({
   hooks = {
+    pre_case = function()
+      config.apply({ core = { path = vim.fs.dirname(scratch) } })
+      project_load = helpers.swap(sources.builtin.project, 'load', function()
+        return {}
+      end)
+    end,
     post_case = function()
+      helpers.swap(sources.builtin.project, 'load', project_load)
       config.apply({})
       vim.env.SQMEOW_CONNECTIONS = nil
       pcall(vim.fn.delete, scratch)
@@ -19,14 +27,9 @@ local T = MiniTest.new_set({
   },
 })
 
---- Configure sources without any of the defaults, so a case sees only what it declares.
-local function only(...)
-  config.apply({ sources = { ... } })
-end
-
---- Read only the scratch file, and nothing else.
+--- Keep writes under the test's data directory.
 local function only_file()
-  only({ type = 'file', path = scratch })
+  config.apply({ core = { path = vim.fs.dirname(scratch) } })
 end
 
 --- Save a connection to the scratch file.
@@ -34,39 +37,9 @@ local function save(name, url)
   return file.add({ name = name, url = url }, { path = scratch })
 end
 
-T['env'] = MiniTest.new_set()
-
-T['env']['reads a json array'] = function()
+T['ignores the removed environment connection source'] = function()
   vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'ci', url = 'sqlite://ci.db' } })
-  only({ type = 'env' })
-
-  local found = sources.load()
-  eq(#found, 1)
-  eq(found[1].name, 'ci')
-  eq(found[1].source, 'env')
-end
-
-T['env']['reads the variable a source names'] = function()
-  vim.env.SQMEOW_OTHER = vim.json.encode({ { name = 'other', url = 'sqlite://o.db' } })
-  only({ type = 'env', var = 'SQMEOW_OTHER' })
-
-  eq(sources.load()[1].name, 'other')
-  vim.env.SQMEOW_OTHER = nil
-end
-
-T['env']['is empty when the variable is unset'] = function()
-  only({ type = 'env' })
   eq(sources.load(), {})
-end
-
-T['env']['reports malformed json'] = function()
-  vim.env.SQMEOW_CONNECTIONS = 'not json'
-  only({ type = 'env' })
-
-  local found, problems = sources.load()
-  eq(found, {})
-  eq(#problems, 1)
-  helpers.contains(problems[1], 'SQMEOW_CONNECTIONS')
 end
 
 T['file'] = MiniTest.new_set()
@@ -285,8 +258,9 @@ T['removing']['closes a connection that was never saved'] = function()
 end
 
 T['removing']['only closes a connection from another source'] = function()
-  vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'ci', url = 'sqlite://ci.db' } })
-  only({ type = 'env' })
+  helpers.stub(sources.builtin.project, 'load', function()
+    return { { name = 'ci', url = 'sqlite://ci.db' } }
+  end)
 
   local id = state.next_connection_id()
   state.add_connection({ id = id, name = 'ci', url = 'sqlite://ci.db', state = 'connected' })
@@ -301,8 +275,9 @@ T['removing']['only closes a connection from another source'] = function()
 end
 
 T['removing']['refuses a connection from another source that is not open'] = function()
-  vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'ci', url = 'sqlite://ci.db' } })
-  only({ type = 'env' })
+  helpers.stub(sources.builtin.project, 'load', function()
+    return { { name = 'ci', url = 'sqlite://ci.db' } }
+  end)
 
   eq(require('sqmeow.api.connection').remove('ci'), false)
   eq(sources.find('ci').url, 'sqlite://ci.db')
@@ -316,40 +291,33 @@ end
 T['combining'] = MiniTest.new_set()
 
 T['combining']['reads every source in order'] = function()
-  vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'from-env', url = 'sqlite://e.db' } })
+  helpers.stub(sources.builtin.project, 'load', function()
+    return { { name = 'from-project', url = 'sqlite://p.db' } }
+  end)
   save('from-file', 'sqlite://f.db')
-  only({ type = 'env' }, { type = 'file', path = scratch })
 
   local found = sources.load()
   eq(#found, 2)
-  eq(found[1].source, 'env')
+  eq(found[1].source, 'project')
   eq(found[2].source, 'file')
 end
 
 T['combining']['reports a duplicate name instead of hiding it'] = function()
-  vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'dev', url = 'sqlite://e.db' } })
+  helpers.stub(sources.builtin.project, 'load', function()
+    return { { name = 'dev', url = 'sqlite://p.db' } }
+  end)
   save('dev', 'sqlite://f.db')
-  only({ type = 'env' }, { type = 'file', path = scratch })
 
   local found, problems = sources.load()
   -- The first one still works, and the collision is surfaced rather than silently resolved.
   eq(#found, 1)
-  eq(found[1].url, 'sqlite://e.db')
+  eq(found[1].url, 'sqlite://p.db')
   eq(#problems, 1)
   helpers.contains(problems[1], 'dev')
 end
 
-T['combining']['reports an unknown source type'] = function()
-  only({ type = 'nowhere' })
-
-  local _, problems = sources.load()
-  eq(#problems, 1)
-  helpers.contains(problems[1], 'nowhere')
-end
-
 T['combining']['reports an entry missing a url'] = function()
-  vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'broken' } })
-  only({ type = 'env' })
+  helpers.writefile(scratch, { '[{"name":"broken"}]' })
 
   local found, problems = sources.load()
   eq(found, {})
@@ -417,30 +385,6 @@ T['connecting']['refuses changed connection settings']['until closed'] = functio
   local returned, err = require('sqmeow.api.connection').connect_named('dev')
   eq(returned, nil)
   helpers.contains(err, 'close it before reconnecting')
-end
-
-T['a command source reads what the command prints, in the background'] = function()
-  local command = require('sqmeow.sources.command')
-  command.reload()
-  local source =
-    { type = 'command', command = { 'printf', '[{"name": "vault", "url": "sqlite::memory:"}]' } }
-
-  local first = command.load(source)
-  eq(first, {})
-  local found
-  vim.wait(5000, function()
-    found = command.load(source)
-    return #found > 0
-  end, 20)
-  eq(found[1].name, 'vault')
-
-  local failing = { type = 'command', command = 'echo nope >&2; exit 3' }
-  local _, err
-  vim.wait(5000, function()
-    _, err = command.load(failing)
-    return err ~= nil
-  end, 20)
-  eq(err:find('nope', 1, true) ~= nil, true)
 end
 
 return T
