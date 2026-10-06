@@ -16,7 +16,6 @@ bundled-duckdb = ["duckdb/bundled", "duckdb/json"]
 sqmeow-db.workspace = true
 
 bigdecimal.workspace = true
-bytes.workspace = true
 chrono.workspace = true
 clickhouse.workspace = true
 duckdb.workspace = true

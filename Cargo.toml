@@ -16,21 +16,18 @@ sqmeow-adapters = { path = "core/sqmeow-adapters" }
 
 rmpv = "1.3"
 thiserror = "2"
-tokio = { version = "1", default-features = false }
+tokio = { version = "1.53", default-features = false }
 tokio-util = "0.7"
 unicode-width = "0.2"
 futures-util = { version = "0.3", default-features = false }
 bigdecimal = "0.4"
-bytes = "1"
-chrono = "0.4"
-uuid = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+uuid = "1.27"
 mysql_async = { version = "0.37", default-features = false, features = [
   "minimal-rust",
   "rustls-tls",
   "ring",
   "tls12",
-  "chrono",
-  "bigdecimal",
   "client_ed25519",
 ] }
 tokio-postgres = { version = "0.7", features = [
@@ -39,9 +36,7 @@ tokio-postgres = { version = "0.7", features = [
   "with-uuid-1",
 ] }
 tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"] }
-# Bundled SQLite supplies column-origin metadata consistently across release targets.
-rusqlite = { version = "0.39", default-features = false, features = [
-  "bundled",
+rusqlite = { version = "0.40", default-features = false, features = [
   "column_decltype",
   "column_metadata",
   "hooks",
@@ -52,56 +47,43 @@ redis = { version = "1.7", default-features = false, features = [
   "cluster-async",
   "sentinel",
 ] }
-# The official driver. Its rustls trusts a bundled set of roots and has no native-roots feature, so a
-# server behind a private CA is reached with `tlsCAFile=` in the URL. DNS is on for `mongodb+srv`.
 mongodb = "3.9"
-# Links the machine's libduckdb (provided by the Nix dev shell and packages);
-# only the Windows release bundles it with `bundled-duckdb`.
-duckdb = { version = "1.10505", features = ["chrono"] }
-# CQL, for ScyllaDB and Apache Cassandra alike.
-scylla = { version = "1.8", features = [
+duckdb = { version = "1.10506", features = ["chrono"] }
+scylla = { version = "1.9", features = [
   "chrono-04",
   "bigdecimal-04",
   "num-bigint-04",
   "rustls-023",
 ] }
-# The official SDK, over WebSocket only: no embedded storage engines.
-surrealdb = { version = "3.2", default-features = false, features = ["protocol-ws", "rustls"] }
-# ClickHouse over HTTP(S), with the same crypto provider and machine roots as other network adapters.
+surrealdb = { version = "3.3", default-features = false, features = ["protocol-ws", "rustls"] }
 clickhouse = { version = "0.15", default-features = false, features = [
   "rustls-tls-ring",
   "rustls-tls-native-roots",
 ] }
-# Pure-Rust Oracle driver, no Instant Client needed.
-oracledb = "=26.0.0-beta.4"
-# TDS driver, pinned to the maintained tiberius-rs fork.
-tiberius = { git = "https://github.com/tiberius-rs/tiberius", rev = "35605c90adb38cc107d35c3432fd2643d9d6e1e6", default-features = false, features = [
+oracledb = "26.0.0-beta.4"
+tiberius = { version = "0.13.0", default-features = false, features = [
   "rustls",
   "tds73",
   "chrono",
-  "bigdecimal",
 ] }
-# TLS for ScyllaDB, with the same crypto provider and roots as other network adapters.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
-# Reads a query's FROM aliases, and parses the filters typed for results held in memory.
 sqlparser = { version = "0.63", default-features = false, features = ["std", "visitor"] }
 percent-encoding = "2"
 url = "2"
 serde_json = "1"
-toml = "1"
-dotenvy = "0.15.7"
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
+dotenvy = "0.15"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+  "env-filter",
+  "fmt",
+  "tracing-log",
+] }
 
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
-# A panic stays in the request task that raised it instead of ending every connection.
 panic = "unwind"
-
-# Most of the binary is DuckDB's C++, whose queries run about twice as slow when built for size.
-[profile.release.package.libduckdb-sys]
-opt-level = 3
