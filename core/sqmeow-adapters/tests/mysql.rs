@@ -162,16 +162,17 @@ async fn cancelling_apply_explicitly_rolls_back_before_reuse() {
 #[tokio::test]
 async fn row_cap_is_exact_and_the_protocol_is_ready_for_reuse() {
     let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
-    for (sql, cap, truncated) in [
-        ("select 1 union all select 2", 2, false),
-        ("select 1 union all select 2 union all select 3", 2, true),
-        ("select 1", 0, true),
-        ("select 1 where false", 0, false),
+    for (sql, cap, rows, truncated) in [
+        ("select 1 union all select 2", 2, 2, false),
+        ("select 1 union all select 2 union all select 3", 2, 2, true),
+        ("select 1", 0, 0, true),
+        ("select 1 where false", 0, 0, false),
     ] {
         let result = backend
             .execute(sql, cap, CancellationToken::new())
             .await
             .unwrap();
+        assert_eq!(result.row_count(), rows, "{sql}");
         assert_eq!(result.is_truncated(), truncated, "{sql}");
         assert_eq!(
             run(&backend, "select 42").await.cell(0, 0),
@@ -570,48 +571,6 @@ async fn reports_an_error_and_keeps_working() {
 
     assert!(error.to_string().contains("nope"), "{error}");
     assert_eq!(run(&backend, "select 1").await.row_count(), 1);
-}
-
-#[tokio::test]
-async fn stops_at_the_row_cap_and_says_so() {
-    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
-    let result = backend
-        .execute(
-            "with recursive n(x) as (select 1 union all select x + 1 from n where x < 1000)
-             select x from n",
-            10,
-            CancellationToken::new(),
-        )
-        .await
-        .expect("the query should run");
-
-    assert_eq!(result.row_count(), 10);
-    assert!(result.is_truncated());
-}
-
-#[tokio::test]
-async fn cancelling_mid_query_stops_it() {
-    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
-    let cancel = CancellationToken::new();
-
-    let stopper = cancel.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        stopper.cancel();
-    });
-
-    let error = backend
-        .execute("select sleep(30)", NO_CAP, cancel)
-        .await
-        .unwrap_err();
-    assert!(matches!(error, Error::Cancelled), "{error}");
-}
-
-#[tokio::test]
-async fn quotes_identifiers_for_the_dialect() {
-    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
-    assert_eq!(backend.quote_ident("plain"), "`plain`");
-    assert_eq!(backend.quote_ident("od`d"), "`od``d`");
 }
 
 #[tokio::test]

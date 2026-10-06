@@ -330,7 +330,6 @@ mod tests {
             Dialect::from_url("SQLSERVER://sa@host/app"),
             Some(Dialect::MsSql)
         );
-        assert_eq!(Dialect::MsSql.quote_ident("a]b"), "[a]]b]");
         assert_eq!(Dialect::from_url("sqlite://app.db"), Some(Dialect::Sqlite));
         assert_eq!(Dialect::from_url("sqlite::memory:"), Some(Dialect::Sqlite));
         assert_eq!(
@@ -382,6 +381,23 @@ mod tests {
         ] {
             assert_eq!(Dialect::from_url(url), Some(Dialect::Oracle), "{url}");
         }
+    }
+
+    #[test]
+    fn identifiers_are_quoted_and_delimiters_are_escaped_without_a_connection() {
+        for dialect in [
+            Dialect::Sqlite,
+            Dialect::DuckDb,
+            Dialect::Postgres,
+            Dialect::Oracle,
+        ] {
+            assert_eq!(dialect.quote_ident("plain"), "\"plain\"");
+            assert_eq!(dialect.quote_ident("od\"d"), "\"od\"\"d\"");
+        }
+        assert_eq!(Dialect::MySql.quote_ident("plain"), "`plain`");
+        assert_eq!(Dialect::MySql.quote_ident("od`d"), "`od``d`");
+        assert_eq!(Dialect::MsSql.quote_ident("plain"), "[plain]");
+        assert_eq!(Dialect::MsSql.quote_ident("a]b"), "[a]]b]");
     }
 
     #[test]

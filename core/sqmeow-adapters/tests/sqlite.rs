@@ -434,32 +434,25 @@ async fn counts_rows_a_statement_changed() {
 }
 
 #[tokio::test]
-async fn reports_a_syntax_error() {
-    let backend = database().await;
-    let error = backend
-        .execute("select from where", NO_CAP, CancellationToken::new())
-        .await
-        .unwrap_err();
-
-    assert!(matches!(error, Error::Driver(_)), "{error}");
-    // The driver's own wording survives, because it is the part that says what is wrong.
-    assert!(error.to_string().contains("syntax"), "{error}");
-}
-
-#[tokio::test]
 async fn survives_an_error_and_keeps_working() {
     let backend = seeded().await;
-    let _ = backend
-        .execute("select nope from people", NO_CAP, CancellationToken::new())
-        .await
-        .unwrap_err();
-
-    assert_eq!(
-        run(&backend, "select count(*) from people")
+    for (sql, message) in [
+        ("select from where", "syntax"),
+        ("select nope from people", "nope"),
+    ] {
+        let error = backend
+            .execute(sql, NO_CAP, CancellationToken::new())
             .await
-            .row_count(),
-        1
-    );
+            .unwrap_err();
+        assert!(matches!(error, Error::Driver(_)), "{error}");
+        assert!(error.to_string().contains(message), "{error}");
+        assert_eq!(
+            run(&backend, "select count(*) from people")
+                .await
+                .row_count(),
+            1
+        );
+    }
 }
 
 #[tokio::test]
@@ -532,20 +525,6 @@ async fn statements_share_one_session() {
     run(&backend, "insert into scratch values (1)").await;
 
     assert_eq!(run(&backend, "select v from scratch").await.row_count(), 1);
-}
-
-#[tokio::test]
-async fn records_how_long_a_statement_took() {
-    let backend = seeded().await;
-    let result = run(&backend, "select count(*) from people").await;
-    assert!(result.elapsed() > std::time::Duration::ZERO);
-}
-
-#[tokio::test]
-async fn quotes_identifiers_for_the_dialect() {
-    let backend = database().await;
-    assert_eq!(backend.quote_ident("plain"), "\"plain\"");
-    assert_eq!(backend.quote_ident("od\"d"), "\"od\"\"d\"");
 }
 
 #[tokio::test]

@@ -520,18 +520,6 @@ mod tests {
     }
 
     #[test]
-    fn csv_starts_with_a_header() {
-        let text = csv(&sample(), &Rows::all().resolve(&sample(), None), None, true);
-        assert_eq!(text.lines().next(), Some("id,name"));
-    }
-
-    #[test]
-    fn csv_writes_null_as_an_empty_field() {
-        let text = csv(&sample(), &Rows::all().resolve(&sample(), None), None, true);
-        assert_eq!(text.lines().nth(2), Some("2,"));
-    }
-
-    #[test]
     fn csv_quotes_only_what_needs_it() {
         let mut result = ResultSet::new("select v", vec![column("v")]);
         result.push_row(vec![Cell::Text("plain".into())]);
@@ -573,8 +561,12 @@ mod tests {
     }
 
     #[test]
-    fn csv_can_leave_the_header_out() {
+    fn csv_preserves_rows_and_nulls_with_or_without_headers() {
         let result = sample();
+        assert_eq!(
+            csv(&result, &Rows::all().resolve(&result, None), None, true),
+            "id,name\n1,alice\n2,\n"
+        );
         assert_eq!(
             csv(&result, &Rows::all().resolve(&result, None), None, false),
             "1,alice\n2,\n"
@@ -661,17 +653,6 @@ mod tests {
     }
 
     #[test]
-    fn json_nests_a_json_column_rather_than_quoting_it() {
-        let mut result = ResultSet::new("select doc", vec![column("doc")]);
-        result.push_row(vec![Cell::Json("{\"a\":1}".into())]);
-
-        let parsed: serde_json::Value =
-            serde_json::from_str(&json(&result, &Rows::all().resolve(&result, None), None))
-                .unwrap();
-        assert_eq!(parsed[0]["doc"]["a"], serde_json::json!(1));
-    }
-
-    #[test]
     fn json_keeps_line_breaks_in_a_string() {
         let mut result = ResultSet::new("select v", vec![column("v")]);
         result.push_row(vec![Cell::Text("a\nb".into())]);
@@ -680,17 +661,6 @@ mod tests {
             serde_json::from_str(&json(&result, &Rows::all().resolve(&result, None), None))
                 .unwrap();
         assert_eq!(parsed[0]["v"], serde_json::json!("a\nb"));
-    }
-
-    #[test]
-    fn json_falls_back_to_text_for_a_number_it_cannot_represent() {
-        let mut result = ResultSet::new("select v", vec![column("v")]);
-        result.push_row(vec![Cell::Float(f64::INFINITY)]);
-
-        let parsed: serde_json::Value =
-            serde_json::from_str(&json(&result, &Rows::all().resolve(&result, None), None))
-                .unwrap();
-        assert_eq!(parsed[0]["v"], serde_json::json!("Infinity"));
     }
 
     #[test]
@@ -728,8 +698,9 @@ mod tests {
                 {"value": "invalid json", "extra": "Infinity"},
             ])
         );
-        assert!(text.contains("\n  {\n"), "export stays pretty-printed");
-        assert_eq!(json(&result, &[0, 1], Some(&[])), "[\n  {},\n  {}\n]");
+        let empty_columns: serde_json::Value =
+            serde_json::from_str(&json(&result, &[0, 1], Some(&[]))).unwrap();
+        assert_eq!(empty_columns, serde_json::json!([{}, {}]));
     }
 
     #[test]

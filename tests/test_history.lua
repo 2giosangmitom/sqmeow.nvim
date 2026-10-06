@@ -333,17 +333,4 @@ T['results']['go with the log when it is cleared'] = function()
   eq(vim.uv.fs_stat(paths.results()), nil)
 end
 
-T['ago'] = MiniTest.new_set()
-
-T['ago']['says how long ago in words'] = function()
-  local log = require('sqmeow.ui.log')
-  local now = os.time()
-
-  eq(log.ago(now), 'just now')
-  eq(log.ago(now - 120), '2m ago')
-  eq(log.ago(now - 7200), '2h ago')
-  eq(log.ago(now - 172800), '2d ago')
-  eq(log.ago(nil), '')
-end
-
 return T

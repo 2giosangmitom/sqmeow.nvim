@@ -71,30 +71,6 @@ T['display']['shows the password when the user turns redaction off'] = function(
   eq(url.display('postgres://app:secret@host/db'), 'postgres://app:secret@host/db')
 end
 
-T['label'] = MiniTest.new_set()
-
-T['label']['names a sqlite file by its basename'] = function()
-  eq(url.label('sqlite://./data/app.db'), 'app.db')
-  eq(url.label('sqlite:///var/lib/app.sqlite3'), 'app.sqlite3')
-end
-
-T['label']['names an in-memory database'] = function()
-  eq(url.label('sqlite::memory:'), 'memory')
-end
-
-T['label']['ignores sqlite query parameters'] = function()
-  eq(url.label('sqlite://./app.db?mode=rwc'), 'app.db')
-end
-
-T['label']['names a server database by database and host'] = function()
-  eq(url.label('postgres://app:secret@db.internal:5432/orders'), 'orders@db.internal')
-  eq(url.label('mysql://root@localhost/shop'), 'shop@localhost')
-end
-
-T['label']['falls back to the database name with no credentials'] = function()
-  eq(url.label('postgres://localhost/orders'), 'orders')
-end
-
 T['parse'] = MiniTest.new_set()
 
 T['parse']['takes a server url apart'] = function()

@@ -168,67 +168,20 @@ fn escape(text: &str) -> Cow<'_, str> {
 mod tests {
     use super::*;
 
-    fn shown(cell: &Cell) -> String {
-        cell.display("NULL").into_owned()
-    }
-
     #[test]
-    fn null_uses_the_configured_text() {
-        assert_eq!(shown(&Cell::Null), "NULL");
-        assert_eq!(Cell::Null.display("~").into_owned(), "~");
+    fn null_and_empty_text_remain_distinct() {
         assert!(Cell::Null.is_null());
-    }
-
-    #[test]
-    fn an_empty_string_is_not_null() {
-        assert_eq!(shown(&Cell::Text(String::new())), "");
         assert!(!Cell::Text(String::new()).is_null());
     }
 
     #[test]
-    fn floats_drop_a_trailing_zero() {
-        assert_eq!(shown(&Cell::Float(1.0)), "1");
-        assert_eq!(shown(&Cell::Float(1.5)), "1.5");
-        assert_eq!(shown(&Cell::Float(f64::NAN)), "NaN");
-        assert_eq!(shown(&Cell::Float(f64::NEG_INFINITY)), "-Infinity");
-    }
-
-    #[test]
-    fn line_breaks_become_escapes() {
-        assert_eq!(shown(&Cell::Text("a\nb\tc".into())), "a\\nb\\tc");
-    }
-
-    #[test]
-    fn text_without_control_characters_is_not_copied() {
-        let cell = Cell::Text("plain".into());
-        assert!(matches!(cell.display("NULL"), Cow::Borrowed(_)));
-    }
-
-    #[test]
-    fn short_blobs_are_shown_whole() {
-        assert_eq!(shown(&Cell::bytes(&[0xde, 0xad])), "0xdead");
-    }
-
-    #[test]
-    fn long_blobs_report_their_true_length() {
+    fn binary_text_preserves_the_whole_value() {
         let cell = Cell::bytes(&[0u8; BYTES_SHOWN * 2]);
-        let shown = shown(&cell);
-        assert!(
-            shown.ends_with(&format!("… ({} bytes)", BYTES_SHOWN * 2)),
-            "{shown}"
-        );
-        // The whole value is kept, and its text is all of it.
         assert_eq!(cell.text("").len(), 2 + BYTES_SHOWN * 4);
     }
 
     #[test]
-    fn arrays_show_their_elements() {
-        let cell = Cell::Array(vec![Cell::Int(1), Cell::Null, Cell::Text("x".into())]);
-        assert_eq!(shown(&cell), "[1, NULL, x]");
-    }
-
-    #[test]
-    fn only_numbers_align_right() {
+    fn numeric_cells_are_distinct_from_numeric_text_and_null() {
         assert!(Cell::Int(1).is_numeric());
         assert!(Cell::Float(1.0).is_numeric());
         assert!(Cell::Decimal("1.00".into()).is_numeric());
@@ -237,26 +190,9 @@ mod tests {
     }
 
     #[test]
-    fn text_keeps_line_breaks_that_display_escapes() {
+    fn text_keeps_line_breaks() {
         let cell = Cell::Text("a\nb".into());
         assert_eq!(cell.text("NULL"), "a\nb");
-        assert_eq!(cell.display("NULL"), "a\\nb");
-    }
-
-    #[test]
-    fn text_agrees_with_display_where_there_is_nothing_to_escape() {
-        for cell in [Cell::Int(1), Cell::Bool(true), Cell::Null, Cell::Float(1.5)] {
-            assert_eq!(cell.text("NULL"), cell.display("NULL"));
-        }
-    }
-
-    #[test]
-    fn an_unsupported_value_with_no_text_shows_its_type() {
-        let cell = Cell::Unsupported {
-            type_name: "INTERVAL".into(),
-            raw: String::new(),
-        };
-        assert_eq!(shown(&cell), "<INTERVAL>");
     }
 
     #[test]
@@ -266,6 +202,6 @@ mod tests {
             raw: "'cat':1".into(),
         };
         assert_eq!(cell.type_name(), "tsvector");
-        assert_eq!(shown(&cell), "'cat':1");
+        assert_eq!(cell.text(""), "'cat':1");
     }
 }

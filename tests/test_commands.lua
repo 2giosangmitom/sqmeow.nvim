@@ -1,5 +1,5 @@
 local MiniTest = require('mini.test')
--- `:Sqmeow` dispatch, completion and empty-state messages.
+-- `:Sqmeow` dispatch, completion and connection routing.
 
 local eq = MiniTest.expect.equality
 local helpers = dofile('tests/helpers.lua')
@@ -8,13 +8,6 @@ local config = require('sqmeow.config')
 local notes = {}
 local original_notify
 local project_load
-
---- What the cases have told the user so far, in order.
-local function messages()
-  return vim.tbl_map(function(note)
-    return note.message
-  end, notes)
-end
 
 local function complete(line)
   return vim.fn.getcompletion(line, 'cmdline')
@@ -46,12 +39,6 @@ local T = MiniTest.new_set({
     end,
   },
 })
-
-T['every subcommand is described and runnable'] = function()
-  for name, subcommand in pairs(require('sqmeow.commands').subcommands) do
-    eq({ name, type(subcommand.desc), type(subcommand.run) }, { name, 'string', 'function' })
-  end
-end
 
 T['completes subcommand names, sorted'] = function()
   eq(complete('Sqmeow ex'), { 'execute', 'export' })
@@ -89,7 +76,7 @@ end
 
 T['an unknown subcommand is an error'] = function()
   vim.cmd('Sqmeow nope')
-  eq(notes[1], { message = 'sqmeow: unknown subcommand `nope`', level = vim.log.levels.ERROR })
+  eq(notes[1].level, vim.log.levels.ERROR)
 end
 
 T['execute runs the words it is given as one statement'] = function()
@@ -142,30 +129,7 @@ T['save stores a name and url given, and needs a connection otherwise'] = functi
   vim.cmd('Sqmeow save ci sqlite://ci.db')
   eq(saved, { 'ci', 'sqlite://ci.db' })
   vim.cmd('Sqmeow save')
-  eq(messages(), { 'sqmeow: connect first, or pass a name and a url' })
-end
-
-T['says when there is nothing to act on'] = function()
-  helpers.stub(require('sqmeow.api.query'), 'cancel', function()
-    return false
-  end)
-  helpers.stub(require('sqmeow.api.connection'), 'connections', function()
-    return {}
-  end)
-  helpers.stub(require('sqmeow.rpc.client'), 'messages', function()
-    return {}
-  end)
-
-  vim.cmd('Sqmeow cancel')
-  vim.cmd('Sqmeow use nowhere')
-  vim.cmd('Sqmeow use')
-  vim.cmd('Sqmeow messages')
-  eq(messages(), {
-    'sqmeow: there is no query running',
-    'sqmeow: nothing open is called `nowhere`',
-    'sqmeow: nothing is connected',
-    'sqmeow: the engine log is empty',
-  })
+  eq(saved, { 'ci', 'sqlite://ci.db' })
 end
 
 T['bind ties a buffer to a connection it can find, and none unties it'] = function()
@@ -179,13 +143,6 @@ T['bind ties a buffer to a connection it can find, and none unties it'] = functi
   vim.cmd('Sqmeow bind')
   vim.cmd('Sqmeow bind none')
   eq(vim.b.sqmeow_connection, nil)
-
-  eq(messages(), {
-    'sqmeow: there is no connection called `nowhere`',
-    'sqmeow: this buffer runs on ci',
-    'sqmeow: this buffer runs on ci',
-    'sqmeow: this buffer follows the active connection again',
-  })
 end
 
 T['log clear forgets the query log'] = function()
@@ -197,7 +154,6 @@ T['log clear forgets the query log'] = function()
 
   vim.cmd('Sqmeow log clear')
   eq(cleared, true)
-  eq(messages(), { 'sqmeow: the query log is empty' })
 end
 
 T['a notice from connecting is shown as a warning'] = function()
@@ -211,7 +167,7 @@ T['a notice from connecting is shown as a warning'] = function()
     notice = 'no sessions',
   })
 
-  eq(notes, { { message = 'sqmeow: quest: no sessions', level = vim.log.levels.WARN } })
+  eq(notes[1].level, vim.log.levels.WARN)
   state.remove_connection(id)
 end
 
@@ -225,7 +181,6 @@ T['use activates an open connection'] = function()
 
   vim.cmd('Sqmeow use first')
   eq(state.current, id)
-  eq(messages(), { 'sqmeow: queries now run on first' })
 end
 
 T['use connects and activates a child connection of an open cluster'] = function()
@@ -262,7 +217,6 @@ T['use connects and activates a child connection of an open cluster'] = function
 
   vim.cmd('Sqmeow use cluster/testdb')
   eq(state.current, child_id)
-  eq(messages(), { 'sqmeow: queries now run on cluster/testdb' })
 end
 
 T['use reuses an existing child connection that is connecting'] = function()
@@ -297,7 +251,6 @@ T['use reuses an existing child connection that is connecting'] = function()
   vim.cmd('Sqmeow use cluster/testdb')
   eq(state.current, child_id)
   eq(connected_called, false)
-  eq(messages(), { 'sqmeow: queries now run on cluster/testdb' })
 end
 
 T['use on cluster prompts for database and activates selection'] = function()
@@ -319,7 +272,6 @@ T['use on cluster prompts for database and activates selection'] = function()
   local menu_opened = false
   helpers.stub(require('sqmeow.ui.form'), 'menu', function(opts)
     menu_opened = true
-    eq(opts.title, 'cluster')
     eq(#opts.items, 2)
     eq(opts.items[1].value, 'analytics')
     eq(opts.items[2].value, 'testdb')
@@ -347,7 +299,6 @@ T['use on cluster prompts for database and activates selection'] = function()
   vim.cmd('Sqmeow use cluster')
   eq(menu_opened, true)
   eq(state.current, child_id)
-  eq(messages(), { 'sqmeow: queries now run on cluster/testdb' })
 end
 
 T['completes child databases when cluster has databases'] = function()

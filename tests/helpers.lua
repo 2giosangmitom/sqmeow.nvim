@@ -75,83 +75,10 @@ function M.result_lines()
   return vim.api.nvim_buf_get_lines(require('sqmeow.ui.result').buffer(), 0, -1, false)
 end
 
---- The column names and the rule under them.
----@return string[]
-function M.result_header()
-  return vim.list_slice(M.result_lines(), 1, 2)
-end
-
 --- The data rows, with the header dropped.
 ---@return string[]
 function M.result_rows()
   return vim.list_slice(M.result_lines(), 3)
-end
-
---- The drawer's lines, as they are drawn now.
----@return string[]
-function M.drawer_lines()
-  return vim.api.nvim_buf_get_lines(require('sqmeow.ui.drawer').buffer(), 0, -1, false)
-end
-
---- Wait until the drawer draws a line matching `pattern`, then answer with the first one's number.
----@param pattern string A Lua pattern.
----@param timeout integer|nil Milliseconds. Defaults to 5000.
----@return integer number
-function M.drawer_line(pattern, timeout)
-  local found
-  vim.wait(timeout or 5000, function()
-    for number, line in ipairs(M.drawer_lines()) do
-      if line:find(pattern) then
-        found = number
-        return true
-      end
-    end
-    return false
-  end, 20)
-  return assert(
-    found,
-    ('no line matching %q; drawer holds:\n%s'):format(pattern, table.concat(M.drawer_lines(), '\n'))
-  )
-end
-
---- Every extmark on one line of a buffer, as `{ group, from, to }` in column order.
----@param buf integer
----@param namespace string The namespace's name, such as `'sqmeow.drawer'`.
----@param number integer The line, counted from one.
----@return { group: string, from: integer, to: integer }[]
-function M.marks_on(buf, namespace, number)
-  local found = vim.api.nvim_buf_get_extmarks(
-    buf,
-    vim.api.nvim_create_namespace(namespace),
-    { number - 1, 0 },
-    { number - 1, -1 },
-    { details = true }
-  )
-
-  local spans = vim.tbl_map(function(mark)
-    return { group = mark[4].hl_group, from = mark[3], to = mark[4].end_col }
-  end, found)
-  table.sort(spans, function(left, right)
-    return left.from < right.from
-  end)
-  return spans
-end
-
---- Plain characters for what a column holds.
----@return table<string, string>
-function M.ascii_icons()
-  return {
-    text = 't',
-    number = 'n',
-    boolean = 'b',
-    temporal = 'd',
-    json = 'j',
-    uuid = 'u',
-    binary = 'y',
-    unknown = '?',
-    primary_key = 'K',
-    foreign_key = 'k',
-  }
 end
 
 --- Fail unless `haystack` holds `needle` as plain text.
@@ -206,39 +133,6 @@ end
 function M.writefile(path, lines)
   vim.fn.mkdir(vim.fs.dirname(path), 'p')
   vim.fn.writefile(lines, path)
-end
-
---- Close whatever floats are open.
-function M.close_floats()
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_config(win).relative ~= '' then
-      pcall(vim.api.nvim_win_close, win, true)
-    end
-  end
-end
-
---- The first window holding a buffer `predicate` accepts, or nil.
----@param predicate fun(win: integer, buf: integer): boolean
----@return integer|nil
-function M.find_win(predicate)
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local buf = vim.api.nvim_win_get_buf(win)
-    if predicate(win, buf) then
-      return win
-    end
-  end
-  return nil
-end
-
---- Buffer-local normal-mode maps, keyed by what they are pressed as.
----@param buf integer
----@return table<string, string|nil>
-function M.buf_maps(buf)
-  local seen = {}
-  for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, 'n')) do
-    seen[map.lhs] = map.desc
-  end
-  return seen
 end
 
 return M

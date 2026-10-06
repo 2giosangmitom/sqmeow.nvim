@@ -453,7 +453,7 @@ T['duckdb'] = MiniTest.new_set({
     pre_case = function()
       require('sqmeow').setup({ query = { persist_history = false } })
       state.reset()
-      helpers.connect('duckdb::memory:', 'parameter_duckdb')
+      helpers.connect('duckdb::memory:', { name = 'parameter_duckdb' })
     end,
     post_case = function()
       rpc.stop()
@@ -474,7 +474,7 @@ T['duckdb']['prompts and native execution preserve typed values through refresh'
   helpers.wait_for('DuckDB prompted run should finish', function()
     return state.call ~= nil and state.call.state ~= 'executing'
   end)
-  local call = state.call
+  local call = assert(state.call, 'the prompted query should leave a result')
   eq(call.state, 'done')
   eq(names, { 'id: ', 'flag: ', 'name: ' })
   local row = rpc.request('row', { call_id = call.call_id, row = 0 })
