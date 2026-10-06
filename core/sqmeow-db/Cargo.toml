@@ -15,4 +15,10 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-util.workspace = true
 tracing.workspace = true
-polars = { version = "0.55.2", default-features = false, features = ["sql", "lazy", "strings", "csv", "json"] }
+polars = { version = "0.55.2", default-features = false, features = [
+  "sql",
+  "lazy",
+  "strings",
+  "csv",
+  "json",
+] }

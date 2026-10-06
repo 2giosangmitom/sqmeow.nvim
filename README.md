@@ -124,47 +124,27 @@ To follow `master` with lazy.nvim or vim.pack, remove the release version settin
 
 Visual `<CR>` runs the selection; `<leader>E` runs the whole buffer. Press `?` in the drawer or result window for its keymaps.
 
-In the drawer, `p` previews a table's rows and `P` also opens the preview query in an editor.
+| Key            | Action                                            |
+| -------------- | ------------------------------------------------- |
+| `p` / `P`      | Preview a drawer table / also open its query      |
+| `gR`           | Browse foreign keys from a table or result column |
+| `L` / `H`      | Next / previous page                              |
+| `K`            | Row details                                       |
+| `gf` / `go`    | Filter / sort bar                                 |
+| `=`            | Filter by the current cell                        |
+| `s` / `S`      | Sort by column / add another sort column          |
+| `i`            | Stage a cell edit                                 |
+| `gs` / `<C-s>` | Review edits; `<C-s>` in the review applies them  |
+| `x`            | Export CSV, JSON, or SQL where supported          |
+| `R`            | Clear filters, sorting, and hidden columns        |
 
-Press `gR` on a drawer table or result column to browse foreign keys under `Belongs to` and
-`Referenced by`. Each constraint shows its columns in order, including composite keys and
-self-references. `<CR>` follows a relationship to the other table; `K` opens its structure.
-Configure these keys under `keymaps.relationships`. The browser reads declared foreign keys;
-it does not fetch related rows or infer cardinality or many-to-many relationships.
-Inspired by [Squix](https://github.com/eduardofuncao/squix). See `:h sqmeow-relationships`.
-
-| Result key     | Action                                           |
-| -------------- | ------------------------------------------------ |
-| `L` / `H`      | Next / previous page                             |
-| `K`            | Row details                                      |
-| `gf` / `go`    | Filter / sort bar                                |
-| `=`            | Filter by the current cell                       |
-| `s` / `S`      | Sort by column / add another sort column         |
-| `i`            | Stage a cell edit                                |
-| `gs` / `<C-s>` | Review edits; `<C-s>` in the review applies them |
-| `x`            | Export CSV, JSON, or SQL where supported         |
-| `R`            | Clear filters, sorting, and hidden columns       |
-
-Editing requires columns that map to a table and a complete primary or unique key. Editing support varies by adapter. Use a read-only database account when you need server-enforced permissions.
+Editing requires table-backed columns and a complete primary or unique key; support varies by adapter. Use a read-only database account for server-enforced permissions.
 
 SQL databases use their own query dialects. Redis accepts one command per line, MongoDB accepts Extended JSON commands, ScyllaDB/Cassandra use CQL, and SurrealDB uses SurrealQL.
 
+Filtering and sorting use Polars SQL on retained rows, including historical results, without rerunning the query or discarding staged edits. Run the query again for fresh data.
+
 See `:h sqmeow-commands`, `:h sqmeow-keymaps`, and `:h sqmeow-queries` for the full reference.
-
-### Filtering results
-
-Every adapter uses Polars SQL to filter and sort retained rows, including disconnected and historical results. Filtering preserves staged edits and does not rerun the database query.
-
-Press `gf` or `go`. Type only the expressions; the bar supplies the labels:
-
-```text
-WHERE     age >= 18 AND status = 'active'
-ORDER BY  age DESC NULLS LAST, id ASC
-```
-
-Column names are case-sensitive. Use double quotes for names such as `"Customer Name"` and single quotes for strings. Numeric-looking strings remain strings; use `CAST(value AS DOUBLE)` for numeric comparisons when needed.
-
-Filters cover all retained pages but cannot recover rows omitted by the query or `query.max_rows`. Run the query again for fresh data. See `:h sqmeow-queries` for supported expressions and type handling.
 
 ## Connections
 
@@ -184,7 +164,7 @@ type = "sqlite"
 path = "app.db"
 ```
 
-The nearest project file is loaded from the working directory upward. Project definitions take precedence over saved connections with the same name. Relative database paths resolve from the project root.
+The nearest project file overrides saved connections with the same name. Relative database paths resolve from the project root.
 
 ### Credentials
 
@@ -196,13 +176,7 @@ url = "{{ env 'DATABASE_URL' }}"
 read_only = true
 ```
 
-Put `DATABASE_URL` in the process environment or in `.env` beside `.sqmeow/`:
-
-```dotenv
-DATABASE_URL=postgres://dev_user:local-password@localhost:5432/my_app
-```
-
-Process variables take precedence. Reconnect after changing `.env`, and keep it out of version control. URL entries can set `read_only` and `ssh`, but cannot mix `url` with `type`, `host`, or other connection fields.
+Set `DATABASE_URL` in the process environment or in `.env` beside `.sqmeow/`; process variables take precedence. Keep `.env` out of version control and reconnect after changing it.
 
 For SSH tunnels, set `ssh = "user@bastion"` or use a Host alias from `~/.ssh/config`. The database host is resolved from the SSH host.
 
@@ -210,18 +184,7 @@ See `:h sqmeow-project` and `:h sqmeow-credentials` for connection fields, templ
 
 ### Scratchpads
 
-Keep project queries under `.sqmeow/scratchpads/`:
-
-```text
-.sqmeow/scratchpads/
-├── users.sql
-└── reports/
-    └── monthly.sql
-```
-
-Expand `scratchpads` → `local scratchpads` in the drawer. Use `a` to create files or folders, `R` to rename or move them, and `d` to delete them. Scratchpads use the selected connection; folders do not bind them to a database.
-
-Supported extensions are `.sql`, `.redis`, `.json`, and `.surql`. For development, the repo includes [adapter smoke-test scratchpads](.sqmeow/scratchpads/README.md).
+Keep queries under `.sqmeow/scratchpads/` (`.sql`, `.redis`, `.json`, or `.surql`). In the drawer's local scratchpads, `a` creates files or folders, `R` renames or moves them, and `d` deletes them. Queries use the selected connection.
 
 ## Completion
 
@@ -298,6 +261,7 @@ Thanks to these projects for database workflow ideas:
 - [vim-dadbod-ui](https://github.com/kristijanhusak/vim-dadbod-ui)
 - [nvim-dbee](https://github.com/kndndrj/nvim-dbee)
 - [squix](https://github.com/eduardofuncao/squix)
+- [DBeaver](https://github.com/dbeaver/dbeaver)
 
 I borrowed lots of ideas and even some code here and there. That's the beauty of the open-source world :)
 

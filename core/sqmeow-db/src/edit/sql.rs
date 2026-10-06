@@ -8,8 +8,7 @@ use crate::value::Cell;
 
 use super::{Changes, Source, Table, Value, check_column, check_row, not_editable};
 
-/// Plan changes to the tables a result came from: deletes, then inserts, then updates, as DBeaver
-/// orders them.
+/// Plan changes to the tables a result came from: deletes, then inserts, then updates.
 pub fn sql_plan(dialect: Dialect, result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
     let Some(source @ Source::Tables(tables)) = result.source() else {
         return Err(not_editable());
@@ -43,7 +42,7 @@ struct Planner<'a> {
 }
 
 impl Planner<'_> {
-    /// Delete from the table of the first editable column, which is DBeaver's default row identifier.
+    /// Delete from the table of the first editable column.
     fn delete(&self, row: usize) -> Result<String> {
         let table = &self.tables[0];
         Ok(format!(

@@ -1166,7 +1166,6 @@ Empty sections say `None`; unsupported adapters and metadata failures show an
 error. An open connection is required. Closing the browser, disconnecting or
 restarting invalidates pending replies. The browser does not fetch related rows
 or infer cardinality or many-to-many relationships.
-Inspired by Squix (https://github.com/eduardofuncao/squix).
 Parameters ~
 {conn_id} `(integer)`
 {schema} `(string)`

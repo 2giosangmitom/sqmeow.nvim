@@ -484,7 +484,7 @@ T['editing applies through a review'] = function()
     changes = edit.changes(),
   })
   eq(#statements, 3)
-  -- Deletes, then inserts, then updates, the order DBeaver saves in.
+  -- Apply deletes, then inserts, then updates.
   eq(statements[1]:match('^DELETE') ~= nil, true)
   eq(statements[3]:match('^UPDATE') ~= nil, true)
 

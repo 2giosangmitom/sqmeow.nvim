@@ -68,7 +68,6 @@ end
 --- error. An open connection is required. Closing the browser, disconnecting or
 --- restarting invalidates pending replies. The browser does not fetch related rows
 --- or infer cardinality or many-to-many relationships.
---- Inspired by Squix (https://github.com/eduardofuncao/squix).
 ---@tag sqmeow-relationships
 ---@toc_entry Relationships
 ---@param conn_id integer
