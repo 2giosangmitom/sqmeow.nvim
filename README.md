@@ -27,7 +27,9 @@ Queries run in a separate Rust engine. Results stay available for filtering, sor
 
 ## Supported databases
 
-PostgreSQL, CockroachDB, MySQL, MariaDB, SQLite, DuckDB, Redis, Valkey, Dragonfly, MongoDB, ScyllaDB, Cassandra, SurrealDB, ClickHouse, Oracle Database, and Microsoft SQL Server.
+- **Relational & analytical**: PostgreSQL, CockroachDB, MySQL, MariaDB, SQLite, DuckDB, ClickHouse, Oracle Database, Microsoft SQL Server.
+- **Key-value & document**: Redis, Valkey, Dragonfly, MongoDB, SurrealDB.
+- **Wide-column**: ScyllaDB, Cassandra.
 
 ## Installation
 
@@ -131,17 +133,17 @@ Configure these keys under `keymaps.relationships`. The browser reads declared f
 it does not fetch related rows or infer cardinality or many-to-many relationships.
 Inspired by [Squix](https://github.com/eduardofuncao/squix). See `:h sqmeow-relationships`.
 
-| Result key | Action |
-| ---------- | ------ |
-| `L` / `H` | Next / previous page |
-| `K` | Row details |
-| `gf` / `go` | Filter / sort bar |
-| `=` | Filter by the current cell |
-| `s` / `S` | Sort by column / add another sort column |
-| `i` | Stage a cell edit |
+| Result key     | Action                                           |
+| -------------- | ------------------------------------------------ |
+| `L` / `H`      | Next / previous page                             |
+| `K`            | Row details                                      |
+| `gf` / `go`    | Filter / sort bar                                |
+| `=`            | Filter by the current cell                       |
+| `s` / `S`      | Sort by column / add another sort column         |
+| `i`            | Stage a cell edit                                |
 | `gs` / `<C-s>` | Review edits; `<C-s>` in the review applies them |
-| `x` | Export CSV, JSON, or SQL where supported |
-| `R` | Clear filters, sorting, and hidden columns |
+| `x`            | Export CSV, JSON, or SQL where supported         |
+| `R`            | Clear filters, sorting, and hidden columns       |
 
 Editing requires columns that map to a table and a complete primary or unique key. Editing support varies by adapter. Use a read-only database account when you need server-enforced permissions.
 
@@ -292,10 +294,12 @@ See `:h sqmeow-config` for all options and `:h sqmeow-keymaps` to change mapping
 
 Thanks to these projects for database workflow ideas:
 
-- [vim-dadbod](https://github.com/tpope/vim-dadbod) for running database queries from editor buffers and using URLs for connections.
-- [vim-dadbod-ui](https://github.com/kristijanhusak/vim-dadbod-ui) for its database drawer, schema browsing, and saved queries.
-- [nvim-dbee](https://github.com/kndndrj/nvim-dbee) for the drawer/editor/result layout and the separate database backend.
-- [squix](https://github.com/eduardofuncao/squix) for ideas on parameterized queries, keymaps, and relationship exploration.
+- [vim-dadbod](https://github.com/tpope/vim-dadbod)
+- [vim-dadbod-ui](https://github.com/kristijanhusak/vim-dadbod-ui)
+- [nvim-dbee](https://github.com/kndndrj/nvim-dbee)
+- [squix](https://github.com/eduardofuncao/squix)
+
+I borrowed lots of ideas and even some code here and there. That's the beauty of the open-source world :)
 
 ## Contributing
 
