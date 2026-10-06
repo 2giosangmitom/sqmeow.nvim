@@ -124,6 +124,13 @@ Visual `<CR>` runs the selection; `<leader>E` runs the whole buffer. Press `?` i
 
 In the drawer, `p` previews a table's rows and `P` also opens the preview query in an editor.
 
+Press `gR` on a drawer table or result column to browse foreign keys under `Belongs to` and
+`Referenced by`. Each constraint shows its columns in order, including composite keys and
+self-references. `<CR>` follows a relationship to the other table; `K` opens its structure.
+Configure these keys under `keymaps.relationships`. The browser reads declared foreign keys;
+it does not fetch related rows or infer cardinality or many-to-many relationships.
+Inspired by [Squix](https://github.com/eduardofuncao/squix). See `:h sqmeow-relationships`.
+
 | Result key | Action |
 | ---------- | ------ |
 | `L` / `H` | Next / previous page |

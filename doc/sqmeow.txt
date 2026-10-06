@@ -24,6 +24,7 @@ Contents ~
   Troubleshooting ................................... |sqmeow-troubleshooting|
   Configuration .............................................. |sqmeow-config|
   Keymaps ................................................... |sqmeow-keymaps|
+  Relationships ....................................... |sqmeow-relationships|
 
 ------------------------------------------------------------------------------
                                                            *sqmeow-installation*
@@ -312,8 +313,8 @@ An empty parameter map uses declared defaults; missing required values fail
 before any statement runs. Live-result refreshes reuse the values in memory.
 Supplied values are not saved as history parameters, but returned rows and
 edit-source metadata (including Redis keys) may be archived. After restart
-or result eviction, rerun from the scratchpad to
-enter values again. Keep secrets out of defaults, which are part of the SQL.
+or result eviction, rerun from the scratchpad to enter values again.
+Keep secrets out of defaults, which are part of the SQL.
 Unannotated NULL uses a text null; declare the type when the SQL context needs
 a numeric/boolean null. Driver-specific value limits still apply. Oracle
 treats empty strings as NULL, following its own database semantics.
@@ -417,9 +418,8 @@ sessions, temporary tables, or in-memory databases. Project TOML lives in
                                                              *sqmeow-completion*
 Auto-completion ~
 
-sqmeow provides completion sources for both `blink.cmp` and `nvim-cmp`. The
-completion engine uses the active connection to offer schemas, tables, views,
-and columns as you type.
+Use `blink.cmp` or `nvim-cmp` to complete schemas, tables, views, and columns
+from the active connection.
 Columns are loaded on demand for relations in the current statement, including
 multiline SELECT, WHERE, JOIN, GROUP BY, and ORDER BY clauses. Table aliases and
 double-quoted, backtick-quoted, and bracket-quoted identifiers are supported.
@@ -538,11 +538,11 @@ Stop the engine. It restarts on the next call that needs it.
 Configuration defaults and validation.
 
 Pass only the options you want to change to |sqmeow.setup()|. Each setup
-starts from the defaults, rather than extending the previous setup call.
+starts from the defaults and discards the previous setup call's options.
 Nested option tables are merged. See |sqmeow-sources| for connection discovery
 and |sqmeow-keymaps| for mappings.
 
-The most useful limits are `query.max_rows` (retained rows),
+Limits include `query.max_rows` (retained rows),
 `ui.result.page_size` (displayed rows per page), and `query.timeout_ms`
 (execution deadline). A zero row limit is unlimited; a zero timeout is off.
 `query.history_size` is in-memory retention, while `query.history_limit`
@@ -551,8 +551,7 @@ controls the visible persistent log. See |sqmeow-history| for storage paths.
 ------------------------------------------------------------------------------
                                                         *sqmeow.config.defaults*
                             `sqmeow.config.defaults`
-Complete default configuration. Override selected fields in setup; there is
-no need to copy the whole table. Icon values are display glyphs, not behavior.
+Default configuration. Pass only changed fields to setup. Icons control display glyphs.
 >lua
   sqmeow.config.defaults = {
     core = {
@@ -572,7 +571,7 @@ no need to copy the whole table. Icon values are display glyphs, not behavior.
         height = 16,
         page_size = 100,
         max_column_width = 48,
-        -- Marks each column of the grid header with what it holds, or with the key it is.
+        -- Show type and key icons in column headers.
         column_icons = true,
         -- What a SQL `NULL` reads as. Distinct from an empty string, which is drawn as nothing.
         null_text = 'NULL',
@@ -590,16 +589,15 @@ no need to copy the whole table. Icon values are display glyphs, not behavior.
     },
 
     query = {
-      -- Rows held per result. Reached, the result is marked truncated rather than failed. 0 holds every
-      -- row.
+      -- Maximum retained rows per result. Results exceeding the cap are truncated. 0 keeps all rows.
       max_rows = 100000,
       -- Milliseconds before a query is cancelled. 0 disables the timeout.
       timeout_ms = 0,
-      -- Runs whose results the engine holds in memory. An older one is read back from disk when shown.
+      -- Query results kept in memory. Older archived results are loaded from disk when reopened.
       history_size = 32,
       -- Save the queries you run, and the rows they returned, under `core.path`.
       persist_history = true,
-      -- Queries kept in the log, each with its result. The oldest go once there are twice as many.
+      -- Queries shown in the log. Prune the oldest entries when storage exceeds twice this limit.
       history_limit = 500,
       -- Ask before a DELETE or UPDATE without WHERE, a DROP, a TRUNCATE, or emptying a database.
       confirm_destructive = true,
@@ -607,7 +605,7 @@ no need to copy the whole table. Icon values are display glyphs, not behavior.
 
     -- Every character the plugin draws that is not text.
     icons = {
-      -- The kind of thing a drawer row names.
+      -- Drawer node icons.
       connection = '󰆼',
       database = '󰆼',
       schema = '󰙅',
@@ -635,7 +633,7 @@ no need to copy the whole table. Icon values are display glyphs, not behavior.
       sequence = '󰎠',
       role = '󰀄',
 
-      -- The headings a schema is drawn as, each above the things it holds.
+      -- Schema section icons.
       tables = '󰓫',
       views = '󰈈',
       functions = '󰊕',
@@ -646,7 +644,7 @@ no need to copy the whole table. Icon values are display glyphs, not behavior.
       -- A Redis database's groups, one per type of value, all drawn with the same glyph.
       keys = '',
 
-      -- One per dialect, so a drawer holding several of them tells them apart without reading a word.
+      -- Database dialect icons.
       postgres = '',
       mysql = '',
       sqlite = '',
@@ -659,7 +657,7 @@ no need to copy the whole table. Icon values are display glyphs, not behavior.
       oracle = '',
       mssql = '',
 
-      -- What sits before a drawer row: whether its children are showing, or that it has none.
+      -- Tree expansion markers. Leaves have no children.
       markers = { open = '', closed = '', leaf = ' ' },
 
       -- What the result grid is drawn with.
@@ -738,7 +736,7 @@ Return ~
                                                                 *sqmeow-keymaps*
 Buffer-local mappings for the drawer, result grid, filter bar, and editor.
 
-Override by surface and action name, not by the existing key. A string sets
+Configure mappings by window and action name. A string sets
 one key, a list sets aliases, and `false` disables the action: >lua
   require('sqmeow').setup({
     keymaps = {
@@ -780,6 +778,7 @@ drawer
  p         Show the first page of this relation
  P         Preview this relation in an editor
  K         Show the structure of this table or key
+ gR        Browse table relationships
  f         Show only the Redis keys matching a pattern
  r         Reload this subtree
  y         Yank the qualified name or history command
@@ -794,19 +793,20 @@ drawer
  q         Close the drawer
 
 result
+ gR            Browse this column's table relationships
  L             Next page
  H             Previous page
  [H            First page
  ]H            Last page
  <Tab>, ]c     Next column
  <S-Tab>, [c   Previous column
- K             Show this row down the page
- gK            Show the columns and indexes of the table this column is from
+ K             Show row details
+ gK            Show this column's table structure
  ]r            Show the next statement's result
  [r            Show the previous statement's result
  x             Export the result to a file
  x (x)         Export the selected rows
- =             Show only rows holding this value in this column
+ =             Filter by this cell value
  gf            Filter the rows with a WHERE condition
  go            Order the rows with an ORDER BY list
  s             Sort by this column: ascending, descending, off
@@ -814,24 +814,30 @@ result
  -             Hide this column
  g-            Show every hidden column
  R             Clear filters, sort and hidden columns
- Z             Show the result in a float, or back in its split
+ Z             Toggle between a floating window and a split
  i, <CR>       Change this cell
  X             Set this cell to NULL
  g=            Set this cell to a SQL expression, such as now()
  o             Add a row
  D             Add a copy of this row
- dd            Delete this row, or keep it after all
+ dd            Toggle row deletion
  d (x)         Delete the selected rows
  u             Undo the last change
- <C-c>         Stop the running query, or the changes being applied
+ <C-c>         Cancel the query or edit batch
  U             Discard every change
- gs, <C-s>     Review the changes; <C-s> there applies them
+ gs, <C-s>     Review edits; <C-s> in the review applies them
  ?             Show these mappings
  q             Close the result window
 
+relationships
+ <CR>       Browse the other table’s foreign keys
+ K          Show the other table’s structure
+ ?          Show these mappings
+ q, <Esc>   Close relationship browsing
+
 filter
- <CR>       Filter the result with what the bar holds
- <CR> (i)   Filter the result with what the bar holds
+ <CR>       Apply the filter and sort expressions
+ <CR> (i)   Apply the filter and sort expressions
  q, <Esc>   Close the bar without filtering
  <C-p>      Show the filter used before this one
  <C-n>      Show the filter used after this one
@@ -847,7 +853,7 @@ Type ~
 ------------------------------------------------------------------------------
                                                             *sqmeow.keymap.plug*
                               `sqmeow.keymap.plug`
-Actions that are worth a key of the user's own choosing.
+Additional actions available for custom mappings.
 Type ~
 `(table<string, { desc: string, run: fun() }>)`
 
@@ -1140,7 +1146,7 @@ Show the result in a float, or put it back in its split.
 ------------------------------------------------------------------------------
                                                       *sqmeow.api.view.review()*
                            `sqmeow.api.view.review`()
-Show the statements the changes staged in the result plan into, to apply with `<C-s>`.
+Review the statements for staged edits. Apply them with `<C-s>` in the review.
 
 ------------------------------------------------------------------------------
                                                       *sqmeow.api.view.filter()*
@@ -1167,6 +1173,29 @@ Parameters ~
 Usage ~
 >lua
   require('sqmeow.api.view').view({ filters = { { column = 1, op = 'contains', value = 'al' } } })
+<
+------------------------------------------------------------------------------
+                                                          *sqmeow-relationships*
+        `sqmeow.api.view.relationships`({conn_id}, {schema}, {relation})
+Browse a connected table's declared foreign keys.
+Press `gR` on a drawer table or result column. The popup shows Belongs to
+and Referenced by. Each constraint lists its columns in order, including
+composite keys and self-references. `<CR>` follows a relationship to the other
+table; `K` opens its structure. `?` shows configured mappings.
+Override popup actions under `keymaps.relationships`.
+
+Empty sections say `None`; unsupported adapters and metadata failures show an
+error. An open connection is required. Closing the browser, disconnecting or
+restarting invalidates pending replies. The browser does not fetch related rows
+or infer cardinality or many-to-many relationships.
+Inspired by Squix (https://github.com/eduardofuncao/squix).
+Parameters ~
+{conn_id} `(integer)`
+{schema} `(string)`
+{relation} `(string)`
+Usage ~
+>lua
+  require('sqmeow.api.view').relationships(1, 'public', 'orders')
 <
 ------------------------------------------------------------------------------
                                                         *sqmeow.api.view.open()*

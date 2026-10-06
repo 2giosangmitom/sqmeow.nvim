@@ -1,11 +1,11 @@
 --- Configuration defaults and validation.
 ---
 --- Pass only the options you want to change to |sqmeow.setup()|. Each setup
---- starts from the defaults, rather than extending the previous setup call.
+--- starts from the defaults and discards the previous setup call's options.
 --- Nested option tables are merged. See |sqmeow-sources| for connection discovery
 --- and |sqmeow-keymaps| for mappings.
 ---
---- The most useful limits are `query.max_rows` (retained rows),
+--- Limits include `query.max_rows` (retained rows),
 --- `ui.result.page_size` (displayed rows per page), and `query.timeout_ms`
 --- (execution deadline). A zero row limit is unlimited; a zero timeout is off.
 --- `query.history_size` is in-memory retention, while `query.history_limit`
@@ -15,8 +15,7 @@
 
 local M = {}
 
---- Complete default configuration. Override selected fields in setup; there is
---- no need to copy the whole table. Icon values are display glyphs, not behavior.
+--- Default configuration. Pass only changed fields to setup. Icons control display glyphs.
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 M.defaults = {
   core = {
@@ -36,7 +35,7 @@ M.defaults = {
       height = 16,
       page_size = 100,
       max_column_width = 48,
-      -- Marks each column of the grid header with what it holds, or with the key it is.
+      -- Show type and key icons in column headers.
       column_icons = true,
       -- What a SQL `NULL` reads as. Distinct from an empty string, which is drawn as nothing.
       null_text = 'NULL',
@@ -54,16 +53,15 @@ M.defaults = {
   },
 
   query = {
-    -- Rows held per result. Reached, the result is marked truncated rather than failed. 0 holds every
-    -- row.
+    -- Maximum retained rows per result. Results exceeding the cap are truncated. 0 keeps all rows.
     max_rows = 100000,
     -- Milliseconds before a query is cancelled. 0 disables the timeout.
     timeout_ms = 0,
-    -- Runs whose results the engine holds in memory. An older one is read back from disk when shown.
+    -- Query results kept in memory. Older archived results are loaded from disk when reopened.
     history_size = 32,
     -- Save the queries you run, and the rows they returned, under `core.path`.
     persist_history = true,
-    -- Queries kept in the log, each with its result. The oldest go once there are twice as many.
+    -- Queries shown in the log. Prune the oldest entries when storage exceeds twice this limit.
     history_limit = 500,
     -- Ask before a DELETE or UPDATE without WHERE, a DROP, a TRUNCATE, or emptying a database.
     confirm_destructive = true,
@@ -71,7 +69,7 @@ M.defaults = {
 
   -- Every character the plugin draws that is not text.
   icons = {
-    -- The kind of thing a drawer row names.
+    -- Drawer node icons.
     connection = '󰆼',
     database = '󰆼',
     schema = '󰙅',
@@ -99,7 +97,7 @@ M.defaults = {
     sequence = '󰎠',
     role = '󰀄',
 
-    -- The headings a schema is drawn as, each above the things it holds.
+    -- Schema section icons.
     tables = '󰓫',
     views = '󰈈',
     functions = '󰊕',
@@ -110,7 +108,7 @@ M.defaults = {
     -- A Redis database's groups, one per type of value, all drawn with the same glyph.
     keys = '',
 
-    -- One per dialect, so a drawer holding several of them tells them apart without reading a word.
+    -- Database dialect icons.
     postgres = '',
     mysql = '',
     sqlite = '',
@@ -123,7 +121,7 @@ M.defaults = {
     oracle = '',
     mssql = '',
 
-    -- What sits before a drawer row: whether its children are showing, or that it has none.
+    -- Tree expansion markers. Leaves have no children.
     markers = { open = '', closed = '', leaf = ' ' },
 
     -- What the result grid is drawn with.
@@ -161,7 +159,7 @@ M.defaults = {
 --- The active configuration. Replaced wholesale by `setup()`.
 M.current = vim.deepcopy(M.defaults)
 
--- Options whose shape is the user's to decide, so only "is it a table" is checked.
+-- User-defined mappings: validate the table type, not its keys.
 local freeform = {
   ['keymaps'] = true,
   -- Keyed by whatever the database calls its types, so the keys cannot be known in advance.

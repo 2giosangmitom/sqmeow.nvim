@@ -3,7 +3,7 @@ use rmpv::Value;
 use sqmeow_rpc::client::Client;
 use sqmeow_rpc::error::Result;
 
-/// Provides a typed surface over [`Client`] for talking to Neovim.
+/// Typed Neovim calls over [`Client`].
 #[derive(Clone)]
 pub struct Nvim {
     client: Client,

@@ -7,7 +7,7 @@ local notify = require('sqmeow.core.utils').notify
 
 M.subcommands = {
   install = {
-    desc = 'Install the engine this plugin needs, by download or with cargo',
+    desc = 'Download the engine or build it with cargo',
     complete = function(lead)
       return vim.tbl_filter(function(method)
         return method:find(lead, 1, true) == 1
@@ -38,7 +38,7 @@ M.subcommands = {
     end,
   },
   messages = {
-    desc = 'Show what the engine has been saying',
+    desc = 'Show the engine log',
     run = function()
       local lines = require('sqmeow.rpc.client').messages()
       if #lines == 0 then

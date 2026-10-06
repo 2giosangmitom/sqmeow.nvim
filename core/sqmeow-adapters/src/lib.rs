@@ -1,4 +1,4 @@
-//! Provides database adapters for sqmeow.nvim.
+//! Database adapters for sqmeow.nvim.
 //!
 //! Each adapter implements [`sqmeow_db::adapter::Adapter`] for one dialect. The
 //! [`Backend`] enum erases the concrete type so the engine can hold a
@@ -31,6 +31,7 @@ use sqmeow_db::node::ColumnNode;
 use sqmeow_db::node::Details;
 use sqmeow_db::node::IndexNode;
 use sqmeow_db::node::RelationNode;
+use sqmeow_db::node::RelationshipNode;
 use sqmeow_db::node::RoleNode;
 use sqmeow_db::node::RoutineKind;
 use sqmeow_db::node::RoutineNode;
@@ -54,27 +55,21 @@ pub(crate) fn cancelled_after(done: usize, total: usize) -> Error {
     ))
 }
 
-/// Open a pool, trying again while the server resets connections, until `CONNECT_TIMEOUT`.
-pub(crate) async fn connect_retrying<T, F, Fut>(mut open: F) -> sqlx::Result<T>
+/// Retry transient connection-establishment failures, using the driver's error classification.
+/// Never use this to replay queries or writes whose outcome might already be committed.
+pub(crate) async fn connect_retrying_with<T, E, F, Fut>(
+    mut open: F,
+    retryable: impl Fn(&E) -> bool,
+) -> std::result::Result<T, E>
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = sqlx::Result<T>>,
+    Fut: std::future::Future<Output = std::result::Result<T, E>>,
 {
-    use std::io::ErrorKind;
-
     let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
     loop {
         match open().await {
-            Err(sqlx::Error::Io(error))
-                if matches!(
-                    error.kind(),
-                    ErrorKind::ConnectionReset
-                        | ErrorKind::ConnectionAborted
-                        | ErrorKind::UnexpectedEof
-                        | ErrorKind::BrokenPipe
-                ) && tokio::time::Instant::now() < deadline =>
-            {
-                tracing::debug!(%error, "the server cut the connection off; trying again");
+            Err(error) if retryable(&error) && tokio::time::Instant::now() < deadline => {
+                tracing::debug!("the server cut the connection off; trying again");
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
             outcome => return outcome,
@@ -328,6 +323,15 @@ impl Backend {
         dispatch!(self, adapter => adapter.columns(schema, relation).await)
     }
 
+    /// Foreign keys with this table at either endpoint.
+    pub async fn relationships(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<RelationshipNode>> {
+        dispatch!(self, adapter => adapter.relationships(schema, relation).await)
+    }
+
     /// The roles or users the server knows.
     pub async fn roles(&self) -> Result<Vec<RoleNode>> {
         dispatch!(self, adapter => adapter.roles().await)
@@ -357,6 +361,45 @@ impl Backend {
     }
 }
 
+/// Group catalog rows ordered by source, constraint identity, and column position.
+pub(crate) fn relationship_nodes(
+    rows: impl IntoIterator<Item = (String, String, String, String, String, String, String)>,
+) -> Vec<RelationshipNode> {
+    let mut nodes: Vec<RelationshipNode> = Vec::new();
+    for (
+        name,
+        source_schema,
+        source_relation,
+        column,
+        target_schema,
+        target_relation,
+        referenced,
+    ) in rows
+    {
+        if let Some(node) = nodes.last_mut()
+            && node.name == name
+            && node.source_schema == source_schema
+            && node.source_relation == source_relation
+            && node.target_schema == target_schema
+            && node.target_relation == target_relation
+        {
+            node.columns.push(column);
+            node.referenced.push(referenced);
+        } else {
+            nodes.push(RelationshipNode {
+                name,
+                source_schema,
+                source_relation,
+                columns: vec![column],
+                target_schema,
+                target_relation,
+                referenced: vec![referenced],
+            });
+        }
+    }
+    nodes
+}
+
 /// Dialects this build can connect to.
 pub fn supported() -> Vec<&'static str> {
     vec![
@@ -378,22 +421,50 @@ pub fn supported() -> Vec<&'static str> {
 mod tests {
     use std::io::ErrorKind;
 
-    use super::connect_retrying;
+    use super::connect_retrying_with;
+
+    #[test]
+    fn relationship_rows_group_by_constraint_and_source_not_target() {
+        let row = |name: &str, source: &str, column: &str, referenced: &str| {
+            (
+                name.to_owned(),
+                "s.with.dot".to_owned(),
+                source.to_owned(),
+                column.to_owned(),
+                "target.schema".to_owned(),
+                "target.table".to_owned(),
+                referenced.to_owned(),
+            )
+        };
+        let nodes = super::relationship_nodes([
+            row("first", "child", "b", "y"),
+            row("first", "child", "a", "x"),
+            row("second", "child", "c", "x"),
+            row("second", "other", "d", "x"),
+        ]);
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0].columns, ["b", "a"]);
+        assert_eq!(nodes[0].referenced, ["y", "x"]);
+        assert_eq!(nodes[2].source_relation, "other");
+    }
 
     #[tokio::test]
     async fn a_reset_connection_is_tried_again() {
         let mut attempts = 0;
-        let opened = connect_retrying(|| {
-            attempts += 1;
-            let attempt = attempts;
-            async move {
-                if attempt < 3 {
-                    Err(sqlx::Error::Io(ErrorKind::ConnectionReset.into()))
-                } else {
-                    Ok(attempt)
+        let opened = connect_retrying_with(
+            || {
+                attempts += 1;
+                let attempt = attempts;
+                async move {
+                    if attempt < 3 {
+                        Err(std::io::Error::from(ErrorKind::ConnectionReset))
+                    } else {
+                        Ok(attempt)
+                    }
                 }
-            }
-        })
+            },
+            |error| error.kind() == ErrorKind::ConnectionReset,
+        )
         .await;
 
         assert_eq!(opened.expect("the third attempt should open"), 3);
@@ -402,10 +473,13 @@ mod tests {
     #[tokio::test]
     async fn any_other_failure_is_reported_at_once() {
         let mut attempts = 0;
-        let opened: sqlx::Result<()> = connect_retrying(|| {
-            attempts += 1;
-            async { Err(sqlx::Error::PoolTimedOut) }
-        })
+        let opened: std::io::Result<()> = connect_retrying_with(
+            || {
+                attempts += 1;
+                async { Err(ErrorKind::PermissionDenied.into()) }
+            },
+            |error: &std::io::Error| error.kind() == ErrorKind::ConnectionReset,
+        )
         .await;
 
         assert!(opened.is_err());

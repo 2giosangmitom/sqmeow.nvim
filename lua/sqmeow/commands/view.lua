@@ -10,7 +10,7 @@ local function void(_) end
 
 M.subcommands = {
   float = {
-    desc = 'Show the result in a bigger float, or back in its split',
+    desc = 'Toggle between a floating result window and a split',
     run = function()
       require('sqmeow.api.view').toggle_float()
     end,
@@ -28,7 +28,7 @@ M.subcommands = {
     end,
   },
   export = {
-    desc = 'Write the result to a file, or with `clipboard` as the path copy it',
+    desc = 'Export the result to a file or `clipboard`',
     run = function(args)
       if args[2] == 'clipboard' then
         return require('sqmeow.api.export').export({ format = args[1], clipboard = true })
@@ -42,7 +42,7 @@ M.subcommands = {
     end,
   },
   toggle = {
-    desc = 'Show the schema drawer, or hide it',
+    desc = 'Toggle the schema drawer',
     run = function()
       require('sqmeow.api.view').toggle()
     end,
@@ -66,7 +66,7 @@ M.subcommands = {
     end,
   },
   log = {
-    desc = 'Choose a past query and show its result again, or `clear` to forget them',
+    desc = 'Reopen a query result, or use `clear` to erase history',
     run = function(args)
       if args[1] == 'clear' then
         require('sqmeow.server.history').clear()

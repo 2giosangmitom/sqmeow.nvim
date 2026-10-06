@@ -1,309 +1,17 @@
-//! What the sqlx adapters share.
+//! Driver-independent result provenance and transaction-safety helpers.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Mutex;
-use std::time::Instant;
 
-use futures_util::{Stream, StreamExt};
-use sqlx::{
-    Arguments, AssertSqlSafe, ColumnIndex, Database, Decode, Either, Encode, Executor,
-    IntoArguments, Pool, Row, SqlSafeStr, Type, TypeInfo,
-};
-use sqmeow_db::edit::Source;
-use sqmeow_db::edit::TableBinder;
-use sqmeow_db::edit::TableName;
-use sqmeow_db::error::Error;
-use sqmeow_db::error::Result;
+use sqmeow_db::edit::{Source, TableBinder, TableName};
+use sqmeow_db::error::{Error, Result};
 use sqmeow_db::result::Column;
-use sqmeow_db::result::ResultSet;
 use sqmeow_db::sql::Sides;
-use sqmeow_db::sql::parameters::{Kind, Value};
-use sqmeow_db::types::ForeignKey;
 use sqmeow_db::types::KeyKind;
-use sqmeow_db::value::Cell;
-use tokio_util::sync::CancellationToken;
 
 /// Where a result column came from: its table, and its name in that table.
 pub(crate) type Origin = Option<(TableName, String)>;
-
-/// Prepare a statement to learn what its result looks like, before running it.
-pub(crate) async fn prepare<DB>(pool: &Pool<DB>, statement: &str) -> Option<DB::Statement>
-where
-    DB: Database,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-{
-    let sql = AssertSqlSafe(statement.to_owned()).into_sql_str();
-    match pool.prepare(sql).await {
-        Ok(prepared) => Some(prepared),
-        Err(error) => {
-            tracing::debug!(%error, "could not prepare a statement to read its columns");
-            None
-        }
-    }
-}
-
-/// A prepared statement's result columns, classified by the type the driver names.
-pub(crate) fn result_columns<C: sqlx::Column>(prepared: &[C]) -> Vec<Column> {
-    prepared
-        .iter()
-        .map(|column| Column::new(column.name(), column.type_info().name()))
-        .collect()
-}
-
-/// The table column each result column came from, for a driver that says.
-pub(crate) fn origins<C: sqlx::Column>(prepared: &[C]) -> Vec<Origin> {
-    prepared
-        .iter()
-        .map(|column| {
-            let origin = column.origin();
-            let origin = origin.table_column()?;
-            // MySQL names the table with its schema when it knows one.
-            Some((TableName::parse(&origin.table), origin.name.to_string()))
-        })
-        .collect()
-}
-
-/// What each sqlx adapter supplies to the shared query flow in [`run`].
-pub(crate) trait SqlxAdapter: Sync {
-    type Db: Database;
-
-    fn pool(&self) -> &Pool<Self::Db>;
-
-    /// A statement's columns and where its rows are stored, read before it runs.
-    fn describe(
-        &self,
-        statement: &str,
-    ) -> impl Future<Output = (Vec<Column>, Option<Source>)> + Send;
-
-    fn describe_bound(
-        &self,
-        statement: &str,
-        _values: &[Value],
-    ) -> impl Future<Output = (Vec<Column>, Option<Source>)> + Send {
-        self.describe(statement)
-    }
-
-    fn decode(row: &<Self::Db as Database>::Row, index: usize) -> Cell;
-
-    fn affected(outcome: &<Self::Db as Database>::QueryResult) -> u64;
-
-    /// Stop a cancelled query on the server.
-    fn stop_running(&self) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-
-    /// Forget the tables read so far.
-    fn forget(&self);
-}
-
-/// Run and read one statement through an adapter, describing it through `origin`, the query it
-/// wraps or itself.
-pub(crate) async fn run<A: SqlxAdapter>(
-    adapter: &A,
-    statement: &str,
-    origin: &str,
-    max_rows: usize,
-    cancel: &CancellationToken,
-) -> Result<ResultSet>
-where
-    for<'c> &'c mut <A::Db as Database>::Connection: Executor<'c, Database = A::Db>,
-    <A::Db as Database>::Arguments: IntoArguments<A::Db>,
-{
-    run_with(adapter, statement, origin, max_rows, cancel, None, &[]).await
-}
-
-/// The bound path shares metadata, cancellation and row draining with ordinary execution.
-pub(crate) async fn run_bound<A: SqlxAdapter>(
-    adapter: &A,
-    statement: &str,
-    values: &[Value],
-    max_rows: usize,
-    cancel: &CancellationToken,
-) -> Result<ResultSet>
-where
-    for<'c> &'c mut <A::Db as Database>::Connection: Executor<'c, Database = A::Db>,
-    <A::Db as Database>::Arguments: IntoArguments<A::Db>,
-    for<'q> Option<String>: Encode<'q, A::Db> + Type<A::Db>,
-    for<'q> Option<i64>: Encode<'q, A::Db> + Type<A::Db>,
-    for<'q> Option<f64>: Encode<'q, A::Db> + Type<A::Db>,
-    for<'q> Option<bool>: Encode<'q, A::Db> + Type<A::Db>,
-{
-    let mut arguments = <A::Db as Database>::Arguments::default();
-    for value in values {
-        match value {
-            Value::Text(value) => arguments.add(Some(value.clone())),
-            Value::Int(value) => arguments.add(Some(*value)),
-            Value::Float(value) => arguments.add(Some(*value)),
-            Value::Bool(value) => arguments.add(Some(*value)),
-            Value::Null(Kind::Auto | Kind::Text) => arguments.add(None::<String>),
-            Value::Null(Kind::Int) => arguments.add(None::<i64>),
-            Value::Null(Kind::Float) => arguments.add(None::<f64>),
-            Value::Null(Kind::Bool) => arguments.add(None::<bool>),
-        }
-        .map_err(Error::driver)?;
-    }
-    run_with(
-        adapter,
-        statement,
-        statement,
-        max_rows,
-        cancel,
-        Some(arguments),
-        values,
-    )
-    .await
-}
-
-/// Both protocols share metadata, timing, row limits and cancellation cleanup.
-async fn run_with<A: SqlxAdapter>(
-    adapter: &A,
-    statement: &str,
-    origin: &str,
-    max_rows: usize,
-    cancel: &CancellationToken,
-    arguments: Option<<A::Db as Database>::Arguments>,
-    values: &[Value],
-) -> Result<ResultSet>
-where
-    for<'c> &'c mut <A::Db as Database>::Connection: Executor<'c, Database = A::Db>,
-    <A::Db as Database>::Arguments: IntoArguments<A::Db>,
-{
-    let (columns, source) = if arguments.is_some() {
-        adapter.describe_bound(origin, values).await
-    } else {
-        adapter.describe(origin).await
-    };
-    let started = Instant::now();
-    let width = columns.len();
-    let mut result = ResultSet::new(statement, columns);
-
-    let stream = match arguments {
-        Some(arguments) => adapter.pool().fetch_many(sqlx::query_with::<A::Db, _>(
-            AssertSqlSafe(statement.to_owned()),
-            arguments,
-        )),
-        None => sqlx::raw_sql(AssertSqlSafe(statement.to_owned())).fetch_many(adapter.pool()),
-    };
-
-    let outcome = drain(
-        stream,
-        &mut result,
-        max_rows,
-        cancel,
-        A::affected,
-        |row| result_columns(row.columns()),
-        |row| {
-            // A row can be wider than preparing predicted.
-            (0..width.max(row.len()))
-                .map(|index| A::decode(row, index))
-                .collect()
-        },
-    )
-    .await;
-    if matches!(outcome, Err(Error::Cancelled)) {
-        adapter.stop_running().await;
-    }
-    if may_change_schema(statement) {
-        adapter.forget();
-    }
-    outcome?;
-
-    result.set_elapsed(started.elapsed());
-    result.set_source(source);
-    Ok(result)
-}
-
-/// Read a query's output into a result set.
-async fn drain<S, Q, R>(
-    mut stream: S,
-    result: &mut ResultSet,
-    max_rows: usize,
-    cancel: &CancellationToken,
-    affected: impl Fn(&Q) -> u64,
-    describe: impl Fn(&R) -> Vec<Column>,
-    decode: impl Fn(&R) -> Vec<Cell>,
-) -> Result<()>
-where
-    S: Stream<Item = std::result::Result<Either<Q, R>, sqlx::Error>> + Unpin,
-{
-    loop {
-        tokio::select! {
-            // Cancellation wins a tie.
-            biased;
-
-            () = cancel.cancelled() => return Err(Error::Cancelled),
-
-            item = stream.next() => match item {
-                None => return Ok(()),
-                Some(Err(error)) => return Err(Error::driver(error)),
-                Some(Ok(Either::Left(outcome))) => result.set_affected(affected(&outcome)),
-                Some(Ok(Either::Right(row))) => {
-                    // A statement that would not prepare arrives with no columns, and the first row
-                    // is the first thing to say what they are.
-                    if result.columns().is_empty() {
-                        result.adopt_columns(describe(&row));
-                    }
-                    if result.row_count() >= max_rows {
-                        // Stopping here drops the stream, which tells the server to stop sending.
-                        result.mark_truncated();
-                        return Ok(());
-                    }
-                    result.push_row(decode(&row));
-                }
-            },
-        }
-    }
-}
-
-/// Run statements in one transaction, rolling all of them back when any fails, and answer with the
-/// rows any of them returned.
-pub(crate) async fn transact<DB>(
-    pool: &Pool<DB>,
-    statements: &[String],
-    cancel: &CancellationToken,
-    affected: impl Fn(&DB::QueryResult) -> u64,
-    decode: impl Fn(&DB::Row, usize) -> Cell,
-) -> Result<Vec<ResultSet>>
-where
-    DB: Database,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-{
-    let mut transaction = pool.begin().await.map_err(Error::driver)?;
-    let mut returned = Vec::new();
-    for statement in statements {
-        let failed = |error: sqlx::Error| rolled_back(format!("{error}\nin: {statement}"));
-        let mut result = ResultSet::new(statement.as_str(), Vec::new());
-        let mut changed = 0;
-        let mut stream =
-            sqlx::raw_sql(AssertSqlSafe(statement.clone())).fetch_many(&mut *transaction);
-        loop {
-            // Dropping the transaction on a cancel rolls it back.
-            let item = tokio::select! {
-                biased;
-                () = cancel.cancelled() => return Err(Error::Cancelled),
-                item = stream.next() => item,
-            };
-            let Some(item) = item else { break };
-            match item.map_err(failed)? {
-                Either::Left(outcome) => changed += affected(&outcome),
-                Either::Right(row) => {
-                    if result.columns().is_empty() {
-                        result.adopt_columns(result_columns(row.columns()));
-                    }
-                    result.push_row((0..row.len()).map(|index| decode(&row, index)).collect());
-                }
-            }
-        }
-        drop(stream);
-        check_affected(statement, changed).map_err(rolled_back)?;
-        if result.row_count() > 0 {
-            returned.push(result);
-        }
-    }
-    transaction.commit().await.map_err(Error::driver)?;
-    Ok(returned)
-}
 
 /// A statement's failure, after its transaction was rolled back.
 pub(crate) fn rolled_back(error: impl std::fmt::Display) -> Error {
@@ -312,7 +20,6 @@ pub(crate) fn rolled_back(error: impl std::fmt::Display) -> Error {
 
 /// Refuse a planned `UPDATE` or `DELETE` that did not change exactly one row.
 pub(crate) fn check_affected(statement: &str, affected: u64) -> Result<()> {
-    // `first_word` lowercases and strips comments, so user-supplied lowercase is caught too.
     if !matches!(
         sqmeow_db::sql::first_word(statement).as_str(),
         "update" | "delete"
@@ -351,62 +58,11 @@ pub(crate) fn may_change_schema(statement: &str) -> bool {
     )
 }
 
-/// Last resort for a value no decoder claimed.
-pub(crate) fn text_or_bytes<'r, R>(row: &'r R, index: usize, type_name: &str) -> Cell
-where
-    R: Row,
-    usize: ColumnIndex<R>,
-    String: Decode<'r, R::Database> + Type<R::Database>,
-    Vec<u8>: Decode<'r, R::Database> + Type<R::Database>,
-{
-    if let Ok(text) = row.try_get::<String, _>(index) {
-        return Cell::Text(text);
-    }
-    if let Ok(bytes) = row.try_get::<Vec<u8>, _>(index) {
-        return Cell::bytes(&bytes);
-    }
-    // Skipping the type check still reads the driver's raw form.
-    match row.try_get_unchecked::<Vec<u8>, _>(index) {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(raw) => Cell::Unsupported {
-                type_name: type_name.to_owned(),
-                raw,
-            },
-            Err(error) => Cell::bytes(error.as_bytes()),
-        },
-        Err(_) => Cell::Unsupported {
-            type_name: type_name.to_owned(),
-            raw: String::new(),
-        },
-    }
-}
-
-/// What a drawer column's foreign key points at, read from `references_table` and
-/// `references_column`, if it has one.
-pub(crate) fn foreign_key<'r, R>(row: &'r R) -> Option<ForeignKey>
-where
-    R: Row,
-    &'static str: ColumnIndex<R>,
-    String: Decode<'r, R::Database> + Type<R::Database>,
-{
-    Some(ForeignKey {
-        table: row
-            .try_get::<Option<String>, _>("references_table")
-            .ok()??,
-        column: row
-            .try_get::<Option<String>, _>("references_column")
-            .ok()??,
-    })
-}
-
 /// Which columns of one table are keys.
 #[derive(Debug, Default)]
 pub(crate) struct Keys {
-    /// By column name.
     pub(crate) kinds: HashMap<String, KeyKind>,
-    /// The columns of each unique key other than the primary one.
     pub(crate) unique: Vec<Vec<String>>,
-    /// The columns the database fills in.
     pub(crate) generated: Vec<String>,
 }
 
@@ -415,24 +71,20 @@ pub(crate) struct Keys {
 pub(crate) struct TableKeys(Mutex<HashMap<TableName, Keys>>);
 
 impl TableKeys {
-    /// Forget every table, so each is read again the next time a result comes from it.
     pub(crate) fn forget(&self) {
         if let Ok(mut known) = self.0.lock() {
             known.clear();
         }
     }
 
-    /// Mark the result columns that are keys in the table they came from, reading each table not
-    /// seen before with `read`.
+    /// Mark result columns, reading metadata only for tables not yet cached.
     pub(crate) async fn mark<F, Fut>(&self, origins: &[Origin], columns: &mut [Column], read: F)
     where
         F: Fn(TableName) -> Fut,
         Fut: Future<Output = Keys>,
     {
         let missing: Vec<TableName> = {
-            let Ok(known) = self.0.lock() else {
-                return;
-            };
+            let Ok(known) = self.0.lock() else { return };
             let mut missing: Vec<TableName> = origins
                 .iter()
                 .flatten()
@@ -443,17 +95,13 @@ impl TableKeys {
             missing.dedup();
             missing
         };
-
         for table in missing {
             let found = read(table.clone()).await;
             if let Ok(mut known) = self.0.lock() {
                 known.insert(table, found);
             }
         }
-
-        let Ok(known) = self.0.lock() else {
-            return;
-        };
+        let Ok(known) = self.0.lock() else { return };
         for (column, origin) in columns.iter_mut().zip(origins) {
             if let Some(kind) = origin
                 .as_ref()
@@ -469,9 +117,7 @@ impl TableKeys {
         }
     }
 
-    /// Where a result's rows are stored, from the tables read so far. `plain` is whether each row is a
-    /// table row, so a table without a key in the result can be found by every column, and `sides`
-    /// tells apart the reads of a table the query reads twice.
+    /// Bind writable results using primary/unique keys and self-join sides.
     pub(crate) fn source(&self, origins: &[Origin], plain: bool, sides: Sides) -> Option<Source> {
         let known = self.0.lock().ok()?;
         let mut binder = TableBinder::default().every_column(plain).sides(sides);

@@ -10,7 +10,7 @@ local function void(_) end
 
 M.subcommands = {
   add = {
-    desc = 'Add a connection, choosing the database and filling in a form',
+    desc = 'Add a connection with the database settings form',
     run = function()
       require('sqmeow.ui.connection').create()
     end,
@@ -35,7 +35,7 @@ M.subcommands = {
     end,
   },
   edit = {
-    desc = 'Change a saved connection: what it is called, or where it points',
+    desc = 'Edit a saved connection name or settings',
     run = function(args)
       -- The form is the way in.
       local function prompt(spec)
@@ -105,7 +105,7 @@ M.subcommands = {
     end,
   },
   remove = {
-    desc = 'Delete a saved connection, closing it while it is open',
+    desc = 'Delete a saved connection and disconnect it if open',
     run = function(args)
       local name = args[1]
       if not name or name == '' then
@@ -289,7 +289,7 @@ M.subcommands = {
     end,
   },
   bind = {
-    desc = 'Tie this buffer to one connection, or `none` to untie it',
+    desc = 'Bind this buffer to a connection; `none` clears the binding',
     run = function(args)
       local name = args[1]
 

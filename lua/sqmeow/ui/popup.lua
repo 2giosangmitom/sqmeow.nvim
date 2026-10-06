@@ -16,6 +16,7 @@ local M = {}
 ---@field bottom string|nil Bottom border text.
 ---@field zindex integer|nil Nui zindex, default 50.
 ---@field extra_maps table|nil Extra `{ mode, lhs, handler }` mappings.
+---@field close_maps boolean|nil Set false when the caller supplies configurable close mappings.
 
 ---@param spec sqmeow.PopupSpec
 ---@return any|nil popup Mounted nui popup.
@@ -52,8 +53,10 @@ function M.open(spec)
     win_options = { cursorline = true, wrap = false, number = false, relativenumber = false },
   })
   popup:mount()
-  popup:map('n', 'q', spec.on_close, { nowait = true })
-  popup:map('n', '<Esc>', spec.on_close, { nowait = true })
+  if spec.close_maps ~= false then
+    popup:map('n', 'q', spec.on_close, { nowait = true })
+    popup:map('n', '<Esc>', spec.on_close, { nowait = true })
+  end
   for _, map in ipairs(spec.extra_maps or {}) do
     popup:map(map.mode, map.lhs, map.handler, { nowait = true })
   end

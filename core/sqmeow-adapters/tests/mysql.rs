@@ -13,8 +13,273 @@ use sqmeow_db::value::Cell;
 
 include!("common/harness.rs");
 
+#[tokio::test]
+async fn atomic_edits_reject_a_hidden_commit_before_changing_rows() {
+    let url = server!("SQMEOW_TEST_MYSQL_URL");
+    let backend = connect(&url).await;
+    run(
+        &backend,
+        "create temporary table guarded_apply (id int primary key, value int)",
+    )
+    .await;
+    run(&backend, "insert into guarded_apply values (1, 10)").await;
+    assert!(
+        backend
+            .apply(
+                &["update guarded_apply set value = 20 where id = 1; commit".into()],
+                CancellationToken::new()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        run(&backend, "select value from guarded_apply")
+            .await
+            .cell(0, 0),
+        Some(&sqmeow_db::value::Cell::Int(10))
+    );
+    backend.close().await;
+}
+
+#[tokio::test]
+async fn abandoning_an_edit_batch_does_not_commit_it_on_reuse() {
+    let url = server!("SQMEOW_TEST_MYSQL_URL");
+    let backend = connect(&url).await;
+    run(
+        &backend,
+        "create temporary table abandoned_apply (id int primary key, value int)",
+    )
+    .await;
+    run(&backend, "insert into abandoned_apply values (1, 10)").await;
+    let statements = [
+        "update abandoned_apply set value = 20 where id = 1".into(),
+        "select sleep(2)".into(),
+    ];
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            backend.apply(&statements, CancellationToken::new())
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        backend
+            .apply(
+                &["update abandoned_apply set value = 30 where id = 1".into()],
+                CancellationToken::new()
+            )
+            .await
+            .is_err()
+    );
+    backend.close().await;
+}
+include!("common/relationships.rs");
+
+#[tokio::test]
+async fn relationships_preserve_catalog_endpoints() {
+    relationship_fixture(&connect(&server!("SQMEOW_TEST_MYSQL_URL")).await, SCHEMA).await;
+}
+
 // Introspection reads the catalogue.
 const SCHEMA: &str = "sqmeow";
+
+#[tokio::test]
+async fn cancellation_preserves_temporary_tables_and_session_identity() {
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
+    run(&backend, "create temporary table cancel_session (v int)").await;
+    run(&backend, "insert into cancel_session values (42)").await;
+    run(&backend, "set @cancel_marker = 7").await;
+    let identity = run(&backend, "select connection_id()")
+        .await
+        .cell(0, 0)
+        .cloned();
+    for bound in [false, true] {
+        let cancel = CancellationToken::new();
+        let stopper = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            stopper.cancel();
+        });
+        let outcome = if bound {
+            backend
+                .execute_bound("select sleep(?)", &[Value::Int(30)], NO_CAP, cancel)
+                .await
+        } else {
+            backend.execute("select sleep(30)", NO_CAP, cancel).await
+        };
+        assert!(matches!(outcome, Err(Error::Cancelled)), "{outcome:?}");
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            backend.execute(
+                "select v, @cancel_marker, connection_id() from cancel_session",
+                NO_CAP,
+                CancellationToken::new(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.cell(0, 0), Some(&Cell::Int(42)));
+        assert_eq!(result.cell(0, 1), Some(&Cell::Int(7)));
+        assert_eq!(result.cell(0, 2), identity.as_ref());
+    }
+}
+
+#[tokio::test]
+async fn cancelling_apply_explicitly_rolls_back_before_reuse() {
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
+    fixture(&backend, "native_cancel_apply").await;
+    run(
+        &backend,
+        "insert into native_cancel_apply values (1, 'old', null)",
+    )
+    .await;
+    let cancel = CancellationToken::new();
+    let stopper = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stopper.cancel();
+    });
+    let outcome = backend
+        .apply(
+            &[
+                "update native_cancel_apply set label = 'new' where id = 1".into(),
+                "select sleep(30)".into(),
+            ],
+            cancel,
+        )
+        .await;
+    assert!(matches!(outcome, Err(Error::Cancelled)), "{outcome:?}");
+    assert_eq!(
+        run(&backend, "select label from native_cancel_apply")
+            .await
+            .cell(0, 0),
+        Some(&Cell::Text("old".into()))
+    );
+}
+
+#[tokio::test]
+async fn row_cap_is_exact_and_the_protocol_is_ready_for_reuse() {
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
+    for (sql, cap, truncated) in [
+        ("select 1 union all select 2", 2, false),
+        ("select 1 union all select 2 union all select 3", 2, true),
+        ("select 1", 0, true),
+        ("select 1 where false", 0, false),
+    ] {
+        let result = backend
+            .execute(sql, cap, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result.is_truncated(), truncated, "{sql}");
+        assert_eq!(
+            run(&backend, "select 42").await.cell(0, 0),
+            Some(&Cell::Int(42))
+        );
+    }
+}
+
+#[tokio::test]
+async fn signed_and_extended_mysql_times_are_not_truncated_to_a_clock() {
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
+    for bound in [false, true] {
+        let sql = "select cast('-837:59:59.123456' as time(6)) as negative, cast('36:05:06.500000' as time(6)) as extended";
+        let result = if bound {
+            backend
+                .execute_bound(sql, &[], NO_CAP, CancellationToken::new())
+                .await
+                .unwrap()
+        } else {
+            run(&backend, sql).await
+        };
+        assert_eq!(
+            result.cell(0, 0),
+            Some(&Cell::Time("-837:59:59.123456".into()))
+        );
+        // Text protocol keeps the declared precision; binary protocol carries a scalar duration.
+        assert!(
+            matches!(result.cell(0, 1), Some(Cell::Time(value)) if value == "36:05:06.500000" || value == "36:05:06.5")
+        );
+    }
+}
+
+#[tokio::test]
+async fn timestamps_label_configured_zone_until_session_changes_in_both_protocols() {
+    let mut url = url::Url::parse(&server!("SQMEOW_TEST_MYSQL_URL")).unwrap();
+    url.query_pairs_mut().append_pair("timezone", "+08:00");
+    let backend = connect(url.as_str()).await;
+    run(
+        &backend,
+        "create temporary table timezone_kinds (moment timestamp, wall datetime)",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into timezone_kinds values ('2026-01-02 15:04:05', '2026-01-02 15:04:05')",
+    )
+    .await;
+
+    for (zone, expected) in [
+        (None, "2026-01-02 15:04:05 +08:00"),
+        (Some("-05:30"), "2026-01-02 01:34:05"),
+        (Some("+00:00"), "2026-01-02 07:04:05"),
+    ] {
+        if let Some(zone) = zone {
+            // A modifier anywhere in a batch invalidates the configured label.
+            run(&backend, &format!("select 1; set time_zone = '{zone}'")).await;
+        }
+        for bound in [false, true] {
+            let sql = "select moment, wall from timezone_kinds";
+            let result = if bound {
+                backend
+                    .execute_bound(sql, &[], NO_CAP, CancellationToken::new())
+                    .await
+                    .unwrap()
+            } else {
+                run(&backend, sql).await
+            };
+            assert_eq!(result.cell(0, 0), Some(&Cell::Timestamp(expected.into())));
+            assert_eq!(
+                result.cell(0, 1),
+                Some(&Cell::Timestamp("2026-01-02 15:04:05".into()))
+            );
+        }
+    }
+
+    run(&backend, "set time_zone = 'SYSTEM'").await;
+    for bound in [false, true] {
+        let sql = "select moment, cast(moment as char) from timezone_kinds";
+        let result = if bound {
+            backend
+                .execute_bound(sql, &[], NO_CAP, CancellationToken::new())
+                .await
+                .unwrap()
+        } else {
+            run(&backend, sql).await
+        };
+        let Some(Cell::Text(local)) = result.cell(0, 1) else {
+            panic!("expected the server's local timestamp text");
+        };
+        assert_eq!(result.cell(0, 0), Some(&Cell::Timestamp(local.clone())));
+    }
+}
+
+#[tokio::test]
+async fn row_count_observes_user_update_without_hidden_timezone_queries() {
+    let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
+    run(
+        &backend,
+        "create temporary table timezone_diagnostics (v int)",
+    )
+    .await;
+    run(&backend, "insert into timezone_diagnostics values (1), (2)").await;
+    run(&backend, "update timezone_diagnostics set v = v + 1").await;
+    assert_eq!(
+        run(&backend, "select row_count()").await.cell(0, 0),
+        Some(&Cell::Int(2))
+    );
+}
 
 async fn fixture(backend: &Backend, table: &str) {
     run(backend, &format!("drop table if exists {table}")).await;

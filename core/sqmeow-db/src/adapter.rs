@@ -12,7 +12,8 @@ use tokio_util::sync::CancellationToken;
 use crate::edit::Changes;
 use crate::error::Result;
 use crate::node::{
-    ColumnNode, Details, IndexNode, RelationNode, RoleNode, RoutineNode, SchemaNode,
+    ColumnNode, Details, IndexNode, RelationNode, RelationshipNode, RoleNode, RoutineNode,
+    SchemaNode,
 };
 use crate::result::ResultSet;
 
@@ -100,13 +101,14 @@ impl Dialect {
     }
 }
 
-/// Defines the contract every database adapter implements.
+/// Database execution, editing, and metadata discovery.
 ///
 /// Each adapter owns its connection pool and translates `sqmeow-db` types
 /// to and from the underlying driver.
 /// Methods receive unquoted schema/relation names; implementations are responsible
 /// for binding values or quoting identifiers in generated statements. Default
-/// metadata methods return empty results where a feature is unsupported.
+/// metadata methods return empty results where a feature is unsupported, except
+/// relationship discovery, which reports unsupported explicitly.
 pub trait Adapter: Send + Sync {
     /// Returns the dialect this connection speaks.
     fn dialect(&self) -> Dialect;
@@ -148,7 +150,7 @@ pub trait Adapter: Send + Sync {
         }
     }
 
-    /// Bound batches can return several result sets, just like ordinary batches.
+    /// Execute a bound batch and return its result sets.
     fn execute_bound_results(
         &self,
         statement: &str,
@@ -196,7 +198,7 @@ pub trait Adapter: Send + Sync {
         }
     }
 
-    /// Plans staged changes to a result into the SQL statements that make them.
+    /// Generate statements for staged result edits.
     ///
     /// Does not write to the database. The default planner validates source/key
     /// metadata and generates dialect-quoted SQL; non-SQL adapters can override it.
@@ -241,6 +243,20 @@ pub trait Adapter: Send + Sync {
         async { Ok(Vec::new()) }
     }
 
+    /// Lists foreign keys where this table is the source or target, with self references once.
+    /// Unsupported adapters return an error, not an empty set of relationships.
+    fn relationships(
+        &self,
+        _schema: &str,
+        _relation: &str,
+    ) -> impl Future<Output = Result<Vec<RelationshipNode>>> + Send {
+        async {
+            Err(crate::error::Error::driver(
+                "this adapter does not support relationship metadata",
+            ))
+        }
+    }
+
     /// Lists roles or users known to the server.
     fn roles(&self) -> impl Future<Output = Result<Vec<RoleNode>>> + Send {
         async { Ok(Vec::new()) }
@@ -255,13 +271,54 @@ pub trait Adapter: Send + Sync {
         async { Ok(Details::default()) }
     }
 
-    /// Closes the underlying connection pool.
+    /// Closes the underlying database sessions and their background workers.
     fn close(&self) -> impl Future<Output = ()> + Send;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Unsupported;
+
+    impl Adapter for Unsupported {
+        fn dialect(&self) -> Dialect {
+            Dialect::Redis
+        }
+        async fn execute(&self, _: &str, _: usize, _: CancellationToken) -> Result<ResultSet> {
+            Err(crate::error::Error::driver("not used"))
+        }
+        async fn apply(&self, _: &[String], _: CancellationToken) -> Result<Vec<ResultSet>> {
+            Ok(Vec::new())
+        }
+        async fn schemas(&self) -> Result<Vec<SchemaNode>> {
+            Ok(Vec::new())
+        }
+        async fn relations(&self, _: &str) -> Result<Vec<RelationNode>> {
+            Ok(Vec::new())
+        }
+        async fn routines(&self, _: &str) -> Result<Vec<RoutineNode>> {
+            Ok(Vec::new())
+        }
+        async fn columns(&self, _: &str, _: &str) -> Result<Vec<ColumnNode>> {
+            Ok(Vec::new())
+        }
+        async fn close(&self) {}
+    }
+
+    #[test]
+    fn unsupported_relationship_metadata_is_not_an_empty_list() {
+        let mut future = std::pin::pin!(Unsupported.relationships("main", "table"));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let std::task::Poll::Ready(Err(error)) = future.as_mut().poll(&mut context) else {
+            panic!("unsupported metadata must immediately return an error");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("does not support relationship metadata")
+        );
+    }
 
     #[test]
     fn recognises_the_schemes_people_type() {

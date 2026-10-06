@@ -1,4 +1,4 @@
---- Finding, and when asked, fetching the engine binary.
+--- Locate, download, or build the engine binary.
 
 local M = {}
 
@@ -8,10 +8,10 @@ M.repository = '2giosangmitom/sqmeow.nvim'
 --- Name of the engine executable on this platform.
 M.binary = vim.fn.has('win32') == 1 and 'sqmeow-core.exe' or 'sqmeow-core'
 
---- The ways an engine can be obtained, as |sqmeow.install()| accepts them.
+--- Installation methods accepted by |sqmeow.install()|.
 M.methods = { 'curl', 'wget', 'powershell', 'cargo' }
 
---- How long |sqmeow.install()| waits when it was given no callback, in milliseconds.
+--- Timeout in milliseconds for |sqmeow.install()| calls without a callback.
 M.timeout = 10 * 60 * 1000
 
 --- The install now running, if there is one.
@@ -26,7 +26,7 @@ local root = vim.fs.normalize(
 
 local notify = require('sqmeow.core.utils').notify
 
---- Show how far the install has got, on the message line rather than in the notification history.
+--- Show installation progress on the message line without adding notification history.
 ---@param message string|nil nil clears the line.
 local function progress(message)
   if not message then
@@ -35,7 +35,7 @@ local function progress(message)
   vim.api.nvim_echo({ { 'sqmeow: ' .. message, 'MoreMsg' } }, false, {})
 end
 
---- Start a program and answer when it is done, without waiting for it.
+--- Start a program asynchronously and call back when it exits.
 ---@param command string[]
 ---@param opts table
 ---@param callback fun(result: table)

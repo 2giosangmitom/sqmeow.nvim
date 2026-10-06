@@ -1367,7 +1367,7 @@ function M.read_from(call)
 end
 
 --- Show the structure of the table the column under the cursor comes from.
-function M.actions.structure()
+local function show_table(surface)
   local call = require('sqmeow.core.state').call
   if not call then
     return
@@ -1379,7 +1379,7 @@ function M.actions.structure()
     if not (relation and call.conn_id) then
       return utils.notify('this result names no table to show', vim.log.levels.WARN)
     end
-    return require('sqmeow.ui.structure').open(call.conn_id, schema or '', relation)
+    return require('sqmeow.ui.' .. surface).open(call.conn_id, schema or '', relation)
   end
   local here = cursor_column()
   local chosen = tables[1]
@@ -1389,7 +1389,16 @@ function M.actions.structure()
       break
     end
   end
-  require('sqmeow.ui.structure').open(call.conn_id, chosen.schema or '', chosen.name)
+  require('sqmeow.ui.' .. surface).open(call.conn_id, chosen.schema or '', chosen.name)
+end
+
+function M.actions.structure()
+  show_table('structure')
+end
+
+--- Use the same column provenance and query fallback as the structure action.
+function M.actions.relationships()
+  show_table('relationships')
 end
 
 --- Show another statement's result from the same run.

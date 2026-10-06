@@ -14,7 +14,7 @@ For an overview of the plugin, see the [sqmeow.nvim architecture on DeepWiki](ht
 
 ## Set up your environment
 
-The recommended route is the [Nix](https://nixos.org/download/) development shell. It provides the locked toolchain used by CI on Linux (x86_64 and ARM64) and Apple Silicon Macs. Enable Nix's `nix-command` and `flakes` experimental features first.
+Use the [Nix](https://nixos.org/download/) development shell for CI's locked toolchain on Linux (x86_64 and ARM64) and Apple Silicon Macs. Enable Nix's `nix-command` and `flakes` experimental features first.
 
 ```sh
 nix develop
@@ -41,7 +41,13 @@ You can run a single task without entering the shell, for example `nix develop -
 > [!NOTE]
 > Server-backed tests skip their cases when the corresponding Docker services are not running. Run `just db-up` before testing database-specific changes. If you edit annotated help sources, run `just docs` before `just` and include the regenerated help file.
 
-Updating the toolchain? `flake.lock` pins Rust and system dependencies. After `nix flake update`, run `nix flake check --all-systems --no-build` and `nix develop --command just`. Keep Rust compatible with `Cargo.toml`'s `rust-version` and `mise.toml`.
+MariaDB compatibility checks are optional so the default database stack does not consume extra
+memory. Start it with `docker compose --profile mariadb up -d --wait mariadb`; `just test-rust`
+then includes the MariaDB tests. For a focused run, set
+`SQMEOW_TEST_MARIADB_URL=mysql://root:sqmeow@127.0.0.1:53307/sqmeow` and run
+`cargo test -p sqmeow-adapters --test mariadb -- --test-threads=1`.
+
+`flake.lock` pins Rust and system dependencies. After `nix flake update`, run `nix flake check --all-systems --no-build` and `nix develop --command just`. Keep Rust compatible with `Cargo.toml`'s `rust-version` and `mise.toml`.
 
 ## Using AI coding tools
 

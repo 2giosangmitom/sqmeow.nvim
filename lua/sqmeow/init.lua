@@ -294,8 +294,8 @@
 --- before any statement runs. Live-result refreshes reuse the values in memory.
 --- Supplied values are not saved as history parameters, but returned rows and
 --- edit-source metadata (including Redis keys) may be archived. After restart
---- or result eviction, rerun from the scratchpad to
---- enter values again. Keep secrets out of defaults, which are part of the SQL.
+--- or result eviction, rerun from the scratchpad to enter values again.
+--- Keep secrets out of defaults, which are part of the SQL.
 --- Unannotated NULL uses a text null; declare the type when the SQL context needs
 --- a numeric/boolean null. Driver-specific value limits still apply. Oracle
 --- treats empty strings as NULL, following its own database semantics.
@@ -399,9 +399,8 @@
 
 --- Auto-completion ~
 ---
---- sqmeow provides completion sources for both `blink.cmp` and `nvim-cmp`. The
---- completion engine uses the active connection to offer schemas, tables, views,
---- and columns as you type.
+--- Use `blink.cmp` or `nvim-cmp` to complete schemas, tables, views, and columns
+--- from the active connection.
 --- Columns are loaded on demand for relations in the current statement, including
 --- multiline SELECT, WHERE, JOIN, GROUP BY, and ORDER BY clauses. Table aliases and
 --- double-quoted, backtick-quoted, and bracket-quoted identifiers are supported.

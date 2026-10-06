@@ -3,6 +3,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use bigdecimal::BigDecimal;
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use futures_util::StreamExt;
 use percent_encoding::percent_decode_str;
 use scylla::client::pager::QueryPager;
@@ -13,8 +15,6 @@ use scylla::deserialize::row::DeserializeRow;
 use scylla::frame::response::result::{CollectionType, ColumnType, NativeType};
 use scylla::serialize::row::SerializeRow;
 use scylla::value::{CqlValue, Row};
-use sqlx::types::BigDecimal;
-use sqlx::types::chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use sqmeow_db::adapter::Adapter;
 use sqmeow_db::adapter::Dialect;
 use sqmeow_db::edit::Source;

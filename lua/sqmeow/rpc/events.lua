@@ -140,6 +140,7 @@ end
 
 --- Handle the engine restarting: call ids start over, so nothing held is valid.
 function M.on_engine_restart()
+  require('sqmeow.ui.relationships').close()
   require('sqmeow.ui.result').forget()
 end
 
@@ -155,6 +156,11 @@ function M.ensure()
   rpc.on('call:state', M.on_call)
   rpc.on('schema:nodes', M.on_nodes)
   rpc.on('export:done', M.on_export)
+  rpc.on('relationships:done', function(payload)
+    vim.schedule(function()
+      require('sqmeow.ui.relationships').on_done(payload)
+    end)
+  end)
   rpc.on('structure:done', function(payload)
     vim.schedule(function()
       require('sqmeow.ui.structure').on_done(payload)

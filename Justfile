@@ -46,6 +46,9 @@ test-rust:
     if [ -n "$(docker compose ps --status running --quiet mysql 2>/dev/null)" ]; then
         export SQMEOW_TEST_MYSQL_URL="mysql://root:sqmeow@127.0.0.1:53306/sqmeow"
     fi
+    if [ -n "$(docker compose ps --status running --quiet mariadb 2>/dev/null)" ]; then
+        export SQMEOW_TEST_MARIADB_URL="mysql://root:sqmeow@127.0.0.1:53307/sqmeow"
+    fi
     if [ -n "$(docker compose ps --status running --quiet clickhouse 2>/dev/null)" ]; then
         export SQMEOW_TEST_CLICKHOUSE_URL="clickhouse://sqmeow:sqmeow@127.0.0.1:58123/default"
     fi

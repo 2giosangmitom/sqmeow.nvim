@@ -8,6 +8,16 @@ use sqmeow_db::node::RelationKind;
 use sqmeow_db::value::Cell;
 
 include!("common/harness.rs");
+include!("common/relationships.rs");
+
+#[tokio::test]
+async fn relationships_preserve_catalog_endpoints() {
+    relationship_fixture(
+        &connect(&server!("SQMEOW_TEST_COCKROACH_URL")).await,
+        SCHEMA,
+    )
+    .await;
+}
 
 const SCHEMA: &str = "public";
 
@@ -144,4 +154,25 @@ async fn a_read_only_connection_is_refused_writes_by_the_server() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("read-only"), "{error}");
+}
+
+#[tokio::test]
+async fn native_typed_binds_keep_int8_nulls_and_exact_decimals() {
+    use sqmeow_db::sql::parameters::{Kind, Value};
+    let backend = connect(&server!("SQMEOW_TEST_COCKROACH_URL")).await;
+    let result = backend
+        .execute_bound(
+            "select $1, $2, 123456789012345678901234567890.0001::decimal",
+            &[Value::Int(42), Value::Null(Kind::Int)],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.cell(0, 0), Some(&Cell::Int(42)));
+    assert_eq!(result.cell(0, 1), Some(&Cell::Null));
+    assert_eq!(
+        result.cell(0, 2),
+        Some(&Cell::Decimal("123456789012345678901234567890.0001".into()))
+    );
 }

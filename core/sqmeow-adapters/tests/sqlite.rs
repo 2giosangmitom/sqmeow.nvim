@@ -13,6 +13,17 @@ use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
 
+fn named_memory_url() -> String {
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!(
+        "sqlite:sqmeow-memory-{}-{suffix}?mode=memory",
+        std::process::id()
+    )
+}
+
 async fn database() -> Backend {
     Backend::connect("sqlite::memory:")
         .await
@@ -48,6 +59,284 @@ async fn seeded() -> Backend {
 async fn opens_an_in_memory_database() {
     let backend = database().await;
     assert_eq!(backend.dialect().name(), "sqlite");
+}
+
+#[tokio::test]
+async fn named_memory_databases_share_by_default_but_honour_private_cache() {
+    let url = named_memory_url();
+    let owner = Backend::connect(&url).await.unwrap();
+    run(&owner, "create table shared (id integer primary key)").await;
+    run(&owner, "insert into shared values (1)").await;
+    let peer = Backend::connect(&url).await.unwrap();
+    assert_eq!(
+        run(&peer, "select id from shared").await.cell(0, 0),
+        Some(&Cell::Int(1))
+    );
+
+    let private = Backend::connect(&format!("{url}&cache=private"))
+        .await
+        .unwrap();
+    assert!(
+        private
+            .execute("select id from shared", NO_CAP, CancellationToken::new())
+            .await
+            .is_err()
+    );
+    private.close().await;
+    peer.close().await;
+    owner.close().await;
+}
+
+#[tokio::test]
+async fn independent_memory_connections_do_not_share_tables() {
+    let owner = database().await;
+    run(&owner, "create table private (id integer)").await;
+    let peer = database().await;
+    assert!(
+        peer.execute("select * from private", NO_CAP, CancellationToken::new())
+            .await
+            .is_err()
+    );
+    peer.close().await;
+    owner.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_query_after_a_batch_commit_can_be_cancelled_without_undoing_the_commit() {
+    let url = named_memory_url();
+    let backend = Backend::connect(&url).await.unwrap();
+    run(&backend, "create table writes (id integer primary key)").await;
+    let observer = Backend::connect(&url).await.unwrap();
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    let query = backend.execute(
+        "begin; insert into writes values (1); commit;
+         with recursive n(x) as (select 1 union all select x+1 from n where x<500000000)
+         select sum(x) from n",
+        NO_CAP,
+        cancel,
+    );
+    let cancel_after_commit = async {
+        loop {
+            let rows = observer
+                .execute(
+                    "select count(*) from writes",
+                    NO_CAP,
+                    CancellationToken::new(),
+                )
+                .await;
+            if rows.is_ok_and(|rows| rows.cell(0, 0) == Some(&Cell::Int(1))) {
+                stop.cancel();
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        tokio::join!(query, cancel_after_commit)
+    })
+    .await
+    .expect("the statement after COMMIT must remain cancellable");
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert_eq!(
+        run(&backend, "select id from writes").await.cell(0, 0),
+        Some(&Cell::Int(1))
+    );
+    run(&backend, "begin; rollback").await;
+    observer.close().await;
+    backend.close().await;
+}
+
+#[tokio::test]
+async fn an_attach_after_other_batch_statements_is_visible_to_metadata() {
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join("opencode");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join(format!(
+        "sqmeow-batch-attach-{}-{suffix}.db",
+        std::process::id()
+    ));
+    let backend = Backend::connect(&format!("sqlite://{}?mode=rwc", path.display()))
+        .await
+        .unwrap();
+    run(
+        &backend,
+        "create table audit (id integer);
+        create trigger audit_insert after insert on audit begin
+          select 1; select case when new.id > 0 then 1 else 0 end;
+        end;
+        attach database ':memory:' as other;
+        create table other.things (id integer primary key, label text);
+        create index other.things_label on things (label)",
+    )
+    .await;
+    assert!(
+        backend
+            .schemas()
+            .await
+            .unwrap()
+            .iter()
+            .any(|schema| schema.name == "other")
+    );
+    assert_eq!(backend.relations("other").await.unwrap()[0].name, "things");
+    assert!(
+        backend
+            .details("other", "things")
+            .await
+            .unwrap()
+            .definition
+            .is_some()
+    );
+    assert_eq!(
+        backend.indexes("other", "things").await.unwrap()[0].name,
+        "things_label"
+    );
+    backend.close().await;
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn relationships_preserve_composite_keys_and_quoted_endpoints() {
+    let backend = database().await;
+    run(&backend, "create table \"parent.\"\"table\" (\"second.key\" integer, \"first key\" integer, primary key (\"first key\", \"second.key\"))").await;
+    run(&backend, "create table \"child.\"\"table\" (a integer, b integer, c integer, d integer, foreign key (b, a) references \"parent.\"\"table\", foreign key (c, d) references \"parent.\"\"table\" (\"second.key\", \"first key\"))").await;
+    let outgoing = backend
+        .relationships("main", "child.\"table")
+        .await
+        .unwrap();
+    let incoming = backend
+        .relationships("main", "parent.\"table")
+        .await
+        .unwrap();
+    assert_eq!(outgoing, incoming);
+    assert_eq!(outgoing.len(), 2);
+    assert_ne!(outgoing[0].name, outgoing[1].name);
+    for key in &outgoing {
+        assert_eq!(key.source_schema, "main");
+        assert_eq!(key.source_relation, "child.\"table");
+        assert_eq!(key.target_schema, "main");
+        assert_eq!(key.target_relation, "parent.\"table");
+    }
+    let implicit = outgoing
+        .iter()
+        .find(|key| key.columns == ["b", "a"])
+        .unwrap();
+    assert_eq!(implicit.referenced, ["first key", "second.key"]);
+    let explicit = outgoing
+        .iter()
+        .find(|key| key.columns == ["c", "d"])
+        .unwrap();
+    assert_eq!(explicit.referenced, ["second.key", "first key"]);
+    assert!(
+        backend
+            .relationships("main", "unrelated")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn relationships_return_self_reference_once() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table tree (id integer primary key, parent integer references tree)",
+    )
+    .await;
+    let keys = backend.relationships("main", "tree").await.unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].source_relation, "tree");
+    assert_eq!(keys[0].target_relation, "tree");
+    assert_eq!(keys[0].columns, ["parent"]);
+    assert_eq!(keys[0].referenced, ["id"]);
+}
+
+#[tokio::test]
+async fn relationships_do_not_guess_an_implicit_primary_key() {
+    let backend = database().await;
+    run(&backend, "create table parent (id integer)").await;
+    run(
+        &backend,
+        "create table child (parent integer references parent)",
+    )
+    .await;
+    assert!(backend.relationships("main", "child").await.is_err());
+}
+
+#[tokio::test]
+async fn relationships_scan_only_the_quoted_selected_schema() {
+    let backend = database().await;
+    run(
+        &backend,
+        "attach database ':memory:' as \"attached.\"\"db\"",
+    )
+    .await;
+    run(
+        &backend,
+        "create table \"attached.\"\"db\".\"Parent.Table\" (id integer primary key)",
+    )
+    .await;
+    run(
+        &backend,
+        "create table \"attached.\"\"db\".child (p integer references \"parent.table\")",
+    )
+    .await;
+    run(
+        &backend,
+        "create table child (p integer references \"Parent.Table\")",
+    )
+    .await;
+    let keys = backend
+        .relationships("attached.\"db", "Parent.Table")
+        .await
+        .unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].source_schema, "attached.\"db");
+    assert_eq!(keys[0].target_schema, "attached.\"db");
+    assert_eq!(keys[0].target_relation, "Parent.Table");
+    assert_eq!(keys[0].referenced, ["id"]);
+}
+
+#[tokio::test]
+async fn relationships_resolve_mixed_case_names_to_canonical_endpoints() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table Users (Id integer primary key, Manager integer references users)",
+    )
+    .await;
+    run(
+        &backend,
+        "create table Posts (Author integer references USERS(Id))",
+    )
+    .await;
+    let keys = backend.relationships("MAIN", "users").await.unwrap();
+    assert_eq!(keys.len(), 2);
+    for key in &keys {
+        assert_eq!(key.source_schema, "main");
+        assert_eq!(key.target_schema, "main");
+        assert_eq!(key.target_relation, "Users");
+        assert_eq!(key.referenced, ["Id"]);
+    }
+    let self_key = keys
+        .iter()
+        .find(|key| key.source_relation == "Users")
+        .unwrap();
+    assert_eq!(self_key.columns, ["Manager"]);
+    let incoming = keys
+        .iter()
+        .find(|key| key.source_relation == "Posts")
+        .unwrap();
+    assert_eq!(incoming.columns, ["Author"]);
+    assert_eq!(
+        backend.relationships("main", "pOsTs").await.unwrap(),
+        std::slice::from_ref(incoming)
+    );
+    assert_eq!(backend.relationships("main", "Users").await.unwrap(), keys);
 }
 
 #[tokio::test]

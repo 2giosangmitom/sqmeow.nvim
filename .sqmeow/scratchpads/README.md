@@ -11,7 +11,7 @@ bind queries to connections.
 2. Connect in `:Sqmeow`, select the connection, and open its local scratchpads.
 3. Execute `01_setup`, then `02_create`, then `03_read`.
 4. Execute `04_update`, re-run reads, then `05_delete` and read again.
-5. Run the adapter's `07_parameters` **before** cleanup.
+5. Run the adapter's `07_parameters` before cleanup.
 6. Run `06_cleanup` when finished. Confirm destructive-operation prompts.
 
 Use `<leader>E` for the whole buffer and `<CR>` for the current statement.
@@ -20,7 +20,7 @@ keep them out of repeated runs unless you clean up first.
 
 ## Dataset and expected results
 
-Five entities have **20 records each** immediately after `02_create`:
+Five entities have 20 records each immediately after `02_create`:
 
 | Entity | Data and relationships |
 | --- | --- |
@@ -43,7 +43,7 @@ The seed includes apostrophes, Unicode, nullable notes and literal colons.
   product 2 stock becomes 77; order 2 becomes shipped with `priority delivery`;
   payment 2 becomes settled with `manually verified`.
 - `05_delete`: deletes payment 20, line item 20 and order 20, in that order.
-  Counts become **20 customers, 20 products, 19 orders, 19 items, 19 payments**.
+  Counts become 20 customers, 20 products, 19 orders, 19 items, and 19 payments.
   Customer/product records remain, so this does not violate foreign keys.
 - `06_cleanup`: removes only the five named fixture entities. Redis cleanup
   deletes only the 100 explicitly listed fixture keys, never `FLUSHDB`.
@@ -64,7 +64,7 @@ other input is text, and `"42"` forces text. Run the examples after `04_update`:
 
 - Accept SQL defaults: customer 2 has shipped orders 2 and 14; both clear the
   minimum total. The second query returns customer 2 with the updated note.
-- Execute just one statement/range: only its distinct names should prompt,
+- Execute one statement or range: only its distinct names should prompt,
   while annotations in the buffer header still supply types and defaults.
 - Cancel a prompt: no partial execution or replacement of the current result.
 - Change `customer_id` to 1, raise `min_total`, or change `status` to exercise
