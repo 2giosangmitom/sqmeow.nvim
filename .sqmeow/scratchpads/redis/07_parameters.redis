@@ -1,0 +1,4 @@
+HGETALL :customer_key
+HSET sqmeow:smoke:customers:2 note :note
+HGET sqmeow:smoke:customers:2 note
+HGETALL :customer_key

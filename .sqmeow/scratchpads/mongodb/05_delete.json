@@ -1,1 +1,6 @@
-{"delete":"sqmeow_crud","deletes":[{"q":{"_id":3},"limit":1}]}
+{"delete":"sqmeow_payments","deletes":[{"q":{"_id":20},"limit":1}]}
+{"find":"sqmeow_payments","filter":{"_id":20}}
+{"delete":"sqmeow_order_items","deletes":[{"q":{"_id":20},"limit":1}]}
+{"find":"sqmeow_order_items","filter":{"_id":20}}
+{"delete":"sqmeow_orders","deletes":[{"q":{"_id":20},"limit":1}]}
+{"find":"sqmeow_orders","filter":{"_id":20}}

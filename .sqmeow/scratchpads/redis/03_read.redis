@@ -1,3 +1,20 @@
-HGETALL sqmeow:crud:1
-HGETALL sqmeow:crud:2
-HGETALL sqmeow:crud:3
+SCAN 0 MATCH sqmeow:smoke:* COUNT 200
+HGETALL sqmeow:smoke:customers:1
+HGETALL sqmeow:smoke:customers:2
+HGETALL sqmeow:smoke:customers:20
+HGETALL sqmeow:smoke:products:1
+HGETALL sqmeow:smoke:products:2
+HGETALL sqmeow:smoke:products:20
+HGETALL sqmeow:smoke:orders:1
+HGETALL sqmeow:smoke:orders:2
+HGETALL sqmeow:smoke:orders:20
+HGETALL sqmeow:smoke:order_items:1
+HGETALL sqmeow:smoke:order_items:2
+HGETALL sqmeow:smoke:order_items:20
+HGETALL sqmeow:smoke:payments:1
+HGETALL sqmeow:smoke:payments:2
+HGETALL sqmeow:smoke:payments:20
+HMGET sqmeow:smoke:orders:2 customer_id status total_cents
+HMGET sqmeow:smoke:order_items:2 order_id product_id quantity unit_price_cents
+HMGET sqmeow:smoke:payments:2 order_id amount_cents status
+HEXISTS sqmeow:smoke:customers:2 note
