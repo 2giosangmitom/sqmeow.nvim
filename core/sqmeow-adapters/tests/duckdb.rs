@@ -34,6 +34,49 @@ async fn opens_an_in_memory_database() {
 }
 
 #[tokio::test]
+async fn relationships_preserve_composite_keys_and_quoted_endpoints() {
+    let backend = database().await;
+    run(&backend, "create schema \"schema.with.dot\"").await;
+    run(&backend, "create table \"schema.with.dot\".\"parent.\"\"table\" (a integer, b integer, primary key (b, a))").await;
+    run(&backend, "create table \"schema.with.dot\".\"child.\"\"table\" (c integer, d integer, e integer, f integer, foreign key (d, c) references \"schema.with.dot\".\"parent.\"\"table\" (b, a), foreign key (e, f) references \"schema.with.dot\".\"parent.\"\"table\" (b, a))").await;
+    let outgoing = backend
+        .relationships("schema.with.dot", "child.\"table")
+        .await
+        .unwrap();
+    let incoming = backend
+        .relationships("schema.with.dot", "parent.\"table")
+        .await
+        .unwrap();
+    assert_eq!(outgoing, incoming);
+    assert_eq!(outgoing.len(), 2);
+    let key = outgoing
+        .iter()
+        .find(|key| key.columns == ["d", "c"])
+        .unwrap();
+    assert_eq!(key.source_schema, "schema.with.dot");
+    assert_eq!(key.source_relation, "child.\"table");
+    assert_eq!(key.target_schema, "schema.with.dot");
+    assert_eq!(key.target_relation, "parent.\"table");
+    assert_eq!(key.referenced, ["b", "a"]);
+}
+
+#[tokio::test]
+async fn relationships_return_self_reference_once() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table tree (id integer primary key, parent integer references tree(id))",
+    )
+    .await;
+    let keys = backend.relationships("main", "tree").await.unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].source_relation, "tree");
+    assert_eq!(keys[0].target_relation, "tree");
+    assert_eq!(keys[0].columns, ["parent"]);
+    assert_eq!(keys[0].referenced, ["id"]);
+}
+
+#[tokio::test]
 async fn bound_text_is_data_even_when_it_looks_like_sql() {
     let backend = people().await;
     let text = "alice' OR true; DROP TABLE people; -- :name ?";

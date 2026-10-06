@@ -53,10 +53,10 @@ impl Sides {
         }
     }
 
-    /// Count the tables each view the query reads reads in turn, from `views`' names and definitions,
-    /// for a driver that traces a view's columns to its tables. Each read of a view counts again.
+    /// Expand view reads into underlying table reads using `views`' names and definitions.
+    /// Used by drivers that trace view columns to source tables. Count each view read separately.
     pub fn expand_views(&mut self, dialect: Dialect, views: &[(String, String)]) {
-        // Far past any real nesting, so a definition that reads itself cannot loop.
+        // Bound expansion to stop recursive view definitions from looping.
         const LIMIT: usize = 10_000;
 
         let grammar = grammar(dialect);

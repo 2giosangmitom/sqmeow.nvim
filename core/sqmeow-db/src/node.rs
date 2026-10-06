@@ -155,6 +155,19 @@ pub struct ForeignKeyNode {
     pub referenced: Vec<String>,
 }
 
+/// One foreign-key constraint, with structured endpoints and ordered column pairs.
+/// Returned once even when both endpoints are the selected table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelationshipNode {
+    pub name: String,
+    pub source_schema: String,
+    pub source_relation: String,
+    pub columns: Vec<String>,
+    pub target_schema: String,
+    pub target_relation: String,
+    pub referenced: Vec<String>,
+}
+
 /// What the structure view shows of a relation besides its columns and indexes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Details {

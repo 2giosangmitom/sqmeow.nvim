@@ -47,7 +47,7 @@ local function check_engine()
     vim.health.error('no engine binary found', {
       'Run `:Sqmeow install` to get one',
       'Or `require("sqmeow").install("cargo")` to build the checkout',
-      "Nothing installs it on its own; put it in your plugin manager's build hook",
+      "Add install() to your plugin manager's build hook for automatic installation",
     })
     return
   end
@@ -65,7 +65,7 @@ local function check_engine()
     local other = install.version(dev)
     if other and other ~= version then
       vim.health.warn(('a different engine is built in this checkout: %s %s'):format(other, dev), {
-        ('The one above is being used instead, because %s comes first'):format(source),
+        ('The %s engine takes precedence over the checkout build'):format(source),
         'Run `require("sqmeow").install("cargo")` to install the checkout build',
       })
     end
@@ -143,7 +143,7 @@ local function check_open()
   end
 end
 
---- The one plugin sqmeow cannot do without.
+--- Check the required UI dependency.
 local function check_dependencies()
   vim.health.start('dependencies')
 
@@ -160,8 +160,8 @@ local function check_dependencies()
   vim.health.info('icons need a Nerd Font; set `icons` if boxes appear in the drawer')
   if require('sqmeow.config').get().ui.result.column_icons then
     vim.health.info(
-      'the result grid is marking its columns; '
-        .. 'set `ui.result.column_icons = false` if the grid looks out of step'
+      'column icons are enabled; '
+        .. 'set `ui.result.column_icons = false` if column headers are misaligned'
     )
   end
 end

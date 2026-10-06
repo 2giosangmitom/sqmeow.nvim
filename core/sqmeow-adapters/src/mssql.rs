@@ -475,7 +475,7 @@ fn type_name(kind: tiberius::ColumnType) -> &'static str {
 }
 
 fn decode(data: &ColumnData<'static>) -> Result<Cell> {
-    use sqlx::types::chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
+    use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
     use tiberius::FromSql;
     Ok(match data {
         ColumnData::U8(v) => v.map(|v| Cell::Int(v.into())).unwrap_or(Cell::Null),
@@ -762,6 +762,38 @@ impl Adapter for MsSqlAdapter {
     async fn roles(&self) -> Result<Vec<RoleNode>> {
         Ok(self.metadata("SELECT name, type_desc FROM sys.database_principals WHERE principal_id>4 ORDER BY name", &[]).await?
             .iter().map(|r| RoleNode { name: text(r, 0), attributes: vec![text(r, 1)] }).collect())
+    }
+
+    async fn relationships(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::RelationshipNode>> {
+        let data = self.metadata(
+            "SELECT fk.name, ps.name, pt.name, pc.name, rs.name, rt.name, rc.name
+             FROM sys.foreign_keys fk
+             JOIN sys.foreign_key_columns fc ON fc.constraint_object_id=fk.object_id
+             JOIN sys.tables pt ON pt.object_id=fk.parent_object_id
+             JOIN sys.schemas ps ON ps.schema_id=pt.schema_id
+             JOIN sys.columns pc ON pc.object_id=pt.object_id AND pc.column_id=fc.parent_column_id
+             JOIN sys.tables rt ON rt.object_id=fk.referenced_object_id
+             JOIN sys.schemas rs ON rs.schema_id=rt.schema_id
+             JOIN sys.columns rc ON rc.object_id=rt.object_id AND rc.column_id=fc.referenced_column_id
+             WHERE (ps.name=@P1 AND pt.name=@P2) OR (rs.name=@P1 AND rt.name=@P2)
+             ORDER BY ps.name, pt.name, fk.object_id, fc.constraint_column_id",
+            &[&schema, &relation],
+        ).await?;
+        Ok(crate::relationship_nodes(data.iter().map(|r| {
+            (
+                text(r, 0),
+                text(r, 1),
+                text(r, 2),
+                text(r, 3),
+                text(r, 4),
+                text(r, 5),
+                text(r, 6),
+            )
+        })))
     }
 
     async fn details(&self, schema: &str, relation: &str) -> Result<Details> {

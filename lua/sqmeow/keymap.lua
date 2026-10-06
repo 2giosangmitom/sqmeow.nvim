@@ -1,6 +1,6 @@
 --- Buffer-local mappings for the drawer, result grid, filter bar, and editor.
 ---
---- Override by surface and action name, not by the existing key. A string sets
+--- Configure mappings by window and action name. A string sets
 --- one key, a list sets aliases, and `false` disables the action: >lua
 ---   require('sqmeow').setup({
 ---     keymaps = {
@@ -40,6 +40,7 @@ M.defaults = {
     { action = 'preview', lhs = 'p', desc = 'Show the first page of this relation' },
     { action = 'preview_editor', lhs = 'P', desc = 'Preview this relation in an editor' },
     { action = 'structure', lhs = 'K', desc = 'Show the structure of this table or key' },
+    { action = 'relationships', lhs = 'gR', desc = 'Browse table relationships' },
     { action = 'filter_keys', lhs = 'f', desc = 'Show only the Redis keys matching a pattern' },
     { action = 'refresh', lhs = 'r', desc = 'Reload this subtree' },
     { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified name or history command' },
@@ -64,17 +65,22 @@ M.defaults = {
   },
 
   result = {
+    {
+      action = 'relationships',
+      lhs = 'gR',
+      desc = "Browse this column's table relationships",
+    },
     { action = 'next_page', lhs = 'L', desc = 'Next page' },
     { action = 'prev_page', lhs = 'H', desc = 'Previous page' },
     { action = 'first_page', lhs = '[H', desc = 'First page' },
     { action = 'last_page', lhs = ']H', desc = 'Last page' },
     { action = 'next_column', lhs = { '<Tab>', ']c' }, desc = 'Next column' },
     { action = 'prev_column', lhs = { '<S-Tab>', '[c' }, desc = 'Previous column' },
-    { action = 'detail', lhs = 'K', desc = 'Show this row down the page' },
+    { action = 'detail', lhs = 'K', desc = 'Show row details' },
     {
       action = 'structure',
       lhs = 'gK',
-      desc = 'Show the columns and indexes of the table this column is from',
+      desc = "Show this column's table structure",
     },
     { action = 'next_result', lhs = ']r', desc = "Show the next statement's result" },
     { action = 'prev_result', lhs = '[r', desc = "Show the previous statement's result" },
@@ -85,7 +91,7 @@ M.defaults = {
     {
       action = 'filter_cell',
       lhs = '=',
-      desc = 'Show only rows holding this value in this column',
+      desc = 'Filter by this cell value',
     },
     { action = 'filter', lhs = 'gf', desc = 'Filter the rows with a WHERE condition' },
     { action = 'order', lhs = 'go', desc = 'Order the rows with an ORDER BY list' },
@@ -101,7 +107,7 @@ M.defaults = {
     {
       action = 'toggle_float',
       lhs = 'Z',
-      desc = 'Show the result in a float, or back in its split',
+      desc = 'Toggle between a floating window and a split',
     },
     { action = 'edit_cell', lhs = { 'i', '<CR>' }, desc = 'Change this cell' },
     { action = 'set_null', lhs = 'X', desc = 'Set this cell to NULL' },
@@ -112,32 +118,39 @@ M.defaults = {
     },
     { action = 'add_row', lhs = 'o', desc = 'Add a row' },
     { action = 'duplicate_row', lhs = 'D', desc = 'Add a copy of this row' },
-    { action = 'delete_row', lhs = 'dd', desc = 'Delete this row, or keep it after all' },
+    { action = 'delete_row', lhs = 'dd', desc = 'Toggle row deletion' },
     { action = 'delete_selection', lhs = 'd', mode = 'x', desc = 'Delete the selected rows' },
     { action = 'undo', lhs = 'u', desc = 'Undo the last change' },
     {
       action = 'cancel',
       lhs = '<C-c>',
-      desc = 'Stop the running query, or the changes being applied',
+      desc = 'Cancel the query or edit batch',
     },
     { action = 'discard', lhs = 'U', desc = 'Discard every change' },
     {
       action = 'review',
       lhs = { 'gs', '<C-s>' },
-      desc = 'Review the changes; <C-s> there applies them',
+      desc = 'Review edits; <C-s> in the review applies them',
     },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = 'q', desc = 'Close the result window' },
   },
 
+  relationships = {
+    { action = 'browse', lhs = '<CR>', desc = 'Browse the other table’s foreign keys' },
+    { action = 'structure', lhs = 'K', desc = 'Show the other table’s structure' },
+    { action = 'help', lhs = '?', desc = 'Show these mappings' },
+    { action = 'close', lhs = { 'q', '<Esc>' }, desc = 'Close relationship browsing' },
+  },
+
   -- The WHERE and ORDER BY bar above the result.
   filter = {
-    { action = 'apply', lhs = '<CR>', desc = 'Filter the result with what the bar holds' },
+    { action = 'apply', lhs = '<CR>', desc = 'Apply the filter and sort expressions' },
     {
       action = 'apply',
       lhs = '<CR>',
       mode = 'i',
-      desc = 'Filter the result with what the bar holds',
+      desc = 'Apply the filter and sort expressions',
     },
     { action = 'close', lhs = { 'q', '<Esc>' }, desc = 'Close the bar without filtering' },
     { action = 'older', lhs = '<C-p>', desc = 'Show the filter used before this one' },
@@ -153,7 +166,7 @@ M.defaults = {
   },
 }
 
---- Actions that are worth a key of the user's own choosing.
+--- Additional actions available for custom mappings.
 ---@type table<string, { desc: string, run: fun() }>
 M.plug = {
   ['sqmeow-toggle'] = {
@@ -307,7 +320,7 @@ end
 function M.summary()
   local lines = {}
 
-  for _, surface in ipairs({ 'drawer', 'result', 'filter', 'editor' }) do
+  for _, surface in ipairs({ 'drawer', 'result', 'relationships', 'filter', 'editor' }) do
     table.insert(lines, surface)
     vim.list_extend(lines, require('sqmeow.ui.help').lines(surface))
     table.insert(lines, '')

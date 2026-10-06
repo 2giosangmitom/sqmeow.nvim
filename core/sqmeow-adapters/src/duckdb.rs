@@ -3,9 +3,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use duckdb::types::{Value, ValueRef};
 use duckdb::{Connection, InterruptHandle, Row, Statement};
-use sqlx::types::chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use sqmeow_db::adapter::Adapter;
 use sqmeow_db::adapter::Dialect;
 use sqmeow_db::edit::Source;
@@ -358,6 +358,41 @@ impl Adapter for DuckDbAdapter {
                         columns: list_names(&row.get::<_, String>(1)?),
                         unique: row.get(2)?,
                         primary: row.get(3)?,
+                    })
+                },
+            )
+        })
+        .await
+    }
+
+    async fn relationships(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::RelationshipNode>> {
+        let params = [schema, relation, schema, relation].map(str::to_owned);
+        self.run_meta(move |connection| {
+            // DuckDB only supports references within the source table's schema.
+            rows(
+                connection,
+                "select constraint_name, schema_name, table_name,
+                        to_json(constraint_column_names)::varchar, schema_name,
+                        referenced_table, to_json(referenced_column_names)::varchar
+                 from duckdb_constraints()
+                 where database_name = current_database() and constraint_type = 'FOREIGN KEY'
+                   and ((schema_name = ? and table_name = ?)
+                     or (schema_name = ? and referenced_table = ?))
+                 order by schema_name, table_name, constraint_index",
+                params,
+                |row| {
+                    Ok(sqmeow_db::node::RelationshipNode {
+                        name: row.get(0)?,
+                        source_schema: row.get(1)?,
+                        source_relation: row.get(2)?,
+                        columns: list_names(&row.get::<_, String>(3)?),
+                        target_schema: row.get(4)?,
+                        target_relation: row.get(5)?,
+                        referenced: list_names(&row.get::<_, String>(6)?),
                     })
                 },
             )

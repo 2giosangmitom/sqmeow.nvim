@@ -1,228 +1,88 @@
-//! The SQLite adapter.
+//! SQLite connections live exclusively on dedicated native worker threads.
 
 use std::collections::HashMap;
-use std::ptr;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
-use sqlx::{AssertSqlSafe, Pool, Row, Sqlite, SqlitePool, Statement as _, TypeInfo, ValueRef};
-use sqmeow_db::adapter::Adapter;
-use sqmeow_db::adapter::Dialect;
-use sqmeow_db::edit::Source;
-use sqmeow_db::edit::TableName;
-use sqmeow_db::error::Error;
-use sqmeow_db::error::Result;
-use sqmeow_db::node::ColumnNode;
-use sqmeow_db::node::RelationKind;
-use sqmeow_db::node::RelationNode;
-use sqmeow_db::node::RoutineNode;
-use sqmeow_db::node::SchemaNode;
-use sqmeow_db::result::Column;
+use sqmeow_db::adapter::{Adapter, Dialect};
+use sqmeow_db::error::{Error, Result};
+use sqmeow_db::node::*;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::Value;
 use sqmeow_db::types::ForeignKey;
-use sqmeow_db::types::KeyKind;
-use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
-use crate::stream::{
-    self, Keys, SqlxAdapter, TableKeys, origins, prepare, result_columns, text_or_bytes,
-};
+mod worker;
+use worker::{Options, OwnedRow, Worker};
 
-/// A pool against one SQLite database.
 #[derive(Debug)]
 pub struct SqliteAdapter {
-    pool: SqlitePool,
-    /// A session of its own for the drawer, which a long query on `pool` does not hold up. The same
-    /// pool for an in-memory database, which a second session would not see.
-    meta: SqlitePool,
-    /// Which columns of a table are keys, read from the pragmas a whole table at a time.
-    keys: TableKeys,
-    /// The pool's one connection, for a cancel to interrupt a statement still being stepped through.
-    handle: Arc<AtomicPtr<libsqlite3_sys::sqlite3>>,
+    execution: Worker,
+    metadata: Option<Worker>,
+    // Conservatively preserve session visibility after ATTACH, temporary DDL or BEGIN.
+    session_metadata: AtomicBool,
 }
 
 impl SqliteAdapter {
-    /// Open a database, refusing writes when `read_only`.
     pub async fn connect(url: &str, read_only: bool) -> Result<Self> {
-        // Preparing a statement is how a result learns its columns, and a cached statement keeps
-        // the columns its table had when it was first prepared.
-        let mut options = SqliteConnectOptions::from_str(url)
-            .map_err(Error::driver)?
-            .statement_cache_capacity(0);
-        if read_only {
-            options = options.pragma("query_only", "ON");
-        }
-        let in_memory = url.contains(":memory:") || url.contains("mode=memory");
-        let meta_options = options.clone();
-        let handle = Arc::new(AtomicPtr::new(ptr::null_mut()));
-        let raw = Arc::clone(&handle);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            // sqlx retries a refused connection until this expires.
-            .acquire_timeout(crate::CONNECT_TIMEOUT)
-            .after_connect(move |connection, _| {
-                let raw = Arc::clone(&raw);
-                Box::pin(async move {
-                    let mut locked = connection.lock_handle().await?;
-                    raw.store(locked.as_raw_handle().as_ptr(), Ordering::Relaxed);
-                    Ok(())
-                })
-            })
-            .connect_with(options)
-            .await
-            .map_err(Error::driver)?;
-
-        let meta = if in_memory {
-            pool.clone()
+        let options = Options::parse(url, read_only)?;
+        let execution = Worker::open(options.clone()).await?;
+        let metadata = if options.memory {
+            None
         } else {
-            SqlitePoolOptions::new()
-                .max_connections(1)
-                .acquire_timeout(crate::CONNECT_TIMEOUT)
-                .connect_lazy_with(meta_options)
+            Some(Worker::open(options).await?)
         };
-
         Ok(Self {
-            pool,
-            meta,
-            keys: TableKeys::default(),
-            handle,
+            execution,
+            metadata,
+            session_metadata: AtomicBool::new(false),
         })
     }
 
-    /// What a statement's result looks like, with the columns that are keys marked.
-    async fn columns(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
-        let Some(prepared) = prepare(&self.meta, statement).await else {
-            return (Vec::new(), None);
-        };
-        let mut columns = result_columns(prepared.columns());
-        let origins = origins(prepared.columns());
-        // SQLite names the table and column a result column came from, for a prepared statement,
-        // without being asked and without a query.
-        self.keys
-            .mark(&origins, &mut columns, |table| self.read_keys(table))
-            .await;
-        // SQLite traces a compound `SELECT`'s columns to its first part, though rows come from every part.
-        let plain = sqmeow_db::sql::plain(Dialect::Sqlite, statement);
-        let mut sides = sqmeow_db::sql::Sides::read(Dialect::Sqlite, statement);
-        // SQLite traces a view's columns to its tables, so what a view reads counts as read.
-        sides.expand_views(Dialect::Sqlite, &self.views().await);
-        let source = match self.keys.source(&origins, plain, sides) {
-            Some(source) if !self.compound(statement).await => Some(source),
-            _ => None,
-        };
-        (columns, source)
-    }
-
-    /// Every view's name and definition, in the main and temporary schemas.
-    async fn views(&self) -> Vec<(String, String)> {
-        sqlx::query_as::<_, (String, String)>(
-            "select name, sql from sqlite_master where type = 'view'
-             union all
-             select name, sql from sqlite_temp_master where type = 'view'",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .unwrap_or_else(|error| {
-            tracing::debug!(%error, "could not read the views");
-            Vec::new()
-        })
-    }
-
-    /// Whether a statement's plan combines `SELECT`s with `UNION`, `INTERSECT` or `EXCEPT`.
-    async fn compound(&self, statement: &str) -> bool {
-        let sql = format!("explain query plan {statement}");
-        match sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await {
-            Ok(rows) => rows.iter().any(|row| {
-                row.try_get::<String, _>("detail")
-                    .is_ok_and(|detail| detail == "COMPOUND QUERY" || detail.starts_with("MERGE ("))
-            }),
-            Err(error) => {
-                tracing::debug!(%error, "could not read a statement's plan");
-                true
-            }
+    fn meta(&self) -> &Worker {
+        if self.session_metadata.load(Ordering::Acquire) {
+            &self.execution
+        } else {
+            self.metadata.as_ref().unwrap_or(&self.execution)
         }
     }
 
-    /// Ask the pragmas which columns of one table are keys.
-    async fn read_keys(&self, table: TableName) -> Keys {
-        let mut keys = HashMap::new();
-        let table = table.name;
-
-        // Foreign keys first.
-        let sql = format!("pragma foreign_key_list({})", self.quote_ident(&table));
-        match sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await {
-            Ok(rows) => {
-                for row in &rows {
-                    if let Ok(column) = row.try_get::<String, _>("from") {
-                        keys.insert(column, KeyKind::Foreign);
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::debug!(%error, %table, "could not read a table's foreign keys");
-            }
-        }
-
-        let sql = format!("pragma table_info({})", self.quote_ident(&table));
-        match sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await {
-            Ok(rows) => {
-                for row in &rows {
-                    // `pk` is the column's position in the primary key, counted from one, and zero
-                    // for a column that is not part of it.
-                    if row.try_get::<i64, _>("pk").unwrap_or(0) > 0
-                        && let Ok(column) = row.try_get::<String, _>("name")
-                    {
-                        keys.insert(column, KeyKind::Primary);
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::debug!(%error, %table, "could not read a table's primary key");
-            }
-        }
-
-        Keys {
-            kinds: keys,
-            unique: self.unique_keys(&table).await,
-            generated: Vec::new(),
+    fn note_session(&self, sql: &str) {
+        if sqmeow_db::sql::split(sql, Dialect::Sqlite)
+            .iter()
+            .any(|statement| {
+                matches!(
+                    sqmeow_db::sql::first_word(&statement.sql).as_str(),
+                    "begin" | "savepoint" | "attach" | "detach"
+                )
+            })
+            || sql.to_ascii_lowercase().contains("temp")
+        {
+            self.session_metadata.store(true, Ordering::Release);
         }
     }
 
-    /// The columns of each unique index on a table that is neither partial nor on an expression.
-    async fn unique_keys(&self, table: &str) -> Vec<Vec<String>> {
-        let sql = format!("pragma index_list({})", self.quote_ident(table));
-        let Ok(indexes) = sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await else {
-            return Vec::new();
-        };
-        let mut unique = Vec::new();
-        for index in &indexes {
-            let wanted = index.try_get::<i64, _>("unique").unwrap_or(0) == 1
-                && index.try_get::<i64, _>("partial").unwrap_or(1) == 0
-                && index
-                    .try_get::<String, _>("origin")
-                    .is_ok_and(|origin| origin != "pk");
-            let Ok(name) = index.try_get::<String, _>("name") else {
-                continue;
-            };
-            if !wanted {
-                continue;
-            }
-            let sql = format!("pragma index_info({})", self.quote_ident(&name));
-            let Ok(columns) = sqlx::query(AssertSqlSafe(sql)).fetch_all(&self.pool).await else {
-                continue;
-            };
-            // An expression's column has no name.
-            if let Some(columns) = columns
-                .iter()
-                .map(|column| column.try_get::<Option<String>, _>("name").ok().flatten())
-                .collect::<Option<Vec<_>>>()
-            {
-                unique.push(columns);
-            }
-        }
-        unique
+    async fn fetch(&self, sql: impl Into<String>) -> Result<Vec<OwnedRow>> {
+        self.meta().fetch(sql.into(), Vec::new()).await
+    }
+
+    async fn run(
+        &self,
+        sql: &str,
+        origin: &str,
+        values: &[Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        self.note_session(sql);
+        self.execution
+            .run(
+                sql.to_owned(),
+                origin.to_owned(),
+                values.to_vec(),
+                max_rows,
+                cancel,
+            )
+            .await
     }
 }
 
@@ -231,37 +91,24 @@ impl Adapter for SqliteAdapter {
         Dialect::Sqlite
     }
 
-    async fn apply(
-        &self,
-        statements: &[String],
-        cancel: CancellationToken,
-    ) -> Result<Vec<ResultSet>> {
-        let affected = |outcome: &sqlx::sqlite::SqliteQueryResult| outcome.rows_affected();
-        let outcome =
-            stream::transact(&self.pool, statements, &cancel, affected, decode_cell).await;
-        if matches!(outcome, Err(Error::Cancelled)) {
-            self.stop_running().await;
-        }
-        outcome
-    }
-
     async fn execute(
         &self,
         statement: &str,
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run(self, statement, statement, max_rows, &cancel).await
+        self.run(statement, statement, &[], max_rows, cancel).await
     }
 
     async fn execute_bound(
         &self,
         statement: &str,
-        values: &[sqmeow_db::sql::parameters::Value],
+        values: &[Value],
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run_bound(self, statement, values, max_rows, &cancel).await
+        self.run(statement, statement, values, max_rows, cancel)
+            .await
     }
 
     async fn execute_wrapped(
@@ -271,19 +118,27 @@ impl Adapter for SqliteAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run(self, statement, origin, max_rows, &cancel).await
+        self.run(statement, origin, &[], max_rows, cancel).await
     }
 
-    /// SQLite calls them databases: `main`, `temp`, and anything attached.
-    async fn schemas(&self) -> Result<Vec<SchemaNode>> {
-        let rows = sqlx::query("pragma database_list")
-            .fetch_all(&self.meta)
-            .await
-            .map_err(Error::driver)?;
+    async fn apply(
+        &self,
+        statements: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        for sql in statements {
+            self.note_session(sql);
+        }
+        self.execution.apply(statements.to_vec(), cancel).await
+    }
 
-        Ok(rows
+    async fn schemas(&self) -> Result<Vec<SchemaNode>> {
+        Ok(self
+            .execution
+            .fetch("pragma database_list".into(), vec![])
+            .await?
             .iter()
-            .filter_map(|row| row.try_get::<String, _>("name").ok())
+            .filter_map(|row| row.text("name"))
             .map(|name| SchemaNode {
                 is_default: name == "main",
                 name,
@@ -292,278 +147,263 @@ impl Adapter for SqliteAdapter {
     }
 
     async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
-        // The schema cannot be a bind parameter here.
         let sql = format!(
-            "select name, type from {}.sqlite_master
-             where type in ('table', 'view') and name not like 'sqlite_%'
-             order by name",
+            "select name, type from {}.sqlite_master where type in ('table', 'view') and name not like 'sqlite_%' order by name",
             self.quote_ident(schema)
         );
-
-        let rows = sqlx::query(AssertSqlSafe(sql))
-            .fetch_all(&self.meta)
-            .await
-            .map_err(Error::driver)?;
-
-        Ok(rows
+        let worker = if schema.eq_ignore_ascii_case("temp") {
+            &self.execution
+        } else {
+            self.meta()
+        };
+        Ok(worker
+            .fetch(sql, vec![])
+            .await?
             .iter()
             .filter_map(|row| {
-                let name = row.try_get::<String, _>("name").ok()?;
-                let kind = match row.try_get::<String, _>("type").ok()?.as_str() {
-                    "view" => RelationKind::View,
-                    "table" => RelationKind::Table,
-                    _ => RelationKind::Other,
-                };
-                Some(RelationNode { name, kind })
+                Some(RelationNode {
+                    name: row.text("name")?,
+                    kind: match row.text("type")?.as_str() {
+                        "view" => RelationKind::View,
+                        "table" => RelationKind::Table,
+                        _ => RelationKind::Other,
+                    },
+                })
             })
             .collect())
     }
 
     async fn routines(&self, _schema: &str) -> Result<Vec<RoutineNode>> {
-        // SQLite has no stored functions or procedures.
         Ok(Vec::new())
     }
 
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
-        let sql = format!(
-            "pragma {}.table_info({})",
-            self.quote_ident(schema),
-            self.quote_ident(relation)
-        );
-
-        let rows = sqlx::query(AssertSqlSafe(sql))
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Error::driver)?;
-
-        let sql = format!(
-            "pragma {}.foreign_key_list({})",
-            self.quote_ident(schema),
-            self.quote_ident(relation)
-        );
-        let references: HashMap<String, ForeignKey> = sqlx::query(AssertSqlSafe(sql))
-            .fetch_all(&self.pool)
+        let rows = self
+            .execution
+            .fetch(
+                format!(
+                    "pragma {}.table_info({})",
+                    self.quote_ident(schema),
+                    self.quote_ident(relation)
+                ),
+                vec![],
+            )
+            .await?;
+        let references: HashMap<String, ForeignKey> = self
+            .execution
+            .fetch(
+                format!(
+                    "pragma {}.foreign_key_list({})",
+                    self.quote_ident(schema),
+                    self.quote_ident(relation)
+                ),
+                vec![],
+            )
             .await
             .unwrap_or_default()
             .iter()
             .filter_map(|row| {
-                let from = row.try_get::<String, _>("from").ok()?;
-                let table = row.try_get::<String, _>("table").ok()?;
-                // A reference that names no column points at the other table's primary key.
-                let column = row
-                    .try_get::<Option<String>, _>("to")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "rowid".to_owned());
-                Some((from, ForeignKey { table, column }))
+                Some((
+                    row.text("from")?,
+                    ForeignKey {
+                        table: row.text("table")?,
+                        column: row.text("to").unwrap_or_else(|| "rowid".into()),
+                    },
+                ))
             })
             .collect();
-
         Ok(rows
             .iter()
             .filter_map(|row| {
-                let name = row.try_get::<String, _>("name").ok()?;
+                let name = row.text("name")?;
                 Some(ColumnNode {
                     foreign_key: references.get(&name).cloned(),
                     name,
-                    // SQLite allows a column with no declared type.
-                    type_name: match row.try_get::<String, _>("type").ok()? {
-                        empty if empty.is_empty() => "any".to_owned(),
-                        declared => declared,
+                    type_name: match row.text("type")? {
+                        t if t.is_empty() => "any".into(),
+                        t => t,
                     },
-                    nullable: row.try_get::<i64, _>("notnull").unwrap_or(0) == 0,
-                    primary_key: row.try_get::<i64, _>("pk").unwrap_or(0) > 0,
-                    default: row
-                        .try_get::<Option<String>, _>("dflt_value")
-                        .ok()
-                        .flatten(),
+                    nullable: row.int("notnull") == 0,
+                    primary_key: row.int("pk") > 0,
+                    default: row.text("dflt_value"),
                 })
             })
             .collect())
     }
 
-    async fn indexes(
-        &self,
-        schema: &str,
-        relation: &str,
-    ) -> Result<Vec<sqmeow_db::node::IndexNode>> {
-        let sql = format!(
-            "pragma {}.index_list({})",
-            self.quote_ident(schema),
-            self.quote_ident(relation)
-        );
-        let rows = sqlx::query(AssertSqlSafe(sql))
-            .fetch_all(&self.meta)
-            .await
-            .map_err(Error::driver)?;
-
-        let mut indexes = Vec::new();
-        for row in &rows {
-            let name: String = row.try_get("name").map_err(Error::driver)?;
-            let sql = format!(
-                "pragma {}.index_info({})",
+    async fn indexes(&self, schema: &str, relation: &str) -> Result<Vec<IndexNode>> {
+        let rows = self
+            .fetch(format!(
+                "pragma {}.index_list({})",
                 self.quote_ident(schema),
-                self.quote_ident(&name)
-            );
-            let columns = sqlx::query(AssertSqlSafe(sql))
-                .fetch_all(&self.meta)
-                .await
-                .map_err(Error::driver)?
+                self.quote_ident(relation)
+            ))
+            .await?;
+        let mut indexes = Vec::new();
+        for row in rows {
+            let name = row.required("name")?;
+            let columns = self
+                .fetch(format!(
+                    "pragma {}.index_info({})",
+                    self.quote_ident(schema),
+                    self.quote_ident(&name)
+                ))
+                .await?
                 .iter()
-                .map(|column| {
-                    column
-                        .try_get::<Option<String>, _>("name")
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| "(expression)".to_owned())
-                })
+                .map(|r| r.text("name").unwrap_or_else(|| "(expression)".into()))
                 .collect();
-            indexes.push(sqmeow_db::node::IndexNode {
-                columns,
-                unique: row.try_get::<i64, _>("unique").unwrap_or(0) == 1,
-                primary: row
-                    .try_get::<String, _>("origin")
-                    .is_ok_and(|origin| origin == "pk"),
+            indexes.push(IndexNode {
                 name,
+                columns,
+                unique: row.int("unique") == 1,
+                primary: row.text("origin").is_some_and(|v| v == "pk"),
             });
         }
         indexes.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(indexes)
     }
 
-    async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::node::Details> {
+    async fn relationships(&self, schema: &str, relation: &str) -> Result<Vec<RelationshipNode>> {
+        let schemas = self.schemas().await?;
+        let schema = schemas
+            .into_iter()
+            .find(|s| s.name.eq_ignore_ascii_case(schema))
+            .ok_or_else(|| Error::driver(format!("unknown SQLite database: {schema}")))?
+            .name;
+        let tables: Vec<String> = self
+            .fetch(format!(
+                "select name from {}.sqlite_master where type = 'table' order by name",
+                self.quote_ident(&schema)
+            ))
+            .await?
+            .iter()
+            .map(|r| r.required("name"))
+            .collect::<Result<_>>()?;
+        let mut nodes = Vec::new();
+        for table in &tables {
+            let mut rows = self
+                .fetch(format!(
+                    "pragma {}.foreign_key_list({})",
+                    self.quote_ident(&schema),
+                    self.quote_ident(table)
+                ))
+                .await?;
+            rows.sort_by_key(|r| (r.int("id"), r.int("seq")));
+            let mut keys: Vec<(i64, RelationshipNode)> = Vec::new();
+            for row in rows {
+                let id = row.int("id");
+                let target = row.required("table")?;
+                let target = tables
+                    .iter()
+                    .find(|t| t.eq_ignore_ascii_case(&target))
+                    .cloned()
+                    .unwrap_or(target);
+                if !table.eq_ignore_ascii_case(relation) && !target.eq_ignore_ascii_case(relation) {
+                    continue;
+                }
+                if keys.last().is_none_or(|(known, _)| *known != id) {
+                    keys.push((
+                        id,
+                        RelationshipNode {
+                            name: format!("fk_{id}"),
+                            source_schema: schema.clone(),
+                            source_relation: table.clone(),
+                            columns: vec![],
+                            target_schema: schema.clone(),
+                            target_relation: target,
+                            referenced: vec![],
+                        },
+                    ));
+                }
+                let key = &mut keys.last_mut().expect("inserted above").1;
+                key.columns.push(row.required("from")?);
+                if let Some(column) = row.text("to") {
+                    key.referenced.push(column);
+                }
+            }
+            for (_, mut key) in keys {
+                if key.referenced.is_empty() {
+                    let mut primary = self
+                        .fetch(format!(
+                            "pragma {}.table_info({})",
+                            self.quote_ident(&schema),
+                            self.quote_ident(&key.target_relation)
+                        ))
+                        .await?;
+                    primary.retain(|r| r.int("pk") > 0);
+                    primary.sort_by_key(|r| r.int("pk"));
+                    key.referenced = primary
+                        .iter()
+                        .map(|r| r.required("name"))
+                        .collect::<Result<_>>()?;
+                }
+                if key.columns.len() != key.referenced.len() {
+                    return Err(Error::driver(format!(
+                        "cannot resolve referenced columns for {} on {}",
+                        key.name, key.source_relation
+                    )));
+                }
+                nodes.push(key);
+            }
+        }
+        Ok(nodes)
+    }
+
+    async fn details(&self, schema: &str, relation: &str) -> Result<Details> {
         let master = format!("{}.sqlite_master", self.quote_ident(schema));
-        let definition = sqlx::query_scalar::<_, Option<String>>(AssertSqlSafe(format!(
-            "select sql from {master} where name = ? and type in ('table', 'view')"
-        )))
-        .bind(relation)
-        .fetch_optional(&self.meta)
-        .await
-        .map_err(Error::driver)?
-        .flatten();
-
-        let triggers = sqlx::query_as::<_, (String, Option<String>)>(AssertSqlSafe(format!(
-            "select name, sql from {master} where type = 'trigger' and tbl_name = ? order by name"
-        )))
-        .bind(relation)
-        .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?
-        .into_iter()
-        .map(|(name, sql)| (name, sql.as_deref().map(trigger_event).unwrap_or_default()))
-        .collect();
-
-        let sql = format!(
-            "pragma {}.foreign_key_list({})",
-            self.quote_ident(schema),
-            self.quote_ident(relation)
-        );
-        let rows = sqlx::query(AssertSqlSafe(sql))
-            .fetch_all(&self.meta)
-            .await
-            .map_err(Error::driver)?;
-        let mut foreign_keys: Vec<(i64, sqmeow_db::node::ForeignKeyNode)> = Vec::new();
-        for row in &rows {
-            let id: i64 = row.try_get("id").map_err(Error::driver)?;
-            if !matches!(foreign_keys.last(), Some((known, _)) if *known == id) {
-                foreign_keys.push((
+        let values = vec![Value::Text(relation.into())];
+        let definition = self
+            .meta()
+            .fetch(
+                format!("select sql from {master} where name = ? and type in ('table', 'view')"),
+                values.clone(),
+            )
+            .await?
+            .first()
+            .and_then(|r| r.text("sql"));
+        let triggers = self.meta().fetch(format!("select name, sql from {master} where type = 'trigger' and tbl_name = ? order by name"), values).await?.iter().map(|r| Ok((r.required("name")?, r.text("sql").as_deref().map(trigger_event).unwrap_or_default()))).collect::<Result<_>>()?;
+        let mut rows = self
+            .fetch(format!(
+                "pragma {}.foreign_key_list({})",
+                self.quote_ident(schema),
+                self.quote_ident(relation)
+            ))
+            .await?;
+        rows.sort_by_key(|r| (r.int("id"), r.int("seq")));
+        let mut keys: Vec<(i64, ForeignKeyNode)> = Vec::new();
+        for row in rows {
+            let id = row.int("id");
+            if keys.last().is_none_or(|(known, _)| *known != id) {
+                keys.push((
                     id,
-                    sqmeow_db::node::ForeignKeyNode {
+                    ForeignKeyNode {
                         name: String::new(),
-                        columns: Vec::new(),
-                        target: row.try_get("table").map_err(Error::driver)?,
-                        referenced: Vec::new(),
+                        columns: vec![],
+                        target: row.required("table")?,
+                        referenced: vec![],
                     },
                 ));
             }
-            let (_, key) = foreign_keys.last_mut().expect("pushed above");
-            key.columns
-                .push(row.try_get("from").map_err(Error::driver)?);
-            key.referenced
-                .extend(row.try_get::<Option<String>, _>("to").ok().flatten());
+            let key = &mut keys.last_mut().expect("inserted above").1;
+            key.columns.push(row.required("from")?);
+            key.referenced.extend(row.text("to"));
         }
-
-        Ok(sqmeow_db::node::Details {
-            foreign_keys: foreign_keys.into_iter().map(|(_, key)| key).collect(),
-            triggers,
+        Ok(Details {
             definition,
-            ..sqmeow_db::node::Details::default()
+            triggers,
+            foreign_keys: keys.into_iter().map(|(_, k)| k).collect(),
+            ..Details::default()
         })
     }
 
     async fn close(&self) {
-        self.handle.store(ptr::null_mut(), Ordering::Relaxed);
-        self.meta.close().await;
-        self.pool.close().await;
-    }
-}
-
-impl SqlxAdapter for SqliteAdapter {
-    type Db = Sqlite;
-
-    fn pool(&self) -> &Pool<Sqlite> {
-        &self.pool
-    }
-
-    async fn describe(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
-        self.columns(statement).await
-    }
-
-    fn decode(row: &SqliteRow, index: usize) -> Cell {
-        decode_cell(row, index)
-    }
-
-    fn affected(outcome: &<Sqlite as sqlx::Database>::QueryResult) -> u64 {
-        outcome.rows_affected()
-    }
-
-    /// Dropping the stream leaves a statement that returns nothing yet, such as an aggregate, running.
-    async fn stop_running(&self) {
-        let handle = self.handle.load(Ordering::Relaxed);
-        if !handle.is_null() {
-            // SAFETY: the pool's one connection owns the handle until `close` clears it, and
-            // `sqlite3_interrupt` may be called from any thread.
-            unsafe { libsqlite3_sys::sqlite3_interrupt(handle) };
+        if let Some(meta) = &self.metadata {
+            meta.close().await;
         }
-    }
-
-    fn forget(&self) {
-        self.keys.forget();
+        self.execution.close().await;
     }
 }
 
-fn decode_cell(row: &SqliteRow, index: usize) -> Cell {
-    let Ok(raw) = row.try_get_raw(index) else {
-        return Cell::Null;
-    };
-    if raw.is_null() {
-        return Cell::Null;
-    }
-
-    let type_name = raw.type_info().name().to_ascii_uppercase();
-
-    match type_name.as_str() {
-        "INTEGER" | "INT" | "BIGINT" => row
-            .try_get::<i64, _>(index)
-            .map_or_else(|_| text_or_bytes(row, index, &type_name), Cell::Int),
-        "REAL" | "FLOAT" | "DOUBLE" => row
-            .try_get::<f64, _>(index)
-            .map_or_else(|_| text_or_bytes(row, index, &type_name), Cell::Float),
-        "BOOLEAN" | "BOOL" => row
-            .try_get::<bool, _>(index)
-            .map_or_else(|_| text_or_bytes(row, index, &type_name), Cell::Bool),
-        "TEXT" | "VARCHAR" | "CHAR" | "CLOB" => row
-            .try_get::<String, _>(index)
-            .map_or_else(|_| text_or_bytes(row, index, &type_name), Cell::Text),
-        "BLOB" => row.try_get::<Vec<u8>, _>(index).map_or_else(
-            |_| text_or_bytes(row, index, &type_name),
-            |bytes| Cell::bytes(&bytes),
-        ),
-        _ => text_or_bytes(row, index, &type_name),
-    }
-}
-
-/// What fires a trigger, read from its `CREATE TRIGGER`, such as `AFTER UPDATE`.
 fn trigger_event(sql: &str) -> String {
     let lower = sql.to_ascii_lowercase();
     ["before", "after", "instead of"]

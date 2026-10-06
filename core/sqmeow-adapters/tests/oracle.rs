@@ -8,6 +8,12 @@ use sqmeow_db::sql::parameters::{Kind, Value};
 use sqmeow_db::value::Cell;
 
 include!("common/harness.rs");
+include!("common/relationships.rs");
+
+#[tokio::test]
+async fn relationships_preserve_catalog_endpoints() {
+    relationship_fixture(&connect(&server!("SQMEOW_TEST_ORACLE_URL")).await, SCHEMA).await;
+}
 
 // Introspection reads the catalog. Unquoted Oracle names are upper case.
 const SCHEMA: &str = "SQMEOW";

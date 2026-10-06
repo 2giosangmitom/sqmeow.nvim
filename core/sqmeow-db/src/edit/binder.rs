@@ -30,30 +30,30 @@ impl TableName {
     }
 }
 
-/// A table, and the alias it is read through when the query reads it more than once.
+/// A table and its alias, used to distinguish repeated reads of the same table.
 type Read = (TableName, Option<String>);
 
-/// Collects where each result column came from and keeps the tables whose rows can be found again.
+/// Tracks source columns and identifies tables whose result rows can be located for editing.
 ///
-/// Every SQL adapter feeds it the same way, so which tables are editable is decided in one place.
+/// SQL adapters share these rules for deciding which tables are editable.
 #[derive(Debug, Default)]
 pub struct TableBinder {
     bound: Vec<(usize, TableName, String)>,
-    /// Find a table with no whole key in the result by every column it shows.
+    /// Use all displayed columns to locate rows when no complete key is present.
     every_column: bool,
-    /// Which read of a table each column came through, for a table the query reads twice.
+    /// Distinguishes source aliases when a query reads the same table more than once.
     sides: Sides,
 }
 
 impl TableBinder {
-    /// Find a table with no whole key in the result by every column the result shows of it, which
-    /// suits only a query whose rows are table rows.
+    /// Allow all displayed columns to locate rows when no complete key is present.
+    /// Use only for queries whose result rows correspond to table rows.
     pub fn every_column(mut self, every_column: bool) -> Self {
         self.every_column = every_column;
         self
     }
 
-    /// Tell apart the reads of a table the query reads more than once.
+    /// Set source aliases to distinguish repeated reads of the same table.
     pub fn sides(mut self, sides: Sides) -> Self {
         self.sides = sides;
         self
@@ -64,8 +64,9 @@ impl TableBinder {
         self.bound.push((column, table, name.into()));
     }
 
-    /// The tables with a whole key in the result, or `None` when no table has one. `keys` lists a
-    /// table's primary key, then its unique keys, and the first one found in full is used.
+    /// Build editable table metadata, or return `None` if no table can be located.
+    /// `keys` lists the primary key followed by unique keys; use the first complete
+    /// key in the result, or all displayed columns when `every_column` is enabled.
     pub fn build(self, keys: impl Fn(&TableName) -> Vec<Vec<String>>) -> Option<Source> {
         let Self {
             mut bound,
@@ -74,7 +75,7 @@ impl TableBinder {
         } = self;
         bound.sort_by_key(|(column, ..)| *column);
 
-        // Each read of a table is grouped apart, and a table with a read that cannot be told is dropped.
+        // Group columns by table and alias. Exclude tables with ambiguous source reads.
         let mut unknown: Vec<TableName> = Vec::new();
         let mut grouped: Vec<(Read, Vec<(usize, String)>)> = Vec::new();
         for (column, table, name) in bound {

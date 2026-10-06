@@ -967,6 +967,15 @@ function M.actions.structure()
   require('sqmeow.ui.structure').open(node.conn_id, node.path[1], node.path[#node.path])
 end
 
+--- Browse the relation's foreign keys, not the selected row's values.
+function M.actions.relationships()
+  local node = M.current_node()
+  if not node or not is_relation(node.kind) then
+    return
+  end
+  require('sqmeow.ui.relationships').open(node.conn_id, node.path[1], node.path[#node.path])
+end
+
 --- Copy the qualified name, or the full command on a history entry.
 function M.actions.yank_name()
   local node = M.current_node()

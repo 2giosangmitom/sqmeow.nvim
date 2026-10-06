@@ -1,18 +1,16 @@
 //! The PostgreSQL adapter.
 
 use std::collections::HashMap;
-use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use sqlx::postgres::types::Oid;
-use sqlx::postgres::{
-    PgColumn, PgConnectOptions, PgConnection, PgHasArrayType, PgPool, PgPoolOptions, PgRow,
-};
-use sqlx::{
-    AssertSqlSafe, Connection, Decode, Executor as _, Pool, Postgres, Row, SqlSafeStr,
-    Statement as _, Type, TypeInfo, ValueRef, types,
-};
+use tokio_postgres::{Column as PgColumn, Row as PgRow};
+type Oid = u32;
+mod codec;
+mod native;
+use futures_util::StreamExt;
+use native as pg;
+use native::{Options, Session};
 use sqmeow_db::adapter::Adapter;
 use sqmeow_db::adapter::Dialect;
 use sqmeow_db::edit::Source;
@@ -27,28 +25,30 @@ use sqmeow_db::node::RoutineNode;
 use sqmeow_db::node::SchemaNode;
 use sqmeow_db::result::Column;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::{Kind, Value};
 use sqmeow_db::types::KeyKind;
-use sqmeow_db::value::Cell;
+use tokio_postgres::types::{ToSql, Type};
 use tokio_util::sync::CancellationToken;
 
-use crate::stream::{self, SqlxAdapter, foreign_key, prepare, result_columns};
+use crate::stream;
+use codec::{decode_cell, result_columns};
 
-/// A pool against one PostgreSQL database.
+/// Persistent execution and drawer sessions against one PostgreSQL database.
 #[derive(Debug)]
 pub struct PostgresAdapter {
-    pool: PgPool,
+    pool: Session,
     /// A session of its own for the drawer, which a long query on `pool` does not hold up.
-    meta: PgPool,
+    meta: Session,
     /// Which of a table's columns are keys, by table OID and attribute number.
     keys: Mutex<HashMap<(Oid, i16), KeyKind>>,
     /// What a table is called, its columns by attribute number, and its primary key, by OID.
     relations: Mutex<HashMap<Oid, Relation>>,
     /// Whether the URL named no database, so the drawer lists the server's databases instead.
     cluster: bool,
-    /// How the pool connects, for the second connection that stops a cancelled query.
-    options: PgConnectOptions,
-    /// The server process behind the pool's one connection, which is what a cancel names.
-    backend_pid: Arc<AtomicI32>,
+    /// Connection/TLS options for native cancellation and Cockroach's auxiliary session.
+    options: Options,
+    /// Serializes execution, including cancellation cleanup and manual transactions.
+    execution: tokio::sync::Mutex<()>,
     /// The CockroachDB session behind the pool's one connection, which it cancels by instead.
     cockroach_session: Arc<Mutex<Option<String>>>,
     /// Whether a read-only connection's server keeps the session read-only; some servers that
@@ -59,82 +59,32 @@ pub struct PostgresAdapter {
 impl PostgresAdapter {
     /// Open a connection, to `database` when given and otherwise to the one the URL names.
     pub async fn connect(url: &str, database: Option<&str>, read_only: bool) -> Result<Self> {
-        // Preparing a statement is how a result learns its columns, and a cached statement keeps
-        // the columns its table had when it was first prepared.
-        let mut options = PgConnectOptions::from_str(url)
-            .map_err(Error::driver)?
-            .statement_cache_capacity(0);
-        let cluster = database.is_none() && options.get_database().is_none();
-        if let Some(database) = database {
-            options = options.database(database);
-        } else if cluster {
-            options = options.database("postgres");
-        }
-        let backend_pid = Arc::new(AtomicI32::new(0));
+        let (options, cluster) = Options::parse(url, database)?;
         let read_only_session = Arc::new(AtomicBool::new(false));
         let cockroach_session = Arc::new(Mutex::new(None));
-        let pool = crate::connect_retrying(|| {
-            let backend_pid = backend_pid.clone();
-            let cockroach_session = cockroach_session.clone();
-            let session = read_only_session.clone();
-            let armed = read_only_session.clone();
-            PgPoolOptions::new()
-                .max_connections(1)
-                // sqlx retries a refused connection until this expires.
-                .acquire_timeout(crate::CONNECT_TIMEOUT)
-                // Read on every connect, since the pool opens a new session after losing one.
-                .after_connect(move |connection, _| {
-                    let backend_pid = backend_pid.clone();
-                    let cockroach_session = cockroach_session.clone();
-                    let session = session.clone();
-                    Box::pin(async move {
-                        // Not every server that speaks the protocol has it; such a session cannot
-                        // be cancelled.
-                        let found: Option<(i32, String)> =
-                            sqlx::query_as("select pg_backend_pid()::int4, version()")
-                                .fetch_one(&mut *connection)
-                                .await
-                                .ok();
-                        let (pid, version) = found.unwrap_or_default();
-                        backend_pid.store(pid, Ordering::Relaxed);
-                        let id = if version.starts_with("CockroachDB") {
-                            sqlx::query_scalar("show session_id")
-                                .fetch_one(&mut *connection)
-                                .await
-                                .ok()
-                        } else {
-                            None
-                        };
-                        if let Ok(mut session) = cockroach_session.lock() {
-                            *session = id;
-                        }
-                        if read_only {
-                            session.store(make_read_only(connection).await, Ordering::Relaxed);
-                        }
-                        Ok(())
-                    })
-                })
-                // `set_config` can turn the session default off, so it is set again before each use.
-                .before_acquire(move |connection, _| {
-                    let armed = armed.clone();
-                    Box::pin(async move {
-                        if armed.load(Ordering::Relaxed) {
-                            connection
-                                .execute("set default_transaction_read_only = on")
-                                .await?;
-                        }
-                        Ok(true)
-                    })
-                })
-                .connect_with(options.clone())
-        })
-        .await
-        .map_err(Error::driver)?;
-
-        let meta = PgPoolOptions::new()
-            .max_connections(1)
-            .acquire_timeout(crate::CONNECT_TIMEOUT)
-            .connect_lazy_with(options.clone());
+        let pool = options.open_retrying().await?;
+        let version = pool
+            .client()
+            .await?
+            .query_one("select version()", &[])
+            .await
+            .map_err(Error::driver)?
+            .get::<_, String>(0);
+        if version.starts_with("CockroachDB") {
+            let rows = pool
+                .client()
+                .await?
+                .simple_query("show session_id")
+                .await
+                .map_err(Error::driver)?;
+            if let Some(tokio_postgres::SimpleQueryMessage::Row(row)) = rows.first() {
+                *cockroach_session.lock().unwrap() = row.get(0).map(str::to_owned);
+            }
+        }
+        if read_only {
+            read_only_session.store(make_read_only(&pool).await, Ordering::Relaxed);
+        }
+        let meta = options.open_retrying().await?;
 
         Ok(Self {
             pool,
@@ -143,7 +93,7 @@ impl PostgresAdapter {
             relations: Mutex::default(),
             cluster,
             options,
-            backend_pid,
+            execution: tokio::sync::Mutex::new(()),
             cockroach_session,
             read_only_session,
         })
@@ -155,7 +105,7 @@ impl PostgresAdapter {
             return None;
         }
         Some(
-            sqlx::query_scalar(
+            pg::query_scalar(
                 "select datname from pg_database
                  where datallowconn and not datistemplate
                  order by datname",
@@ -172,34 +122,36 @@ impl PostgresAdapter {
     }
 
     /// Stop the query the session is running, from a connection of its own.
-    async fn stop_query(&self) {
-        let pid = self.backend_pid.load(Ordering::Relaxed);
+    async fn stop_query(&self) -> Result<()> {
         let cockroach = self
             .cockroach_session
             .lock()
             .ok()
             .and_then(|session| session.clone());
-        if pid == 0 && cockroach.is_none() {
-            return;
-        }
         let stop = async {
-            let mut connection = PgConnection::connect_with(&self.options).await?;
-            let query = match &cockroach {
-                // CockroachDB has no `pg_cancel_backend`.
-                Some(session) => sqlx::query(
+            if let Some(session) = &cockroach {
+                let connection = self.options.open_retrying().await?;
+                pg::query(
                     "cancel queries if exists (select query_id from [show cluster statements]
                      where session_id = $1)",
                 )
-                .bind(session),
-                None => sqlx::query("select pg_cancel_backend($1)").bind(pid),
-            };
-            query.execute(&mut connection).await?;
-            connection.close().await
+                .bind(session)
+                .fetch_all(&connection)
+                .await
+                .map_err(Error::driver)?;
+                connection.close().await;
+            } else {
+                self.options
+                    .cancel(self.pool.client().await?.as_ref())
+                    .await?;
+            }
+            Ok::<_, Error>(())
         };
         match tokio::time::timeout(crate::STOP_TIMEOUT, stop).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::debug!(%error, "could not stop a cancelled query"),
-            Err(_) => tracing::debug!("stopping a cancelled query took too long"),
+            Ok(result) => result,
+            Err(_) => Err(Error::driver(
+                "stopping a cancelled PostgreSQL query timed out",
+            )),
         }
     }
 
@@ -215,7 +167,10 @@ impl PostgresAdapter {
 
     /// What a statement's result looks like, with the columns that are keys marked.
     async fn columns(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
-        let Some(prepared) = prepare(&self.meta, statement).await else {
+        let Ok(client) = self.pool.client().await else {
+            return (Vec::new(), None);
+        };
+        let Ok(prepared) = client.prepare(statement).await else {
             return (Vec::new(), None);
         };
         self.described_columns(statement, prepared.columns()).await
@@ -238,7 +193,7 @@ impl PostgresAdapter {
     async fn mark_keys(&self, prepared: &[PgColumn], columns: &mut [Column]) {
         let sources: Vec<Option<(Oid, i16)>> = prepared
             .iter()
-            .map(|column| column.relation_id().zip(column.relation_attribute_no()))
+            .map(|column| column.table_oid().zip(column.column_id()))
             .collect();
 
         let missing: Vec<(Oid, i16)> = {
@@ -251,8 +206,7 @@ impl PostgresAdapter {
                 .filter(|source| !known.contains_key(source))
                 .copied()
                 .collect();
-            // Sorted by the OID's own integer, because `Oid` is a newtype that does not order.
-            missing.sort_unstable_by_key(|(relation, attribute)| (relation.0, *attribute));
+            missing.sort_unstable();
             missing.dedup();
             missing
         };
@@ -284,7 +238,7 @@ impl PostgresAdapter {
         let attributes: Vec<i16> = wanted.iter().map(|(_, attribute)| *attribute).collect();
 
         // The primary key wins over a foreign one.
-        let rows = sqlx::query(
+        let rows = pg::query(
             "select want.relation, want.attribute,
                     bool_or(c.contype = 'p') as primary_key,
                     bool_or(c.contype = 'f') as foreign_key
@@ -310,8 +264,8 @@ impl PostgresAdapter {
 
         rows.iter()
             .filter_map(|row| {
-                let relation = row.try_get::<Oid, _>("relation").ok()?;
-                let attribute = row.try_get::<i16, _>("attribute").ok()?;
+                let relation = row.try_get::<_, Oid>("relation").ok()?;
+                let attribute = row.try_get::<_, i16>("attribute").ok()?;
                 Some(((relation, attribute), key_kind(row)))
             })
             .collect()
@@ -321,7 +275,7 @@ impl PostgresAdapter {
 impl PostgresAdapter {
     /// A table's `CREATE TABLE`, built from the catalog, with the indexes no constraint made.
     async fn table_definition(&self, oid: Oid, schema: &str, relation: &str) -> Result<String> {
-        let columns = sqlx::query_as::<_, (String, String, bool, Option<String>)>(
+        let columns = pg::query_as::<(String, String, bool, Option<String>)>(
             "select a.attname::text, format_type(a.atttypid, a.atttypmod), a.attnotnull,
                     pg_get_expr(d.adbin, d.adrelid)
              from pg_catalog.pg_attribute a
@@ -333,7 +287,7 @@ impl PostgresAdapter {
         .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
-        let constraints = sqlx::query_as::<_, (String, String)>(
+        let constraints = pg::query_as::<(String, String)>(
             "select conname::text, pg_get_constraintdef(oid) from pg_catalog.pg_constraint
              where conrelid = $1 and contype in ('p', 'u', 'f', 'c', 'x')
              order by contype, conname",
@@ -342,7 +296,7 @@ impl PostgresAdapter {
         .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
-        let indexes = sqlx::query_scalar::<_, String>(
+        let indexes = pg::query_scalar::<String>(
             "select pg_get_indexdef(i.indexrelid) from pg_catalog.pg_index i
              where i.indrelid = $1
                and not exists (select 1 from pg_catalog.pg_constraint k where k.conindid = i.indexrelid)
@@ -404,10 +358,10 @@ impl PostgresAdapter {
     ) -> Option<Source> {
         let sources: Vec<Option<(Oid, i16)>> = prepared
             .iter()
-            .map(|column| column.relation_id().zip(column.relation_attribute_no()))
+            .map(|column| column.table_oid().zip(column.column_id()))
             .collect();
         let mut wanted: Vec<Oid> = sources.iter().flatten().map(|(oid, _)| *oid).collect();
-        wanted.sort_unstable_by_key(|oid| oid.0);
+        wanted.sort_unstable();
         wanted.dedup();
         if wanted.is_empty() {
             return None;
@@ -458,7 +412,7 @@ impl PostgresAdapter {
     /// Ask the catalog what these tables are called, what their columns are, and which of those
     /// make up the primary key.
     async fn read_relations(&self, wanted: &[Oid]) -> HashMap<Oid, Relation> {
-        let rows = sqlx::query(
+        let rows = pg::query(
             "select c.oid as relation, n.nspname::text as schema, c.relname::text as name,
                     a.attnum as attribute, a.attname::text as column_name,
                     coalesce(a.attnum = any(pk.conkey), false) as primary_key
@@ -485,12 +439,12 @@ impl PostgresAdapter {
         let mut relations: HashMap<Oid, Relation> = HashMap::new();
         for row in &rows {
             let (Ok(oid), Ok(schema), Ok(name), Ok(attribute), Ok(column), Ok(primary)) = (
-                row.try_get::<Oid, _>("relation"),
-                row.try_get::<String, _>("schema"),
-                row.try_get::<String, _>("name"),
-                row.try_get::<i16, _>("attribute"),
-                row.try_get::<String, _>("column_name"),
-                row.try_get::<bool, _>("primary_key"),
+                row.try_get::<_, Oid>("relation"),
+                row.try_get::<_, String>("schema"),
+                row.try_get::<_, String>("name"),
+                row.try_get::<_, i16>("attribute"),
+                row.try_get::<_, String>("column_name"),
+                row.try_get::<_, bool>("primary_key"),
             ) else {
                 continue;
             };
@@ -509,7 +463,7 @@ impl PostgresAdapter {
             }
         }
 
-        let unique = sqlx::query_as::<_, (Oid, Vec<i16>)>(
+        let unique = pg::query_as::<(Oid, Vec<i16>)>(
             "select indrelid, array(select unnest(indkey))::int2[] from pg_catalog.pg_index
              where indrelid = any($1::oid[]) and indisunique and not indisprimary
                and indpred is null and indexprs is null",
@@ -528,80 +482,28 @@ impl PostgresAdapter {
 }
 
 /// Make the session read-only, and read the setting back, since some servers accept it silently.
-async fn make_read_only(connection: &mut PgConnection) -> bool {
-    if connection
-        .execute("set default_transaction_read_only = on")
+async fn make_read_only(connection: &Session) -> bool {
+    let Ok(client) = connection.client().await else {
+        return false;
+    };
+    if client
+        .batch_execute("set default_transaction_read_only = on")
         .await
         .is_err()
     {
         return false;
     }
     let setting: Option<Option<String>> =
-        sqlx::query_scalar("select current_setting('default_transaction_read_only')")
+        pg::query_scalar("select current_setting('default_transaction_read_only')")
             .fetch_one(connection)
             .await
             .ok();
     setting.flatten().as_deref() == Some("on")
 }
 
-impl SqlxAdapter for PostgresAdapter {
-    type Db = Postgres;
-
-    fn pool(&self) -> &Pool<Postgres> {
-        &self.pool
-    }
-
-    async fn describe(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
-        self.columns(statement).await
-    }
-
-    async fn describe_bound(
-        &self,
-        statement: &str,
-        values: &[sqmeow_db::sql::parameters::Value],
-    ) -> (Vec<Column>, Option<Source>) {
-        use sqmeow_db::sql::parameters::{Kind, Value};
-        let types: Vec<_> = values
-            .iter()
-            .map(|value| match value {
-                Value::Text(_) | Value::Null(Kind::Auto | Kind::Text) => {
-                    <String as Type<Postgres>>::type_info()
-                }
-                Value::Int(_) | Value::Null(Kind::Int) => <i64 as Type<Postgres>>::type_info(),
-                Value::Float(_) | Value::Null(Kind::Float) => <f64 as Type<Postgres>>::type_info(),
-                Value::Bool(_) | Value::Null(Kind::Bool) => <bool as Type<Postgres>>::type_info(),
-            })
-            .collect();
-        let sql = AssertSqlSafe(statement.to_owned()).into_sql_str();
-        match self.meta.prepare_with(sql, &types).await {
-            Ok(prepared) => self.described_columns(statement, prepared.columns()).await,
-            Err(error) => {
-                tracing::debug!(%error, "could not prepare a bound statement to read its columns");
-                (Vec::new(), None)
-            }
-        }
-    }
-
-    fn decode(row: &PgRow, index: usize) -> Cell {
-        decode_cell(row, index)
-    }
-
-    fn affected(outcome: &<Postgres as sqlx::Database>::QueryResult) -> u64 {
-        outcome.rows_affected()
-    }
-
-    async fn stop_running(&self) {
-        self.stop_query().await;
-    }
-
-    fn forget(&self) {
-        self.forget_tables();
-    }
-}
-
 /// Which key a catalog row says a column is.
 fn key_kind(row: &PgRow) -> KeyKind {
-    let flag = |name| row.try_get::<Option<bool>, _>(name).ok().flatten() == Some(true);
+    let flag = |name| row.try_get::<_, Option<bool>>(name).ok().flatten() == Some(true);
 
     if flag("primary_key") {
         KeyKind::Primary
@@ -609,6 +511,294 @@ fn key_kind(row: &PgRow) -> KeyKind {
         KeyKind::Foreign
     } else {
         KeyKind::None
+    }
+}
+
+impl PostgresAdapter {
+    async fn rearm(&self) -> Result<()> {
+        if self.read_only_session() && !make_read_only(&self.pool).await {
+            return Err(Error::driver(
+                "could not rearm and verify the read-only PostgreSQL session",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn run(
+        &self,
+        statement: &str,
+        origin: &str,
+        values: Option<&[Value]>,
+        max_rows: usize,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        let _guard = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(Error::Cancelled),
+            guard = self.execution.lock() => guard,
+        };
+        let mut in_flight = self.pool.in_flight();
+        self.rearm().await?;
+        let outcome = self
+            .run_locked(statement, origin, values, max_rows, cancel)
+            .await;
+        if outcome.is_ok() || self.protocol_drained().await {
+            in_flight.complete();
+        }
+        outcome
+    }
+
+    /// Errors may arrive before ReadyForQuery; preserve error reuse only after
+    /// an ordered barrier proves there is no outstanding protocol work.
+    async fn protocol_drained(&self) -> bool {
+        let barrier = async {
+            self.pool
+                .client()
+                .await?
+                .simple_query("")
+                .await
+                .map_err(native::driver)?;
+            Ok::<_, Error>(())
+        };
+        matches!(
+            tokio::time::timeout(crate::STOP_TIMEOUT, barrier).await,
+            Ok(Ok(()))
+        )
+    }
+
+    async fn run_locked(
+        &self,
+        statement: &str,
+        origin: &str,
+        values: Option<&[Value]>,
+        max_rows: usize,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        // COPY has a separate streaming protocol, not a tabular SQL result. Reject
+        // it before sending so COPY FROM cannot strand the session awaiting input.
+        if sqmeow_db::sql::split(statement, Dialect::Postgres)
+            .iter()
+            .any(|s| sqmeow_db::sql::first_word(&s.sql) == "copy")
+        {
+            return Err(Error::driver(
+                "COPY streaming is not supported; use SELECT or INSERT instead",
+            ));
+        }
+        let started = std::time::Instant::now();
+        let operation = self.collect(statement, origin, values, max_rows, cancel);
+        tokio::pin!(operation);
+        let outcome = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                let cleanup = async {
+                    self.stop_query().await?;
+                    // Retain serialization until cancellation EOF and ReadyForQuery.
+                    let _ = operation.await;
+                    self.pool.client().await?.simple_query("").await.map_err(native::driver)?;
+                    Ok::<_, Error>(())
+                };
+                if !matches!(tokio::time::timeout(crate::STOP_TIMEOUT, cleanup).await, Ok(Ok(()))) {
+                    self.pool.retire().await;
+                }
+                Err(Error::Cancelled)
+            },
+            result = &mut operation => result,
+        };
+        if stream::may_change_schema(statement) {
+            self.forget_tables();
+        }
+        let mut result = outcome?;
+        result.set_elapsed(started.elapsed());
+        Ok(result)
+    }
+
+    async fn collect(
+        &self,
+        statement: &str,
+        origin: &str,
+        values: Option<&[Value]>,
+        max_rows: usize,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        let client = self.pool.client().await?;
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+        let mut types = Vec::new();
+        for value in values.unwrap_or_default() {
+            match value {
+                Value::Text(v) => {
+                    params.push(Box::new(Some(v.clone())));
+                    types.push(Type::TEXT);
+                }
+                Value::Int(v) => {
+                    params.push(Box::new(Some(*v)));
+                    types.push(Type::INT8);
+                }
+                Value::Float(v) => {
+                    params.push(Box::new(Some(*v)));
+                    types.push(Type::FLOAT8);
+                }
+                Value::Bool(v) => {
+                    params.push(Box::new(Some(*v)));
+                    types.push(Type::BOOL);
+                }
+                Value::Null(Kind::Auto | Kind::Text) => {
+                    params.push(Box::new(None::<String>));
+                    types.push(Type::TEXT);
+                }
+                Value::Null(Kind::Int) => {
+                    params.push(Box::new(None::<i64>));
+                    types.push(Type::INT8);
+                }
+                Value::Null(Kind::Float) => {
+                    params.push(Box::new(None::<f64>));
+                    types.push(Type::FLOAT8);
+                }
+                Value::Null(Kind::Bool) => {
+                    params.push(Box::new(None::<bool>));
+                    types.push(Type::BOOL);
+                }
+            }
+        }
+        let statements = sqmeow_db::sql::split(statement, Dialect::Postgres);
+        let batch = statements.len() > 1;
+        let preparable = matches!(
+            sqmeow_db::sql::first_word(statement).as_str(),
+            "select"
+                | "with"
+                | "values"
+                | "table"
+                | "show"
+                | "explain"
+                | "insert"
+                | "update"
+                | "delete"
+                | "merge"
+        );
+        let prepared = if values.is_none() && (batch || !preparable) {
+            None
+        } else {
+            match client.prepare_typed(statement, &types).await {
+                Ok(prepared) => Some(prepared),
+                // A parse failure inside a manual transaction aborts it. Do not try
+                // another protocol or replay execution after a server error.
+                Err(error) => return Err(native::driver(error)),
+            }
+        };
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let (columns, source) = if origin == statement {
+            if let Some(prepared) = &prepared {
+                self.described_columns(origin, prepared.columns()).await
+            } else {
+                (Vec::new(), None)
+            }
+        } else {
+            self.columns(origin).await
+        };
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let mut result = ResultSet::new(statement, columns);
+        result.set_source(source);
+        let binary = values.is_some()
+            || prepared.as_ref().is_some_and(|p| {
+                p.columns()
+                    .iter()
+                    .all(|c| codec::binary_supported(c.type_()))
+            });
+        if binary {
+            let prepared = prepared
+                .as_ref()
+                .expect("binary execution requires prepare");
+            let params: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| &**p as _).collect();
+            let rows = client
+                .query_raw(prepared, params)
+                .await
+                .map_err(native::driver)?;
+            tokio::pin!(rows);
+            while let Some(row) = rows.next().await {
+                let row = row.map_err(native::driver)?;
+                if result.row_count() < max_rows {
+                    result.push_row((0..row.len()).map(|i| decode_cell(&row, i)).collect());
+                } else {
+                    result.mark_truncated();
+                }
+            }
+            if let Some(affected) = rows.rows_affected() {
+                result.set_affected(affected);
+            }
+        } else {
+            // Keep the batch a single simple-protocol request (and its implicit
+            // transaction). The dialect lexer handles dollar bodies and comments.
+            // Describing on the drawer session cannot abort a user's transaction.
+            let mut descriptions = Vec::new();
+            if batch {
+                let meta = self.meta.client().await?;
+                for part in &statements {
+                    descriptions.push(meta.prepare(&part.sql).await.ok());
+                    if cancel.is_cancelled() {
+                        return Err(Error::Cancelled);
+                    }
+                }
+            }
+            let mut part = 0;
+            let rows = client
+                .simple_query_raw(statement)
+                .await
+                .map_err(native::driver)?;
+            tokio::pin!(rows);
+            while let Some(message) = rows.next().await {
+                match message.map_err(native::driver)? {
+                    tokio_postgres::SimpleQueryMessage::RowDescription(columns) => {
+                        if result.columns().is_empty() {
+                            if let Some(description) =
+                                descriptions.get(part).and_then(Option::as_ref)
+                            {
+                                result.adopt_columns(result_columns(description.columns()));
+                            } else {
+                                result.adopt_columns(
+                                    columns
+                                        .iter()
+                                        .map(|c| Column::new(c.name(), "TEXT"))
+                                        .collect(),
+                                );
+                            }
+                        }
+                    }
+                    tokio_postgres::SimpleQueryMessage::Row(row) => {
+                        if result.row_count() < max_rows {
+                            let description = prepared
+                                .as_ref()
+                                .or_else(|| descriptions.get(part).and_then(Option::as_ref));
+                            result.push_row(
+                                (0..row.len())
+                                    .map(|i| {
+                                        codec::text(
+                                            description
+                                                .and_then(|p| p.columns().get(i))
+                                                .map(|c| c.type_()),
+                                            row.get(i),
+                                        )
+                                    })
+                                    .collect(),
+                            );
+                        } else {
+                            result.mark_truncated();
+                        }
+                    }
+                    tokio_postgres::SimpleQueryMessage::CommandComplete(affected) => {
+                        result.set_affected(affected);
+                        part += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -622,13 +812,88 @@ impl Adapter for PostgresAdapter {
         statements: &[String],
         cancel: CancellationToken,
     ) -> Result<Vec<ResultSet>> {
-        let affected = |outcome: &sqlx::postgres::PgQueryResult| outcome.rows_affected();
-        let outcome =
-            stream::transact(&self.pool, statements, &cancel, affected, decode_cell).await;
-        if matches!(outcome, Err(Error::Cancelled)) {
-            self.stop_query().await;
+        let _guard = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(Error::Cancelled),
+            guard = self.execution.lock() => guard,
+        };
+        let mut in_flight = self.pool.in_flight();
+        self.rearm().await?;
+        let client = self.pool.client().await?;
+        client
+            .batch_execute("BEGIN")
+            .await
+            .map_err(native::driver)?;
+        let mut returned = Vec::new();
+        for statement in statements {
+            let outcome = self
+                .run_locked(statement, statement, None, usize::MAX, &cancel)
+                .await;
+            let outcome = outcome.and_then(|result| {
+                stream::check_affected(statement, result.affected().unwrap_or(0))?;
+                Ok(result)
+            });
+            match outcome {
+                Ok(result) => {
+                    if result.row_count() > 0 {
+                        returned.push(result);
+                    }
+                }
+                Err(error) => {
+                    // Do not unlock until rollback is acknowledged, including on cancellation.
+                    if matches!(error, Error::Cancelled) && self.pool.client().await.is_err() {
+                        return Err(error);
+                    }
+                    match tokio::time::timeout(
+                        crate::STOP_TIMEOUT,
+                        client.batch_execute("ROLLBACK"),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => {
+                            in_flight.complete();
+                        }
+                        outcome => {
+                            self.pool.retire().await;
+                            if matches!(error, Error::Cancelled) {
+                                return Err(error);
+                            }
+                            return Err(match outcome {
+                                Ok(Err(error)) => native::driver(error),
+                                _ => Error::driver(
+                                    "PostgreSQL rollback timed out; connection retired",
+                                ),
+                            });
+                        }
+                    }
+                    return Err(if matches!(error, Error::Cancelled) {
+                        error
+                    } else {
+                        stream::rolled_back(format!("{error}\nin: {statement}"))
+                    });
+                }
+            }
         }
-        outcome
+        if cancel.is_cancelled() {
+            if !matches!(
+                tokio::time::timeout(crate::STOP_TIMEOUT, client.batch_execute("ROLLBACK")).await,
+                Ok(Ok(()))
+            ) {
+                self.pool.retire().await;
+            } else {
+                in_flight.complete();
+            }
+            return Err(Error::Cancelled);
+        }
+        // Once commit starts, report its actual outcome; never interrupt or replay it.
+        if let Err(error) = client.batch_execute("COMMIT").await {
+            if error.as_db_error().is_some() && self.protocol_drained().await {
+                in_flight.complete();
+            }
+            return Err(native::commit_error(error));
+        }
+        in_flight.complete();
+        Ok(returned)
     }
 
     async fn execute(
@@ -637,7 +902,8 @@ impl Adapter for PostgresAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run(self, statement, statement, max_rows, &cancel).await
+        self.run(statement, statement, None, max_rows, &cancel)
+            .await
     }
 
     async fn execute_bound(
@@ -647,7 +913,8 @@ impl Adapter for PostgresAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run_bound(self, statement, values, max_rows, &cancel).await
+        self.run(statement, statement, Some(values), max_rows, &cancel)
+            .await
     }
 
     async fn execute_wrapped(
@@ -657,12 +924,12 @@ impl Adapter for PostgresAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run(self, statement, origin, max_rows, &cancel).await
+        self.run(statement, origin, None, max_rows, &cancel).await
     }
 
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
         // The catalogue schemas are hidden.
-        let rows = sqlx::query(
+        let rows = pg::query(
             "select nspname as name, nspname = current_schema() as is_default
              from pg_namespace
              where nspname not like 'pg\\_%' and nspname <> 'information_schema'
@@ -676,9 +943,9 @@ impl Adapter for PostgresAdapter {
             .iter()
             .filter_map(|row| {
                 Some(SchemaNode {
-                    name: row.try_get::<String, _>("name").ok()?,
+                    name: row.try_get::<_, String>("name").ok()?,
                     is_default: row
-                        .try_get::<Option<bool>, _>("is_default")
+                        .try_get::<_, Option<bool>>("is_default")
                         .ok()?
                         .unwrap_or(false),
                 })
@@ -687,7 +954,7 @@ impl Adapter for PostgresAdapter {
     }
 
     async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
-        let rows = sqlx::query(
+        let rows = pg::query(
             "select c.relname as name, c.relkind as kind
              from pg_class c
              join pg_namespace n on n.oid = c.relnamespace
@@ -702,9 +969,9 @@ impl Adapter for PostgresAdapter {
         Ok(rows
             .iter()
             .filter_map(|row| {
-                let name = row.try_get::<String, _>("name").ok()?;
+                let name = row.try_get::<_, String>("name").ok()?;
                 // relkind is a "char", which decodes as one byte.
-                let kind = match row.try_get::<i8, _>("kind").ok()? as u8 {
+                let kind = match row.try_get::<_, i8>("kind").ok()? as u8 {
                     // An ordinary table and a partitioned one are both tables to the user.
                     b'r' | b'p' => RelationKind::Table,
                     b'v' => RelationKind::View,
@@ -720,7 +987,7 @@ impl Adapter for PostgresAdapter {
     async fn routines(&self, schema: &str) -> Result<Vec<RoutineNode>> {
         // `prokind` is a "char", and reading it as text here rather than as a byte keeps the
         // decoding in SQL where the catalog's own spelling of it is obvious.
-        let rows = sqlx::query(
+        let rows = pg::query(
             "select p.proname as name,
                     case p.prokind when 'p' then 'procedure' else 'function' end as kind
              from pg_catalog.pg_proc p
@@ -737,8 +1004,8 @@ impl Adapter for PostgresAdapter {
         Ok(rows
             .iter()
             .filter_map(|row| {
-                let name = row.try_get::<String, _>("name").ok()?;
-                let kind = row.try_get::<String, _>("kind").ok()?;
+                let name = row.try_get::<_, String>("name").ok()?;
+                let kind = row.try_get::<_, String>("kind").ok()?;
                 Some(crate::routine_node(name, &kind))
             })
             .collect())
@@ -746,7 +1013,7 @@ impl Adapter for PostgresAdapter {
 
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         // `format_type` renders the type the way the schema declares it.
-        let rows = sqlx::query(
+        let rows = pg::query(
             "select a.attname as name,
                     format_type(a.atttypid, a.atttypmod) as type_name,
                     not a.attnotnull as nullable,
@@ -779,7 +1046,7 @@ impl Adapter for PostgresAdapter {
         )
         .bind(schema)
         .bind(relation)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
 
@@ -787,13 +1054,13 @@ impl Adapter for PostgresAdapter {
             .iter()
             .filter_map(|row| {
                 Some(ColumnNode {
-                    name: row.try_get::<String, _>("name").ok()?,
-                    type_name: row.try_get::<String, _>("type_name").ok()?,
-                    nullable: row.try_get::<bool, _>("nullable").unwrap_or(true),
-                    primary_key: row.try_get::<bool, _>("primary_key").unwrap_or(false),
-                    foreign_key: foreign_key(row),
+                    name: row.try_get::<_, String>("name").ok()?,
+                    type_name: row.try_get::<_, String>("type_name").ok()?,
+                    nullable: row.try_get::<_, bool>("nullable").unwrap_or(true),
+                    primary_key: row.try_get::<_, bool>("primary_key").unwrap_or(false),
+                    foreign_key: native::foreign_key(row),
                     default: row
-                        .try_get::<Option<String>, _>("default_value")
+                        .try_get::<_, Option<String>>("default_value")
                         .ok()
                         .flatten(),
                 })
@@ -806,7 +1073,7 @@ impl Adapter for PostgresAdapter {
         schema: &str,
         relation: &str,
     ) -> Result<Vec<sqmeow_db::node::IndexNode>> {
-        let rows = sqlx::query_as::<_, (String, Vec<String>, bool, bool)>(
+        let rows = pg::query_as::<(String, Vec<String>, bool, bool)>(
             "select i.relname::text,
                     array(select pg_get_indexdef(ix.indexrelid, k, true)
                           from generate_series(1, ix.indnkeyatts::int) k order by k)::text[],
@@ -837,8 +1104,55 @@ impl Adapter for PostgresAdapter {
             .collect())
     }
 
+    async fn relationships(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::RelationshipNode>> {
+        let rows = pg::query_as::<(String, String, String, Vec<String>, String, String, Vec<String>)>(
+            "select k.conname::text, sn.nspname::text, s.relname::text,
+                    array(select a.attname::text from unnest(k.conkey) with ordinality as u(n, i)
+                          join pg_catalog.pg_attribute a on a.attrelid = k.conrelid and a.attnum = u.n order by u.i),
+                    tn.nspname::text, t.relname::text,
+                    array(select a.attname::text from unnest(k.confkey) with ordinality as u(n, i)
+                          join pg_catalog.pg_attribute a on a.attrelid = k.confrelid and a.attnum = u.n order by u.i)
+             from pg_catalog.pg_constraint k
+             join pg_catalog.pg_class s on s.oid = k.conrelid
+             join pg_catalog.pg_namespace sn on sn.oid = s.relnamespace
+             join pg_catalog.pg_class t on t.oid = k.confrelid
+             join pg_catalog.pg_namespace tn on tn.oid = t.relnamespace
+             where k.contype = 'f' and ((sn.nspname = $1 and s.relname = $2)
+                                    or (tn.nspname = $1 and t.relname = $2))
+             order by sn.nspname, s.relname, k.conname, k.oid",
+        ).bind(schema).bind(relation).fetch_all(&self.meta).await.map_err(Error::driver)?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    name,
+                    source_schema,
+                    source_relation,
+                    columns,
+                    target_schema,
+                    target_relation,
+                    referenced,
+                )| {
+                    sqmeow_db::node::RelationshipNode {
+                        name,
+                        source_schema,
+                        source_relation,
+                        columns,
+                        target_schema,
+                        target_relation,
+                        referenced,
+                    }
+                },
+            )
+            .collect())
+    }
+
     async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::node::Details> {
-        let Some((oid, kind)) = sqlx::query_as::<_, (Oid, i8)>(
+        let Some((oid, kind)) = pg::query_as::<(Oid, i8)>(
             "select c.oid, c.relkind from pg_catalog.pg_class c
              join pg_catalog.pg_namespace n on n.oid = c.relnamespace
              where n.nspname = $1 and c.relname = $2",
@@ -852,13 +1166,12 @@ impl Adapter for PostgresAdapter {
             return Ok(sqmeow_db::node::Details::default());
         };
 
-        let comment =
-            sqlx::query_scalar::<_, Option<String>>("select obj_description($1, 'pg_class')")
-                .bind(oid)
-                .fetch_one(&self.meta)
-                .await
-                .map_err(Error::driver)?;
-        let column_comments = sqlx::query_as::<_, (String, String)>(
+        let comment = pg::query_scalar::<Option<String>>("select obj_description($1, 'pg_class')")
+            .bind(oid)
+            .fetch_one(&self.meta)
+            .await
+            .map_err(Error::driver)?;
+        let column_comments = pg::query_as::<(String, String)>(
             "select a.attname::text, col_description(a.attrelid, a.attnum)
              from pg_catalog.pg_attribute a
              where a.attrelid = $1 and a.attnum > 0 and not a.attisdropped
@@ -869,7 +1182,7 @@ impl Adapter for PostgresAdapter {
         .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
-        let foreign_keys = sqlx::query_as::<_, (String, Vec<String>, String, Vec<String>)>(
+        let foreign_keys = pg::query_as::<(String, Vec<String>, String, Vec<String>)>(
             "select k.conname::text,
                     array(select a.attname::text
                           from unnest(k.conkey) with ordinality as u(n, i)
@@ -896,7 +1209,7 @@ impl Adapter for PostgresAdapter {
             referenced,
         })
         .collect();
-        let checks = sqlx::query_as::<_, (String, String)>(
+        let checks = pg::query_as::<(String, String)>(
             "select conname::text, pg_get_constraintdef(oid) from pg_catalog.pg_constraint
              where conrelid = $1 and contype = 'c' order by conname",
         )
@@ -904,7 +1217,7 @@ impl Adapter for PostgresAdapter {
         .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
-        let triggers = sqlx::query_as::<_, (String, String)>(
+        let triggers = pg::query_as::<(String, String)>(
             "select tgname::text, pg_get_triggerdef(oid, true) from pg_catalog.pg_trigger
              where tgrelid = $1 and not tgisinternal order by tgname",
         )
@@ -915,7 +1228,7 @@ impl Adapter for PostgresAdapter {
 
         let definition = match kind as u8 {
             b'v' | b'm' => {
-                let body = sqlx::query_scalar::<_, String>("select pg_get_viewdef($1, true)")
+                let body = pg::query_scalar::<String>("select pg_get_viewdef($1, true)")
                     .bind(oid)
                     .fetch_one(&self.meta)
                     .await
@@ -949,7 +1262,7 @@ impl Adapter for PostgresAdapter {
     }
 
     async fn roles(&self) -> Result<Vec<sqmeow_db::node::RoleNode>> {
-        let rows = sqlx::query_as::<_, (String, bool, bool, bool, bool)>(
+        let rows = pg::query_as::<(String, bool, bool, bool, bool)>(
             "select rolname::text, rolsuper, rolcanlogin, rolcreatedb, rolcreaterole
              from pg_catalog.pg_roles where rolname !~ '^pg_' order by rolname",
         )
@@ -977,134 +1290,8 @@ impl Adapter for PostgresAdapter {
     }
 
     async fn close(&self) {
+        let _guard = self.execution.lock().await;
         self.meta.close().await;
         self.pool.close().await;
-    }
-}
-
-fn decode_cell(row: &PgRow, index: usize) -> Cell {
-    let Ok(raw) = row.try_get_raw(index) else {
-        return Cell::Null;
-    };
-    if raw.is_null() {
-        return Cell::Null;
-    }
-
-    let type_name = raw.type_info().name().to_ascii_uppercase();
-
-    if let Some(element) = type_name.strip_suffix("[]") {
-        return decode_array(row, index, element);
-    }
-
-    match type_name.as_str() {
-        "BOOL" => scalar(row, index, &type_name, Cell::Bool),
-        "INT2" => scalar(row, index, &type_name, |value: i16| Cell::Int(value.into())),
-        "INT4" => scalar(row, index, &type_name, |value: i32| Cell::Int(value.into())),
-        "INT8" => scalar(row, index, &type_name, Cell::Int),
-        "OID" => scalar(row, index, &type_name, |value: Oid| {
-            Cell::Int(value.0.into())
-        }),
-        "FLOAT4" => scalar(row, index, &type_name, |value: f32| {
-            Cell::Float(value.into())
-        }),
-        "FLOAT8" => scalar(row, index, &type_name, Cell::Float),
-        "NUMERIC" => scalar(row, index, &type_name, |value: types::BigDecimal| {
-            Cell::Decimal(value.to_string())
-        }),
-        "TEXT" | "VARCHAR" | "BPCHAR" | "CHAR" | "NAME" | "CITEXT" | "UNKNOWN" => {
-            scalar(row, index, &type_name, Cell::Text)
-        }
-        "UUID" => scalar(row, index, &type_name, |value: types::Uuid| {
-            Cell::Uuid(value.to_string())
-        }),
-        "JSON" | "JSONB" => scalar(row, index, &type_name, |value: serde_json::Value| {
-            Cell::Json(value.to_string())
-        }),
-        "TIMESTAMP" => scalar(
-            row,
-            index,
-            &type_name,
-            |value: types::chrono::NaiveDateTime| Cell::Timestamp(value.to_string()),
-        ),
-        "TIMESTAMPTZ" => scalar(
-            row,
-            index,
-            &type_name,
-            |value: types::chrono::DateTime<types::chrono::Utc>| Cell::Timestamp(value.to_string()),
-        ),
-        "DATE" => scalar(row, index, &type_name, |value: types::chrono::NaiveDate| {
-            Cell::Date(value.to_string())
-        }),
-        "TIME" => scalar(row, index, &type_name, |value: types::chrono::NaiveTime| {
-            Cell::Time(value.to_string())
-        }),
-        // No binary decoder is needed.
-        "INTERVAL" => raw_text(row, index).map_or_else(|| unsupported(&type_name), Cell::Text),
-        "BYTEA" => scalar(row, index, &type_name, |value: Vec<u8>| Cell::bytes(&value)),
-        _ => fallback(row, index, &type_name),
-    }
-}
-
-fn decode_array(row: &PgRow, index: usize, element: &str) -> Cell {
-    let name = format!("{element}[]");
-
-    match element {
-        "BOOL" => array(row, index, &name, Cell::Bool),
-        "INT2" => array(row, index, &name, |value: i16| Cell::Int(value.into())),
-        "INT4" => array(row, index, &name, |value: i32| Cell::Int(value.into())),
-        "INT8" => array(row, index, &name, Cell::Int),
-        "FLOAT4" => array(row, index, &name, |value: f32| Cell::Float(value.into())),
-        "FLOAT8" => array(row, index, &name, Cell::Float),
-        "TEXT" | "VARCHAR" | "BPCHAR" | "NAME" => array(row, index, &name, Cell::Text),
-        "UUID" => array(row, index, &name, |value: types::Uuid| {
-            Cell::Uuid(value.to_string())
-        }),
-        _ => fallback(row, index, &name),
-    }
-}
-
-fn scalar<T>(row: &PgRow, index: usize, type_name: &str, wrap: impl Fn(T) -> Cell) -> Cell
-where
-    T: for<'r> Decode<'r, Postgres> + Type<Postgres>,
-{
-    row.try_get::<T, _>(index)
-        .map_or_else(|_| fallback(row, index, type_name), wrap)
-}
-
-/// The value exactly as the server wrote it.
-fn raw_text(row: &PgRow, index: usize) -> Option<String> {
-    let raw = row.try_get_raw(index).ok()?;
-    raw.as_str().ok().map(str::to_owned)
-}
-
-/// A type nothing above decodes, kept as the server's text rather than discarded.
-fn fallback(row: &PgRow, index: usize, type_name: &str) -> Cell {
-    Cell::Unsupported {
-        type_name: type_name.to_owned(),
-        raw: raw_text(row, index).unwrap_or_default(),
-    }
-}
-
-fn array<T>(row: &PgRow, index: usize, type_name: &str, wrap: impl Fn(T) -> Cell) -> Cell
-where
-    T: for<'r> Decode<'r, Postgres> + Type<Postgres> + PgHasArrayType,
-{
-    match row.try_get::<Vec<Option<T>>, _>(index) {
-        // A null element inside an array is still a null, and showing it as one keeps the array's
-        // length honest.
-        Ok(items) => Cell::Array(
-            items
-                .into_iter()
-                .map(|item| item.map_or(Cell::Null, &wrap))
-                .collect(),
-        ),
-        Err(_) => fallback(row, index, type_name),
-    }
-}
-
-fn unsupported(type_name: &str) -> Cell {
-    Cell::Unsupported {
-        type_name: type_name.to_owned(),
-        raw: String::new(),
     }
 }

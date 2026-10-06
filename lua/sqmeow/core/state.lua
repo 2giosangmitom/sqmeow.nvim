@@ -98,6 +98,9 @@ end
 --- Forget a connection, and pick another as current if it was the current one.
 ---@param id integer
 function M.remove_connection(id)
+  if package.loaded['sqmeow.ui.relationships'] then
+    package.loaded['sqmeow.ui.relationships'].invalidate(id)
+  end
   M.connections[id] = nil
   if M.current ~= id then
     return
@@ -164,6 +167,9 @@ end
 
 --- Forget everything. Used when the engine restarts, since its session went with it.
 function M.reset()
+  if package.loaded['sqmeow.ui.relationships'] then
+    package.loaded['sqmeow.ui.relationships'].close()
+  end
   M.connections = {}
   M.failures = {}
   M.current = nil

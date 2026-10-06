@@ -15,25 +15,31 @@ bundled-duckdb = ["duckdb/bundled", "duckdb/json"]
 [dependencies]
 sqmeow-db.workspace = true
 
+bigdecimal.workspace = true
+bytes.workspace = true
+chrono.workspace = true
 clickhouse.workspace = true
 duckdb.workspace = true
 futures-util.workspace = true
-libsqlite3-sys.workspace = true
 mongodb.workspace = true
+mysql_async.workspace = true
 oracledb.workspace = true
 percent-encoding.workspace = true
 redis.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true
+rusqlite.workspace = true
 scylla.workspace = true
 serde_json.workspace = true
-sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }
 surrealdb.workspace = true
 tiberius.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "io-util"] }
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 tracing.workspace = true
 url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

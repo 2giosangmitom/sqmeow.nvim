@@ -12,6 +12,12 @@ use sqmeow_db::types::TypeClass;
 use sqmeow_db::value::Cell;
 
 include!("common/harness.rs");
+include!("common/relationships.rs");
+
+#[tokio::test]
+async fn relationships_preserve_catalog_endpoints() {
+    relationship_fixture(&connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await, SCHEMA).await;
+}
 
 // Introspection reads the catalogue.
 const SCHEMA: &str = "public";
@@ -1517,4 +1523,350 @@ async fn sequences_are_listed_and_roles_are_read() {
         .find(|role| role.name == "sqmeow")
         .expect("the test user is a role");
     assert!(user.attributes.contains(&"login".to_owned()), "{user:?}");
+}
+
+#[tokio::test]
+async fn native_numeric_and_multidimensional_arrays_keep_exact_values() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    let result = run(
+        &backend,
+        "select 123456789012345678901234567890.00010000::numeric,
+                -0.00000000000000000001::numeric, 0.00::numeric,
+                array[[1,null],[2,3]]::int4[], array['a,b','NULL',null,'a\\b']::text[],
+                array[1.2300,null,-0.0001]::numeric[], 4294967295::oid",
+    )
+    .await;
+    assert_eq!(
+        result.cell(0, 0),
+        Some(&Cell::Decimal(
+            "123456789012345678901234567890.00010000".into()
+        ))
+    );
+    assert_eq!(
+        result.cell(0, 1),
+        Some(&Cell::Decimal("-0.00000000000000000001".into()))
+    );
+    assert_eq!(result.cell(0, 2), Some(&Cell::Decimal("0.00".into())));
+    assert_eq!(
+        result.cell(0, 3),
+        Some(&Cell::Array(vec![
+            Cell::Array(vec![Cell::Int(1), Cell::Null]),
+            Cell::Array(vec![Cell::Int(2), Cell::Int(3)])
+        ]))
+    );
+    assert_eq!(
+        result.cell(0, 4),
+        Some(&Cell::Array(vec![
+            text("a,b"),
+            text("NULL"),
+            Cell::Null,
+            text("a\\b")
+        ]))
+    );
+    assert_eq!(
+        result.cell(0, 5),
+        Some(&Cell::Array(vec![
+            Cell::Decimal("1.2300".into()),
+            Cell::Null,
+            Cell::Decimal("-0.0001".into())
+        ]))
+    );
+    assert_eq!(result.cell(0, 6), Some(&Cell::Int(4294967295)));
+}
+
+#[tokio::test]
+async fn text_fallback_parses_quoted_arrays_and_nullable_elements() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    let result = run(&backend,"select '10.0.0.1'::inet, array['a,b','NULL',null,'a\\b']::text[], array[[1,null],[2,3]]::int4[]").await;
+    assert_eq!(
+        result.cell(0, 0),
+        Some(&Cell::Unsupported {
+            type_name: "INET".into(),
+            raw: "10.0.0.1".into()
+        })
+    );
+    assert_eq!(
+        result.cell(0, 1),
+        Some(&Cell::Array(vec![
+            text("a,b"),
+            text("NULL"),
+            Cell::Null,
+            text("a\\b")
+        ]))
+    );
+    assert_eq!(
+        result.cell(0, 2),
+        Some(&Cell::Array(vec![
+            Cell::Array(vec![Cell::Int(1), Cell::Null]),
+            Cell::Array(vec![Cell::Int(2), Cell::Int(3)])
+        ]))
+    );
+}
+
+#[tokio::test]
+async fn simple_batches_keep_dollar_bodies_and_implicit_rollback() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    run(&backend, "create temporary table native_batch (v text)").await;
+    run(
+        &backend,
+        "begin; do $body$ begin insert into native_batch values ('one;two'); end $body$; commit",
+    )
+    .await;
+    assert_eq!(
+        run(&backend, "select v from native_batch").await.cell(0, 0),
+        Some(&text("one;two"))
+    );
+    let error = backend
+        .execute(
+            "insert into native_batch values ('rollback'); select nonexistent_column",
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("nonexistent_column"), "{error}");
+    assert_eq!(
+        run(&backend, "select v from native_batch")
+            .await
+            .row_count(),
+        1
+    );
+    let result = run(
+        &backend,
+        "select 1::int8 as value; /* outer /* nested ; */ done */ select 2::int8 as value",
+    )
+    .await;
+    assert_eq!(result.column_cells(0), &[Cell::Int(1), Cell::Int(2)]);
+}
+
+#[tokio::test]
+async fn copy_input_and_copy_in_a_batch_are_rejected_before_protocol_entry() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    run(&backend, "create temporary table native_copy (v int)").await;
+    for sql in [
+        "copy native_copy from stdin",
+        "select 1; copy native_copy from stdin",
+        "select 1; copy native_copy to stdout",
+    ] {
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            backend.execute(sql, NO_CAP, CancellationToken::new()),
+        )
+        .await
+        .expect("COPY must not hang")
+        .unwrap_err();
+        assert!(error.to_string().contains("COPY"), "{error}");
+        assert_eq!(
+            run(&backend, "select 1").await.cell(0, 0),
+            Some(&Cell::Int(1))
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancellation_does_not_kill_a_query_queued_behind_it() {
+    let backend = std::sync::Arc::new(connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await);
+    let cancel = CancellationToken::new();
+    let running = backend.clone();
+    let token = cancel.clone();
+    let first =
+        tokio::spawn(async move { running.execute("select pg_sleep(10)", NO_CAP, token).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let queued = backend.clone();
+    let second = tokio::spawn(async move {
+        queued
+            .execute("select pg_sleep(0.2), 42", NO_CAP, CancellationToken::new())
+            .await
+    });
+    cancel.cancel();
+    assert!(matches!(first.await.unwrap(), Err(Error::Cancelled)));
+    assert_eq!(
+        second.await.unwrap().unwrap().cell(0, 1),
+        Some(&Cell::Int(42))
+    );
+}
+
+#[tokio::test]
+async fn url_options_and_query_host_port_overrides_are_preserved() {
+    let url = server!("SQMEOW_TEST_POSTGRES_URL");
+    let mut parsed = url::Url::parse(&url).unwrap();
+    let host = parsed.host_str().unwrap().to_owned();
+    let port = parsed.port().unwrap_or(5432);
+    parsed.set_host(Some("127.0.0.2")).unwrap();
+    parsed.set_port(Some(1)).unwrap();
+    parsed
+        .query_pairs_mut()
+        .append_pair("host", &host)
+        .append_pair("port", &port.to_string())
+        .append_pair("ssl-mode", "disable")
+        .append_pair("options[search_path]", "pg_catalog")
+        .append_pair("application_name", "sqmeow native options")
+        .append_pair("statement-cache-capacity", "0");
+    let backend = connect(parsed.as_str()).await;
+    assert_eq!(
+        run(&backend, "show search_path").await.cell(0, 0),
+        Some(&text("pg_catalog"))
+    );
+    assert_eq!(
+        run(&backend, "show application_name").await.cell(0, 0),
+        Some(&text("sqmeow native options"))
+    );
+}
+
+#[tokio::test]
+async fn unsupported_bound_results_keep_types_without_corrupting_wire_bytes() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    let result = backend
+        .execute_bound(
+            "select $1::text, '10.0.0.1'::inet",
+            &[Value::Text("bound".into())],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.cell(0, 0), Some(&text("bound")));
+    assert_eq!(
+        result.cell(0, 1),
+        Some(&Cell::Unsupported {
+            type_name: "INET".into(),
+            raw: "10.0.0.1".into()
+        })
+    );
+    let result = backend
+        .execute_bound(
+            "select $1::text, '10.0.0.1'::inet::text",
+            &[Value::Text("bound".into())],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.cell(0, 1), Some(&text("10.0.0.1/32")));
+    assert_eq!(
+        run(&backend, "select '10.0.0.1'::inet").await.cell(0, 0),
+        Some(&Cell::Unsupported {
+            type_name: "INET".into(),
+            raw: "10.0.0.1".into(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn unsupported_box_array_keeps_its_server_representation() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    let result = run(
+        &backend,
+        "select array[box(point(1,2),point(3,4)),box(point(5,6),point(7,8))]",
+    )
+    .await;
+    assert_eq!(
+        result.cell(0, 0),
+        Some(&Cell::Unsupported {
+            type_name: "BOX[]".into(),
+            raw: "{(3,4),(1,2);(7,8),(5,6)}".into(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn commit_server_rejection_is_not_reported_as_unknown() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    run(&backend, "create temporary table native_deferred_unique (v text unique deferrable initially deferred)").await;
+    let error = backend
+        .apply(
+            &[
+                "insert into native_deferred_unique values ('duplicate')".into(),
+                "insert into native_deferred_unique values ('duplicate')".into(),
+            ],
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("duplicate key"), "{error}");
+    assert!(!error.to_string().contains("outcome unknown"), "{error}");
+    assert_eq!(
+        run(&backend, "select v from native_deferred_unique")
+            .await
+            .row_count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn aborted_apply_cannot_be_committed_by_a_later_apply() {
+    let url = server!("SQMEOW_TEST_POSTGRES_URL");
+    let backend = std::sync::Arc::new(connect(&url).await);
+    let observer = connect(&url).await;
+    run(&observer, "drop table if exists native_aborted_apply").await;
+    run(&observer, "create table native_aborted_apply (v int)").await;
+    run(&observer, "insert into native_aborted_apply values (10)").await;
+    let worker = backend.clone();
+    let apply = tokio::spawn(async move {
+        worker
+            .apply(
+                &[
+                    "update native_aborted_apply set v = 11".into(),
+                    "select pg_sleep(2) /* native_aborted_apply */".into(),
+                ],
+                CancellationToken::new(),
+            )
+            .await
+    });
+    let mut active = false;
+    for _ in 0..100 {
+        let result = run(&observer,
+            "select count(*)::int8 from pg_stat_activity where state = 'active' and query = 'select pg_sleep(2) /* native_aborted_apply */'",
+        ).await;
+        if result.cell(0, 0) == Some(&Cell::Int(1)) {
+            active = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        active,
+        "first update must have run before aborting the apply"
+    );
+    apply.abort();
+    assert!(apply.await.unwrap_err().is_cancelled());
+    // An unguarded session executes BEGIN inside the abandoned transaction,
+    // then this COMMIT silently commits its earlier update to 11.
+    let reuse = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.apply(&["select 1".into()], CancellationToken::new()),
+    )
+    .await
+    .expect("retired session must reject reuse without waiting indefinitely");
+    assert_eq!(
+        run(&observer, "select v from native_aborted_apply")
+            .await
+            .cell(0, 0),
+        Some(&Cell::Int(10)),
+        "later apply must not commit abandoned edits (reuse outcome: {reuse:?})"
+    );
+    run(&observer, "drop table native_aborted_apply").await;
+}
+
+#[tokio::test]
+async fn drained_syntax_error_keeps_session_usable() {
+    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    let error = backend
+        .execute("select from", NO_CAP, CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("syntax error"), "{error}");
+    assert_eq!(
+        run(&backend, "select 42").await.cell(0, 0),
+        Some(&Cell::Int(42))
+    );
+    let error = backend
+        .apply(&["select from".into()], CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("syntax error"), "{error}");
+    assert_eq!(
+        run(&backend, "select 43").await.cell(0, 0),
+        Some(&Cell::Int(43))
+    );
 }

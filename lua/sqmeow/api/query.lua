@@ -105,7 +105,7 @@ function M.execute(sql, opts)
       return nil, 'waiting for parameter values'
     end
   end
-  -- A new result would drop them.
+  -- Settle staged edits before replacing the result.
   if require('sqmeow.ui.edit').settle(function()
     M.execute(sql, opts)
   end) then
@@ -158,7 +158,7 @@ function M.execute(sql, opts)
     return nil, err
   end
 
-  -- The SQL is the plugin's to remember.
+  -- Keep the original SQL for result display and history.
   state.call = {
     call_id = call_id,
     conn_id = connection.id,

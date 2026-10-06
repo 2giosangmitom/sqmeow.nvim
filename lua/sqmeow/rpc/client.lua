@@ -214,7 +214,7 @@ end
 
 --- Calls an engine method and waits for its answer.
 --- Starts the engine lazily and catches transport/RPC errors. A successful reply
---- may merely acknowledge queued work; listen for the method's completion event
+--- may acknowledge queued work; wait for the method's completion event
 --- before using results. Database and UI state are managed by callers/events.
 ---@param method string
 ---@param args table|nil Keyword arguments for the method.

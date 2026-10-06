@@ -20,17 +20,18 @@ tokio = { version = "1", default-features = false }
 tokio-util = "0.7"
 unicode-width = "0.2"
 futures-util = { version = "0.3", default-features = false }
-sqlx = { version = "0.9", default-features = false, features = [
-  "runtime-tokio",
-  # Native roots rather than a bundled set: people connect to company servers whose certificate
-  # chains are trusted by the machine and by nothing else.
-  "tls-rustls-ring-native-roots",
-  # Without these, a NUMERIC, a UUID, a JSON column or a timestamp cannot be decoded at all,
-  # which are exactly the columns real schemas are full of.
-  "bigdecimal",
-  "chrono",
-  "json",
-  "uuid",
+bigdecimal = "0.4"
+bytes = "1"
+chrono = "0.4"
+uuid = "1"
+mysql_async = { version = "0.37", default-features = false, features = [
+  "minimal-rust", "rustls-tls", "ring", "tls12", "chrono", "bigdecimal", "client_ed25519",
+] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"] }
+# Bundled SQLite supplies column-origin metadata consistently across release targets.
+rusqlite = { version = "0.39", default-features = false, features = [
+  "bundled", "column_decltype", "column_metadata", "hooks",
 ] }
 redis = { version = "1.7", default-features = false, features = [
   "tokio-rustls-comp",
@@ -53,7 +54,7 @@ scylla = { version = "1.8", features = [
 ] }
 # The official SDK, over WebSocket only: no embedded storage engines.
 surrealdb = { version = "3.2", default-features = false, features = ["protocol-ws", "rustls"] }
-# ClickHouse over HTTP(S), with the same crypto provider and machine roots as sqlx.
+# ClickHouse over HTTP(S), with the same crypto provider and machine roots as other network adapters.
 clickhouse = { version = "0.15", default-features = false, features = [
   "rustls-tls-ring",
   "rustls-tls-native-roots",
@@ -67,13 +68,11 @@ tiberius = { git = "https://github.com/tiberius-rs/tiberius", rev = "35605c90adb
   "chrono",
   "bigdecimal",
 ] }
-# TLS for ScyllaDB, with the same crypto provider and roots as sqlx.
+# TLS for ScyllaDB, with the same crypto provider and roots as other network adapters.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
 # Reads a query's FROM aliases, and parses the filters typed for results held in memory.
 sqlparser = { version = "0.63", default-features = false, features = ["std", "visitor"] }
-# The version sqlx's SQLite driver links, for `sqlite3_interrupt`, which sqlx does not expose.
-libsqlite3-sys = "0.37"
 percent-encoding = "2"
 url = "2"
 serde_json = "1"

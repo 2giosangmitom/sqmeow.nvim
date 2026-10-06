@@ -60,6 +60,21 @@ services:
       timeout: 3s
       retries: 30
 
+  # The MySQL adapter also serves MariaDB; keep a separate endpoint for compatibility checks.
+  mariadb:
+    image: mariadb:11.8
+    profiles: ["mariadb"]
+    environment:
+      MARIADB_ROOT_PASSWORD: sqmeow
+      MARIADB_DATABASE: sqmeow
+    ports:
+      - "53307:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   clickhouse:
     image: clickhouse/clickhouse-server:25.8-alpine
     environment:

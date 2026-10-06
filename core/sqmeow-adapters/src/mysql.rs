@@ -1,17 +1,10 @@
 //! The MySQL and MariaDB adapter.
 
-use std::str::FromStr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-use sqlx::mysql::{MySqlConnectOptions, MySqlConnection, MySqlPool, MySqlPoolOptions, MySqlRow};
-use sqlx::{
-    AssertSqlSafe, Connection, Decode, MySql, Pool, Row, Statement as _, Type, TypeInfo, ValueRef,
-    types,
-};
+mod native;
+use mysql_async::{Conn, Opts, prelude::Queryable};
+use native::{Session, foreign_key, query, query_as, query_scalar};
 use sqmeow_db::adapter::Adapter;
 use sqmeow_db::adapter::Dialect;
-use sqmeow_db::edit::Source;
 use sqmeow_db::edit::TableName;
 use sqmeow_db::error::Error;
 use sqmeow_db::error::Result;
@@ -20,124 +13,214 @@ use sqmeow_db::node::RelationKind;
 use sqmeow_db::node::RelationNode;
 use sqmeow_db::node::RoutineNode;
 use sqmeow_db::node::SchemaNode;
-use sqmeow_db::result::Column;
 use sqmeow_db::result::ResultSet;
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::value::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::stream::{
-    self, Keys, SqlxAdapter, TableKeys, foreign_key, origins, prepare, result_columns,
-    text_or_bytes,
-};
+use crate::stream::{self, Keys, TableKeys};
 
-/// A pool against one MySQL or MariaDB database.
+/// Persistent sessions against one MySQL or MariaDB database.
 #[derive(Debug)]
 pub struct MySqlAdapter {
-    pool: MySqlPool,
+    pool: Session,
     /// A session of its own for the drawer, which a long query on `pool` does not hold up.
-    meta: MySqlPool,
+    meta: Session,
     /// Which columns of a table are keys, read from `information_schema` a whole table at a time.
     keys: TableKeys,
-    /// How the pool connects, for the second connection that stops a cancelled query.
-    options: MySqlConnectOptions,
-    /// The server's id for the pool's one connection, which is what `KILL QUERY` names.
-    connection_id: Arc<AtomicU64>,
+    /// Connection options for the independent cancellation session.
+    options: Opts,
+    preferred_tls: bool,
+    /// Configured label is valid only until user SQL may modify the session timezone.
+    timezone: String,
+    timezone_known: AtomicBool,
+    /// A timed-out KILL must never be allowed to hit a subsequent request.
+    unusable: AtomicBool,
+    /// The persistent execution session's server id, which `KILL QUERY` names.
+    connection_id: u32,
+}
+
+/// A dropped protocol/transaction future must never expose its unfinished session for reuse.
+struct Unfinished<'a> {
+    unusable: &'a AtomicBool,
+    armed: bool,
+}
+
+impl Drop for Unfinished<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.unusable.store(true, Ordering::Release);
+        }
+    }
 }
 
 impl MySqlAdapter {
+    async fn run_owned(
+        &self,
+        connection: &mut Conn,
+        statement: &str,
+        values: Option<&[sqmeow_db::sql::parameters::Value]>,
+        max_rows: usize,
+        cancel: &CancellationToken,
+    ) -> Result<(ResultSet, Vec<stream::Origin>)> {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        if self.unusable.load(Ordering::Acquire) {
+            return Err(Error::driver(
+                "cancellation connection failed; execution session cannot safely be reused",
+            ));
+        }
+        let mut unfinished = Unfinished {
+            unusable: &self.unusable,
+            armed: true,
+        };
+        if sqmeow_db::sql::split(statement, Dialect::MySql)
+            .iter()
+            .any(|part| {
+                matches!(
+                    sqmeow_db::sql::first_word(&part.sql).as_str(),
+                    "set" | "call" | "do"
+                )
+            })
+        {
+            self.timezone_known.store(false, Ordering::Release);
+        }
+        let timezone = if self.timezone_known.load(Ordering::Acquire) {
+            self.timezone.as_str()
+        } else {
+            ""
+        };
+        let work = native::execute(connection, statement, values, max_rows, cancel, timezone);
+        tokio::pin!(work);
+        let outcome = tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                // Keep the original protocol future alive. KILL finishes before we release
+                // execution ownership, so it cannot target the next request.
+                if !self.stop_query().await { self.unusable.store(true, Ordering::Release); }
+                if tokio::time::timeout(crate::STOP_TIMEOUT, &mut work).await.is_err() {
+                    self.unusable.store(true, Ordering::Release);
+                }
+                Err(Error::Cancelled)
+            }
+            result = &mut work => result,
+        };
+        unfinished.armed = false;
+        outcome
+    }
+
+    async fn run(
+        &self,
+        statement: &str,
+        origin: &str,
+        values: Option<&[sqmeow_db::sql::parameters::Value]>,
+        max_rows: usize,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        let started = std::time::Instant::now();
+        let (mut result, origins) = {
+            let mut session = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Err(Error::Cancelled),
+                session = self.pool.lock() => session,
+            };
+            let connection = session
+                .as_mut()
+                .ok_or_else(|| Error::driver("connection is closed"))?;
+            let outcome = self
+                .run_owned(connection, statement, values, max_rows, cancel)
+                .await;
+            if self.unusable.load(Ordering::Acquire) {
+                session.take();
+                return Err(Error::driver(
+                    "cancel cleanup failed; execution session was closed",
+                ));
+            }
+            if stream::may_change_schema(statement) {
+                self.keys.forget();
+            }
+            outcome?
+        };
+        self.keys
+            .mark(&origins, result.columns_mut(), |table| {
+                self.read_keys(table)
+            })
+            .await;
+        result.set_source(self.keys.source(
+            &origins,
+            sqmeow_db::sql::plain(Dialect::MySql, origin),
+            sqmeow_db::sql::Sides::read(Dialect::MySql, origin),
+        ));
+        result.set_elapsed(started.elapsed());
+        Ok(result)
+    }
+
     /// Open a connection.
     pub async fn connect(url: &str, read_only: bool) -> Result<Self> {
-        // Preparing a statement is how a result learns its columns, and a cached statement keeps
-        // the columns its table had when it was first prepared.
-        let options = MySqlConnectOptions::from_str(url)
-            .map_err(Error::driver)?
-            .statement_cache_capacity(0);
-        let connection_id = Arc::new(AtomicU64::new(0));
-        let pool = crate::connect_retrying(|| {
-            let connection_id = connection_id.clone();
-            MySqlPoolOptions::new()
-                .max_connections(1)
-                // sqlx retries a refused connection until this expires.
-                .acquire_timeout(crate::CONNECT_TIMEOUT)
-                // Read on every connect, since the pool opens a new session after losing one.
-                .after_connect(move |connection, _| {
-                    let connection_id = connection_id.clone();
-                    Box::pin(async move {
-                        let id: u64 = sqlx::query_scalar("select connection_id()")
-                            .fetch_one(&mut *connection)
-                            .await?;
-                        connection_id.store(id, Ordering::Relaxed);
-                        if read_only {
-                            sqlx::query("set session transaction read only")
-                                .execute(&mut *connection)
-                                .await?;
-                        }
-                        Ok(())
-                    })
-                })
-                .connect_with(options.clone())
-        })
+        let (options, preferred_tls, timezone) = native::options(url)?;
+        let mut connection = crate::connect_retrying_with(
+            || native::connect(options.clone(), preferred_tls),
+            native::retryable,
+        )
         .await
         .map_err(Error::driver)?;
-
-        let meta = MySqlPoolOptions::new()
-            .max_connections(1)
-            .acquire_timeout(crate::CONNECT_TIMEOUT)
-            .connect_lazy_with(options.clone());
+        let connection_id = connection.id();
+        if read_only {
+            connection
+                .query_drop("set session transaction read only")
+                .await
+                .map_err(Error::driver)?;
+        }
+        let pool = Mutex::new(Some(connection));
+        let meta = Mutex::new(Some(
+            native::connect(options.clone(), preferred_tls)
+                .await
+                .map_err(Error::driver)?,
+        ));
 
         Ok(Self {
             pool,
             meta,
             keys: TableKeys::default(),
             options,
+            preferred_tls,
+            timezone,
+            timezone_known: AtomicBool::new(true),
+            unusable: AtomicBool::new(false),
             connection_id,
         })
     }
 
     /// Stop the query the session is running, from a connection of its own.
-    async fn stop_query(&self) {
-        let id = self.connection_id.load(Ordering::Relaxed);
+    async fn stop_query(&self) -> bool {
+        let id = self.connection_id;
         let stop = async {
-            let mut connection = MySqlConnection::connect_with(&self.options).await?;
+            let mut connection = native::connect(self.options.clone(), self.preferred_tls).await?;
             // `KILL` cannot be prepared, and the id is a number this adapter read itself.
-            sqlx::raw_sql(AssertSqlSafe(format!("kill query {id}")))
-                .execute(&mut connection)
-                .await?;
-            connection.close().await
+            connection.query_drop(format!("kill query {id}")).await?;
+            connection.disconnect().await
         };
         match tokio::time::timeout(crate::STOP_TIMEOUT, stop).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::debug!(%error, "could not stop a cancelled query"),
-            Err(_) => tracing::debug!("stopping a cancelled query took too long"),
+            Ok(Ok(())) => true,
+            Ok(Err(error)) => {
+                tracing::debug!(%error, "could not stop a cancelled query");
+                false
+            }
+            Err(_) => {
+                tracing::debug!("stopping a cancelled query took too long");
+                false
+            }
         }
-    }
-
-    /// What a statement's result looks like, with the columns that are keys marked.
-    async fn columns(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
-        let Some(prepared) = prepare(&self.meta, statement).await else {
-            return (Vec::new(), None);
-        };
-        let mut columns = result_columns(prepared.columns());
-        let origins = origins(prepared.columns());
-        // MySQL reports the table and column a result column really came from in the column
-        // definitions it sends with every result.
-        self.keys
-            .mark(&origins, &mut columns, |table| self.read_keys(table))
-            .await;
-        let source = self.keys.source(
-            &origins,
-            sqmeow_db::sql::plain(Dialect::MySql, statement),
-            sqmeow_db::sql::Sides::read(Dialect::MySql, statement),
-        );
-        (columns, source)
     }
 
     /// Ask `information_schema` which columns of one table are keys.
     async fn read_keys(&self, origin: TableName) -> Keys {
         let (schema, table) = (origin.schema.as_deref(), origin.name.as_str());
 
-        let rows = sqlx::query(
+        let rows = query(
             "select c.column_name as column_name,
                     c.column_key = 'PRI' as primary_key,
                     exists (
@@ -155,7 +238,7 @@ impl MySqlAdapter {
         )
         .bind(schema)
         .bind(table)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await;
 
         let rows = match rows {
@@ -185,7 +268,7 @@ impl MySqlAdapter {
 
     /// The columns of each unique index on a table other than its primary key.
     async fn unique_keys(&self, schema: Option<&str>, table: &str) -> Vec<Vec<String>> {
-        let rows = sqlx::query(
+        let rows = query(
             "select s.index_name as index_name, s.column_name as column_name
              from information_schema.statistics s
              where s.table_schema = coalesce(?, database()) and s.table_name = ?
@@ -194,7 +277,7 @@ impl MySqlAdapter {
         )
         .bind(schema)
         .bind(table)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .unwrap_or_default();
 
@@ -223,36 +306,8 @@ impl MySqlAdapter {
     }
 }
 
-impl SqlxAdapter for MySqlAdapter {
-    type Db = MySql;
-
-    fn pool(&self) -> &Pool<MySql> {
-        &self.pool
-    }
-
-    async fn describe(&self, statement: &str) -> (Vec<Column>, Option<Source>) {
-        self.columns(statement).await
-    }
-
-    fn decode(row: &MySqlRow, index: usize) -> Cell {
-        decode_cell(row, index)
-    }
-
-    fn affected(outcome: &<MySql as sqlx::Database>::QueryResult) -> u64 {
-        outcome.rows_affected()
-    }
-
-    async fn stop_running(&self) {
-        self.stop_query().await;
-    }
-
-    fn forget(&self) {
-        self.keys.forget();
-    }
-}
-
 /// Which key an `information_schema` row says a column is.
-fn key_kind(row: &MySqlRow) -> KeyKind {
+fn key_kind(row: &native::Row) -> KeyKind {
     // Both come back as integers: MySQL has no boolean, and a comparison yields 1 or 0.
     let flag = |name| row.try_get::<i64, _>(name).unwrap_or(0) != 0;
 
@@ -275,13 +330,89 @@ impl Adapter for MySqlAdapter {
         statements: &[String],
         cancel: CancellationToken,
     ) -> Result<Vec<ResultSet>> {
-        let affected = |outcome: &sqlx::mysql::MySqlQueryResult| outcome.rows_affected();
-        let outcome =
-            stream::transact(&self.pool, statements, &cancel, affected, decode_cell).await;
-        if matches!(outcome, Err(Error::Cancelled)) {
-            self.stop_running().await;
+        // MySQL DDL and transaction controls can implicitly commit. They cannot be
+        // part of an atomic edit batch whose cancellation promises rollback.
+        for statement in statements {
+            if sqmeow_db::sql::split(statement, Dialect::MySql).len() != 1
+                || !matches!(
+                    sqmeow_db::sql::first_word(statement).as_str(),
+                    "insert" | "update" | "delete" | "replace" | "select" | "with"
+                )
+            {
+                return Err(Error::driver(
+                    "atomic MySQL edits cannot contain statements that may implicitly commit",
+                ));
+            }
         }
-        outcome
+        let mut session = self.pool.lock().await;
+        let connection = session
+            .as_mut()
+            .ok_or_else(|| Error::driver("connection is closed"))?;
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        if self.unusable.load(Ordering::Acquire) {
+            return Err(Error::driver("execution session cannot safely be reused"));
+        }
+        let mut unfinished = Unfinished {
+            unusable: &self.unusable,
+            armed: true,
+        };
+        connection
+            .query_drop("start transaction")
+            .await
+            .map_err(Error::driver)?;
+        let mut returned = Vec::new();
+        for statement in statements {
+            let outcome = self
+                .run_owned(connection, statement, None, usize::MAX, &cancel)
+                .await;
+            let outcome = outcome.and_then(|(result, _)| {
+                stream::check_affected(statement, result.affected().unwrap_or(0))?;
+                Ok(result)
+            });
+            match outcome {
+                Ok(result) => {
+                    if result.row_count() > 0 {
+                        returned.push(result);
+                    }
+                }
+                Err(error) => {
+                    if self.unusable.load(Ordering::Acquire) {
+                        session.take();
+                        return Err(Error::driver(
+                            "cancel cleanup failed; transaction session was closed",
+                        ));
+                    }
+                    connection
+                        .query_drop("rollback")
+                        .await
+                        .map_err(Error::driver)?;
+                    unfinished.armed = false;
+                    return Err(if matches!(error, Error::Cancelled) {
+                        error
+                    } else {
+                        stream::rolled_back(error)
+                    });
+                }
+            }
+        }
+        if cancel.is_cancelled() {
+            connection
+                .query_drop("rollback")
+                .await
+                .map_err(Error::driver)?;
+            unfinished.armed = false;
+            return Err(Error::Cancelled);
+        }
+        // Once COMMIT is sent, cancellation must not claim that no changes were committed.
+        connection.query_drop("commit").await.map_err(|error| {
+            Error::driver(format!(
+                "commit failed; outcome may be unknown, verify before retrying: {error}"
+            ))
+        })?;
+        unfinished.armed = false;
+        Ok(returned)
     }
 
     async fn execute(
@@ -290,7 +421,8 @@ impl Adapter for MySqlAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run(self, statement, statement, max_rows, &cancel).await
+        self.run(statement, statement, None, max_rows, &cancel)
+            .await
     }
 
     async fn execute_bound(
@@ -300,7 +432,8 @@ impl Adapter for MySqlAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run_bound(self, statement, values, max_rows, &cancel).await
+        self.run(statement, statement, Some(values), max_rows, &cancel)
+            .await
     }
 
     async fn execute_wrapped(
@@ -310,12 +443,12 @@ impl Adapter for MySqlAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        stream::run(self, statement, origin, max_rows, &cancel).await
+        self.run(statement, origin, None, max_rows, &cancel).await
     }
 
     /// MySQL has no schemas within a database, so its databases fill that level of the tree.
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
-        let rows = sqlx::query(
+        let rows = query(
             "select schema_name as name, schema_name = database() as is_default
              from information_schema.schemata
              where schema_name not in
@@ -343,7 +476,7 @@ impl Adapter for MySqlAdapter {
     }
 
     async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>> {
-        let rows = sqlx::query(
+        let rows = query(
             "select table_name as name, table_type as kind
              from information_schema.tables
              where table_schema = ?
@@ -369,7 +502,7 @@ impl Adapter for MySqlAdapter {
     }
 
     async fn routines(&self, schema: &str) -> Result<Vec<RoutineNode>> {
-        let rows = sqlx::query(
+        let rows = query(
             "select routine_name as name, lower(routine_type) as kind
              from information_schema.routines
              where routine_schema = ?
@@ -392,7 +525,7 @@ impl Adapter for MySqlAdapter {
 
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         // `column_type` keeps the declared width and signedness, which `data_type` drops.
-        let rows = sqlx::query(
+        let rows = query(
             "select c.column_name as name,
                     c.column_type as type_name,
                     c.is_nullable as nullable,
@@ -421,7 +554,7 @@ impl Adapter for MySqlAdapter {
         )
         .bind(schema)
         .bind(relation)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
 
@@ -448,7 +581,7 @@ impl Adapter for MySqlAdapter {
         schema: &str,
         relation: &str,
     ) -> Result<Vec<sqmeow_db::node::IndexNode>> {
-        let rows = sqlx::query(
+        let rows = query(
             "select s.index_name as index_name, s.non_unique as non_unique,
                     s.column_name as column_name
              from information_schema.statistics s
@@ -482,8 +615,32 @@ impl Adapter for MySqlAdapter {
         Ok(indexes)
     }
 
+    async fn relationships(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::RelationshipNode>> {
+        let rows = query_as::<(String, String, String, String, String, String, String)>(
+            "select constraint_name, table_schema, table_name, column_name,
+                    referenced_table_schema, referenced_table_name, referenced_column_name
+             from information_schema.key_column_usage
+             where referenced_table_name is not null
+               and ((table_schema = ? and table_name = ?)
+                 or (referenced_table_schema = ? and referenced_table_name = ?))
+             order by table_schema, table_name, constraint_name, ordinal_position",
+        )
+        .bind(schema)
+        .bind(relation)
+        .bind(schema)
+        .bind(relation)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)?;
+        Ok(crate::relationship_nodes(rows))
+    }
+
     async fn details(&self, schema: &str, relation: &str) -> Result<sqmeow_db::node::Details> {
-        let comment = sqlx::query_scalar::<_, String>(
+        let comment = query_scalar::<String>(
             "select table_comment from information_schema.tables
              where table_schema = ? and table_name = ?",
         )
@@ -493,7 +650,7 @@ impl Adapter for MySqlAdapter {
         .await
         .map_err(Error::driver)?
         .filter(|comment| !comment.is_empty());
-        let column_comments = sqlx::query_as::<_, (String, String)>(
+        let column_comments = query_as::<(String, String)>(
             "select column_name, column_comment from information_schema.columns
              where table_schema = ? and table_name = ? and column_comment <> ''
              order by ordinal_position",
@@ -504,7 +661,7 @@ impl Adapter for MySqlAdapter {
         .await
         .map_err(Error::driver)?;
 
-        let parts = sqlx::query_as::<_, (String, String, String, String, String)>(
+        let parts = query_as::<(String, String, String, String, String)>(
             "select constraint_name, column_name, referenced_table_schema, referenced_table_name,
                     referenced_column_name
              from information_schema.key_column_usage
@@ -531,7 +688,7 @@ impl Adapter for MySqlAdapter {
             key.referenced.push(referenced);
         }
 
-        let checks = sqlx::query_as::<_, (String, String)>(
+        let checks = query_as::<(String, String)>(
             "select cc.constraint_name, cc.check_clause
              from information_schema.check_constraints cc
              join information_schema.table_constraints tc
@@ -545,7 +702,7 @@ impl Adapter for MySqlAdapter {
         .fetch_all(&self.meta)
         .await
         .map_err(Error::driver)?;
-        let triggers = sqlx::query_as::<_, (String, String)>(
+        let triggers = query_as::<(String, String)>(
             "select trigger_name, concat(action_timing, ' ', event_manipulation)
              from information_schema.triggers
              where event_object_schema = ? and event_object_table = ?
@@ -562,7 +719,7 @@ impl Adapter for MySqlAdapter {
             self.quote_ident(schema),
             self.quote_ident(relation)
         );
-        let definition = sqlx::query(AssertSqlSafe(sql))
+        let definition = query(sql)
             .fetch_optional(&self.meta)
             .await
             .map_err(Error::driver)?
@@ -582,7 +739,7 @@ impl Adapter for MySqlAdapter {
     }
 
     async fn roles(&self) -> Result<Vec<sqmeow_db::node::RoleNode>> {
-        let rows = sqlx::query_as::<_, (String, String, String)>(
+        let rows = query_as::<(String, String, String)>(
             "select user, host, account_locked from mysql.user order by user, host",
         )
         .fetch_all(&self.meta)
@@ -601,71 +758,11 @@ impl Adapter for MySqlAdapter {
     }
 
     async fn close(&self) {
-        self.meta.close().await;
-        self.pool.close().await;
-    }
-}
-
-fn decode_cell(row: &MySqlRow, index: usize) -> Cell {
-    let Ok(raw) = row.try_get_raw(index) else {
-        return Cell::Null;
-    };
-    if raw.is_null() {
-        return Cell::Null;
-    }
-
-    let type_name = raw.type_info().name().to_ascii_uppercase();
-
-    // Unsigned columns are named "INT UNSIGNED" and friends, so the suffix is the switch.
-    if let Some(base) = type_name.strip_suffix(" UNSIGNED") {
-        return decode_unsigned(row, index, base, &type_name);
-    }
-
-    match type_name.as_str() {
-        "BOOLEAN" | "BOOL" => scalar(row, index, &type_name, Cell::Bool),
-        "TINYINT" => scalar(row, index, &type_name, |value: i8| Cell::Int(value.into())),
-        "SMALLINT" => scalar(row, index, &type_name, |value: i16| Cell::Int(value.into())),
-        "INT" | "MEDIUMINT" => scalar(row, index, &type_name, |value: i32| Cell::Int(value.into())),
-        "BIGINT" => scalar(row, index, &type_name, Cell::Int),
-        "FLOAT" => scalar(row, index, &type_name, |value: f32| {
-            Cell::Float(value.into())
-        }),
-        "DOUBLE" => scalar(row, index, &type_name, Cell::Float),
-        "DECIMAL" | "NEWDECIMAL" => scalar(row, index, &type_name, |value: types::BigDecimal| {
-            Cell::Decimal(value.to_string())
-        }),
-        "VARCHAR" | "CHAR" | "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" | "ENUM" | "SET" => {
-            scalar(row, index, &type_name, Cell::Text)
+        for session in [&self.meta, &self.pool] {
+            if let Some(connection) = session.lock().await.take() {
+                let _ = connection.disconnect().await;
+            }
         }
-        "JSON" => scalar(row, index, &type_name, |value: serde_json::Value| {
-            Cell::Json(value.to_string())
-        }),
-        "DATE" => scalar(row, index, &type_name, |value: types::chrono::NaiveDate| {
-            Cell::Date(value.to_string())
-        }),
-        "TIME" => scalar(row, index, &type_name, |value: types::chrono::NaiveTime| {
-            Cell::Time(value.to_string())
-        }),
-        "DATETIME" => scalar(
-            row,
-            index,
-            &type_name,
-            |value: types::chrono::NaiveDateTime| Cell::Timestamp(value.to_string()),
-        ),
-        // sqlx refuses to read a TIMESTAMP as a naive date and time, only as a zoned one.
-        "TIMESTAMP" => scalar(
-            row,
-            index,
-            &type_name,
-            |value: types::chrono::DateTime<types::chrono::Utc>| Cell::Timestamp(value.to_string()),
-        ),
-        "YEAR" => scalar(row, index, &type_name, |value: u16| Cell::Int(value.into())),
-        "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" | "BINARY" | "VARBINARY" => {
-            scalar(row, index, &type_name, binary)
-        }
-        "GEOMETRY" => scalar(row, index, &type_name, |value: Vec<u8>| Cell::bytes(&value)),
-        "BIT" => bits(row, index, &type_name),
-        _ => text_or_bytes(row, index, &type_name),
     }
 }
 
@@ -682,39 +779,4 @@ fn binary(bytes: Vec<u8>) -> Cell {
         Ok(text) => Cell::bytes(text.as_bytes()),
         Err(error) => Cell::bytes(error.as_bytes()),
     }
-}
-
-/// A `BIT` column as the number its bits spell, which is how MySQL compares one.
-fn bits(row: &MySqlRow, index: usize, type_name: &str) -> Cell {
-    // sqlx decodes nothing from a `BIT`, so its bytes are taken without asking.
-    match row.try_get_unchecked::<Vec<u8>, _>(index) {
-        Ok(bytes) if bytes.len() <= 8 => {
-            let value = bytes
-                .iter()
-                .fold(0u64, |value, byte| (value << 8) | u64::from(*byte));
-            i64::try_from(value).map_or_else(|_| Cell::Decimal(value.to_string()), Cell::Int)
-        }
-        _ => text_or_bytes(row, index, type_name),
-    }
-}
-
-fn decode_unsigned(row: &MySqlRow, index: usize, base: &str, type_name: &str) -> Cell {
-    match base {
-        "TINYINT" => scalar(row, index, type_name, |value: u8| Cell::Int(value.into())),
-        "SMALLINT" => scalar(row, index, type_name, |value: u16| Cell::Int(value.into())),
-        "INT" | "MEDIUMINT" => scalar(row, index, type_name, |value: u32| Cell::Int(value.into())),
-        // An unsigned BIGINT reaches past i64.
-        "BIGINT" => scalar(row, index, type_name, |value: u64| {
-            i64::try_from(value).map_or_else(|_| Cell::Decimal(value.to_string()), Cell::Int)
-        }),
-        _ => text_or_bytes(row, index, type_name),
-    }
-}
-
-fn scalar<T>(row: &MySqlRow, index: usize, type_name: &str, wrap: impl Fn(T) -> Cell) -> Cell
-where
-    T: for<'r> Decode<'r, MySql> + Type<MySql>,
-{
-    row.try_get::<T, _>(index)
-        .map_or_else(|_| text_or_bytes(row, index, type_name), wrap)
 }

@@ -28,6 +28,13 @@ async fn run(db: &Backend, sql: &str) -> ResultSet {
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
 }
 
+include!("common/relationships.rs");
+
+#[tokio::test]
+async fn relationships_preserve_catalog_endpoints() {
+    relationship_fixture(&Backend::connect(&server!()).await.unwrap(), "dbo").await;
+}
+
 #[tokio::test]
 async fn bound_row_caps_apply_to_columns_that_resemble_internal_metadata() {
     let db = Backend::connect(&server!()).await.unwrap();

@@ -1037,6 +1037,38 @@ impl Adapter for OracleAdapter {
         .await
     }
 
+    async fn relationships(
+        &self,
+        schema: &str,
+        relation: &str,
+    ) -> Result<Vec<sqmeow_db::node::RelationshipNode>> {
+        let (schema, relation) = (schema.to_owned(), relation.to_owned());
+        self.run_meta(move |meta| {
+            let (schema, relation) = resolve_table(meta, &schema, &relation)?;
+            let data = Self::query_bound(meta,
+                "select k.constraint_name, k.owner, k.table_name, cc.column_name,
+                        rc.owner, rc.table_name, rcc.column_name
+                 from all_constraints k
+                 join all_cons_columns cc on cc.owner=k.owner and cc.constraint_name=k.constraint_name
+                 join all_constraints rc on rc.owner=k.r_owner and rc.constraint_name=k.r_constraint_name
+                 join all_cons_columns rcc on rcc.owner=rc.owner and rcc.constraint_name=rc.constraint_name
+                                         and rcc.position=cc.position
+                 where k.constraint_type='R'
+                   and ((k.owner=:1 and k.table_name=:2) or (rc.owner=:3 and rc.table_name=:4))
+                 order by k.owner, k.table_name, k.constraint_name, cc.position",
+                &[schema.clone(), relation.clone(), schema, relation], |row| {
+                    Ok((row.get::<String>(0).map_err(Error::driver)?,
+                        row.get::<String>(1).map_err(Error::driver)?,
+                        row.get::<String>(2).map_err(Error::driver)?,
+                        row.get::<String>(3).map_err(Error::driver)?,
+                        row.get::<String>(4).map_err(Error::driver)?,
+                        row.get::<String>(5).map_err(Error::driver)?,
+                        row.get::<String>(6).map_err(Error::driver)?))
+                })?;
+            Ok(crate::relationship_nodes(data))
+        }).await
+    }
+
     async fn details(&self, schema: &str, relation: &str) -> Result<Details> {
         let (schema, relation) = (schema.to_owned(), relation.to_owned());
         self.run_meta(move |meta| {
@@ -1693,7 +1725,7 @@ fn run_plsql_bound(
 }
 
 /// The inner statement of a plain `EXPLAIN PLAN FOR <statement>`, or `None`
-/// for anything else — including `SET STATEMENT_ID` and `INTO` variants,
+/// for anything else, including `SET STATEMENT_ID` and `INTO` variants,
 /// which execute as written without reading the plan back.
 fn explain_inner(statement: &str) -> Option<&str> {
     let rest = skip_trivia(statement);

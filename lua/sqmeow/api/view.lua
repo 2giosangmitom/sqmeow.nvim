@@ -21,7 +21,7 @@ function M.toggle_float()
   require('sqmeow.ui.result').toggle_float()
 end
 
---- Show the statements the changes staged in the result plan into, to apply with `<C-s>`.
+--- Review the statements for staged edits. Apply them with `<C-s>` in the review.
 function M.review()
   require('sqmeow.ui.edit').review()
 end
@@ -57,6 +57,30 @@ function M.view(view)
   result.send_view()
 end
 
+--- Browse a connected table's declared foreign keys.
+--- Press `gR` on a drawer table or result column. The popup shows Belongs to
+--- and Referenced by. Each constraint lists its columns in order, including
+--- composite keys and self-references. `<CR>` follows a relationship to the other
+--- table; `K` opens its structure. `?` shows configured mappings.
+--- Override popup actions under `keymaps.relationships`.
+---
+--- Empty sections say `None`; unsupported adapters and metadata failures show an
+--- error. An open connection is required. Closing the browser, disconnecting or
+--- restarting invalidates pending replies. The browser does not fetch related rows
+--- or infer cardinality or many-to-many relationships.
+--- Inspired by Squix (https://github.com/eduardofuncao/squix).
+---@tag sqmeow-relationships
+---@toc_entry Relationships
+---@param conn_id integer
+---@param schema string
+---@param relation string
+---@usage >lua
+---   require('sqmeow.api.view').relationships(1, 'public', 'orders')
+--- <
+function M.relationships(conn_id, schema, relation)
+  require('sqmeow.ui.relationships').open(conn_id, schema, relation)
+end
+
 --- Open the result window.
 function M.open()
   require('sqmeow.ui.result').open()
@@ -86,7 +110,7 @@ function M.reopen(call_id)
     end
   end
 
-  -- Nothing is asked of the engine but the rows.
+  -- Fetch the rows without rerunning the query.
   result.render(state.call)
 end
 
@@ -117,7 +141,7 @@ function M.restore(entry)
     conn_id = conn_id,
     state = 'executing',
     statement = entry.statement,
-    -- Already in the log. Showing it again is not running it again.
+    -- Restoring an archived result does not create another history entry.
     history = false,
     connection = entry.connection,
     dialect = entry.dialect,
@@ -184,6 +208,7 @@ end
 function M.toggle()
   local layout = require('sqmeow.ui.layout')
   if layout.anything_open() then
+    require('sqmeow.ui.relationships').close()
     require('sqmeow.ui.drawer').close()
     require('sqmeow.ui.result').close()
     return
