@@ -1,5 +1,5 @@
 --- Browse declared foreign keys one table at a time; never query selected row values.
---- Inspired by Squix's relationship exploration. No cardinality or many-to-many inference.
+--- No cardinality or many-to-many inference.
 
 local M = {}
 

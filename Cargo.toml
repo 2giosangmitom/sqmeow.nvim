@@ -25,13 +25,26 @@ bytes = "1"
 chrono = "0.4"
 uuid = "1"
 mysql_async = { version = "0.37", default-features = false, features = [
-  "minimal-rust", "rustls-tls", "ring", "tls12", "chrono", "bigdecimal", "client_ed25519",
+  "minimal-rust",
+  "rustls-tls",
+  "ring",
+  "tls12",
+  "chrono",
+  "bigdecimal",
+  "client_ed25519",
 ] }
-tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+tokio-postgres = { version = "0.7", features = [
+  "with-chrono-0_4",
+  "with-serde_json-1",
+  "with-uuid-1",
+] }
 tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"] }
 # Bundled SQLite supplies column-origin metadata consistently across release targets.
 rusqlite = { version = "0.39", default-features = false, features = [
-  "bundled", "column_decltype", "column_metadata", "hooks",
+  "bundled",
+  "column_decltype",
+  "column_metadata",
+  "hooks",
 ] }
 redis = { version = "1.7", default-features = false, features = [
   "tokio-rustls-comp",

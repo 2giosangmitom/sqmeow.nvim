@@ -22,13 +22,13 @@ keep them out of repeated runs unless you clean up first.
 
 Five entities have 20 records each immediately after `02_create`:
 
-| Entity | Data and relationships |
-| --- | --- |
-| `sqmeow_customers` | Names, emails, cities, active flags and nullable notes |
-| `sqmeow_products` | SKUs, categories, integer prices in cents and stock |
-| `sqmeow_orders` | Dates, statuses and totals; references customers |
+| Entity               | Data and relationships                                                  |
+| -------------------- | ----------------------------------------------------------------------- |
+| `sqmeow_customers`   | Names, emails, cities, active flags and nullable notes                  |
+| `sqmeow_products`    | SKUs, categories, integer prices in cents and stock                     |
+| `sqmeow_orders`      | Dates, statuses and totals; references customers                        |
 | `sqmeow_order_items` | Quantities, historical prices and discounts; references orders/products |
-| `sqmeow_payments` | Methods, amounts and settlement statuses; references orders |
+| `sqmeow_payments`    | Methods, amounts and settlement statuses; references orders             |
 
 Customers 1–8 have two orders, 9–12 have one, and 13–20 have none. Every
 order has one line item and one payment. Totals equal quantity × unit price
