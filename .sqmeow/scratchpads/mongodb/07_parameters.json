@@ -1,0 +1,5 @@
+{"find":"sqmeow_customers","filter":{"_id":":customer_id"}}
+
+{"find":"sqmeow_orders","filter":{"customer_id":":customer_id","total_cents":{"$gte":":min_total"}},"sort":{"_id":1}}
+
+{"find":"sqmeow_customers","filter":{"note":":note"},"projection":{"name":1,"note":1}}

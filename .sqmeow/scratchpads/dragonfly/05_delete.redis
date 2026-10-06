@@ -1,2 +1,4 @@
-DEL sqmeow:crud:3
-EXISTS sqmeow:crud:3
+DEL sqmeow:smoke:payments:20 sqmeow:smoke:order_items:20 sqmeow:smoke:orders:20
+EXISTS sqmeow:smoke:payments:20
+EXISTS sqmeow:smoke:order_items:20
+EXISTS sqmeow:smoke:orders:20

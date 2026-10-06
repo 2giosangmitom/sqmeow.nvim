@@ -1,6 +1,8 @@
-{
-  "update": "sqmeow_crud",
-  "updates": [
-    {"q": {"_id": 2}, "u": {"$set": {"score": 25, "note": "updated"}}, "multi": false}
-  ]
-}
+{"update":"sqmeow_customers","updates":[{"q":{"_id":2},"u":{"$set":{"active":1,"note":"updated smoke note"}},"multi":false,"upsert":false}]}
+{"find":"sqmeow_customers","filter":{"_id":2}}
+{"update":"sqmeow_products","updates":[{"q":{"_id":2},"u":{"$set":{"stock_qty":77}},"multi":false,"upsert":false}]}
+{"find":"sqmeow_products","filter":{"_id":2}}
+{"update":"sqmeow_orders","updates":[{"q":{"_id":2},"u":{"$set":{"status":"shipped","note":"priority delivery"}},"multi":false,"upsert":false}]}
+{"find":"sqmeow_orders","filter":{"_id":2}}
+{"update":"sqmeow_payments","updates":[{"q":{"_id":2},"u":{"$set":{"status":"settled","note":"manually verified"}},"multi":false,"upsert":false}]}
+{"find":"sqmeow_payments","filter":{"_id":2}}

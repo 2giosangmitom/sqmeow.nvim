@@ -1,1 +1,5 @@
-{"drop":"sqmeow_crud"}
+{"drop":"sqmeow_payments"}
+{"drop":"sqmeow_order_items"}
+{"drop":"sqmeow_orders"}
+{"drop":"sqmeow_products"}
+{"drop":"sqmeow_customers"}

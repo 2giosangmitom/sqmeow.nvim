@@ -1,1 +1,5 @@
-{"create":"sqmeow_crud"}
+{"create":"sqmeow_customers"}
+{"create":"sqmeow_products"}
+{"create":"sqmeow_orders"}
+{"create":"sqmeow_order_items"}
+{"create":"sqmeow_payments"}

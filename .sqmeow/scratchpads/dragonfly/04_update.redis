@@ -1,2 +1,8 @@
-HSET sqmeow:crud:2 score 25 note updated
-HGETALL sqmeow:crud:2
+HSET sqmeow:smoke:customers:2 active 1 note "updated smoke note"
+HSET sqmeow:smoke:products:2 stock_qty 77
+HSET sqmeow:smoke:orders:2 status shipped note "priority delivery"
+HSET sqmeow:smoke:payments:2 status settled note "manually verified"
+HGETALL sqmeow:smoke:customers:2
+HGETALL sqmeow:smoke:products:2
+HGETALL sqmeow:smoke:orders:2
+HGETALL sqmeow:smoke:payments:2

@@ -1,1 +1,13 @@
-{"find":"sqmeow_crud","filter":{},"sort":{"_id":1}}
+{"find":"sqmeow_customers","filter":{},"sort":{"_id":1}}
+
+{"find":"sqmeow_products","filter":{},"sort":{"_id":1}}
+
+{"find":"sqmeow_orders","filter":{},"sort":{"_id":1}}
+
+{"find":"sqmeow_order_items","filter":{},"sort":{"_id":1}}
+
+{"find":"sqmeow_payments","filter":{},"sort":{"_id":1}}
+
+{"aggregate":"sqmeow_orders","pipeline":[{"$match":{"total_cents":{"$gte":2000}}},{"$lookup":{"from":"sqmeow_customers","localField":"customer_id","foreignField":"_id","as":"customer"}},{"$unwind":"$customer"},{"$lookup":{"from":"sqmeow_order_items","localField":"_id","foreignField":"order_id","as":"items"}},{"$lookup":{"from":"sqmeow_payments","localField":"_id","foreignField":"order_id","as":"payments"}},{"$project":{"customer_name":"$customer.name","status":1,"total_cents":1,"items":1,"payments":1}},{"$sort":{"_id":1}}],"cursor":{}}
+
+{"aggregate":"sqmeow_orders","pipeline":[{"$group":{"_id":"$status","order_count":{"$sum":1},"total_cents":{"$sum":"$total_cents"}}},{"$sort":{"total_cents":-1}}],"cursor":{}}
