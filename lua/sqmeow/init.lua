@@ -1,34 +1,13 @@
 --- Browse databases, run queries, and edit results inside Neovim.
 ---
 --- The Lua plugin owns buffers and windows; a separate Rust engine owns database
---- connections and results. Install both with |sqmeow-installation|, then follow
+--- connections and results. See README.md for installation, then follow
 --- |sqmeow-quickstart|. Use |sqmeow-commands| for commands and |sqmeow-api| for Lua.
 ---@tag sqmeow.nvim
 ---@toc_entry Introduction
 
 --- Contents ~
 ---@toc
-
---- Installation ~
----
---- Requires Neovim 0.10+ and nui.nvim for the drawer, grid, and dialogs. A Nerd
---- Font supplies the default icons; glyphs can be replaced in |sqmeow-config|.
---- With lazy.nvim: >lua
----   {
----     '2giosangmitom/sqmeow.nvim',
----     version = '*',
----     dependencies = { 'MunifTanjim/nui.nvim' },
----     build = function() require('sqmeow').install() end,
----     opts = {},
----     cmd = 'Sqmeow',
----   }
---- <
---- The build hook downloads the matching engine release. To track master,
---- omit `version` and use `install('cargo')`; building requires the repository's
---- Rust toolchain and DuckDB. Run `:checkhealth sqmeow` after installation.
---- Installation methods and asynchronous callbacks: |sqmeow.install()|.
----@tag sqmeow-installation
----@toc_entry Installation
 
 --- Quick start ~
 ---

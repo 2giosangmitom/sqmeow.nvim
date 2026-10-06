@@ -20,7 +20,6 @@ local T = MiniTest.new_set({
     post_case = function()
       helpers.swap(sources.builtin.project, 'load', project_load)
       config.apply({})
-      vim.env.SQMEOW_CONNECTIONS = nil
       pcall(vim.fn.delete, scratch)
       state.reset()
     end,
@@ -35,11 +34,6 @@ end
 --- Save a connection to the scratch file.
 local function save(name, url)
   return file.add({ name = name, url = url }, { path = scratch })
-end
-
-T['ignores the removed environment connection source'] = function()
-  vim.env.SQMEOW_CONNECTIONS = vim.json.encode({ { name = 'ci', url = 'sqlite://ci.db' } })
-  eq(sources.load(), {})
 end
 
 T['file'] = MiniTest.new_set()

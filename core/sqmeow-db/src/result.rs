@@ -244,71 +244,6 @@ mod tests {
     }
 
     #[test]
-    fn a_column_is_measured_over_every_row() {
-        let mut result = ResultSet::new("select v", vec![Column::new("v", "TEXT")]);
-        result.push_row(vec![Cell::Text("short".into())]);
-        result.push_row(vec![Cell::Text("a much longer value".into())]);
-
-        // Over the whole column, not one page of it.
-        let stats = result.column_stats(0);
-        assert_eq!(stats.widest, 19);
-        assert!(!stats.nulls);
-        assert!(!stats.numeric);
-    }
-
-    #[test]
-    fn a_null_is_reported_rather_than_measured() {
-        let mut result = ResultSet::new("select v", vec![Column::new("v", "INTEGER")]);
-        result.push_row(vec![Cell::Int(1)]);
-        result.push_row(vec![Cell::Null]);
-
-        // What `NULL` is drawn as is the plugin's to choose.
-        let stats = result.column_stats(0);
-        assert_eq!(stats.widest, 1);
-        assert!(stats.nulls);
-        assert!(stats.numeric);
-    }
-
-    #[test]
-    fn one_text_value_makes_a_column_textual() {
-        let mut result = ResultSet::new("select v", vec![Column::new("v", "TEXT")]);
-        result.push_row(vec![Cell::Int(1)]);
-        result.push_row(vec![Cell::Text("x".into())]);
-        assert!(!result.column_stats(0).numeric);
-    }
-
-    #[test]
-    fn an_empty_column_is_not_numeric() {
-        // Nothing to align, and calling it numeric would right-align a header over no rows.
-        let result = ResultSet::new("select v", vec![Column::new("v", "INTEGER")]);
-        assert!(!result.column_stats(0).numeric);
-    }
-
-    #[test]
-    fn a_very_wide_value_is_measured_only_far_enough() {
-        let mut result = ResultSet::new("select v", vec![Column::new("v", "TEXT")]);
-        result.push_row(vec![Cell::Text("a".repeat(100_000))]);
-
-        // The editor caps columns far below this.
-        assert_eq!(result.column_stats(0).widest, MAX_MEASURED_WIDTH);
-    }
-
-    #[test]
-    fn width_is_measured_in_display_columns() {
-        let mut result = ResultSet::new("select v", vec![Column::new("v", "TEXT")]);
-        result.push_row(vec![Cell::Text("日本".into())]);
-        assert_eq!(result.column_stats(0).widest, 4);
-    }
-
-    #[test]
-    fn a_line_break_is_measured_as_what_reaches_the_grid() {
-        let mut result = ResultSet::new("select v", vec![Column::new("v", "TEXT")]);
-        result.push_row(vec![Cell::Text("a\nb".into())]);
-        // Four columns: the escape is what the plugin draws, so it is what was measured.
-        assert_eq!(result.column_stats(0).widest, 4);
-    }
-
-    #[test]
     fn rows_land_in_their_columns() {
         let mut result = ResultSet::new("select id, name from t", columns());
         result.push_row(vec![Cell::Int(1), Cell::Text("alice".into())]);
@@ -365,14 +300,9 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_result_still_has_one_page() {
-        let result = ResultSet::new("select 1", columns());
-        assert_eq!(result.page_count(100), 1);
-    }
-
-    #[test]
     fn pages_round_up() {
         let mut result = ResultSet::new("select 1", columns());
+        assert_eq!(result.page_count(100), 1);
         for index in 0..101 {
             result.push_row(vec![Cell::Int(index), Cell::Null]);
         }

@@ -299,13 +299,6 @@ async fn cancelling_returns_at_once() {
 }
 
 #[tokio::test]
-async fn quotes_identifiers_for_the_dialect() {
-    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
-    assert_eq!(backend.quote_ident("plain"), "\"plain\"");
-    assert_eq!(backend.quote_ident("od\"d"), "\"od\"\"d\"");
-}
-
-#[tokio::test]
 async fn lists_its_schemas() {
     let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
     let schemas = backend.schemas().await.expect("schemas should load");

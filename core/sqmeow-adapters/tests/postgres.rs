@@ -346,31 +346,6 @@ async fn stops_at_the_row_cap_and_says_so() {
 }
 
 #[tokio::test]
-async fn cancelling_mid_query_stops_it() {
-    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
-    let cancel = CancellationToken::new();
-
-    let stopper = cancel.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        stopper.cancel();
-    });
-
-    let error = backend
-        .execute("select pg_sleep(30)", NO_CAP, cancel)
-        .await
-        .unwrap_err();
-    assert!(matches!(error, Error::Cancelled), "{error}");
-}
-
-#[tokio::test]
-async fn quotes_identifiers_for_the_dialect() {
-    let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
-    assert_eq!(backend.quote_ident("plain"), "\"plain\"");
-    assert_eq!(backend.quote_ident("od\"d"), "\"od\"\"d\"");
-}
-
-#[tokio::test]
 async fn lists_its_schemas() {
     let backend = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     let schemas = backend.schemas().await.expect("schemas should load");

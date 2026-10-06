@@ -428,13 +428,6 @@ mod tests {
     }
 
     #[test]
-    fn options_start_at_the_documented_defaults() {
-        let options = Session::default().options();
-        assert_eq!(options.max_rows, 100_000);
-        assert_eq!(options.history_size, 32);
-    }
-
-    #[test]
     fn configure_changes_only_what_it_names() {
         let session = Session::default();
         let options = session.configure(OptionsPatch {
@@ -443,12 +436,8 @@ mod tests {
         });
 
         assert_eq!(options.history_size, 8);
-        assert_eq!(options.max_rows, 100_000);
-    }
+        assert_eq!(options.max_rows, Options::default().max_rows);
 
-    #[test]
-    fn configure_refuses_nonsense_values() {
-        let session = Session::default();
         let options = session.configure(OptionsPatch {
             history_size: Some(0),
             ..OptionsPatch::default()

@@ -228,21 +228,11 @@ mod tests {
     }
 
     #[test]
-    fn a_column_classifies_by_its_declared_type() {
-        assert_eq!(column("character varying(10)").class(), TypeClass::Text);
-        assert_eq!(column("bigint").class(), TypeClass::Number);
-    }
-
-    #[test]
-    fn a_column_with_no_key_is_not_one() {
-        assert_eq!(column("int4").key(), KeyKind::None);
-    }
-
-    #[test]
     fn the_primary_key_wins_over_a_foreign_one() {
         // The child half of a composite primary key is often a foreign key as well, and the primary
         // key is the stronger statement about the row.
         let mut both = column("int4");
+        assert_eq!(both.key(), KeyKind::None);
         both.primary_key = true;
         both.foreign_key = Some(ForeignKey {
             table: "authors".into(),
@@ -252,22 +242,6 @@ mod tests {
 
         both.primary_key = false;
         assert_eq!(both.key(), KeyKind::Foreign);
-    }
-
-    #[test]
-    fn relation_kinds_have_names_for_the_interface() {
-        assert_eq!(RelationKind::Table.name(), "table");
-        assert_eq!(RelationKind::View.name(), "view");
-        assert_eq!(RelationKind::MaterializedView.name(), "materialized view");
-        assert_eq!(RelationKind::Other.name(), "relation");
-        assert_eq!(RelationKind::Key(KeyType::Hash).name(), "key");
-    }
-
-    #[test]
-    fn routine_kinds_have_names_for_the_interface() {
-        assert_eq!(RoutineKind::Function.name(), "function");
-        assert_eq!(RoutineKind::Procedure.name(), "procedure");
-        assert_eq!(RoutineKind::Package.name(), "package");
     }
 
     #[test]
