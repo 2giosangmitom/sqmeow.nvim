@@ -12,13 +12,13 @@ serde_json.workspace = true
 sqlparser.workspace = true
 unicode-width.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
 tokio-util.workspace = true
-tracing.workspace = true
 polars = { version = "0.55.2", default-features = false, features = [
-  "sql",
   "lazy",
   "strings",
-  "csv",
-  "json",
 ] }
+# Enable IO and SQL features directly: the facade's CSV/JSON features also
+# enable the streaming engine, which is not used by in-memory views.
+polars-io = { version = "0.55.2", default-features = false, features = ["csv", "json"] }
+# Preserve SQL JSON expressions without enabling streaming.
+polars-sql = { version = "0.55.2", default-features = false, features = ["json"] }

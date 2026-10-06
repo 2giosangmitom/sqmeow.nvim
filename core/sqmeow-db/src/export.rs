@@ -4,9 +4,8 @@ use crate::adapter::Dialect;
 use crate::edit::{Source, literal};
 use crate::result::ResultSet;
 use crate::value::Cell;
-use polars::prelude::{
-    Column as PolarsColumn, CsvWriter, DataFrame, JsonFormat, JsonWriter, SerWriter,
-};
+use polars::prelude::{Column as PolarsColumn, DataFrame};
+use polars_io::prelude::{CsvWriter, JsonFormat, JsonWriter, SerWriter};
 
 /// Describes the format an export is written in.
 #[derive(Debug, Clone, PartialEq, Eq)]

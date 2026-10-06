@@ -2,7 +2,7 @@
 //! frame as an ordinary column; no Polars value is written back to the retained result.
 
 use polars::prelude::{Column, DataFrame, DataType, Expr, IntoLazy, SortMultipleOptions, col, lit};
-use polars::sql::SQLContext;
+use polars_sql::SQLContext;
 use sqlparser::ast::{SetExpr, Statement, Visit, Visitor};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
