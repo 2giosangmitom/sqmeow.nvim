@@ -288,7 +288,7 @@ Thanks to these projects for database workflow ideas:
 - [vim-dadbod](https://github.com/tpope/vim-dadbod) for running database queries from editor buffers and using URLs for connections.
 - [vim-dadbod-ui](https://github.com/kristijanhusak/vim-dadbod-ui) for its database drawer, schema browsing, and saved queries.
 - [nvim-dbee](https://github.com/kndndrj/nvim-dbee) for the drawer/editor/result layout and the separate database backend.
-- [squix](https://github.com/eduardofuncao/squix) for its terminal result table, in-place editing, query library, and export workflow.
+- [squix](https://github.com/eduardofuncao/squix) for ideas on parameterized queries, keymaps, and relationship exploration.
 
 ## Contributing
 
