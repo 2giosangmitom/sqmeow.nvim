@@ -19,6 +19,7 @@ use sqmeow_db::node::RoutineNode;
 use sqmeow_db::node::SchemaNode;
 use sqmeow_db::result::Column;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::Value;
 use sqmeow_db::value::Cell;
 use tokio::io::AsyncBufReadExt;
 use tokio_util::sync::CancellationToken;
@@ -96,14 +97,32 @@ impl ClickHouseAdapter {
             .collect()
     }
 
-    async fn read(&self, statement: &str, max_rows: usize, query_id: &str) -> Result<ResultSet> {
+    async fn read(
+        &self,
+        statement: &str,
+        values: &[Value],
+        max_rows: usize,
+        query_id: &str,
+    ) -> Result<ResultSet> {
         let started = Instant::now();
-        let cursor = self
+        let mut query = self
             .client
             .query_raw(statement)
-            .with_setting("query_id", query_id)
-            .fetch_bytes(FORMAT)
-            .map_err(Error::driver)?;
+            .with_setting("query_id", query_id);
+        // The compiler assigns one name per unique parameter, in first-use order.
+        // `param` sends HTTP param_<name> settings, never interpolating SQL. Pass
+        // scalars directly: the SDK escapes unquoted strings and writes NULL as \N.
+        for (index, value) in values.iter().enumerate() {
+            let name = format!("sqmeow_p{}", index + 1);
+            query = match value {
+                Value::Null(_) => query.param(&name, None::<&str>),
+                Value::Text(value) => query.param(&name, value),
+                Value::Int(value) => query.param(&name, *value),
+                Value::Float(value) => query.param(&name, *value),
+                Value::Bool(value) => query.param(&name, *value),
+            };
+        }
+        let cursor = query.fetch_bytes(FORMAT).map_err(Error::driver)?;
         let mut lines = cursor.lines();
         let mut next = async || -> Result<Option<Vec<Option<String>>>> {
             let Some(line) = lines.next_line().await.map_err(Error::driver)? else {
@@ -181,6 +200,16 @@ impl Adapter for ClickHouseAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
+        self.execute_bound(statement, &[], max_rows, cancel).await
+    }
+
+    async fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let query_id = format!(
             "sqmeow-{}-{}",
@@ -193,7 +222,7 @@ impl Adapter for ClickHouseAdapter {
                 self.kill(&query_id).await;
                 Err(Error::Cancelled)
             }
-            result = self.read(statement, max_rows, &query_id) => result,
+            result = self.read(statement, values, max_rows, &query_id) => result,
         }
     }
 

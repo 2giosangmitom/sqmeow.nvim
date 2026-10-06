@@ -6,6 +6,7 @@ use sqmeow_db::edit::Changes;
 use sqmeow_db::edit::Source;
 use sqmeow_db::node::RelationKind;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::{Kind, Value};
 use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
@@ -55,6 +56,97 @@ async fn run(backend: &Backend, statement: &str) -> ResultSet {
 
 fn names(result: &ResultSet) -> Vec<&str> {
     result.columns().iter().map(|c| c.name.as_str()).collect()
+}
+
+#[tokio::test]
+async fn native_parameters_preserve_types_and_explicit_null() {
+    let backend = fresh(&server!(), "bound_types").await;
+    for (value, expected, kind) in [
+        (Value::Int(42), Cell::Int(42), "int"),
+        (Value::Float(1.5), Cell::Float(1.5), "float"),
+        (Value::Bool(true), Cell::Bool(true), "bool"),
+        (Value::Text("42".into()), Cell::Text("42".into()), "string"),
+    ] {
+        let result = backend
+            .execute_bound(
+                "RETURN $sqmeow_p1",
+                &[value],
+                NO_CAP,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.cell(0, 0), Some(&expected));
+        assert_eq!(result.columns()[0].type_name, kind);
+    }
+    for kind in [Kind::Text, Kind::Int, Kind::Float, Kind::Bool] {
+        let result = backend
+            .execute_bound(
+                "RETURN [$sqmeow_p1 = NULL, $sqmeow_p1 = NONE]",
+                &[Value::Null(kind)],
+                NO_CAP,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.cell(0, 0), Some(&Cell::Bool(true)));
+        assert_eq!(result.cell(1, 0), Some(&Cell::Bool(false)));
+    }
+}
+
+#[tokio::test]
+async fn native_parameters_repeat_without_interpolating_text() {
+    let backend = fresh(&server!(), "bound_text").await;
+    run(&backend, "CREATE person:alice SET name = 'Alice'").await;
+    let text = "'; DELETE person; RETURN 'injected'; -- :name $other";
+    let result = backend
+        .execute_bound(
+            "RETURN [$sqmeow_p1, $sqmeow_p1]",
+            &[Value::Text(text.into())],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.row_count(), 2);
+    for row in 0..2 {
+        assert_eq!(result.cell(row, 0), Some(&Cell::Text(text.into())));
+    }
+    assert_eq!(run(&backend, "SELECT * FROM person").await.row_count(), 1);
+}
+
+#[tokio::test]
+async fn native_parameters_keep_row_caps_provenance_and_cancellation() {
+    let backend = fresh(&server!(), "bound_cap").await;
+    run(
+        &backend,
+        "CREATE person:alice SET age = 3; CREATE person:bob SET age = 4",
+    )
+    .await;
+    let result = backend
+        .execute_bound(
+            "SELECT * FROM person WHERE age >= $sqmeow_p1 ORDER BY age",
+            &[Value::Int(3)],
+            1,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.row_count(), 1);
+    assert!(result.is_truncated());
+    assert!(matches!(result.source(), Some(Source::Collection { name, .. }) if name == "person"));
+
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let error = backend
+        .execute_bound("RETURN $sqmeow_p1", &[Value::Int(1)], NO_CAP, cancel)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, sqmeow_db::error::Error::Cancelled));
+    assert_eq!(
+        run(&backend, "RETURN 1").await.cell(0, 0),
+        Some(&Cell::Int(1))
+    );
 }
 
 #[tokio::test]

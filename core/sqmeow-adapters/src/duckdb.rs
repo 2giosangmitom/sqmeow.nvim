@@ -20,6 +20,7 @@ use sqmeow_db::node::RoutineNode;
 use sqmeow_db::node::SchemaNode;
 use sqmeow_db::result::Column;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::Value as ParameterValue;
 use sqmeow_db::types::ForeignKey;
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::value::Cell;
@@ -198,7 +199,32 @@ impl Adapter for DuckDbAdapter {
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
         let (statement, origin) = (statement.to_owned(), origin.to_owned());
-        let work = self.run(move |connection| read(connection, &statement, &origin, max_rows));
+        let work = self.run(move |connection| read(connection, &statement, &origin, &[], max_rows));
+        self.interrupting(work, &cancel)
+            .await
+            .unwrap_or(Err(Error::Cancelled))
+    }
+
+    async fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[ParameterValue],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        let statement = statement.to_owned();
+        let values: Vec<Value> = values
+            .iter()
+            .map(|value| match value {
+                ParameterValue::Null(_) => Value::Null,
+                ParameterValue::Text(value) => Value::Text(value.clone()),
+                ParameterValue::Int(value) => Value::BigInt(*value),
+                ParameterValue::Float(value) => Value::Double(*value),
+                ParameterValue::Bool(value) => Value::Boolean(*value),
+            })
+            .collect();
+        let work =
+            self.run(move |connection| read(connection, &statement, &statement, &values, max_rows));
         self.interrupting(work, &cancel)
             .await
             .unwrap_or(Err(Error::Cancelled))
@@ -446,12 +472,20 @@ fn rows<T, P: duckdb::Params>(
 }
 
 /// Run one statement and read up to `max_rows` of its rows, describing it through `origin`.
-fn read(connection: &Connection, sql: &str, origin: &str, max_rows: usize) -> Result<ResultSet> {
+fn read(
+    connection: &Connection,
+    sql: &str,
+    origin: &str,
+    values: &[Value],
+    max_rows: usize,
+) -> Result<ResultSet> {
     let started = Instant::now();
     // Before the query, since another query on the connection would end its stream of rows.
     let described = describe(connection, origin);
     let mut statement = connection.prepare(sql).map_err(Error::driver)?;
-    let mut rows = statement.query([]).map_err(Error::driver)?;
+    let mut rows = statement
+        .query(duckdb::params_from_iter(values))
+        .map_err(Error::driver)?;
     let mut columns = rows.as_ref().map(result_columns).unwrap_or_default();
     let source = described
         .filter(|described| described.origins.len() == columns.len())

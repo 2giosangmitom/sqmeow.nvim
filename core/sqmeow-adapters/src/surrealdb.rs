@@ -21,6 +21,7 @@ use sqmeow_db::node::RoutineNode;
 use sqmeow_db::node::SchemaNode;
 use sqmeow_db::result::Column;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::Value as ParameterValue;
 use sqmeow_db::value::Cell;
 use surrealdb::Surreal;
 use surrealdb::engine::remote::ws::{Client, Ws, Wss};
@@ -186,7 +187,12 @@ impl SurrealAdapter {
         response.take::<Value>(0).map_err(Error::driver)
     }
 
-    async fn read(&self, statement: &str, max_rows: usize) -> Result<ResultSet> {
+    async fn read(
+        &self,
+        statement: &str,
+        values: &[ParameterValue],
+        max_rows: usize,
+    ) -> Result<ResultSet> {
         let started = Instant::now();
         // The SDK keeps its own namespace and database, which a `USE` sent as a query leaves alone.
         if let Some((namespace, database)) = use_target(statement) {
@@ -205,7 +211,11 @@ impl SurrealAdapter {
             return Ok(result);
         }
 
-        let mut response = self.db.query(statement).await.map_err(Error::driver)?;
+        let mut query = self.db.query(statement);
+        for (index, value) in values.iter().enumerate() {
+            query = query.bind((format!("sqmeow_p{}", index + 1), bound_value(value)));
+        }
+        let mut response = query.await.map_err(Error::driver)?;
         let count = response.num_statements();
         let mut errors = response.take_errors();
         if let Some(error) = first_error(&mut errors) {
@@ -263,7 +273,21 @@ impl Adapter for SurrealAdapter {
         tokio::select! {
             biased;
             () = cancel.cancelled() => Err(Error::Cancelled),
-            result = self.read(statement, max_rows) => result,
+            result = self.read(statement, &[], max_rows) => result,
+        }
+    }
+
+    async fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[ParameterValue],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(Error::Cancelled),
+            result = self.read(statement, values, max_rows) => result,
         }
     }
 
@@ -446,6 +470,17 @@ impl Adapter for SurrealAdapter {
 
     async fn close(&self) {
         let _ = self.db.invalidate().await;
+    }
+}
+
+/// Native SDK values: `NULL` is distinct from SurrealQL's absent value, `NONE`.
+fn bound_value(value: &ParameterValue) -> Value {
+    match value {
+        ParameterValue::Null(_) => Value::Null,
+        ParameterValue::Text(text) => Value::String(text.clone()),
+        ParameterValue::Int(number) => Value::Number(Number::Int(*number)),
+        ParameterValue::Float(number) => Value::Number(Number::Float(*number)),
+        ParameterValue::Bool(flag) => Value::Bool(*flag),
     }
 }
 
@@ -892,6 +927,29 @@ mod tests {
         object.insert("name", name);
         object.insert("id", RecordId::new("person", id));
         Value::Object(object)
+    }
+
+    #[test]
+    fn bound_values_keep_native_types_and_null_is_not_none() {
+        use sqmeow_db::sql::parameters::Kind;
+
+        for kind in [Kind::Text, Kind::Int, Kind::Float, Kind::Bool] {
+            assert_eq!(bound_value(&ParameterValue::Null(kind)), Value::Null);
+        }
+        assert_eq!(
+            bound_value(&ParameterValue::Int(42)),
+            Value::Number(Number::Int(42))
+        );
+        assert_eq!(
+            bound_value(&ParameterValue::Float(1.5)),
+            Value::Number(Number::Float(1.5))
+        );
+        assert_eq!(bound_value(&ParameterValue::Bool(true)), Value::Bool(true));
+        let text = "'; DELETE person; -- :name $other";
+        assert_eq!(
+            bound_value(&ParameterValue::Text(text.into())),
+            Value::String(text.into())
+        );
     }
 
     fn people() -> ResultSet {

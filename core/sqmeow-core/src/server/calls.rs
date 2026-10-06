@@ -378,11 +378,18 @@ impl Core {
                 if let Some(bound) = bound.get(index).filter(|bound| !bound.values.is_empty()) {
                     connection
                         .backend
-                        .execute_bound(&bound.sql, &bound.values, options.max_rows, running.token())
+                        .execute_bound_results(
+                            &bound.sql,
+                            &bound.values,
+                            options.max_rows,
+                            running.token(),
+                        )
                         .await
-                        .map(|mut result| {
-                            result.set_statement(&statement.sql);
-                            vec![result]
+                        .map(|mut results| {
+                            for result in &mut results {
+                                result.set_statement(&statement.sql);
+                            }
+                            results
                         })
                 } else {
                     connection

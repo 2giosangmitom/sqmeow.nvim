@@ -672,6 +672,46 @@ fn word_end(chars: &[char], index: usize) -> usize {
 }
 
 impl Adapter for OracleAdapter {
+    async fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[sqmeow_db::sql::parameters::Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        Ok(self
+            .execute_bound_results(statement, values, max_rows, cancel)
+            .await?
+            .pop()
+            .unwrap_or_else(|| ResultSet::new(statement, Vec::new())))
+    }
+
+    async fn execute_bound_results(
+        &self,
+        statement: &str,
+        values: &[sqmeow_db::sql::parameters::Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        let (statement, values, schema) = (
+            statement.to_owned(),
+            values.to_vec(),
+            self.default_schema.clone(),
+        );
+        self.run(&cancel, move |connection| {
+            if matches!(
+                sqmeow_db::sql::first_word(&statement).as_str(),
+                "begin" | "declare" | "call"
+            ) {
+                run_plsql_bound(connection, &schema, &statement, max_rows, &values)
+            } else {
+                run_bound_statement(connection, &schema, &statement, &values, max_rows)
+                    .map(|result| vec![result])
+            }
+        })
+        .await
+    }
+
     fn dialect(&self) -> Dialect {
         Dialect::Oracle
     }
@@ -1366,6 +1406,61 @@ fn bare_transaction(statement: &str) -> Option<bool> {
 
 /// Run one statement: `COMMIT` and `ROLLBACK` through the API, a query
 /// through `query`, and anything else through `execute`.
+fn oracle_parameter(value: &sqmeow_db::sql::parameters::Value) -> &dyn oracledb::ToDbValue {
+    use sqmeow_db::sql::parameters::{Kind, Value};
+    match value {
+        Value::Text(value) => value,
+        Value::Int(value) => value,
+        Value::Float(value) => value,
+        Value::Bool(value) => value,
+        Value::Null(Kind::Auto | Kind::Text) => &None::<String>,
+        Value::Null(Kind::Int) => &None::<i64>,
+        Value::Null(Kind::Float) => &None::<f64>,
+        Value::Null(Kind::Bool) => &None::<bool>,
+    }
+}
+
+fn run_bound_statement(
+    connection: &oracledb::Connection,
+    schema: &str,
+    statement: &str,
+    values: &[sqmeow_db::sql::parameters::Value],
+    max_rows: usize,
+) -> Result<ResultSet> {
+    if values.is_empty() {
+        return run_statement(connection, schema, statement, statement, max_rows);
+    }
+    if explain_inner(statement).is_some() || stores_plsql(statement) {
+        return Err(Error::driver(
+            "bound EXPLAIN and stored-program definitions are not supported",
+        ));
+    }
+    let started = Instant::now();
+    let names: Vec<String> = (1..=values.len()).map(|index| index.to_string()).collect();
+    let parameters: Vec<_> = names
+        .iter()
+        .zip(values)
+        .map(|(name, value)| (name.as_str(), oracle_parameter(value)))
+        .collect();
+    if is_query(statement) {
+        let cursor = connection
+            .query_named(statement, &parameters)
+            .map_err(Error::driver)?;
+        return read_cursor(
+            connection, schema, cursor, statement, statement, max_rows, started,
+        );
+    }
+    let affected = connection
+        .execute_named(statement, &parameters)
+        .map_err(Error::driver)?
+        .rows_affected();
+    connection.commit().map_err(Error::driver)?;
+    let mut result = ResultSet::new(statement, Vec::new());
+    result.set_affected(affected);
+    result.set_elapsed(started.elapsed());
+    Ok(result)
+}
+
 fn run_statement(
     connection: &oracledb::Connection,
     default_schema: &str,
@@ -1479,6 +1574,16 @@ fn run_plsql(
     statement: &str,
     max_rows: usize,
 ) -> Result<Vec<ResultSet>> {
+    run_plsql_bound(connection, default_schema, statement, max_rows, &[])
+}
+
+fn run_plsql_bound(
+    connection: &oracledb::Connection,
+    default_schema: &str,
+    statement: &str,
+    max_rows: usize,
+    values: &[sqmeow_db::sql::parameters::Value],
+) -> Result<Vec<ResultSet>> {
     let started = Instant::now();
     let mut sql = statement.trim_end().to_owned();
     if sqmeow_db::sql::first_word(statement) == "call" {
@@ -1489,33 +1594,49 @@ fn run_plsql(
     // Cached OUT-cursor statements can leave this driver stuck after a
     // returned result followed by a PL/SQL exception. Keep these uncached.
     let mut opened = {
-        let mut statement = connection
-            .statement(
-                "declare
+        let bindings = (1..=values.len())
+            .map(|index| format!("dbms_sql.bind_variable(c, ':{index}', :sqmeow_v{index});"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let bridge = format!(
+            "declare
            c integer;
            n integer;
          begin
            c := dbms_sql.open_cursor(treat_as_client_for_results => true);
-           dbms_sql.parse(c, :source, dbms_sql.native);
+            dbms_sql.parse(c, :source, dbms_sql.native);
+            {bindings}
            n := dbms_sql.execute(c);
            :parent := c;
          exception when others then
            if dbms_sql.is_open(c) then dbms_sql.close_cursor(c); end if;
            raise;
-         end;",
-            )
+          end;"
+        );
+        let mut statement = connection
+            .statement(&bridge)
             .map_err(Error::driver)?
             .exclude_from_cache()
             .build()
             .map_err(Error::driver)?;
+        let names: Vec<_> = (1..=values.len())
+            .map(|index| format!("sqmeow_v{index}"))
+            .collect();
+        let mut parameters = vec![
+            ("source", &sql as &dyn oracledb::ToDbValue),
+            (
+                "parent",
+                &oracledb::DB_TYPE_NUMBER as &dyn oracledb::ToDbValue,
+            ),
+        ];
+        parameters.extend(
+            names
+                .iter()
+                .zip(values)
+                .map(|(name, value)| (name.as_str(), oracle_parameter(value))),
+        );
         statement
-            .execute_named(&[
-                ("source", &sql as &dyn oracledb::ToDbValue),
-                (
-                    "parent",
-                    &oracledb::DB_TYPE_NUMBER as &dyn oracledb::ToDbValue,
-                ),
-            ])
+            .execute_named(&parameters)
             .map_err(Error::driver)?
     };
     let id: i64 = opened.out_bind_data().get(0).map_err(Error::driver)?;

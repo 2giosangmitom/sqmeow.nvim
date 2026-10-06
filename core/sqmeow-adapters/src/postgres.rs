@@ -564,7 +564,9 @@ impl SqlxAdapter for PostgresAdapter {
         let types: Vec<_> = values
             .iter()
             .map(|value| match value {
-                Value::Text(_) | Value::Null(Kind::Text) => <String as Type<Postgres>>::type_info(),
+                Value::Text(_) | Value::Null(Kind::Auto | Kind::Text) => {
+                    <String as Type<Postgres>>::type_info()
+                }
                 Value::Int(_) | Value::Null(Kind::Int) => <i64 as Type<Postgres>>::type_info(),
                 Value::Float(_) | Value::Null(Kind::Float) => <f64 as Type<Postgres>>::type_info(),
                 Value::Bool(_) | Value::Null(Kind::Bool) => <bool as Type<Postgres>>::type_info(),

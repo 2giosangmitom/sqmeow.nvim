@@ -222,6 +222,16 @@ impl Backend {
         dispatch!(self, adapter => adapter.execute_bound(statement, values, max_rows, cancel).await)
     }
 
+    pub async fn execute_bound_results(
+        &self,
+        statement: &str,
+        values: &[sqmeow_db::sql::parameters::Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        dispatch!(self, adapter => adapter.execute_bound_results(statement, values, max_rows, cancel).await)
+    }
+
     /// Run a query wrapping `origin`, tracing its columns to tables through `origin`.
     pub async fn execute_wrapped(
         &self,

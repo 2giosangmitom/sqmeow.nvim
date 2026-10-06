@@ -282,13 +282,15 @@ beyond the cap. `query.timeout_ms` cancels long-running work; 0 disables it.
 <C-c> or `:Sqmeow cancel` requests cancellation manually.
 
 Parameterized scratchpads ~
-SQLite, PostgreSQL/CockroachDB and MySQL/MariaDB accept named values such as
+SQL/CQL adapters and SurrealDB accept named values such as
 `:user_id`. The usual statement, selection and buffer actions prompt once
 per distinct name. Cancel any prompt to leave the current result and edits
 alone. Parameter names are case-sensitive and contain ASCII letters, digits
 and underscores, beginning with a letter or underscore.
 
-Names default to text. Header comments declare a type and optional default: >sql
+No declaration is needed: input integers, finite decimals and true/false bind
+as native numbers/booleans; other input binds as text. Use a JSON string such
+as `"42"` to force text. Header comments optionally declare a type and default: >sql
   -- @param user_id int = 42
   -- @param status text = active
   SELECT * FROM users WHERE id = :user_id AND status = :status;
@@ -308,10 +310,31 @@ Lua callers can skip prompts with raw input strings: >lua
 <
 An empty parameter map uses declared defaults; missing required values fail
 before any statement runs. Live-result refreshes reuse the values in memory.
-Supplied values are not saved with query history, but returned rows may still
-be archived. After restart or result eviction, rerun from the scratchpad to
+Supplied values are not saved as history parameters, but returned rows and
+edit-source metadata (including Redis keys) may be archived. After restart
+or result eviction, rerun from the scratchpad to
 enter values again. Keep secrets out of defaults, which are part of the SQL.
-Other adapters do not yet support parameterized scratchpads.
+Unannotated NULL uses a text null; declare the type when the SQL context needs
+a numeric/boolean null. Driver-specific value limits still apply. Oracle
+treats empty strings as NULL, following its own database semantics.
+Oracle bound EXPLAIN and stored-program definitions are not yet supported;
+ordinary bound SQL and anonymous PL/SQL blocks use native named binds.
+
+MongoDB uses whole JSON string values, not raw JSON substitution: >json
+  {"find":"users","filter":{"name":":name","age":{"$gte":":age"}}}
+<
+Values bind as BSON scalars; command, database, collection and field names
+cannot be parameters. Aggregation expression operands require `$literal`,
+for example `{"$project":{"value":{"$literal":":value"}}}`. Executable
+JavaScript and structural stage options cannot be parameters.
+Bind ordinary scalars, not fields inside Extended JSON type wrappers.
+Redis/Valkey/Dragonfly use whole unquoted arguments: >
+  HSET user:1 name :name
+<
+A supplied value stays one Redis argument even with spaces or newlines.
+Quoted `':name'` stays literal. Redis has no NULL command argument; use empty
+text instead. Redis script bodies/subcommands cannot be bound parameters.
+Neither adapter changes or reparses the user's query source.
 
 Filtering and sorting ~
 `gf` opens WHERE and `go` opens ORDER BY above the grid. Enter expressions
