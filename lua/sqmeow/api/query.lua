@@ -90,7 +90,8 @@ function M.execute(sql, opts)
           return
         end
         vim.ui.input({
-          prompt = ('%s (%s): '):format(definition.name, definition.kind),
+          prompt = definition.kind == 'auto' and (definition.name .. ': ')
+            or ('%s (%s): '):format(definition.name, definition.kind),
           default = definition.default or '',
         }, function(value)
           if value == nil then

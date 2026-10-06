@@ -2,13 +2,17 @@
 
 use std::collections::HashMap;
 
-use sqlparser::dialect::{GenericDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+use sqlparser::dialect::{
+    ClickHouseDialect, DuckDbDialect, GenericDialect, MsSqlDialect, MySqlDialect, OracleDialect,
+    PostgreSqlDialect, SQLiteDialect,
+};
 use sqlparser::tokenizer::{Location, Token, TokenWithSpan, Tokenizer, Whitespace};
 
 use crate::adapter::Dialect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
+    Auto,
     Text,
     Int,
     Float,
@@ -18,6 +22,7 @@ pub enum Kind {
 impl Kind {
     pub fn name(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::Text => "text",
             Self::Int => "int",
             Self::Float => "float",
@@ -53,22 +58,6 @@ pub fn describe(
     source: &str,
     statements: &[&str],
 ) -> Result<Vec<Parameter>, String> {
-    // Redis/JSON/SurrealQL/CQL punctuation is not SQL parameter syntax.
-    if matches!(
-        dialect,
-        Dialect::Redis | Dialect::MongoDb | Dialect::SurrealDb | Dialect::Scylla
-    ) {
-        if source
-            .lines()
-            .any(|line| line.trim_start().starts_with("-- @param "))
-        {
-            return Err(format!(
-                "Parameters are not supported for {}",
-                dialect.name()
-            ));
-        }
-        return Ok(Vec::new());
-    }
     if !source.contains(':') && !source.contains("@param") {
         return Ok(Vec::new());
     }
@@ -138,7 +127,7 @@ pub fn describe(
     for name in names {
         result.push(definitions.remove(&name).unwrap_or(Parameter {
             name,
-            kind: Kind::Text,
+            kind: Kind::Auto,
             default: None,
         }));
     }
@@ -152,6 +141,33 @@ pub fn compile(
     values: &HashMap<String, String>,
 ) -> Result<Bound, String> {
     let occurrences = discover(dialect, sql)?;
+    if matches!(dialect, Dialect::Redis | Dialect::MongoDb) {
+        let mut bound = Bound {
+            sql: sql.to_owned(),
+            values: Vec::new(),
+        };
+        let mut names = Vec::new();
+        for (_, _, name) in occurrences {
+            if names.contains(&name) {
+                continue;
+            }
+            let parameter = parameters
+                .iter()
+                .find(|parameter| parameter.name == name)
+                .ok_or_else(|| format!("Unknown parameter: {name}"))?;
+            let raw = values
+                .get(&name)
+                .or(parameter.default.as_ref())
+                .ok_or_else(|| format!("Missing value for parameter: {name}"))?;
+            let value = parse(parameter, raw)?;
+            if dialect == Dialect::Redis && matches!(value, Value::Null(_)) {
+                return Err(format!("Redis command arguments cannot be NULL: {name}"));
+            }
+            bound.values.push(value);
+            names.push(name);
+        }
+        return Ok(bound);
+    }
     let mut bound = Bound {
         sql: String::with_capacity(sql.len()),
         values: Vec::new(),
@@ -180,13 +196,40 @@ pub fn compile(
             indexes.insert(name, index);
             index
         };
-        if dialect == Dialect::Postgres {
-            bound.sql.push_str(&format!("${index}"));
-        } else {
-            bound.sql.push('?');
-            // Every question mark is a distinct positional bind.
-            if repeated {
-                bound.values.push(bound.values[index - 1].clone());
+        match dialect {
+            Dialect::Postgres => bound.sql.push_str(&format!("${index}")),
+            Dialect::MsSql => bound.sql.push_str(&format!("@P{index}")),
+            Dialect::Oracle => bound.sql.push_str(&format!(":{index}")),
+            Dialect::SurrealDb => bound.sql.push_str(&format!("$sqmeow_p{index}")),
+            Dialect::ClickHouse => {
+                let (kind, nullable) = match &bound.values[index - 1] {
+                    Value::Text(_) => ("String", false),
+                    Value::Int(_) => ("Int64", false),
+                    Value::Float(_) => ("Float64", false),
+                    Value::Bool(_) => ("Bool", false),
+                    Value::Null(kind) => (
+                        match kind {
+                            Kind::Auto | Kind::Text => "String",
+                            Kind::Int => "Int64",
+                            Kind::Float => "Float64",
+                            Kind::Bool => "Bool",
+                        },
+                        true,
+                    ),
+                };
+                let kind = if nullable {
+                    format!("Nullable({kind})")
+                } else {
+                    kind.to_owned()
+                };
+                bound.sql.push_str(&format!("{{sqmeow_p{index}:{kind}}}"));
+            }
+            _ => {
+                bound.sql.push('?');
+                // Every question mark is a distinct positional bind.
+                if repeated {
+                    bound.values.push(bound.values[index - 1].clone());
+                }
             }
         }
         cursor = end;
@@ -198,7 +241,11 @@ pub fn compile(
 fn parse(parameter: &Parameter, raw: &str) -> Result<Value, String> {
     let trimmed = raw.trim();
     if trimmed.eq_ignore_ascii_case("null") {
-        return Ok(Value::Null(parameter.kind));
+        return Ok(Value::Null(if parameter.kind == Kind::Auto {
+            Kind::Text
+        } else {
+            parameter.kind
+        }));
     }
     let invalid = || {
         format!(
@@ -208,6 +255,26 @@ fn parse(parameter: &Parameter, raw: &str) -> Result<Value, String> {
         )
     };
     match parameter.kind {
+        Kind::Auto => {
+            if trimmed.starts_with('"') {
+                return serde_json::from_str::<String>(trimmed)
+                    .map(Value::Text)
+                    .map_err(|_| invalid());
+            }
+            if trimmed == "true" || trimmed == "false" {
+                return Ok(Value::Bool(trimmed == "true"));
+            }
+            if let Ok(value) = trimmed.parse::<i64>() {
+                return Ok(Value::Int(value));
+            }
+            if trimmed.contains(['.', 'e', 'E'])
+                && let Ok(value) = trimmed.parse::<f64>()
+                && value.is_finite()
+            {
+                return Ok(Value::Float(value));
+            }
+            Ok(Value::Text(raw.to_owned()))
+        }
         Kind::Text if trimmed.starts_with('"') => serde_json::from_str::<String>(trimmed)
             .map(Value::Text)
             .map_err(|_| invalid()),
@@ -239,6 +306,10 @@ fn tokenizer(dialect: Dialect, sql: &str) -> Tokenizer<'_> {
         Dialect::Sqlite => &SQLiteDialect {},
         Dialect::Postgres => &PostgreSqlDialect {},
         Dialect::MySql => &MySqlDialect {},
+        Dialect::DuckDb => &DuckDbDialect {},
+        Dialect::MsSql => &MsSqlDialect {},
+        Dialect::ClickHouse => &ClickHouseDialect {},
+        Dialect::Oracle => &OracleDialect {},
         _ => &GenericDialect {},
     };
     Tokenizer::new(grammar, sql)
@@ -252,7 +323,296 @@ fn valid_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Native document/command adapters receive the original source and typed named inputs.
+pub fn named_values(
+    dialect: Dialect,
+    source: &str,
+    values: &[Value],
+) -> Result<HashMap<String, Value>, String> {
+    let mut names = Vec::new();
+    for (_, _, name) in discover(dialect, source)? {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    if names.len() != values.len() {
+        return Err("parameter count does not match the command".into());
+    }
+    Ok(names.into_iter().zip(values.iter().cloned()).collect())
+}
+
+/// Raw Redis argument spans. Quoted words remain literals, including quoted ':name'.
+pub fn redis_tokens(source: &str) -> Result<Vec<(usize, usize)>, String> {
+    let mut chars = source.char_indices().peekable();
+    let mut spans = Vec::new();
+    while let Some((start, first)) = chars.next() {
+        if first.is_whitespace() {
+            continue;
+        }
+        if first == '\'' || first == '"' {
+            let mut closed = false;
+            while let Some((_, character)) = chars.next() {
+                if character == '\\' {
+                    chars.next().ok_or("unbalanced quotes")?;
+                } else if character == first {
+                    closed = true;
+                    break;
+                }
+            }
+            if !closed {
+                return Err("unbalanced quotes".into());
+            }
+            if chars
+                .peek()
+                .is_some_and(|(_, character)| !character.is_whitespace())
+            {
+                return Err("a closing quote must be followed by a space".into());
+            }
+        } else {
+            while chars
+                .peek()
+                .is_some_and(|(_, character)| !character.is_whitespace())
+            {
+                chars.next();
+            }
+        }
+        let end = chars.peek().map_or(source.len(), |(offset, _)| *offset);
+        spans.push((start, end));
+    }
+    Ok(spans)
+}
+
+fn mongo_names(
+    value: &serde_json::Value,
+    names: &mut Vec<String>,
+    root: bool,
+) -> Result<(), String> {
+    match value {
+        serde_json::Value::String(value) => {
+            if let Some(name) = value.strip_prefix(':').filter(|name| valid_name(name)) {
+                names.push(name.to_owned());
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                mongo_names(value, names, false)?;
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (key, value) in fields {
+                if key.starts_with(':') && valid_name(&key[1..]) {
+                    return Err("MongoDB field names cannot be parameters".into());
+                }
+                let before = names.len();
+                mongo_names(value, names, false)?;
+                if root
+                    && names.len() != before
+                    && !matches!(
+                        key.as_str(),
+                        "filter"
+                            | "query"
+                            | "pipeline"
+                            | "documents"
+                            | "updates"
+                            | "deletes"
+                            | "comment"
+                            | "projection"
+                            | "sort"
+                            | "let"
+                            | "hint"
+                            | "arrayFilters"
+                            | "limit"
+                            | "skip"
+                            | "batchSize"
+                            | "maxTimeMS"
+                    )
+                {
+                    return Err(
+                        "MongoDB command/database/collection names cannot be parameters".into(),
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Expression operands need explicit $literal protection; identifiers and code never bind.
+fn mongo_context(
+    value: &serde_json::Value,
+    expression: bool,
+    forbidden: bool,
+    pipeline: bool,
+    lookup: bool,
+) -> Result<(), String> {
+    match value {
+        serde_json::Value::String(text) if text.strip_prefix(':').is_some_and(valid_name) => {
+            if forbidden {
+                return Err("MongoDB identifiers and executable code cannot be parameters".into());
+            }
+            if expression {
+                return Err("MongoDB expression parameters must be wrapped in $literal".into());
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                mongo_context(value, expression, forbidden, pipeline, lookup)?;
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (key, value) in fields {
+                let structural = forbidden
+                    || matches!(
+                        key.as_str(),
+                        "$where"
+                            | "$function"
+                            | "$accumulator"
+                            | "$getField"
+                            | "$setField"
+                            | "$regularExpression"
+                            | "$date"
+                            | "$numberInt"
+                            | "$numberLong"
+                            | "$numberDouble"
+                            | "$numberDecimal"
+                            | "$oid"
+                            | "$binary"
+                            | "$uuid"
+                            | "$code"
+                            | "$scope"
+                            | "$symbol"
+                            | "$timestamp"
+                            | "$dbPointer"
+                    )
+                    || pipeline
+                        && matches!(
+                            key.as_str(),
+                            "$out"
+                                | "$merge"
+                                | "$unset"
+                                | "$unionWith"
+                                | "$unwind"
+                                | "$search"
+                                | "$searchMeta"
+                                | "$vectorSearch"
+                                | "$geoNear"
+                                | "$densify"
+                        )
+                    || lookup
+                        && matches!(
+                            key.as_str(),
+                            "from"
+                                | "localField"
+                                | "foreignField"
+                                | "as"
+                                | "connectFromField"
+                                | "connectToField"
+                        );
+                let expression = if key == "$literal" || key == "$match" {
+                    false
+                } else {
+                    expression
+                        || matches!(key.as_str(), "$expr" | "projection" | "let")
+                        || pipeline
+                            && matches!(
+                                key.as_str(),
+                                "$project"
+                                    | "$addFields"
+                                    | "$set"
+                                    | "$group"
+                                    | "$replaceRoot"
+                                    | "$replaceWith"
+                                    | "$redact"
+                                    | "$bucket"
+                                    | "$bucketAuto"
+                                    | "$sortByCount"
+                                    | "$setWindowFields"
+                            )
+                        || lookup && matches!(key.as_str(), "let" | "startWith")
+                };
+                mongo_context(
+                    value,
+                    expression,
+                    structural,
+                    key == "pipeline"
+                        || key == "$facet"
+                        || key == "u" && value.is_array()
+                        || pipeline,
+                    key == "$lookup" || key == "$graphLookup",
+                )?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn discover(dialect: Dialect, sql: &str) -> Result<Vec<(usize, usize, String)>, String> {
+    if dialect == Dialect::SurrealDb {
+        return surreal_occurrences(sql);
+    }
+    if dialect == Dialect::Redis {
+        let spans = redis_tokens(sql)?;
+        let has_parameters = spans
+            .iter()
+            .any(|(start, end)| sql[*start..*end].strip_prefix(':').is_some_and(valid_name));
+        let command = spans
+            .first()
+            .map(|(start, end)| sql[*start..*end].to_ascii_uppercase())
+            .unwrap_or_default();
+        let subcommand = spans
+            .get(1)
+            .map(|(start, end)| sql[*start..*end].to_ascii_uppercase())
+            .unwrap_or_default();
+        if has_parameters
+            && !command
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+        {
+            return Err("Parameterized Redis commands require a literal command name".into());
+        }
+        return spans
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, (start, end))| {
+                let name = sql[start..end]
+                    .strip_prefix(':')
+                    .filter(|name| valid_name(name))?;
+                Some(if index == 0 {
+                    Err("The Redis command name cannot be a parameter".into())
+                } else if index == 1 && matches!(command.as_str(), "EVAL" | "EVAL_RO")
+                    || matches!(command.as_str(), "SCRIPT" | "FUNCTION")
+                        && (index == 1 || subcommand == "LOAD")
+                {
+                    Err("Redis script bodies and script subcommands cannot be parameters".into())
+                } else {
+                    Ok((start, end, name.to_owned()))
+                })
+            })
+            .collect();
+    }
+    if dialect == Dialect::MongoDb {
+        let mut words = sql.split_whitespace();
+        if words.next() == Some("use") {
+            if words
+                .next()
+                .is_some_and(|name| name.strip_prefix(':').is_some_and(valid_name))
+            {
+                return Err("MongoDB database names cannot be parameters".into());
+            }
+            return Ok(Vec::new());
+        }
+        if !sql.contains(':') {
+            return Ok(Vec::new());
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(sql).map_err(|error| error.to_string())?;
+        mongo_context(&json, false, false, false, false)?;
+        let mut names = Vec::new();
+        mongo_names(&json, &mut names, true)?;
+        return Ok(names.into_iter().map(|name| (0, 0, name)).collect());
+    }
     let tokens = tokens(dialect, sql)?;
     // Token locations count characters, not UTF-8 bytes. Preserve the original bytes.
     let mut offsets = HashMap::new();
@@ -271,8 +631,8 @@ fn discover(dialect: Dialect, sql: &str) -> Result<Vec<(usize, usize, String)>, 
     let mut delimiters = Vec::new();
     for (index, token) in tokens.iter().enumerate() {
         match token.token {
-            Token::LBracket | Token::LParen => delimiters.push(token.token.clone()),
-            Token::RBracket | Token::RParen => {
+            Token::LBracket | Token::LParen | Token::LBrace => delimiters.push(token.token.clone()),
+            Token::RBracket | Token::RParen | Token::RBrace => {
                 delimiters.pop();
             }
             _ => {}
@@ -280,8 +640,36 @@ fn discover(dialect: Dialect, sql: &str) -> Result<Vec<(usize, usize, String)>, 
         native |= matches!(token.token, Token::Placeholder(_))
             || dialect != Dialect::Postgres && matches!(token.token, Token::Question)
             || dialect == Dialect::Sqlite && matches!(token.token, Token::AtSign);
+        if dialect == Dialect::MsSql
+            && let Token::Word(word) = &token.token
+            && word.quote_style.is_none()
+        {
+            let name = word.value.to_ascii_lowercase();
+            native |= name.strip_prefix("@p").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+            });
+        }
+        if dialect == Dialect::MsSql
+            && token.token == Token::AtSign
+            && let Some(TokenWithSpan {
+                token: Token::Word(word),
+                ..
+            }) = tokens.get(index + 1)
+        {
+            let name = word.value.to_ascii_lowercase();
+            native |= name.strip_prefix('p').is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+            });
+        }
         if token.token != Token::Colon {
             continue;
+        }
+        if dialect == Dialect::Oracle
+            && tokens
+                .get(index + 1)
+                .is_some_and(|next| matches!(next.token, Token::Number(_, _)))
+        {
+            native = true;
         }
         // PostgreSQL subscripts use ':' for slices, with arbitrary whitespace.
         // Parenthesize named inputs inside a subscript to distinguish them from slices.
@@ -294,6 +682,23 @@ fn discover(dialect: Dialect, sql: &str) -> Result<Vec<(usize, usize, String)>, 
         let Token::Word(word) = &next.token else {
             continue;
         };
+        if matches!(dialect, Dialect::DuckDb | Dialect::ClickHouse)
+            && delimiters.last() == Some(&Token::LBrace)
+        {
+            let previous = tokens[..index]
+                .iter()
+                .rev()
+                .find(|token| !matches!(token.token, Token::Whitespace(_)));
+            if previous.is_some_and(|token| {
+                matches!(
+                    token.token,
+                    Token::SingleQuotedString(_) | Token::Word(_) | Token::Number(_, _)
+                )
+            }) {
+                native |= dialect == Dialect::ClickHouse;
+                continue;
+            }
+        }
         let start = offsets[&token.span.start];
         if word.quote_style.is_none()
             && valid_name(&word.value)
@@ -306,19 +711,114 @@ fn discover(dialect: Dialect, sql: &str) -> Result<Vec<(usize, usize, String)>, 
             occurrences.push((start, start + 1 + word.value.len(), word.value.clone()));
         }
     }
-    if !occurrences.is_empty() {
-        if !matches!(
-            dialect,
-            Dialect::Sqlite | Dialect::Postgres | Dialect::MySql
-        ) {
-            return Err(format!(
-                "Parameters are not supported for {}",
-                dialect.name()
-            ));
+    if !occurrences.is_empty() && native {
+        return Err("Cannot mix named parameters and native positional binds".to_owned());
+    }
+    Ok(occurrences)
+}
+
+fn surreal_occurrences(sql: &str) -> Result<Vec<(usize, usize, String)>, String> {
+    let mut chars = sql.char_indices().peekable();
+    let mut occurrences = Vec::new();
+    let mut objects = 0usize;
+    let mut previous = None;
+    let mut collision = false;
+    while let Some((offset, character)) = chars.next() {
+        if character.is_whitespace() {
+            continue;
         }
-        if native {
-            return Err("Cannot mix named parameters and native positional binds".to_owned());
+        if character == '\'' || character == '"' || character == '`' || character == '⟨' {
+            let close = if character == '⟨' { '⟩' } else { character };
+            let mut closed = false;
+            while let Some((_, next)) = chars.next() {
+                if next == '\\' {
+                    chars.next();
+                } else if next == close {
+                    closed = true;
+                    break;
+                }
+            }
+            if !closed {
+                return Err("unterminated SurrealQL string or identifier".into());
+            }
+            previous = Some(close);
+            continue;
         }
+        if (character == '-' && chars.peek().is_some_and(|(_, c)| *c == '-'))
+            || (character == '/' && chars.peek().is_some_and(|(_, c)| *c == '/'))
+        {
+            for (_, next) in chars.by_ref() {
+                if next == '\n' {
+                    break;
+                }
+            }
+            continue;
+        }
+        if character == '/' && chars.peek().is_some_and(|(_, c)| *c == '*') {
+            chars.next();
+            let mut depth = 1;
+            while let Some((_, next)) = chars.next() {
+                if next == '/' && chars.peek().is_some_and(|(_, c)| *c == '*') {
+                    chars.next();
+                    depth += 1;
+                } else if next == '*' && chars.peek().is_some_and(|(_, c)| *c == '/') {
+                    chars.next();
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+            if depth != 0 {
+                return Err("unterminated SurrealQL comment".into());
+            }
+            continue;
+        }
+        if character == '$'
+            && let Some(rest) = sql[offset..].strip_prefix("$sqmeow_p")
+        {
+            let suffix = rest
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .next()
+                .unwrap_or_default();
+            collision |= !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit());
+        }
+        if character == '{' {
+            objects += 1;
+        }
+        if character == '}' {
+            objects = objects.saturating_sub(1);
+        }
+        if character == ':' {
+            if chars.peek().is_some_and(|(_, c)| *c == ':') {
+                chars.next();
+                previous = Some(':');
+                continue;
+            }
+            let adjacent = sql[..offset].chars().next_back();
+            let identifier =
+                |c: char| c.is_alphanumeric() || matches!(c, '_' | '`' | '⟩' | '\'' | '"');
+            if !adjacent.is_some_and(identifier)
+                && !(objects > 0 && previous.is_some_and(identifier))
+            {
+                let end = sql[offset + 1..]
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .map_or(sql.len(), |end| offset + 1 + end);
+                let name = &sql[offset + 1..end];
+                if valid_name(name)
+                    && sql[end..]
+                        .chars()
+                        .next()
+                        .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+                {
+                    occurrences.push((offset, end, name.to_owned()));
+                }
+            }
+        }
+        previous = Some(character);
+    }
+    if collision && !occurrences.is_empty() {
+        return Err("Native $sqmeow_p variables conflict with generated parameter bindings".into());
     }
     Ok(occurrences)
 }
@@ -475,7 +975,7 @@ mod tests {
         let sql = "SELECT 'é :fake', \"quoted:name\", $$:dollar -- @param x int$$, $tag$:tag$tag$, :x::text, a := 1 /* :comment */ -- :line\n, :x";
         let parameters = describe(Dialect::Postgres, sql, &[sql]).unwrap();
         assert_eq!(parameters.len(), 1);
-        assert_eq!(parameters[0].kind, Kind::Text);
+        assert_eq!(parameters[0].kind, Kind::Auto);
         let bound = compile(
             Dialect::Postgres,
             sql,
@@ -500,6 +1000,25 @@ mod tests {
     }
 
     #[test]
+    fn oracle_alternative_quotes_do_not_discover_parameters() {
+        let sql = "SELECT q'[O'Brien :hidden]', q'{-- @param fake int :ignored}', :value FROM dual";
+        let parameters = describe(Dialect::Oracle, sql, &[sql]).unwrap();
+        assert_eq!(parameters.len(), 1);
+        assert_eq!(parameters[0].name, "value");
+        assert_eq!(
+            compile(
+                Dialect::Oracle,
+                sql,
+                &parameters,
+                &values(&[("value", "42")])
+            )
+            .unwrap()
+            .sql,
+            sql.replace(":value", ":1")
+        );
+    }
+
+    #[test]
     fn annotations_only_in_real_line_comments() {
         let source = "SELECT '-- @param x int = 1'; /* -- @param x bool */\n-- @param x text = yes\nSELECT :x";
         let parameters = describe(Dialect::Sqlite, source, &["SELECT :x"]).unwrap();
@@ -520,7 +1039,12 @@ mod tests {
             assert!(describe(dialect, sql, &[sql]).is_err(), "{sql}");
             assert!(compile(dialect, sql, &[], &HashMap::new()).is_err());
         }
-        assert!(describe(Dialect::DuckDb, "SELECT :x", &["SELECT :x"]).is_err());
+        assert_eq!(
+            describe(Dialect::DuckDb, "SELECT :x", &["SELECT :x"])
+                .unwrap()
+                .len(),
+            1
+        );
         let sql = "SELECT $1, 'no :parameters'";
         assert_eq!(
             compile(Dialect::Postgres, sql, &[], &HashMap::new()).unwrap(),
@@ -540,6 +1064,7 @@ mod tests {
                 r#"{"find":"users","filter":{"_id":{"$oid":"abc"}}}"#,
             ),
             (Dialect::SurrealDb, "SELECT * FROM user:alice"),
+            (Dialect::MongoDb, "use analytics:dev"),
             (Dialect::Scylla, "CREATE TABLE users (id int PRIMARY KEY)"),
         ] {
             assert!(describe(dialect, sql, &[sql]).unwrap().is_empty());
@@ -567,5 +1092,217 @@ mod tests {
         assert_eq!(parameters.len(), 1);
         assert_eq!(parameters[0].kind, Kind::Int);
         assert_eq!(parameters[0].default.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn automatic_inputs_remain_typed_and_can_force_text() {
+        let sql = "SELECT :id, :ratio, :enabled, :text, :empty, :missing";
+        let parameters = describe(Dialect::Sqlite, sql, &[sql]).unwrap();
+        let bound = compile(
+            Dialect::Sqlite,
+            sql,
+            &parameters,
+            &values(&[
+                ("id", "42"),
+                ("ratio", "1.25"),
+                ("enabled", "true"),
+                ("text", "\"42\""),
+                ("empty", ""),
+                ("missing", "NULL"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            bound.values,
+            vec![
+                Value::Int(42),
+                Value::Float(1.25),
+                Value::Bool(true),
+                Value::Text("42".into()),
+                Value::Text("".into()),
+                Value::Null(Kind::Text)
+            ]
+        );
+    }
+
+    #[test]
+    fn each_adapter_uses_native_placeholder_syntax() {
+        for (dialect, expected) in [
+            (Dialect::DuckDb, "SELECT ?, ?, ?"),
+            (Dialect::Scylla, "SELECT ?, ?, ?"),
+            (Dialect::MsSql, "SELECT @P1, @P1, @P2"),
+            (Dialect::Oracle, "SELECT :1, :1, :2"),
+            (
+                Dialect::SurrealDb,
+                "SELECT $sqmeow_p1, $sqmeow_p1, $sqmeow_p2",
+            ),
+            (
+                Dialect::ClickHouse,
+                "SELECT {sqmeow_p1:Int64}, {sqmeow_p1:Int64}, {sqmeow_p2:String}",
+            ),
+        ] {
+            let sql = "SELECT :x, :x, :y";
+            let parameters = describe(dialect, sql, &[sql]).unwrap();
+            let bound = compile(
+                dialect,
+                sql,
+                &parameters,
+                &values(&[("x", "42"), ("y", "text")]),
+            )
+            .unwrap();
+            assert_eq!(bound.sql, expected, "{dialect:?}");
+            assert_eq!(
+                bound.values.len(),
+                if matches!(dialect, Dialect::DuckDb | Dialect::Scylla) {
+                    3
+                } else {
+                    2
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn native_command_inputs_do_not_rewrite_source_or_literals() {
+        for (dialect, sql) in [
+            (
+                Dialect::Redis,
+                "HSET cache:user:1 value :x literal ':literal' repeated :x",
+            ),
+            (
+                Dialect::MongoDb,
+                r#"{"find":"users","filter":{"name":":x","nested":[":x", "not :literal"]}}"#,
+            ),
+        ] {
+            let parameters = describe(dialect, sql, &[sql]).unwrap();
+            assert_eq!(parameters.len(), 1);
+            assert_eq!(parameters[0].name, "x");
+            let bound = compile(
+                dialect,
+                sql,
+                &parameters,
+                &values(&[("x", "\"Alice' \\n DROP TABLE t\"")]),
+            )
+            .unwrap();
+            assert_eq!(bound.sql, sql);
+            assert_eq!(bound.values.len(), 1);
+            assert_eq!(named_values(dialect, sql, &bound.values).unwrap().len(), 1);
+        }
+        assert!(describe(Dialect::Redis, ":command key", &[":command key"]).is_err());
+        for sql in [
+            "EVAL :script 0",
+            "SCRIPT LOAD :script",
+            "FUNCTION LOAD REPLACE :script",
+        ] {
+            assert!(describe(Dialect::Redis, sql, &[sql]).is_err());
+        }
+        let sql = r#"{"find":":collection","filter":{}}"#;
+        assert!(describe(Dialect::MongoDb, sql, &[sql]).is_err());
+    }
+
+    #[test]
+    fn surreal_record_ids_objects_variables_and_quotes_are_preserved() {
+        let sql = "RETURN {record: person:alice, quoted: person:⟨odd name⟩, flag :true, input: :input, message: \"escaped \\\" :hidden\", variable: $event}; -- :comment\nRETURN fn::greet(:input);";
+        let parameters = describe(Dialect::SurrealDb, sql, &[sql]).unwrap();
+        assert_eq!(parameters.len(), 1);
+        assert_eq!(parameters[0].name, "input");
+        let bound = compile(
+            Dialect::SurrealDb,
+            sql,
+            &parameters,
+            &values(&[("input", "42")]),
+        )
+        .unwrap();
+        assert_eq!(bound.sql, sql.replace(":input", "$sqmeow_p1"));
+        assert_eq!(bound.values, vec![Value::Int(42)]);
+        let collision = "RETURN $sqmeow_p1 + :x";
+        assert!(describe(Dialect::SurrealDb, collision, &[collision]).is_err());
+    }
+
+    #[test]
+    fn named_inputs_do_not_hide_writes_from_guards() {
+        for dialect in [
+            Dialect::Sqlite,
+            Dialect::DuckDb,
+            Dialect::Postgres,
+            Dialect::MySql,
+            Dialect::MsSql,
+            Dialect::Oracle,
+            Dialect::ClickHouse,
+            Dialect::Scylla,
+            Dialect::SurrealDb,
+        ] {
+            assert!(
+                !crate::guard::writes(dialect, "SELECT * FROM users WHERE id = :id"),
+                "{dialect:?}"
+            );
+            assert!(
+                crate::guard::writes(dialect, "UPDATE users SET name = :name WHERE id = :id"),
+                "{dialect:?}"
+            );
+        }
+        assert!(!crate::guard::writes(Dialect::Redis, "HGET :key field"));
+        assert!(crate::guard::writes(
+            Dialect::Redis,
+            "HSET :key field :value"
+        ));
+        assert!(!crate::guard::writes(
+            Dialect::MongoDb,
+            r#"{"find":"users","filter":{"_id":":id"}}"#
+        ));
+        assert!(crate::guard::writes(
+            Dialect::MongoDb,
+            r#"{"update":"users","updates":[{"q":{"_id":":id"},"u":{"$set":{"name":":name"}}}]}"#
+        ));
+    }
+
+    #[test]
+    fn native_variables_struct_fields_and_generated_names_do_not_collide() {
+        let sql = "SELECT {'enabled':true, 'missing':NULL}, :x";
+        let parameters = describe(Dialect::DuckDb, sql, &[sql]).unwrap();
+        assert_eq!(parameters.len(), 1);
+        assert_eq!(
+            compile(Dialect::DuckDb, sql, &parameters, &values(&[("x", "7")]))
+                .unwrap()
+                .sql,
+            "SELECT {'enabled':true, 'missing':NULL}, ?"
+        );
+        let sql = "SELECT :x, @@ROWCOUNT, @local";
+        assert_eq!(describe(Dialect::MsSql, sql, &[sql]).unwrap().len(), 1);
+        for (dialect, sql) in [
+            (Dialect::MsSql, "SELECT @p1, :x"),
+            (Dialect::ClickHouse, "SELECT {sqmeow_p1:Int64}, :x"),
+            (Dialect::Oracle, "SELECT :1, :x FROM dual"),
+        ] {
+            assert!(describe(dialect, sql, &[sql]).is_err(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn mongo_binds_only_data_not_identifiers_expressions_or_code() {
+        for sql in [
+            r#"{"aggregate":"users","pipeline":[{"$lookup":{"from":":collection","localField":"id","foreignField":"id","as":"joined"}}],"cursor":{}}"#,
+            r#"{"aggregate":"users","pipeline":[{"$project":{"v":":value"}}],"cursor":{}}"#,
+            r#"{"find":"users","filter":{"$where":":code"}}"#,
+            r#"{"find":"users","projection":{"v":":value"}}"#,
+            r#"{"find":"users","let":{"v":":value"}}"#,
+            r#"{"find":"users","filter":{"name":{"$regularExpression":{"pattern":":pattern","options":""}}}}"#,
+            r#"{"update":"users","updates":[{"q":{},"u":[{"$set":{"v":":value"}}]}]}"#,
+            r#"{"aggregate":"users","pipeline":[{"$unionWith":":collection"}],"cursor":{}}"#,
+            r#"{"aggregate":"users","pipeline":[{"$project":{"v":{"$getField":{"field":{"$literal":":field"},"input":"$$ROOT"}}}}],"cursor":{}}"#,
+        ] {
+            assert!(describe(Dialect::MongoDb, sql, &[sql]).is_err(), "{sql}");
+        }
+        let sql = r#"{"aggregate":"users","pipeline":[{"$project":{"v":{"$literal":":value"}}}],"cursor":{}}"#;
+        let parameters = describe(Dialect::MongoDb, sql, &[sql]).unwrap();
+        let bound = compile(
+            Dialect::MongoDb,
+            sql,
+            &parameters,
+            &values(&[("value", "$secret")]),
+        )
+        .unwrap();
+        assert_eq!(bound.sql, sql);
+        assert_eq!(bound.values, vec![Value::Text("$secret".into())]);
     }
 }

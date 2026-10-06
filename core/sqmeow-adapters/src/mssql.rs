@@ -3,6 +3,7 @@
 //! failed requests are never replayed.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use futures_util::TryStreamExt;
@@ -24,6 +25,7 @@ use sqmeow_db::node::RoutineNode;
 use sqmeow_db::node::SchemaNode;
 use sqmeow_db::result::Column;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::{Kind, Value};
 use sqmeow_db::types::ForeignKey;
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::value::Cell;
@@ -36,6 +38,49 @@ use tokio_util::{
 };
 
 type Connection = Client<Compat<TcpStream>>;
+
+enum Execution<'a> {
+    Plain,
+    Bound(&'a [Value]),
+    Edits(&'a [String]),
+}
+
+fn parameter(value: &Value) -> &dyn ToSql {
+    match value {
+        Value::Text(value) => value,
+        Value::Int(value) => value,
+        Value::Float(value) => value,
+        Value::Bool(value) => value,
+        Value::Null(Kind::Auto | Kind::Text) => &None::<&str>,
+        Value::Null(Kind::Int) => &None::<i64>,
+        Value::Null(Kind::Float) => &None::<f64>,
+        Value::Null(Kind::Bool) => &None::<bool>,
+    }
+}
+
+fn parameter_declarations(values: &[Value]) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+    Some(
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                // Match Tiberius's sp_executesql parameter types, including typed NULLs.
+                let kind = match value {
+                    Value::Text(value) if value.len() > 4000 => "nvarchar(max)",
+                    Value::Text(_) | Value::Null(Kind::Auto | Kind::Text) => "nvarchar(4000)",
+                    Value::Int(_) | Value::Null(Kind::Int) => "bigint",
+                    Value::Float(_) | Value::Null(Kind::Float) => "float(53)",
+                    Value::Bool(_) | Value::Null(Kind::Bool) => "bit",
+                };
+                format!("@P{} {kind}", index + 1)
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
 
 pub struct MsSqlAdapter {
     config: Config,
@@ -183,9 +228,14 @@ impl MsSqlAdapter {
         origin: &str,
         max_rows: usize,
         cancel: CancellationToken,
-        edits: Option<&[String]>,
+        execution: Execution<'_>,
     ) -> Result<Vec<ResultSet>> {
-        let transaction = edits.is_some();
+        let transaction = matches!(execution, Execution::Edits(_));
+        let values = match &execution {
+            Execution::Bound(values) => *values,
+            _ => &[],
+        };
+        let params: Vec<&dyn ToSql> = values.iter().map(parameter).collect();
         let mut slot = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(Error::Cancelled),
@@ -225,20 +275,20 @@ impl MsSqlAdapter {
                 if transaction {
                     client.begin_transaction().await.map_err(Error::driver)?;
                 }
-                let mut result = if let Some(statements) = edits {
+                let mut result = if let Execution::Edits(statements) = execution {
                     let mut results = Vec::new();
                     for statement in statements {
-                        let output = query(client, statement, usize::MAX).await?;
+                        let output = query(client, statement, None, usize::MAX).await?;
                         crate::stream::check_affected(statement, output.iter().filter_map(ResultSet::affected).sum())?;
                         results.extend(output);
                     }
                     results
                 } else {
-                    query(client, sql, max_rows).await?
+                    query(client, sql, matches!(execution, Execution::Bound(_)).then_some(params.as_slice()), max_rows).await?
                 };
                 if result.len() == 1 {
                     // Description is best-effort; unsupported batches stay read-only.
-                    if let Err(error) = describe(client, origin, &mut result[0]).await {
+                    if let Err(error) = describe(client, origin, values, &mut result[0]).await {
                         tracing::debug!(%error, "could not describe MSSQL result");
                     }
                 }
@@ -301,21 +351,58 @@ fn text(row: &Row, index: usize) -> String {
     row.get::<&str, _>(index).unwrap_or("").to_owned()
 }
 
-async fn query(client: &mut Connection, sql: &str, max_rows: usize) -> Result<Vec<ResultSet>> {
+async fn query(
+    client: &mut Connection,
+    sql: &str,
+    params: Option<&[&dyn ToSql]>,
+    max_rows: usize,
+) -> Result<Vec<ResultSet>> {
     let start = Instant::now();
     let mut results = Vec::new();
-    let mut stream = client.simple_query(sql).await.map_err(Error::driver)?;
+    let mut inner_count = None;
+    // sp_executesql preserves the caller's @@ROWCOUNT. Capture it inside the
+    // bound batch instead of reading a stale value on the outer session.
+    static NEXT_COUNT: AtomicU64 = AtomicU64::new(0);
+    let mut count_column = format!(
+        "__sqmeow_bound_affected_{}_{}",
+        std::process::id(),
+        NEXT_COUNT.fetch_add(1, Ordering::Relaxed)
+    );
+    let lower = sql.to_ascii_lowercase();
+    while lower.contains(&count_column) {
+        count_column.push('_');
+    }
+    let executed = if params.is_some() {
+        format!("{sql}\n; SELECT CAST(@@ROWCOUNT AS bigint) AS [{count_column}]")
+    } else {
+        sql.to_owned()
+    };
+    let mut stream = if let Some(params) = params {
+        client.query(&executed, params).await
+    } else {
+        client.simple_query(sql).await
+    }
+    .map_err(Error::driver)?;
     while let Some(item) = stream.try_next().await.map_err(Error::driver)? {
         match item {
-            QueryItem::Metadata(meta) => results.push(ResultSet::new(
-                sql,
-                meta.columns()
-                    .iter()
-                    .map(|column| Column::new(column.name(), type_name(column.column_type())))
-                    .collect(),
-            )),
+            QueryItem::Metadata(meta) => {
+                inner_count = None;
+                results.push(ResultSet::new(
+                    sql,
+                    meta.columns()
+                        .iter()
+                        .map(|column| Column::new(column.name(), type_name(column.column_type())))
+                        .collect(),
+                ));
+            }
             QueryItem::Row(row) => {
                 let result = results.last_mut().expect("metadata precedes rows");
+                if params.is_some()
+                    && result.columns().len() == 1
+                    && result.columns()[0].name == count_column
+                {
+                    inner_count = row.try_get::<i64, _>(0).ok().flatten();
+                }
                 if result.row_count() < max_rows {
                     result.push_row(
                         row.cells()
@@ -329,12 +416,28 @@ async fn query(client: &mut Connection, sql: &str, max_rows: usize) -> Result<Ve
         }
     }
     drop(stream);
+    let bound_count = if params.is_some()
+        && results.last().is_some_and(|result| {
+            result.columns().len() == 1 && result.columns()[0].name == count_column
+        }) {
+        results.pop();
+        inner_count
+    } else {
+        None
+    };
     if results.is_empty() {
         // QueryStream omits DONE counts. Read the last statement's count on the
         // same session, without executing the user's batch a second time.
-        let count = rows(client, "SELECT CAST(@@ROWCOUNT AS bigint)", &[]).await?;
+        let count = if params.is_some() {
+            bound_count
+        } else {
+            rows(client, "SELECT CAST(@@ROWCOUNT AS bigint)", &[])
+                .await?
+                .first()
+                .and_then(|r| r.get::<i64, _>(0))
+        };
         let mut result = ResultSet::new(sql, vec![]);
-        if let Some(count) = count.first().and_then(|r| r.get::<i64, _>(0)) {
+        if let Some(count) = count {
             result.set_affected(count as u64);
         }
         results.push(result);
@@ -414,21 +517,27 @@ fn decode(data: &ColumnData<'static>) -> Result<Cell> {
     })
 }
 
-async fn describe(client: &mut Connection, sql: &str, result: &mut ResultSet) -> Result<()> {
+async fn describe(
+    client: &mut Connection,
+    sql: &str,
+    values: &[Value],
+    result: &mut ResultSet,
+) -> Result<()> {
     if !sqmeow_db::sql::mssql_query(sql)
         || !sqmeow_db::sql::plain(Dialect::MsSql, sql)
         || result.columns().is_empty()
     {
         return Ok(());
     }
+    let declarations = parameter_declarations(values);
     let metadata = rows(
         client,
         "SELECT name, system_type_name, source_schema, source_table, source_column,
                 is_identity_column, is_updateable, is_part_of_unique_key
-         FROM sys.dm_exec_describe_first_result_set(@P1, NULL, 1)
+         FROM sys.dm_exec_describe_first_result_set(@P1, @P2, 1)
          WHERE is_hidden = 0 AND (source_database IS NULL OR source_database = DB_NAME())
          ORDER BY column_ordinal",
-        &[&sql],
+        &[&sql, &declarations],
     )
     .await?;
     if metadata.len() != result.columns().len() {
@@ -564,7 +673,38 @@ impl Adapter for MsSqlAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<Vec<ResultSet>> {
-        self.run(statement, origin, max_rows, cancel, None).await
+        self.run(statement, origin, max_rows, cancel, Execution::Plain)
+            .await
+    }
+
+    async fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        Ok(self
+            .execute_bound_results(statement, values, max_rows, cancel)
+            .await?
+            .remove(0))
+    }
+
+    async fn execute_bound_results(
+        &self,
+        statement: &str,
+        values: &[Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        self.run(
+            statement,
+            statement,
+            max_rows,
+            cancel,
+            Execution::Bound(values),
+        )
+        .await
     }
 
     async fn apply(
@@ -572,7 +712,8 @@ impl Adapter for MsSqlAdapter {
         statements: &[String],
         cancel: CancellationToken,
     ) -> Result<Vec<ResultSet>> {
-        self.run("", "", usize::MAX, cancel, Some(statements)).await
+        self.run("", "", usize::MAX, cancel, Execution::Edits(statements))
+            .await
     }
 
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
@@ -665,6 +806,63 @@ impl Adapter for MsSqlAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binds_native_scalars_and_typed_nulls() {
+        let value = Value::Text("'; SELECT 99; -- 日本🐱".into());
+        assert!(
+            matches!(parameter(&value).to_sql(), ColumnData::String(Some(text)) if text == "'; SELECT 99; -- 日本🐱")
+        );
+        assert!(matches!(
+            parameter(&Value::Int(i64::MAX)).to_sql(),
+            ColumnData::I64(Some(i64::MAX))
+        ));
+        assert!(
+            matches!(parameter(&Value::Float(1.25)).to_sql(), ColumnData::F64(Some(value)) if value == 1.25)
+        );
+        assert!(matches!(
+            parameter(&Value::Bool(true)).to_sql(),
+            ColumnData::Bit(Some(true))
+        ));
+        assert!(matches!(
+            parameter(&Value::Null(Kind::Text)).to_sql(),
+            ColumnData::String(None)
+        ));
+        assert!(matches!(
+            parameter(&Value::Null(Kind::Int)).to_sql(),
+            ColumnData::I64(None)
+        ));
+        assert!(matches!(
+            parameter(&Value::Null(Kind::Float)).to_sql(),
+            ColumnData::F64(None)
+        ));
+        assert!(matches!(
+            parameter(&Value::Null(Kind::Bool)).to_sql(),
+            ColumnData::Bit(None)
+        ));
+    }
+
+    #[test]
+    fn declares_metadata_parameters_without_value_interpolation() {
+        assert_eq!(parameter_declarations(&[]), None);
+        assert_eq!(
+            parameter_declarations(&[
+                Value::Text("'; SELECT 99; --".into()),
+                Value::Int(7),
+                Value::Float(1.25),
+                Value::Bool(true),
+                Value::Null(Kind::Text),
+                Value::Null(Kind::Int),
+                Value::Null(Kind::Float),
+                Value::Null(Kind::Bool),
+                Value::Text("a".repeat(4001)),
+            ])
+            .as_deref(),
+            Some(
+                "@P1 nvarchar(4000), @P2 bigint, @P3 float(53), @P4 bit, @P5 nvarchar(4000), @P6 bigint, @P7 float(53), @P8 bit, @P9 nvarchar(max)"
+            )
+        );
+    }
 
     #[test]
     fn validates_options_without_echoing_credentials() {

@@ -136,7 +136,7 @@ where
             Value::Int(value) => arguments.add(Some(*value)),
             Value::Float(value) => arguments.add(Some(*value)),
             Value::Bool(value) => arguments.add(Some(*value)),
-            Value::Null(Kind::Text) => arguments.add(None::<String>),
+            Value::Null(Kind::Auto | Kind::Text) => arguments.add(None::<String>),
             Value::Null(Kind::Int) => arguments.add(None::<i64>),
             Value::Null(Kind::Float) => arguments.add(None::<f64>),
             Value::Null(Kind::Bool) => arguments.add(None::<bool>),

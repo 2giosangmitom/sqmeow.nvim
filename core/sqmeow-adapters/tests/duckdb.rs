@@ -6,6 +6,7 @@ use sqmeow_db::edit::Source;
 use sqmeow_db::edit::Table;
 use sqmeow_db::error::Error;
 use sqmeow_db::node::RelationKind;
+use sqmeow_db::sql::parameters::{Kind, Value};
 use sqmeow_db::types::ForeignKey;
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::types::TypeClass;
@@ -30,6 +31,144 @@ async fn run(backend: &Backend, sql: &str) -> sqmeow_db::result::ResultSet {
 #[tokio::test]
 async fn opens_an_in_memory_database() {
     assert_eq!(database().await.dialect().name(), "duckdb");
+}
+
+#[tokio::test]
+async fn bound_text_is_data_even_when_it_looks_like_sql() {
+    let backend = people().await;
+    let text = "alice' OR true; DROP TABLE people; -- :name ?";
+    let result = backend
+        .execute_bound(
+            "select ? as literal, ? as repeated",
+            &[Value::Text(text.into()), Value::Text(text.into())],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.cell(0, 0), Some(&Cell::Text(text.into())));
+    assert_eq!(result.cell(0, 1), Some(&Cell::Text(text.into())));
+    let filtered = backend
+        .execute_bound(
+            "select id, name from people where name = ? or name = ?",
+            &[Value::Text(text.into()), Value::Text(text.into())],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(filtered.row_count(), 0);
+    assert_eq!(run(&backend, "select * from people").await.row_count(), 2);
+}
+
+#[tokio::test]
+async fn bound_scalars_and_typed_nulls_use_native_values() {
+    let backend = database().await;
+    let result = backend
+        .execute_bound(
+            "select ?, ?, ?, ?, ?, ?::varchar, ?::bigint, ?::double, ?::boolean",
+            &[
+                Value::Text(String::new()),
+                Value::Int(i64::MIN),
+                Value::Float(2.5),
+                Value::Bool(true),
+                Value::Bool(false),
+                Value::Null(Kind::Text),
+                Value::Null(Kind::Int),
+                Value::Null(Kind::Float),
+                Value::Null(Kind::Bool),
+            ],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    for (index, expected) in [
+        Cell::Text(String::new()),
+        Cell::Int(i64::MIN),
+        Cell::Float(2.5),
+        Cell::Bool(true),
+        Cell::Bool(false),
+        Cell::Null,
+        Cell::Null,
+        Cell::Null,
+        Cell::Null,
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(result.cell(0, index), Some(expected));
+    }
+    assert_eq!(result.columns()[1].type_name, "BIGINT");
+    assert_eq!(result.columns()[2].type_name, "DOUBLE");
+    assert_eq!(result.columns()[3].type_name, "BOOLEAN");
+}
+
+#[tokio::test]
+async fn bound_empty_results_preserve_columns_and_editable_provenance() {
+    let backend = people().await;
+    let expected = run(&backend, "select id, name as who from people where false").await;
+    let result = backend
+        .execute_bound(
+            "select id, name as who from people where id = ?",
+            &[Value::Int(999)],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.row_count(), 0);
+    assert!(!result.is_truncated());
+    assert_eq!(result.columns(), expected.columns());
+    assert_eq!(result.columns()[0].key, KeyKind::Primary);
+    assert!(expected.source().is_some());
+    assert_eq!(result.source(), expected.source());
+    assert!(result.elapsed() > std::time::Duration::ZERO);
+    assert_eq!(
+        result.statement(),
+        "select id, name as who from people where id = ?"
+    );
+}
+
+#[tokio::test]
+async fn bound_results_respect_zero_partial_and_exact_row_caps() {
+    let backend = database().await;
+    for (cap, count, truncated) in [(0, 0, true), (1, 1, true), (3, 3, false)] {
+        let result = backend
+            .execute_bound(
+                "select * from range(?)",
+                &[Value::Int(3)],
+                cap,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.row_count(), count);
+        assert_eq!(result.is_truncated(), truncated);
+        assert_eq!(result.columns().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn bound_cancellation_interrupts_and_releases_the_connection() {
+    let backend = database().await;
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stop.cancel();
+    });
+    let error = backend
+        .execute_bound(
+            "select count(*) from range(?)",
+            &[Value::Int(1_000_000_000_000)],
+            NO_CAP,
+            cancel,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Cancelled), "{error}");
+    assert_eq!(run(&backend, "select 1").await.row_count(), 1);
 }
 
 #[tokio::test]

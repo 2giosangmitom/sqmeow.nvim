@@ -1,6 +1,6 @@
 //! The MongoDB adapter.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{PoisonError, RwLock};
 use std::time::Instant;
@@ -26,6 +26,7 @@ use sqmeow_db::node::RoutineNode;
 use sqmeow_db::node::SchemaNode;
 use sqmeow_db::result::Column;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::{Value as ParameterValue, named_values};
 use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
@@ -183,6 +184,38 @@ impl MongoAdapter {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
+
+    async fn execute_statement(
+        &self,
+        statement: &str,
+        parsed: Statement,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        let started = Instant::now();
+        let mut result = match parsed {
+            Statement::Use(name) => {
+                let mut result = ResultSet::new(statement, vec![Column::new("result", "string")]);
+                result.push_row(vec![Cell::Text(format!("switched to db {name}"))]);
+                *self.db.write().unwrap_or_else(PoisonError::into_inner) = name;
+                result
+            }
+            Statement::Command { db, command } => {
+                let database = self.client.database(&db.unwrap_or_else(|| self.database()));
+                let (command, tag) = tagged(command);
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => {
+                        self.kill(&tag).await;
+                        return Err(Error::Cancelled);
+                    }
+                    result = run(&database, statement, command, max_rows) => result?,
+                }
+            }
+        };
+        result.set_elapsed(started.elapsed());
+        Ok(result)
+    }
 }
 
 impl Adapter for MongoAdapter {
@@ -257,31 +290,24 @@ impl Adapter for MongoAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let started = Instant::now();
+        self.execute_statement(statement, parse(statement)?, max_rows, cancel)
+            .await
+    }
 
-        let mut result = match parse(statement)? {
-            Statement::Use(name) => {
-                let mut result = ResultSet::new(statement, vec![Column::new("result", "string")]);
-                result.push_row(vec![Cell::Text(format!("switched to db {name}"))]);
-                *self.db.write().unwrap_or_else(PoisonError::into_inner) = name;
-                result
-            }
-            Statement::Command { db, command } => {
-                let database = self.client.database(&db.unwrap_or_else(|| self.database()));
-                let (command, tag) = tagged(command);
-                tokio::select! {
-                    biased;
-                    () = cancel.cancelled() => {
-                        self.kill(&tag).await;
-                        return Err(Error::Cancelled);
-                    }
-                    result = run(&database, statement, command, max_rows) => result?,
-                }
-            }
-        };
-
-        result.set_elapsed(started.elapsed());
-        Ok(result)
+    async fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[ParameterValue],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        self.execute_statement(
+            statement,
+            bound_statement(statement, values)?,
+            max_rows,
+            cancel,
+        )
+        .await
     }
 
     /// The database commands run on.
@@ -567,6 +593,92 @@ fn parse(statement: &str) -> Result<Statement> {
         return Err(Error::driver("there is no command to run"));
     }
     Ok(Statement::Command { db, command })
+}
+
+/// Bind BSON scalars after Extended JSON parsing, retaining the original command structure.
+fn bound_statement(statement: &str, values: &[ParameterValue]) -> Result<Statement> {
+    let values = named_values(Dialect::MongoDb, statement, values).map_err(Error::Driver)?;
+    let mut parsed = parse(statement)?;
+    match &mut parsed {
+        Statement::Use(name) => {
+            if parameter_value(name, &values).is_some() {
+                return Err(Error::driver("a parameter cannot name a MongoDB database"));
+            }
+        }
+        Statement::Command { db, command } => {
+            if db
+                .as_ref()
+                .is_some_and(|name| parameter_value(name, &values).is_some())
+            {
+                return Err(Error::driver("a parameter cannot name a MongoDB database"));
+            }
+            // The first value dispatches the command (usually to a collection). Even a nested
+            // placeholder here must not change that dispatch after the engine's safety check.
+            if command
+                .iter()
+                .next()
+                .is_some_and(|(_, value)| contains_parameter(value, &values))
+            {
+                return Err(Error::driver(
+                    "a parameter cannot change MongoDB command dispatch",
+                ));
+            }
+            bind_document(command, &values)?;
+        }
+    }
+    Ok(parsed)
+}
+
+fn parameter_value<'a>(
+    text: &str,
+    values: &'a HashMap<String, ParameterValue>,
+) -> Option<&'a ParameterValue> {
+    text.strip_prefix(':').and_then(|name| values.get(name))
+}
+
+fn contains_parameter(value: &Bson, values: &HashMap<String, ParameterValue>) -> bool {
+    match value {
+        Bson::String(text) => parameter_value(text, values).is_some(),
+        Bson::Array(items) => items.iter().any(|item| contains_parameter(item, values)),
+        Bson::Document(document) => document.iter().any(|(key, value)| {
+            parameter_value(key, values).is_some() || contains_parameter(value, values)
+        }),
+        _ => false,
+    }
+}
+
+fn bind_document(document: &mut Document, values: &HashMap<String, ParameterValue>) -> Result<()> {
+    for (key, value) in document.iter_mut() {
+        if parameter_value(key, values).is_some() {
+            return Err(Error::driver("a parameter cannot name a MongoDB field"));
+        }
+        bind_bson(value, values)?;
+    }
+    Ok(())
+}
+
+fn bind_bson(value: &mut Bson, values: &HashMap<String, ParameterValue>) -> Result<()> {
+    match value {
+        Bson::String(text) => {
+            if let Some(parameter) = parameter_value(text, values) {
+                *value = match parameter {
+                    ParameterValue::Text(text) => Bson::String(text.clone()),
+                    ParameterValue::Int(number) => Bson::Int64(*number),
+                    ParameterValue::Float(number) => Bson::Double(*number),
+                    ParameterValue::Bool(flag) => Bson::Boolean(*flag),
+                    ParameterValue::Null(_) => Bson::Null,
+                };
+            }
+        }
+        Bson::Array(items) => {
+            for item in items {
+                bind_bson(item, values)?;
+            }
+        }
+        Bson::Document(document) => bind_document(document, values)?,
+        _ => {}
+    }
+    Ok(())
 }
 
 /// The command with a `comment` that `kill` can find it by, and that comment.
@@ -905,6 +1017,68 @@ fn cell(value: Bson) -> Cell {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn aggregation_bindings_require_literal_expression_protection() {
+        let source = r#"{"aggregate":"users","pipeline":[{"$project":{"value":{"$literal":":value"}}}],"cursor":{}}"#;
+        let Statement::Command { command, .. } =
+            bound_statement(source, &[ParameterValue::Text("$secret".into())]).unwrap()
+        else {
+            panic!("expected a command")
+        };
+        let stage = command.get_array("pipeline").unwrap()[0]
+            .as_document()
+            .unwrap();
+        let projected = stage
+            .get_document("$project")
+            .unwrap()
+            .get_document("value")
+            .unwrap();
+        assert_eq!(projected.get_str("$literal").unwrap(), "$secret");
+        let unsafe_source =
+            r#"{"aggregate":"users","pipeline":[{"$project":{"value":":value"}}],"cursor":{}}"#;
+        assert!(bound_statement(unsafe_source, &[ParameterValue::Text("$secret".into())]).is_err());
+    }
+
+    #[test]
+    fn native_bindings_preserve_nested_scalar_types_and_never_parse_text() {
+        let input = "hello world\n\"}, \"delete\": \"other\"\n:text";
+        let parsed = bound_statement(
+            r#"{"find":"users","filter":{"nested":[":text",{"i":":int","f":":float","b":":bool","n":":null","again":":text"}],"literal":"prefix :text","id":{"$oid":"507f1f77bcf86cd799439011"}}}"#,
+            &[
+                ParameterValue::Text(input.into()), ParameterValue::Int(42),
+                ParameterValue::Float(1.5), ParameterValue::Bool(true),
+                ParameterValue::Null(sqmeow_db::sql::parameters::Kind::Text),
+            ],
+        ).unwrap();
+        let Statement::Command { command, .. } = parsed else {
+            panic!("expected command")
+        };
+        assert_eq!(command.get_str("find").unwrap(), "users");
+        let filter = command.get_document("filter").unwrap();
+        let nested = filter.get_array("nested").unwrap();
+        assert_eq!(nested[0], Bson::String(input.into()));
+        let document = nested[1].as_document().unwrap();
+        assert_eq!(document.get("i"), Some(&Bson::Int64(42)));
+        assert_eq!(document.get("f"), Some(&Bson::Double(1.5)));
+        assert_eq!(document.get("b"), Some(&Bson::Boolean(true)));
+        assert_eq!(document.get("n"), Some(&Bson::Null));
+        assert_eq!(document.get_str("again").unwrap(), input);
+        assert_eq!(filter.get_str("literal").unwrap(), "prefix :text");
+        assert!(matches!(filter.get("id"), Some(Bson::ObjectId(_))));
+    }
+
+    #[test]
+    fn bindings_cannot_change_dispatch_database_or_document_keys() {
+        let values = [ParameterValue::Text("other".into())];
+        assert!(bound_statement(r#"{"find":":name"}"#, &values).is_err());
+        assert!(bound_statement(r#"{"find":"users","$db":":name"}"#, &values).is_err());
+        assert!(bound_statement("use :name", &values).is_err());
+        assert!(bound_statement(r#"{"find":"users","filter":{":name":1}}"#, &values).is_err());
+        // Harden the structural binder too, independently of lexical validation.
+        let map = HashMap::from([("name".into(), ParameterValue::Text("other".into()))]);
+        assert!(bind_document(&mut doc! { ":name": 1 }, &map).is_err());
+    }
+
     use mongodb::bson::oid::ObjectId;
     use mongodb::bson::{DateTime, Decimal128};
     use sqmeow_db::types::TypeClass;

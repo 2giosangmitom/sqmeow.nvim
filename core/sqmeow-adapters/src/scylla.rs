@@ -5,11 +5,12 @@ use std::time::Instant;
 
 use futures_util::StreamExt;
 use percent_encoding::percent_decode_str;
+use scylla::client::pager::QueryPager;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::cluster::metadata::ColumnKind;
 use scylla::deserialize::row::DeserializeRow;
-use scylla::frame::response::result::{CollectionType, ColumnType};
+use scylla::frame::response::result::{CollectionType, ColumnType, NativeType};
 use scylla::serialize::row::SerializeRow;
 use scylla::value::{CqlValue, Row};
 use sqlx::types::BigDecimal;
@@ -28,6 +29,7 @@ use sqmeow_db::node::RoutineNode;
 use sqmeow_db::node::SchemaNode;
 use sqmeow_db::result::Column;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::Value;
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
@@ -146,6 +148,58 @@ impl ScyllaAdapter {
             .await
             .map_err(Error::driver)?;
 
+        self.read_pager(statement, max_rows, started, pager).await
+    }
+
+    async fn read_bound(
+        &self,
+        statement: &str,
+        values: &[Value],
+        max_rows: usize,
+    ) -> Result<ResultSet> {
+        let started = Instant::now();
+        let prepared = self
+            .session
+            .prepare(statement)
+            .await
+            .map_err(Error::driver)?;
+        let specs = prepared.get_variable_col_specs();
+        if specs.len() != values.len() {
+            return Err(Error::driver(format!(
+                "expected {} bound values, got {}",
+                specs.len(),
+                values.len()
+            )));
+        }
+        let values = values
+            .iter()
+            .zip(specs.iter())
+            .enumerate()
+            .map(|(index, (value, spec))| {
+                bind_value(value, spec.typ()).map_err(|error| {
+                    Error::driver(format!(
+                        "parameter {} ({}): {error}",
+                        index + 1,
+                        spec.name()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<Option<CqlValue>>>>()?;
+        let pager = self
+            .session
+            .execute_iter(prepared, values)
+            .await
+            .map_err(Error::driver)?;
+        self.read_pager(statement, max_rows, started, pager).await
+    }
+
+    async fn read_pager(
+        &self,
+        statement: &str,
+        max_rows: usize,
+        started: Instant,
+        pager: QueryPager,
+    ) -> Result<ResultSet> {
         let specs = pager.column_specs();
         let mut columns: Vec<Column> = specs
             .iter()
@@ -278,6 +332,24 @@ impl Adapter for ScyllaAdapter {
             biased;
             () = cancel.cancelled() => Err(Error::Cancelled),
             result = self.read(statement, max_rows) => result,
+        }
+    }
+
+    async fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        if values.is_empty() {
+            return self.execute(statement, max_rows, cancel).await;
+        }
+        // Dropping preparation/execution or the pager stops this request's work.
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(Error::Cancelled),
+            result = self.read_bound(statement, values, max_rows) => result,
         }
     }
 
@@ -545,6 +617,38 @@ fn type_name(typ: &ColumnType<'_>) -> String {
     }
 }
 
+/// Select the wire representation from prepared metadata, never from CQL text.
+fn bind_value(value: &Value, typ: &ColumnType<'_>) -> Result<Option<CqlValue>> {
+    let range_error = || Error::driver(format!("value is out of range for {}", type_name(typ)));
+    Ok(Some(match value {
+        Value::Null(_) => return Ok(None),
+        Value::Text(value) => CqlValue::Text(value.clone()),
+        Value::Bool(value) => CqlValue::Boolean(*value),
+        Value::Int(value) => match typ {
+            ColumnType::Native(NativeType::Int) => {
+                CqlValue::Int(i32::try_from(*value).map_err(|_| range_error())?)
+            }
+            ColumnType::Native(NativeType::SmallInt) => {
+                CqlValue::SmallInt(i16::try_from(*value).map_err(|_| range_error())?)
+            }
+            ColumnType::Native(NativeType::TinyInt) => {
+                CqlValue::TinyInt(i8::try_from(*value).map_err(|_| range_error())?)
+            }
+            _ => CqlValue::BigInt(*value),
+        },
+        Value::Float(value) => match typ {
+            ColumnType::Native(NativeType::Float) => {
+                let narrowed = *value as f32;
+                if value.is_finite() && !narrowed.is_finite() {
+                    return Err(range_error());
+                }
+                CqlValue::Float(narrowed)
+            }
+            _ => CqlValue::Double(*value),
+        },
+    }))
+}
+
 fn decode(value: CqlValue) -> Cell {
     match value {
         CqlValue::Ascii(text) | CqlValue::Text(text) => Cell::Text(text),
@@ -624,6 +728,49 @@ fn json(value: CqlValue) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqmeow_db::sql::parameters::Kind;
+
+    #[test]
+    fn prepared_types_choose_integer_and_float_wire_widths() {
+        let native = ColumnType::Native;
+        assert_eq!(
+            bind_value(&Value::Int(42), &native(NativeType::Int)).unwrap(),
+            Some(CqlValue::Int(42))
+        );
+        assert_eq!(
+            bind_value(&Value::Int(i64::MAX), &native(NativeType::BigInt)).unwrap(),
+            Some(CqlValue::BigInt(i64::MAX))
+        );
+        for value in [i64::from(i32::MIN) - 1, i64::from(i32::MAX) + 1] {
+            assert!(bind_value(&Value::Int(value), &native(NativeType::Int)).is_err());
+        }
+        assert_eq!(
+            bind_value(&Value::Float(1.5), &native(NativeType::Float)).unwrap(),
+            Some(CqlValue::Float(1.5))
+        );
+        assert_eq!(
+            bind_value(&Value::Float(1.5), &native(NativeType::Double)).unwrap(),
+            Some(CqlValue::Double(1.5))
+        );
+        assert!(bind_value(&Value::Float(f64::MAX), &native(NativeType::Float)).is_err());
+    }
+
+    #[test]
+    fn bound_text_bool_and_null_stay_native_values() {
+        let typ = ColumnType::Native(NativeType::Text);
+        let text = "it's data; ' OR true -- :name ?";
+        assert_eq!(
+            bind_value(&Value::Text(text.into()), &typ).unwrap(),
+            Some(CqlValue::Text(text.into()))
+        );
+        assert_eq!(
+            bind_value(&Value::Bool(true), &ColumnType::Native(NativeType::Boolean)).unwrap(),
+            Some(CqlValue::Boolean(true))
+        );
+        for kind in [Kind::Text, Kind::Int, Kind::Float, Kind::Bool] {
+            assert_eq!(bind_value(&Value::Null(kind), &typ).unwrap(), None);
+        }
+    }
 
     #[test]
     fn reads_hosts_login_and_keyspace_from_the_url() {

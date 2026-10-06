@@ -5,6 +5,7 @@ use sqmeow_db::adapter::Dialect;
 use sqmeow_db::edit::Changes;
 use sqmeow_db::error::Error;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::{Kind, Value};
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
@@ -25,6 +26,143 @@ async fn run(db: &Backend, sql: &str) -> ResultSet {
     db.execute(sql, usize::MAX, CancellationToken::new())
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
+}
+
+#[tokio::test]
+async fn bound_row_caps_apply_to_columns_that_resemble_internal_metadata() {
+    let db = Backend::connect(&server!()).await.unwrap();
+    run(&db, "CREATE TABLE #bound_alias (__sqmeow_bound_affected bigint); INSERT INTO #bound_alias VALUES (1), (2), (3)").await;
+    for cap in [0, 1] {
+        let results = db
+            .execute_bound_results(
+                "SELECT * FROM #bound_alias WHERE @P1=1",
+                &[Value::Int(1)],
+                cap,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].row_count(), cap);
+        assert!(results[0].is_truncated());
+    }
+}
+
+#[tokio::test]
+async fn bound_writes_report_inner_batch_affected_counts() {
+    let db = Backend::connect(&server!()).await.unwrap();
+    run(
+        &db,
+        "CREATE TABLE #bound_counts (id int PRIMARY KEY, name nvarchar(100))",
+    )
+    .await;
+    for (sql, values, expected) in [
+        (
+            "INSERT INTO #bound_counts VALUES (@P1, @P2)",
+            vec![Value::Int(1), Value::Text("first".into())],
+            1,
+        ),
+        (
+            "UPDATE #bound_counts SET name=@P1 WHERE id=@P2",
+            vec![Value::Text("updated".into()), Value::Int(1)],
+            1,
+        ),
+        (
+            "DELETE FROM #bound_counts WHERE id=@P1",
+            vec![Value::Int(99)],
+            0,
+        ),
+    ] {
+        let result = db
+            .execute_bound(sql, &values, 10, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(result.columns().is_empty());
+        assert_eq!(result.affected(), Some(expected));
+    }
+}
+
+#[tokio::test]
+async fn bound_batches_keep_every_result_and_local_variables() {
+    let db = Backend::connect(&server!()).await.unwrap();
+    let results = db.execute_bound_results(
+        "DECLARE @local int = 1; SELECT @P1 AS first; SELECT @P1 + @local AS second, @@ROWCOUNT AS affected",
+        &[Value::Int(42)], 10, CancellationToken::new(),
+    ).await.unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].cell(0, 0), Some(&Cell::Int(42)));
+    assert_eq!(results[1].cell(0, 0), Some(&Cell::Int(43)));
+}
+
+#[tokio::test]
+async fn native_bound_scalars_nulls_and_repeated_parameters() {
+    let db = Backend::connect(&server!()).await.unwrap();
+    let text = "'; DROP TABLE dbo.sqmeow_bound; -- 日本🐱\n:ignored @P99";
+    let result = db.execute_bound(
+        "SELECT @P1 AS first, @P1 AS repeated, @P2 AS n, @P3 AS f, @P4 AS b, @P5 AS nt, @P6 AS ni, @P7 AS nf, @P8 AS nb",
+        &[
+            Value::Text(text.into()), Value::Int(i64::MAX), Value::Float(1.25), Value::Bool(true),
+            Value::Null(Kind::Text), Value::Null(Kind::Int), Value::Null(Kind::Float), Value::Null(Kind::Bool),
+        ],
+        10, CancellationToken::new(),
+    ).await.unwrap();
+    assert_eq!(result.row_count(), 1);
+    assert!(!result.elapsed().is_zero());
+    assert_eq!(result.cell(0, 0), Some(&Cell::Text(text.into())));
+    assert_eq!(result.cell(0, 1), Some(&Cell::Text(text.into())));
+    assert_eq!(result.cell(0, 2), Some(&Cell::Int(i64::MAX)));
+    assert_eq!(result.cell(0, 3), Some(&Cell::Float(1.25)));
+    assert_eq!(result.cell(0, 4), Some(&Cell::Bool(true)));
+    for column in 5..9 {
+        assert_eq!(result.cell(0, column), Some(&Cell::Null));
+    }
+    for (column, expected) in [(5, "nvarchar"), (6, "bigint"), (7, "float"), (8, "bit")] {
+        assert!(
+            result.columns()[column].type_name.starts_with(expected),
+            "{result:?}"
+        );
+    }
+    assert_eq!(run(&db, "SELECT 42").await.cell(0, 0), Some(&Cell::Int(42)));
+}
+
+#[tokio::test]
+async fn native_bound_empty_editable_provenance_and_row_caps() {
+    let db = Backend::connect(&server!()).await.unwrap();
+    run(&db, "DROP TABLE IF EXISTS dbo.sqmeow_mssql_bound; CREATE TABLE dbo.sqmeow_mssql_bound(id int IDENTITY PRIMARY KEY, label nvarchar(50), n int, doubled AS n*2)").await;
+    run(
+        &db,
+        "INSERT INTO dbo.sqmeow_mssql_bound(label,n) VALUES(N'one',1),(N'two',2),(N'three',3)",
+    )
+    .await;
+    let sql = "SELECT id, label, n, doubled FROM dbo.sqmeow_mssql_bound WHERE n >= @P1 ORDER BY id";
+    let empty = db
+        .execute_bound(sql, &[Value::Int(99)], 10, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(empty.row_count(), 0);
+    assert_eq!(empty.columns().len(), 4);
+    assert!(!empty.is_truncated());
+    assert!(empty.source().is_some(), "{empty:?}");
+    assert_eq!(empty.columns()[0].key, KeyKind::Primary);
+    assert!(empty.columns()[0].generated);
+    assert!(empty.columns()[3].generated);
+    let changes = Changes {
+        inserts: vec![vec![(1, "new".into()), (2, "4".into())]],
+        ..Default::default()
+    };
+    assert!(db.plan(&empty, &changes).is_ok());
+    for cap in [0, 1, 3] {
+        let result = db
+            .execute_bound(sql, &[Value::Int(1)], cap, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result.row_count(), cap);
+        assert_eq!(result.is_truncated(), cap < 3);
+        assert!(result.source().is_some(), "{result:?}");
+        assert_eq!(result.columns()[0].key, KeyKind::Primary);
+        assert_eq!(run(&db, "SELECT 42").await.cell(0, 0), Some(&Cell::Int(42)));
+    }
+    run(&db, "DROP TABLE dbo.sqmeow_mssql_bound").await;
 }
 
 #[tokio::test]
@@ -197,6 +335,35 @@ async fn cancels_and_reconnects_without_replaying() {
     .unwrap();
     assert!(matches!(result, Err(Error::Cancelled)), "{result:?}");
     assert_eq!(run(&db, "SELECT 42").await.cell(0, 0), Some(&Cell::Int(42)));
+}
+
+#[tokio::test]
+async fn bound_cancels_and_reconnects_without_replaying() {
+    let db = Backend::connect(&server!()).await.unwrap();
+    let token = CancellationToken::new();
+    let trigger = token.clone();
+    let cancel = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        trigger.cancel();
+    };
+    let values = [Value::Int(99)];
+    let query = db.execute_bound("WAITFOR DELAY '00:00:20'; SELECT @P1", &values, 10, token);
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(6), async {
+        tokio::join!(query, cancel)
+    })
+    .await
+    .unwrap();
+    assert!(matches!(result, Err(Error::Cancelled)), "{result:?}");
+    let result = db
+        .execute_bound(
+            "SELECT @P1",
+            &[Value::Int(42)],
+            10,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.cell(0, 0), Some(&Cell::Int(42)));
 }
 
 #[tokio::test]

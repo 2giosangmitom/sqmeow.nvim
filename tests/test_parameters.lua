@@ -68,6 +68,15 @@ T['prompts'] = MiniTest.new_set({
   },
 })
 
+T['prompts']['unannotated parameters use a simple name prompt'] = function()
+  definitions = { { name = 'id', kind = 'auto' } }
+  local id = query.execute('select :id;')
+  eq(id, nil)
+  eq(prompts[1].opts.prompt, 'id: ')
+  prompts[1].callback('42')
+  eq(requests[#requests].args.parameters, { id = '42' })
+end
+
 local function submitted()
   local calls = {}
   for _, request in ipairs(requests) do
@@ -389,6 +398,19 @@ T['sqlite']['statement selection ignores unfinished unrelated SQL'] = function()
   eq(rpc.request('row', { call_id = call.call_id, row = 0 })[1].value, '43')
 end
 
+T['sqlite']['unannotated inputs infer types and can force text'] = function()
+  local call =
+    helpers.run('select :id + 1 as answer, :text as text, :empty as empty, :flag as flag', {
+      parameters = { id = '42', text = '"42"', empty = '', flag = 'true' },
+    })
+  eq(call.state, 'done')
+  local row = rpc.request('row', { call_id = call.call_id, row = 0 })
+  eq(row[1].value, '43')
+  eq(row[2].value, '42')
+  eq(row[3].value, '')
+  eq(row[4].value, '1')
+end
+
 T['sqlite']['bound results respect retained row limits'] = function()
   require('sqmeow').setup({ query = { max_rows = 2, persist_history = false } })
   local call = helpers.run(
@@ -424,6 +446,54 @@ T['sqlite']['restored results do not silently refresh using defaults'] = functio
   eq(answer, nil)
   helpers.contains(err, 'parameter values are no longer held')
   eq(rpc.request('row', { call_id = restored, row = 0 })[1].value, '2')
+end
+
+T['duckdb'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      require('sqmeow').setup({ query = { persist_history = false } })
+      state.reset()
+      helpers.connect('duckdb::memory:', 'parameter_duckdb')
+    end,
+    post_case = function()
+      rpc.stop()
+    end,
+  },
+})
+
+T['duckdb']['prompts and native execution preserve typed values through refresh'] = function()
+  local sql = 'select :id as id, :id + 1 as answer, :flag as flag, :name as name'
+  local names = {}
+  helpers.stub(vim.ui, 'input', function(opts, callback)
+    names[#names + 1] = opts.prompt
+    callback(
+      ({ ['id: '] = '42', ['flag: '] = 'true', ['name: '] = "Alice' ; SELECT 99 --" })[opts.prompt]
+    )
+  end)
+  query.execute(sql)
+  helpers.wait_for('DuckDB prompted run should finish', function()
+    return state.call ~= nil and state.call.state ~= 'executing'
+  end)
+  local call = state.call
+  eq(call.state, 'done')
+  eq(names, { 'id: ', 'flag: ', 'name: ' })
+  local row = rpc.request('row', { call_id = call.call_id, row = 0 })
+  eq(row[1].value, '42')
+  eq(row[2].value, '43')
+  eq(row[3].value, 'true')
+  eq(row[4].value, "Alice' ; SELECT 99 --")
+  local refresh = rpc.request('result_view', {
+    call_id = call.call_id,
+    conn_id = call.conn_id,
+    sql = call.sql,
+    refresh = true,
+  })
+  helpers.wait_for('DuckDB bound refresh should finish', function()
+    return state.call.call_id == refresh.call_id and state.call.state ~= 'executing'
+  end)
+  eq(state.call.state, 'done')
+  eq(rpc.request('row', { call_id = refresh.call_id, row = 0 }), row)
+  eq(#names, 3)
 end
 
 return T

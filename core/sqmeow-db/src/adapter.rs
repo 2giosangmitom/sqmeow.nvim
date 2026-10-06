@@ -148,6 +148,21 @@ pub trait Adapter: Send + Sync {
         }
     }
 
+    /// Bound batches can return several result sets, just like ordinary batches.
+    fn execute_bound_results(
+        &self,
+        statement: &str,
+        values: &[crate::sql::parameters::Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> impl Future<Output = Result<Vec<ResultSet>>> + Send {
+        async move {
+            self.execute_bound(statement, values, max_rows, cancel)
+                .await
+                .map(|result| vec![result])
+        }
+    }
+
     /// Executes `statement` as a wrapper around `origin`.
     ///
     /// Tracing of columns to their source tables uses `origin`, the unwrapped

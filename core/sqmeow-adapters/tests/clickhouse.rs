@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use sqmeow_db::error::Error;
 use sqmeow_db::node::RelationKind;
+use sqmeow_db::sql::parameters::{Kind, Value};
 use sqmeow_db::types::KeyKind;
 use sqmeow_db::types::TypeClass;
 use sqmeow_db::value::Cell;
@@ -87,6 +88,86 @@ async fn reports_a_server_error() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("nowhere"), "{error}");
+}
+
+#[tokio::test]
+async fn native_parameters_preserve_text_without_interpolation() {
+    let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
+    for text in [
+        "x'; SELECT 99; -- ? {sqmeow_p2:Int64}",
+        "apostrophe ' and slash / and backslash \\",
+        "line\nreturn\rtab\tnul\0backspace\u{8}formfeed\u{c} 雪",
+        r"\N",
+        "",
+    ] {
+        let result = backend
+            .execute_bound(
+                "select {sqmeow_p1:String} as value",
+                &[Value::Text(text.into())],
+                NO_CAP,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.cell(0, 0), Some(&Cell::Text(text.into())));
+        assert!(result.source().is_none());
+    }
+}
+
+#[tokio::test]
+async fn native_parameters_decode_scalars_and_typed_nulls() {
+    let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
+    let result = backend
+        .execute_bound(
+            "select {sqmeow_p1:Int64}, {sqmeow_p2:Float64}, {sqmeow_p3:Bool},
+                    {sqmeow_p4:Nullable(Int64)}, {sqmeow_p5:Nullable(Float64)},
+                    {sqmeow_p6:Nullable(Bool)}, {sqmeow_p7:Nullable(String)}",
+            &[
+                Value::Int(i64::MIN),
+                Value::Float(1.5),
+                Value::Bool(true),
+                Value::Null(Kind::Int),
+                Value::Null(Kind::Float),
+                Value::Null(Kind::Bool),
+                Value::Null(Kind::Text),
+            ],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    for (column, expected) in [
+        Cell::Int(i64::MIN),
+        Cell::Float(1.5),
+        Cell::Bool(true),
+        Cell::Null,
+        Cell::Null,
+        Cell::Null,
+        Cell::Null,
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(result.cell(0, column), Some(expected));
+    }
+}
+
+#[tokio::test]
+async fn native_parameters_reuse_one_value_and_respect_the_row_cap() {
+    let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
+    let result = backend
+        .execute_bound(
+            "select {sqmeow_p1:Int64}, {sqmeow_p1:Int64} from numbers(100)",
+            &[Value::Int(7)],
+            10,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.row_count(), 10);
+    assert!(result.is_truncated());
+    assert_eq!(result.cell(0, 0), Some(&Cell::Int(7)));
+    assert_eq!(result.cell(0, 1), Some(&Cell::Int(7)));
 }
 
 #[tokio::test]

@@ -28,6 +28,7 @@ use sqmeow_db::node::RoutineNode;
 use sqmeow_db::node::SchemaNode;
 use sqmeow_db::result::Column;
 use sqmeow_db::result::ResultSet;
+use sqmeow_db::sql::parameters::{Value as ParameterValue, named_values, redis_tokens};
 use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
@@ -287,6 +288,33 @@ impl RedisAdapter {
             .map_err(Error::driver)
     }
 
+    async fn execute_words(
+        &self,
+        statement: &str,
+        words: Vec<Vec<u8>>,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        let started = Instant::now();
+        if words.is_empty() {
+            return Err(Error::driver("there is no command to run"));
+        }
+        let mut command = Cmd::new();
+        for word in &words {
+            command.arg(word.as_slice());
+        }
+        // Dropping the request leaves the connection usable.
+        let reply = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(Error::Cancelled),
+            reply = self.query::<Value>(&command) => reply?,
+        };
+        let mut result = to_result(statement, reply, max_rows);
+        result.set_source(source(&words));
+        result.set_elapsed(started.elapsed());
+        Ok(result)
+    }
+
     /// The keys matching a glob, from one server or every primary of a cluster, each with the type
     /// of value it holds.
     pub async fn keys(&self, pattern: &str) -> Result<Vec<RelationNode>> {
@@ -474,28 +502,19 @@ impl Adapter for RedisAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        let started = Instant::now();
         let words = split_command(statement).map_err(Error::Driver)?;
-        if words.is_empty() {
-            return Err(Error::driver("there is no command to run"));
-        }
+        self.execute_words(statement, words, max_rows, cancel).await
+    }
 
-        let mut command = Cmd::new();
-        for word in &words {
-            command.arg(word.as_slice());
-        }
-
-        // Dropping the request leaves the connection usable.
-        let reply = tokio::select! {
-            biased;
-            () = cancel.cancelled() => return Err(Error::Cancelled),
-            reply = self.query::<Value>(&command) => reply?,
-        };
-
-        let mut result = to_result(statement, reply, max_rows);
-        result.set_source(source(&words));
-        result.set_elapsed(started.elapsed());
-        Ok(result)
+    async fn execute_bound(
+        &self,
+        statement: &str,
+        values: &[ParameterValue],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<ResultSet> {
+        let words = bound_words(statement, values)?;
+        self.execute_words(statement, words, max_rows, cancel).await
     }
 
     /// Only the database the connection is on.
@@ -580,6 +599,34 @@ impl Adapter for RedisAdapter {
 
     /// Nothing to do: the socket closes once the last handle onto it is dropped.
     async fn close(&self) {}
+}
+
+/// Replace whole unquoted arguments, never parse the supplied bytes as command text.
+fn bound_words(statement: &str, values: &[ParameterValue]) -> Result<Vec<Vec<u8>>> {
+    let values = named_values(Dialect::Redis, statement, values).map_err(Error::Driver)?;
+    let mut words = split_command(statement).map_err(Error::Driver)?;
+    let tokens = redis_tokens(statement).map_err(Error::Driver)?;
+    if words.len() != tokens.len() {
+        return Err(Error::driver("Redis command token count mismatch"));
+    }
+    for (index, (word, (start, end))) in words.iter_mut().zip(tokens).enumerate() {
+        let raw = &statement[start..end];
+        let Some(value) = raw.strip_prefix(':').and_then(|name| values.get(name)) else {
+            continue;
+        };
+        if index == 0 {
+            return Err(Error::driver("a parameter cannot name a Redis command"));
+        }
+        // Cmd::arg uses these same scalar string representations on the wire.
+        *word = match value {
+            ParameterValue::Text(text) => text.as_bytes().to_vec(),
+            ParameterValue::Int(number) => number.to_string().into_bytes(),
+            ParameterValue::Float(number) => number.to_string().into_bytes(),
+            ParameterValue::Bool(flag) => flag.to_string().into_bytes(),
+            ParameterValue::Null(_) => return Err(Error::driver("Redis has no NULL argument")),
+        };
+    }
+    Ok(words)
 }
 
 /// Which key a command read, for the commands whose reply can be written back.
@@ -1021,6 +1068,70 @@ fn cell(value: Value) -> Cell {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bound_arguments_keep_spaces_newlines_and_command_text_as_one_word() {
+        let input = "hello world\nDEL other\n\" :value";
+        let words = bound_words(
+            "SET :key :value",
+            &[
+                ParameterValue::Text("a b\nkey".into()),
+                ParameterValue::Text(input.into()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            words,
+            vec![
+                b"SET".to_vec(),
+                b"a b\nkey".to_vec(),
+                input.as_bytes().to_vec()
+            ]
+        );
+    }
+
+    #[test]
+    fn quoted_parameter_names_are_literal_and_repeated_arguments_bind_once_each() {
+        let words = bound_words(
+            r#"MGET ':key' :key ":key" :key"#,
+            &[ParameterValue::Text("actual key".into())],
+        )
+        .unwrap();
+        assert_eq!(
+            words,
+            vec![
+                b"MGET".to_vec(),
+                b":key".to_vec(),
+                b"actual key".to_vec(),
+                b":key".to_vec(),
+                b"actual key".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn bound_scalars_are_single_arguments_and_null_is_refused() {
+        let words = bound_words(
+            "MSET k :int f :float b :bool",
+            &[
+                ParameterValue::Int(-12),
+                ParameterValue::Float(1.5),
+                ParameterValue::Bool(true),
+            ],
+        )
+        .unwrap();
+        assert_eq!(words[2], b"-12");
+        assert_eq!(words[4], b"1.5");
+        assert_eq!(words[6], b"true");
+        assert!(
+            bound_words(
+                "SET k :value",
+                &[ParameterValue::Null(sqmeow_db::sql::parameters::Kind::Text),]
+            )
+            .is_err()
+        );
+        assert!(bound_words(":command k", &[ParameterValue::Text("GET".into())]).is_err());
+    }
+
     #[test]
     fn a_sentinel_url_names_its_hosts_master_and_database() {
         assert_eq!(

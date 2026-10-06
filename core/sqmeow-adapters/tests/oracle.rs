@@ -4,12 +4,77 @@ use sqmeow_db::edit::Changes;
 use sqmeow_db::edit::Source;
 use sqmeow_db::error::Error;
 use sqmeow_db::node::RelationKind;
+use sqmeow_db::sql::parameters::{Kind, Value};
 use sqmeow_db::value::Cell;
 
 include!("common/harness.rs");
 
 // Introspection reads the catalog. Unquoted Oracle names are upper case.
 const SCHEMA: &str = "SQMEOW";
+
+#[tokio::test]
+async fn bound_native_scalars_nulls_and_repeated_names() {
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
+    let text = "Alice' ; DELETE FROM users -- 日本";
+    let result = backend.execute_bound(
+        "select :1 as first, :1 as repeated, :2 as n, :3 as f, :4 as b, :5 as null_text, :6 as null_int, :7 as null_float, :8 as null_bool from dual",
+        &[Value::Text(text.into()), Value::Int(42), Value::Float(1.5), Value::Bool(true), Value::Null(Kind::Text), Value::Null(Kind::Int), Value::Null(Kind::Float), Value::Null(Kind::Bool)],
+        NO_CAP, CancellationToken::new(),
+    ).await.unwrap();
+    assert_eq!(result.row_count(), 1);
+    assert_eq!(result.cell(0, 0), Some(&Cell::Text(text.into())));
+    assert_eq!(result.cell(0, 1), Some(&Cell::Text(text.into())));
+    assert_eq!(result.cell(0, 2), Some(&Cell::Int(42)));
+    assert_eq!(result.cell(0, 3), Some(&Cell::Float(1.5)));
+    assert_eq!(result.cell(0, 4), Some(&Cell::Bool(true)));
+    for column in 5..9 {
+        assert_eq!(result.cell(0, column), Some(&Cell::Null));
+    }
+}
+
+#[tokio::test]
+async fn bound_empty_queries_keep_provenance_and_writes_keep_counts() {
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
+    fixture(&backend, "ora_bound").await;
+    let inserted = backend
+        .execute_bound(
+            "insert into ora_bound (id, label) values (:1, :2)",
+            &[Value::Int(1), Value::Text("alice".into())],
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(inserted.affected(), Some(1));
+    for id in [1, 99] {
+        let result = backend
+            .execute_bound(
+                "select id, label, optional from ora_bound where id=:1",
+                &[Value::Int(id)],
+                NO_CAP,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.row_count(), usize::from(id == 1));
+        assert_eq!(result.columns().len(), 3);
+        assert!(result.source().is_some());
+    }
+    drop_table(&backend, "ora_bound").await;
+}
+
+#[tokio::test]
+async fn bound_plsql_keeps_every_implicit_result() {
+    let backend = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
+    let sql = "declare c sys_refcursor; begin open c for select :1 as first from dual; dbms_sql.return_result(c); open c for select :1 + 1 as second from dual; dbms_sql.return_result(c); end;";
+    let results = backend
+        .execute_bound_results(sql, &[Value::Int(42)], NO_CAP, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].cell(0, 0), Some(&Cell::Int(42)));
+    assert_eq!(results[1].cell(0, 0), Some(&Cell::Int(43)));
+}
 
 async fn fixture(backend: &Backend, table: &str) {
     drop_table(backend, table).await;
