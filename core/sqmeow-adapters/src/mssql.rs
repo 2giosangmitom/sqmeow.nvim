@@ -617,6 +617,7 @@ async fn index_rows(client: &mut Connection, schema: &str, table: &str) -> Resul
     Ok(indexes)
 }
 
+#[async_trait::async_trait]
 impl Adapter for MsSqlAdapter {
     fn plan(&self, result: &ResultSet, changes: &sqmeow_db::edit::Changes) -> Result<Vec<String>> {
         for (index, _) in changes

@@ -802,6 +802,7 @@ impl PostgresAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl Adapter for PostgresAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::Postgres

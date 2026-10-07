@@ -432,6 +432,7 @@ impl RedisAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl Adapter for RedisAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::Redis

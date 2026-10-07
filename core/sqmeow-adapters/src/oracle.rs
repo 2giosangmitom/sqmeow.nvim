@@ -671,6 +671,7 @@ fn word_end(chars: &[char], index: usize) -> usize {
     end
 }
 
+#[async_trait::async_trait]
 impl Adapter for OracleAdapter {
     async fn execute_bound(
         &self,

@@ -189,6 +189,7 @@ impl ClickHouseAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl Adapter for ClickHouseAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::ClickHouse

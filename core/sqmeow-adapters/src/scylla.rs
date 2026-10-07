@@ -236,6 +236,7 @@ impl ScyllaAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl Adapter for ScyllaAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::Scylla

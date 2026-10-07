@@ -320,6 +320,7 @@ fn key_kind(row: &native::Row) -> KeyKind {
     }
 }
 
+#[async_trait::async_trait]
 impl Adapter for MySqlAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::MySql

@@ -236,6 +236,7 @@ impl SurrealAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl Adapter for SurrealAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::SurrealDb

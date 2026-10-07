@@ -5,7 +5,7 @@
 //! row decoding, schema discovery, and cancellation. The engine owns statement
 //! selection, session history, and editor notifications.
 
-use std::future::Future;
+use async_trait::async_trait;
 
 use tokio_util::sync::CancellationToken;
 
@@ -109,6 +109,7 @@ impl Dialect {
 /// for binding values or quoting identifiers in generated statements. Default
 /// metadata methods return empty results where a feature is unsupported, except
 /// relationship discovery, which reports unsupported explicitly.
+#[async_trait]
 pub trait Adapter: Send + Sync {
     /// Returns the dialect this connection speaks.
     fn dialect(&self) -> Dialect;
@@ -124,45 +125,41 @@ pub trait Adapter: Send + Sync {
     /// `cancel` is cooperative: adapters must stop or drain driver work safely
     /// before the connection can be reused. A cancelled statement need not undo
     /// side effects already committed by the database.
-    fn execute(
+    async fn execute(
         &self,
         statement: &str,
         max_rows: usize,
         cancel: CancellationToken,
-    ) -> impl Future<Output = Result<ResultSet>> + Send;
+    ) -> Result<ResultSet>;
 
     /// Execute one statement using native bound values, never SQL interpolation.
-    fn execute_bound(
+    async fn execute_bound(
         &self,
         statement: &str,
         values: &[crate::sql::parameters::Value],
         max_rows: usize,
         cancel: CancellationToken,
-    ) -> impl Future<Output = Result<ResultSet>> + Send {
-        async move {
-            if values.is_empty() {
-                self.execute(statement, max_rows, cancel).await
-            } else {
-                Err(crate::error::Error::driver(
-                    "this adapter does not support query parameters",
-                ))
-            }
+    ) -> Result<ResultSet> {
+        if values.is_empty() {
+            self.execute(statement, max_rows, cancel).await
+        } else {
+            Err(crate::error::Error::driver(
+                "this adapter does not support query parameters",
+            ))
         }
     }
 
     /// Execute a bound batch and return its result sets.
-    fn execute_bound_results(
+    async fn execute_bound_results(
         &self,
         statement: &str,
         values: &[crate::sql::parameters::Value],
         max_rows: usize,
         cancel: CancellationToken,
-    ) -> impl Future<Output = Result<Vec<ResultSet>>> + Send {
-        async move {
-            self.execute_bound(statement, values, max_rows, cancel)
-                .await
-                .map(|result| vec![result])
-        }
+    ) -> Result<Vec<ResultSet>> {
+        self.execute_bound(statement, values, max_rows, cancel)
+            .await
+            .map(|result| vec![result])
     }
 
     /// Executes `statement` as a wrapper around `origin`.
@@ -170,32 +167,30 @@ pub trait Adapter: Send + Sync {
     /// Tracing of columns to their source tables uses `origin`, the unwrapped
     /// query. This preserves edit provenance when filtering/sorting adds an outer
     /// SELECT. The default implementation ignores provenance and calls `execute`.
-    fn execute_wrapped(
+    async fn execute_wrapped(
         &self,
         statement: &str,
         _origin: &str,
         max_rows: usize,
         cancel: CancellationToken,
-    ) -> impl Future<Output = Result<ResultSet>> + Send {
-        self.execute(statement, max_rows, cancel)
+    ) -> Result<ResultSet> {
+        self.execute(statement, max_rows, cancel).await
     }
 
     /// Executes one statement, keeping every result set it returns in order.
     ///
     /// Drivers with multiple row sets (such as SQL Server batches) override this.
     /// The default wraps `execute_wrapped` in a one-element vector.
-    fn execute_results(
+    async fn execute_results(
         &self,
         statement: &str,
         origin: &str,
         max_rows: usize,
         cancel: CancellationToken,
-    ) -> impl Future<Output = Result<Vec<ResultSet>>> + Send {
-        async move {
-            self.execute_wrapped(statement, origin, max_rows, cancel)
-                .await
-                .map(|result| vec![result])
-        }
+    ) -> Result<Vec<ResultSet>> {
+        self.execute_wrapped(statement, origin, max_rows, cancel)
+            .await
+            .map(|result| vec![result])
     }
 
     /// Generate statements for staged result edits.
@@ -212,67 +207,49 @@ pub trait Adapter: Send + Sync {
     /// not interrupt a commit: `Error::Cancelled` means no changes were committed.
     /// Adapters without transactions report partial application as a driver error
     /// instead, so callers do not mistake partial writes for a complete rollback.
-    fn apply(
+    async fn apply(
         &self,
         statements: &[String],
         cancel: CancellationToken,
-    ) -> impl Future<Output = Result<Vec<ResultSet>>> + Send;
+    ) -> Result<Vec<ResultSet>>;
 
     /// Lists schemas visible to this connection.
-    fn schemas(&self) -> impl Future<Output = Result<Vec<SchemaNode>>> + Send;
+    async fn schemas(&self) -> Result<Vec<SchemaNode>>;
 
     /// Lists relations in a schema.
-    fn relations(&self, schema: &str) -> impl Future<Output = Result<Vec<RelationNode>>> + Send;
+    async fn relations(&self, schema: &str) -> Result<Vec<RelationNode>>;
 
     /// Lists routines in a schema.
-    fn routines(&self, schema: &str) -> impl Future<Output = Result<Vec<RoutineNode>>> + Send;
+    async fn routines(&self, schema: &str) -> Result<Vec<RoutineNode>>;
 
     /// Lists columns of a relation.
-    fn columns(
-        &self,
-        schema: &str,
-        relation: &str,
-    ) -> impl Future<Output = Result<Vec<ColumnNode>>> + Send;
+    async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>>;
 
     /// Lists indexes and unique constraints on a table.
-    fn indexes(
-        &self,
-        _schema: &str,
-        _relation: &str,
-    ) -> impl Future<Output = Result<Vec<IndexNode>>> + Send {
-        async { Ok(Vec::new()) }
+    async fn indexes(&self, _schema: &str, _relation: &str) -> Result<Vec<IndexNode>> {
+        Ok(Vec::new())
     }
 
     /// Lists foreign keys where this table is the source or target, with self references once.
     /// Unsupported adapters return an error, not an empty set of relationships.
-    fn relationships(
-        &self,
-        _schema: &str,
-        _relation: &str,
-    ) -> impl Future<Output = Result<Vec<RelationshipNode>>> + Send {
-        async {
-            Err(crate::error::Error::driver(
-                "this adapter does not support relationship metadata",
-            ))
-        }
+    async fn relationships(&self, _schema: &str, _relation: &str) -> Result<Vec<RelationshipNode>> {
+        Err(crate::error::Error::driver(
+            "this adapter does not support relationship metadata",
+        ))
     }
 
     /// Lists roles or users known to the server.
-    fn roles(&self) -> impl Future<Output = Result<Vec<RoleNode>>> + Send {
-        async { Ok(Vec::new()) }
+    async fn roles(&self) -> Result<Vec<RoleNode>> {
+        Ok(Vec::new())
     }
 
     /// Returns details for a relation, including comments and constraints.
-    fn details(
-        &self,
-        _schema: &str,
-        _relation: &str,
-    ) -> impl Future<Output = Result<Details>> + Send {
-        async { Ok(Details::default()) }
+    async fn details(&self, _schema: &str, _relation: &str) -> Result<Details> {
+        Ok(Details::default())
     }
 
     /// Closes the underlying database sessions and their background workers.
-    fn close(&self) -> impl Future<Output = ()> + Send;
+    async fn close(&self);
 }
 
 #[cfg(test)]
@@ -281,6 +258,7 @@ mod tests {
 
     struct Unsupported;
 
+    #[async_trait]
     impl Adapter for Unsupported {
         fn dialect(&self) -> Dialect {
             Dialect::Redis
@@ -308,7 +286,12 @@ mod tests {
 
     #[test]
     fn unsupported_relationship_metadata_is_not_an_empty_list() {
-        let mut future = std::pin::pin!(Unsupported.relationships("main", "table"));
+        fn assert_send<T: Send>(value: T) -> T {
+            value
+        }
+
+        let adapter: &dyn Adapter = &Unsupported;
+        let mut future = assert_send(adapter.relationships("main", "table"));
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         let std::task::Poll::Ready(Err(error)) = future.as_mut().poll(&mut context) else {
             panic!("unsupported metadata must immediately return an error");
