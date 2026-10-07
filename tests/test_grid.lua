@@ -51,6 +51,15 @@ T['a selection from one table says it can be edited, and which columns'] = funct
   eq(state.call.source, nil)
 end
 
+T['column summaries report value kinds without display widths'] = function()
+  for _, column in ipairs(state.call.columns) do
+    eq(rawget(column, 'widest'), nil)
+  end
+  eq(state.call.columns[1].numeric, true)
+  eq(state.call.columns[2].numeric, false)
+  eq(state.call.columns[3].nulls, true)
+end
+
 T['a join is editable through each table, but takes no new rows'] = function()
   eq(state.call.source.insertable, true)
 
