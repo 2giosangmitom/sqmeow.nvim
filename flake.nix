@@ -1,6 +1,5 @@
 {
-  description = "Query your database from your favorite editor";
-
+  description = "Modern SQL and NoSQL database client for Neovim";
   inputs = {
     nixpkgs.url = "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst";
     fenix = {
@@ -18,17 +17,19 @@
         "aarch64-darwin"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      pkgsFor = forAllSystems (
+        system:
+        import nixpkgs {
+          inherit system;
+          overlays = [ fenix.overlays.default ];
+        }
+      );
     in
     {
-      # Development shells only: releases build with plain cargo (and `cross`
-      # for Linux), so nothing here ever ships to users.
       devShells = forAllSystems (
         system:
         let
-          pkgs = import nixpkgs {
-            inherit system;
-            overlays = [ fenix.overlays.default ];
-          };
+          pkgs = pkgsFor.${system};
           inherit (pkgs) lib;
           toolchain = pkgs.fenix.stable.withComponents [
             "cargo"
@@ -36,6 +37,10 @@
             "rust-src"
             "rustfmt"
             "clippy"
+          ];
+          databasePath = lib.makeLibraryPath [
+            pkgs.sqlite
+            pkgs.duckdb
           ];
         in
         {
@@ -56,15 +61,14 @@
             SQLITE3_INCLUDE_DIR = "${lib.getDev pkgs.sqlite}/include";
             DUCKDB_LIB_DIR = "${lib.getLib pkgs.duckdb}/lib";
             DUCKDB_INCLUDE_DIR = "${lib.getDev pkgs.duckdb}/include";
-            # Cargo-built binaries (tests, engine subprocesses) link this
-            # library dynamically but carry no RUNPATH for it, and Nix leaves
-            # LD_LIBRARY_PATH empty in the shell: without this, they fail to start.
+            # Dev shells link the system SQLite/DuckDB dynamically. Release
+            # archives compile bundled sources instead (`just dist-build`).
             shellHook =
               lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-                export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.sqlite pkgs.duckdb ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+                export LD_LIBRARY_PATH="${databasePath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               ''
               + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
-                export DYLD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.sqlite pkgs.duckdb ]}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+                export DYLD_LIBRARY_PATH="${databasePath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
               '';
           };
         }

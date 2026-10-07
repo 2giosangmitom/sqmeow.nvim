@@ -38,3 +38,9 @@ uuid.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+# Release archives link SQLite/DuckDB from compiled sources instead of the
+# dev shell's shared libraries. Dev/test/lint builds omit this feature and
+# stay dynamic.
+[features]
+bundled = ["duckdb/bundled", "rusqlite/bundled"]

@@ -4,7 +4,6 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: Tag to build and attach the archives to
         required: true
         type: string
   push:
@@ -12,7 +11,6 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag to build and attach the archives to
         required: true
         type: string
 
@@ -33,9 +31,11 @@ jobs:
       matrix:
         include:
           # musl, so the binary does not depend on the distribution's glibc.
+          # SQLite/DuckDB compile from bundled sources (`--features bundled`),
+          # so no system database libraries are needed.
           - { target: x86_64-unknown-linux-musl, runner: ubuntu-latest, cross: true }
           - { target: aarch64-unknown-linux-musl, runner: ubuntu-latest, cross: true }
-          - { target: aarch64-apple-darwin, runner: macos-latest }
+          - { target: aarch64-apple-darwin, runner: macos-14 }
           - { target: x86_64-pc-windows-msvc, runner: windows-latest }
 
     steps:
@@ -58,7 +58,7 @@ jobs:
         run: cargo install cross --locked
 
       - name: Build
-        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }} -p sqmeow-core
+        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }} -p sqmeow-core --features bundled
 
       - name: Package
         shell: bash
@@ -102,5 +102,6 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           files: dist/*
+          fail_on_unmatched_files: true
           # A release-please release already has notes from the changelog.
           generate_release_notes: ${{ !inputs.tag }}
