@@ -72,7 +72,14 @@ function M.on_call(payload)
   -- Preserve the locally recorded SQL when merging updates for the same call.
   local previous = state.call or {}
   if previous.call_id == payload.call_id then
-    state.call = vim.tbl_extend('force', previous, payload)
+    local merged = vim.tbl_extend('force', previous, payload)
+    if previous.statement ~= nil then
+      merged.statement = previous.statement
+    end
+    if previous.sql ~= nil then
+      merged.sql = previous.sql
+    end
+    state.call = merged
   else
     state.call = payload
   end

@@ -634,6 +634,9 @@ local function toggle_database(node)
   end
 
   local parent = require('sqmeow.core.state').connections[node.conn_id]
+  if not parent then
+    return M.render()
+  end
   expanded[key] = true
   local id = require('sqmeow.api.connection').connect(parent.url, {
     name = ('%s/%s'):format(parent.name, node.name),

@@ -39,6 +39,9 @@ pub(crate) fn check_affected(statement: &str, affected: u64) -> Result<()> {
 
 /// Whether a statement may have changed a table an adapter holds a picture of.
 pub(crate) fn may_change_schema(statement: &str) -> bool {
+    if sqmeow_db::sql::first_word(statement).is_empty() {
+        return false;
+    }
     !matches!(
         sqmeow_db::sql::first_word(statement).as_str(),
         "select"

@@ -87,10 +87,14 @@ pub fn read(path: &Path) -> Result<ResultSet, String> {
         .unwrap_or_default();
 
     let mut result = ResultSet::new(statement, columns);
+    let width = result.columns().len();
     for _ in 0..rows {
         let Value::Array(values) = decode(&mut input)? else {
             return Err("the saved result holds a row that is not a row".into());
         };
+        if values.len() != width {
+            return Err("the saved result holds a row with the wrong width".into());
+        }
         result.push_row(values.iter().map(cell).collect::<Result<Vec<_>, _>>()?);
     }
 

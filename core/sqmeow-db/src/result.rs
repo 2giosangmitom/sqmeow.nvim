@@ -180,7 +180,7 @@ impl ResultSet {
     pub fn set_affected(&mut self, affected: u64) {
         self.affected = Some(match self.affected {
             // One statement can report more than once; the counts add up.
-            Some(existing) => existing + affected,
+            Some(existing) => existing.saturating_add(affected),
             None => affected,
         });
     }

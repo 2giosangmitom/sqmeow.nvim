@@ -43,8 +43,8 @@ function M.lines(columns, width)
     if column.is_null then
       line:append(config.ui.result.null_text, 'SqmeowNull')
     else
-      -- Keep each value on one line.
-      local value = column.value:gsub('[\r\n]', ' ')
+      -- The engine can send numbers and booleans here.
+      local value = tostring(column.value):gsub('[\r\n]', ' ')
       line:append(truncate(value, value_width, ellipsis))
     end
     lines[index] = line
