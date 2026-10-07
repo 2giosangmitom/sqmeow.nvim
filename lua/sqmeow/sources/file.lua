@@ -38,6 +38,9 @@ function M.load(opts)
   if type(decoded) ~= 'table' then
     return {}, ('%s must hold a JSON array of connections'):format(path)
   end
+  if not vim.islist(decoded) then
+    return {}, ('%s must hold a JSON array of connections'):format(path)
+  end
 
   return decoded
 end

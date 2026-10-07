@@ -33,6 +33,7 @@ impl Options {
     pub(super) fn parse(url: &str, read_only: bool) -> Result<Self> {
         let rest = url
             .strip_prefix("sqlite:")
+            .or_else(|| url.strip_prefix("file:"))
             .ok_or_else(|| Error::driver("invalid SQLite URL"))?;
         let rest = rest.strip_prefix("//").unwrap_or(rest);
         let (path, query) = rest.split_once('?').unwrap_or((rest, ""));

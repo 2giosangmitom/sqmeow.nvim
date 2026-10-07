@@ -77,7 +77,7 @@ function M.connect_named(name)
   end
 
   local existing = state.connection_by_name(name)
-  if existing and existing.state ~= 'closed' then
+  if existing then
     if
       existing.url ~= spec.url
       or (existing.read_only == true) ~= (spec.read_only == true)
@@ -281,7 +281,9 @@ function M.disconnect(id)
     end
   end
 
-  engine().request('disconnect', { id = id })
+  if require('sqmeow.rpc.client').is_running() then
+    engine().request('disconnect', { id = id })
+  end
   state.remove_connection(id)
 end
 

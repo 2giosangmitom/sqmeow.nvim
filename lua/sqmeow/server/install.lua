@@ -154,6 +154,7 @@ function M.archive_url(version, triple)
     version = manifest['.']
   end
 
+  version = version:gsub('^v', '')
   return ('https://github.com/%s/releases/download/v%s/%s'):format(
     M.repository,
     version,

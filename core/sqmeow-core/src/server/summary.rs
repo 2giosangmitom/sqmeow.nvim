@@ -16,13 +16,14 @@ pub(super) fn capabilities(connected: bool) -> Value {
     ])
 }
 
-/// Encode nulls, booleans, integers, and floats as MessagePack values; send other cells as text.
+/// Encode nulls, booleans, and integers as MessagePack values; send other cells as text.
 pub(super) fn cell_value(cell: &Cell) -> Value {
     match cell {
         Cell::Null => Value::Nil,
         Cell::Bool(value) => Value::from(*value),
         Cell::Int(value) => Value::from(*value),
-        Cell::Float(value) => Value::from(*value),
+        // NaN and infinities have no MessagePack float form Neovim reads back.
+        Cell::Float(value) if value.is_finite() => Value::from(*value),
         // Exact numerics stay text.
         other => Value::from(other.display("").into_owned()),
     }

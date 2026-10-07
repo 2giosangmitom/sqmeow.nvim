@@ -102,7 +102,7 @@ test-lua: build-debug
     # The plugin loads a release build before a debug one, so one left over from `just build` is
     # what the suite would test. Keep it current rather than testing an old engine.
     if [ -x target/release/sqmeow-core ]; then
-        cargo build --release
+        cargo build --release {{cargo_flags}}
     fi
     if [ -n "$(docker compose ps --status running --quiet mssql 2>/dev/null)" ]; then
         export SQMEOW_TEST_MSSQL_URL="mssql://sa:Sqmeow_Test123%21@127.0.0.1:51433/master?trust_server_certificate=true"
@@ -117,6 +117,9 @@ test-lua: build-debug
     fi
     if [ -n "$(docker compose ps --status running --quiet mysql 2>/dev/null)" ]; then
         export SQMEOW_TEST_MYSQL_URL="mysql://root:sqmeow@127.0.0.1:53306/sqmeow"
+    fi
+    if [ -n "$(docker compose ps --status running --quiet mariadb 2>/dev/null)" ]; then
+        export SQMEOW_TEST_MARIADB_URL="mysql://root:sqmeow@127.0.0.1:53307/sqmeow"
     fi
     if [ -n "$(docker compose ps --status running --quiet clickhouse 2>/dev/null)" ]; then
         export SQMEOW_TEST_CLICKHOUSE_URL="clickhouse://sqmeow:sqmeow@127.0.0.1:58123/default"

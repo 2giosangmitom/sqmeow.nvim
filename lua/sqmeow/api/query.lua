@@ -61,7 +61,9 @@ function M.execute(sql, opts)
   end
   -- The engine understands dialect tokens; this only avoids an extra RPC for
   -- the usual unparameterized query. Never rewrite the SQL with input values.
-  if opts.parameters == nil and (sql:find(':', 1, true) or sql:find('@param', 1, true)) then
+  -- `::` casts and `://` URLs carry no parameter.
+  local probe = sql:gsub('::', ''):gsub('://', '')
+  if opts.parameters == nil and (probe:find(':', 1, true) or sql:find('@param', 1, true)) then
     local definitions, err = engine().request('query_parameters', {
       conn_id = connection.id,
       sql = sql,
@@ -113,11 +115,15 @@ function M.execute(sql, opts)
   end
 
   if not opts.confirmed and require('sqmeow.config').get().query.confirm_destructive then
-    local dangers = engine().request('inspect', {
+    local dangers, inspect_err = engine().request('inspect', {
       conn_id = connection.id,
       sql = sql,
       line = opts.line,
     })
+    if dangers == nil and inspect_err ~= nil then
+      notify(inspect_err, vim.log.levels.ERROR)
+      return nil, inspect_err
+    end
     if type(dangers) == 'table' and #dangers > 0 then
       vim.ui.select({ 'Run it', 'Cancel' }, {
         prompt = ('%s, on %s. Run it?'):format(table.concat(dangers, '; '), connection.name),

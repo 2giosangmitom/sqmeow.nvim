@@ -1211,7 +1211,10 @@ function M.toggle_float()
   if not M.is_float() then
     return M.open_float()
   end
-  assert(popup and win, 'a float is open, so it has a popup and a window')
+  if not (popup and win) then
+    popup, win = nil, nil
+    return M.open()
+  end
 
   local cursor = vim.api.nvim_win_get_cursor(win)
   local closing = popup

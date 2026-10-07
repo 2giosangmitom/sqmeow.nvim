@@ -67,6 +67,11 @@ function M.label(url)
     return ('%s@%s'):format(database, host)
   end
 
+  local bracketed_host, bracketed_db = url:match('@(%[[^%]]+%][^/]*)/*([^%?]*)')
+  if bracketed_host and bracketed_db ~= '' then
+    return ('%s@%s'):format(bracketed_db, bracketed_host)
+  end
+
   local bare = url:match('://[^/]*/([^%?]+)')
   return bare or M.redact(url:gsub('%?.*$', ''))
 end
