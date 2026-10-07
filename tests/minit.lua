@@ -1,7 +1,11 @@
 #!/usr/bin/env -S nvim -l
 -- Runtime for the test suite and the help file, with its plugins installed by lazy.nvim's minit
 vim.env.LAZY_STDPATH = '.tests'
-load(vim.fn.system('curl -fsSL --proto "=https" https://raw.githubusercontent.com/folke/lazy.nvim/main/bootstrap.lua'))()
+load(
+  vim.fn.system(
+    'curl -fsSL --proto "=https" https://raw.githubusercontent.com/folke/lazy.nvim/main/bootstrap.lua'
+  )
+)()
 
 require('lazy.minit').setup({
   spec = {
