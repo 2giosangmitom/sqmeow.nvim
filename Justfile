@@ -1,6 +1,6 @@
 # Everything CI runs, runnable locally with the same command.
 
-# Extra cargo flags, e.g. `--features bundled-duckdb` on a machine without libduckdb.
+# Extra cargo flags. SQLite and DuckDB must always be supplied as prebuilt libraries.
 cargo_flags := env_var_or_default("SQMEOW_CARGO_FLAGS", "")
 
 default: lint test docs-check

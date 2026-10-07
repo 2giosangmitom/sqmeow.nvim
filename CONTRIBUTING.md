@@ -20,9 +20,9 @@ Use the [Nix](https://nixos.org/download/) development shell for CI's locked too
 nix develop
 ```
 
-The shell includes Rust, rustfmt, Clippy, [just](https://just.systems), StyLua, Selene, lua-language-server, Neovim, SQLite, and the DuckDB CLI and library. For server-backed integration tests, install Docker with Compose separately.
+The shell includes Rust, rustfmt, Clippy, [just](https://just.systems), StyLua, Selene, lua-language-server, Neovim, SQLite, and the DuckDB CLI and library. It supplies the build-time and runtime library paths needed by Cargo tests and engine subprocesses; Cargo links the database libraries rather than compiling their sources. Nix normally downloads cached packages, but can build them when substitutes are unavailable. For server-backed integration tests, install Docker with Compose separately.
 
-Without Nix, run `mise install` to install the tools in `mise.toml`, then install Neovim and the DuckDB library separately. Releases build with plain cargo (`cross` for Linux); Nix is only the development environment.
+Without Nix, run `mise install` to install the tools in `mise.toml`, then install Neovim and prebuilt SQLite and DuckDB libraries separately. The SQLite library must support column metadata; DuckDB must provide JSON functions including `json_serialize_sql`. Database source compilation is not supported. Linux release targets remain musl-only; target-specific prebuilt libraries are required for cross-compilation.
 
 ## Run the checks
 
