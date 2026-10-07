@@ -42,8 +42,6 @@ pub(super) fn summarize(call: &Call, connected: bool) -> Vec<(&'static str, Valu
                 ("name", Value::from(column.name.as_str())),
                 ("type_name", Value::from(column.type_name.as_str())),
                 ("class", Value::from(column.class.name())),
-                // Display columns taken by the widest value, `NULL`s excluded.
-                ("widest", Value::from(stats.widest as u64)),
                 ("nulls", Value::from(stats.nulls)),
                 ("numeric", Value::from(stats.numeric)),
             ];

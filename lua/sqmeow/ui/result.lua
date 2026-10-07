@@ -16,6 +16,9 @@ local sticky_win = nil
 --- The rows on screen, their offset in the view, and their result indices.
 local page = { offset = 0, rows = {}, indices = {} }
 
+--- Content widths seen on loaded pages of the current result, excluding NULL labels.
+local content_widths = {}
+
 --- How each result is shown, by call id.
 local specs = {}
 --- Previous free-form views awaiting asynchronous Polars validation, by call id.
@@ -439,8 +442,16 @@ local function measure(columns, hidden)
         header = header + vim.api.nvim_strwidth(icon) + 1
       end
 
-      -- Sized from the engine's measurement over every row, so paging does not move the columns.
-      local content = column.widest or 0
+      -- Measure the same text we draw, using Neovim's Unicode width rules.
+      -- Keep widths from earlier pages so navigating back never shrinks columns.
+      local content = content_widths[index] or 0
+      for _, row in ipairs(page.rows) do
+        local text, is_null = cell_text(row[index], null_text)
+        if not is_null then
+          content = math.max(content, vim.api.nvim_strwidth(text))
+        end
+      end
+      content_widths[index] = content
       if column.nulls then
         content = math.max(content, vim.api.nvim_strwidth(null_text))
       end
@@ -970,6 +981,7 @@ function M.render(summary)
   local id = summary and summary.call_id
   if id ~= drawn then
     drawn = id
+    content_widths = {}
     -- Staged changes name rows of the result they were made on, which is no longer on screen.
     local dropped = require('sqmeow.ui.edit').reset()
     if dropped > 0 then

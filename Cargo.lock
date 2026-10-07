@@ -5694,7 +5694,6 @@ dependencies = [
  "sqlparser 0.63.0",
  "thiserror",
  "tokio-util",
- "unicode-width",
 ]
 
 [[package]]

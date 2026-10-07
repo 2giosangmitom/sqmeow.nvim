@@ -52,7 +52,6 @@ local M = {}
 ---@field class string One of the type classes the icons are keyed by.
 ---@field key string|nil `primary_key` or `foreign_key`, absent when the column is neither.
 ---@field editable boolean|nil Present when the column can be written back to where it is stored.
----@field widest integer Display columns taken by the widest value, `NULL`s excluded.
 ---@field nulls boolean Whether any value in the column is `NULL`.
 ---@field numeric boolean Whether every value is a number.
 

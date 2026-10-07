@@ -1,7 +1,7 @@
 //! Defines the in-memory result set stored column-wise.
 //!
 //! Adapters append row-shaped data; the result stores columns independently for
-//! paging, measurement, filtering, and export. Source metadata links editable
+//! paging, filtering, and export. Source metadata links editable
 //! cells back to table keys and is separate from display column metadata.
 
 use std::time::Duration;
@@ -9,10 +9,6 @@ use std::time::Duration;
 use crate::edit::Source;
 use crate::types::{KeyKind, TypeClass};
 use crate::value::Cell;
-use crate::width;
-
-/// The widest a column is measured to, past which the exact figure stops mattering.
-pub const MAX_MEASURED_WIDTH: usize = 512;
 
 /// Describes one column of a result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,12 +45,9 @@ impl Column {
     }
 }
 
-/// Stores measurements used by the editor to size a column.
+/// Describes the kinds of values present in a column.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ColumnStats {
-    /// Display columns taken by the widest value, `NULL`s excluded and capped at
-    /// [`MAX_MEASURED_WIDTH`].
-    pub widest: usize,
     /// Whether any value in the column is `NULL`.
     pub nulls: bool,
     /// Whether every value in the column is a number.
@@ -121,12 +114,11 @@ impl ResultSet {
         self.columns = columns;
     }
 
-    /// Measure one column for the editor.
+    /// Describe one column's values without formatting or measuring them.
     pub fn column_stats(&self, index: usize) -> ColumnStats {
         let cells = self.column_cells(index);
 
         let mut stats = ColumnStats {
-            widest: 0,
             nulls: false,
             numeric: !cells.is_empty(),
         };
@@ -139,16 +131,8 @@ impl ResultSet {
             if !cell.is_numeric() {
                 stats.numeric = false;
             }
-            if stats.widest < MAX_MEASURED_WIDTH {
-                // Measured against the same text the plugin will draw.
-                let shown = cell.display("");
-                stats.widest = stats
-                    .widest
-                    .max(width::width_capped(&shown, MAX_MEASURED_WIDTH));
-            }
         }
 
-        stats.widest = stats.widest.min(MAX_MEASURED_WIDTH);
         stats
     }
 
@@ -241,6 +225,28 @@ mod tests {
 
     fn columns() -> Vec<Column> {
         vec![Column::new("id", "INTEGER"), Column::new("name", "TEXT")]
+    }
+
+    #[test]
+    fn column_stats_preserve_nulls_and_numeric_kinds() {
+        let mut result = ResultSet::new("select id, name from t", columns());
+        assert_eq!(result.column_stats(0), ColumnStats::default());
+        result.push_row(vec![Cell::Int(1), Cell::Text("中é".into())]);
+        result.push_row(vec![Cell::Null, Cell::Text("NULL".into())]);
+        assert_eq!(
+            result.column_stats(0),
+            ColumnStats {
+                nulls: true,
+                numeric: true
+            }
+        );
+        assert_eq!(
+            result.column_stats(1),
+            ColumnStats {
+                nulls: false,
+                numeric: false
+            }
+        );
     }
 
     #[test]
