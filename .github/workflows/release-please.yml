@@ -14,7 +14,6 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      pr: ${{ steps.release.outputs.pr }}
       released: ${{ steps.release.outputs.releases_created }}
       tag: ${{ steps.release.outputs.tag_name }}
 
@@ -25,23 +24,18 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # release-please bumps Cargo.toml but not Cargo.lock, and release builds use `--locked`.
-  lockfile:
-    name: lockfile
-    needs: release-please
-    if: needs.release-please.outputs.pr
-    runs-on: ubuntu-latest
-
-    steps:
       - uses: actions/checkout@v7
+        if: steps.release.outputs.pr
         with:
-          ref: ${{ fromJson(needs.release-please.outputs.pr).headBranchName }}
+          ref: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
 
-      # The pinned toolchain from mise.toml, so the synced lockfile never needs a
-      # newer rust than the repo builds with.
-      - uses: jdx/mise-action@v4
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.release.outputs.pr
 
+      # Release builds use --locked, so keep Cargo.lock on the release PR current.
+      # `cargo update` only resolves manifests, so no database libraries are needed.
       - name: Sync Cargo.lock
+        if: steps.release.outputs.pr
         run: |
           set -euo pipefail
           cargo update --workspace --quiet

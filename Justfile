@@ -1,6 +1,7 @@
 # Everything CI runs, runnable locally with the same command.
 
-# Extra cargo flags. SQLite and DuckDB must always be supplied as prebuilt libraries.
+# Extra cargo flags. Dev builds link external SQLite and DuckDB libraries;
+# release archives compile bundled sources instead (`just dist-build`).
 cargo_flags := env_var_or_default("SQMEOW_CARGO_FLAGS", "")
 
 default: lint test docs-check
@@ -12,6 +13,12 @@ build:
 # Compile the engine in debug mode, which is faster to iterate on.
 build-debug:
     cargo build {{cargo_flags}}
+
+# Compile a static release binary for distribution. The `bundled` feature
+# compiles SQLite/DuckDB from source; `target` is a Rust target triple and
+# `builder` is `cargo`, `cross`, or another cargo wrapper.
+dist-build target builder="cargo":
+    {{builder}} build --release --locked --target {{quote(target)}} -p sqmeow-core --features bundled {{cargo_flags}}
 
 lint: lint-rust lint-lua
 

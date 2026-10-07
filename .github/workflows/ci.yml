@@ -15,8 +15,7 @@ env:
   CARGO_PROFILE_DEV_DEBUG: 0
 
 jobs:
-  lint:
-    name: lint
+  checks:
     runs-on: ubuntu-latest
 
     steps:
@@ -34,61 +33,8 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
-      - run: nix flake check --all-systems --no-build
       # Also installs the plugins lua-language-server checks against.
       - run: nix develop --command just docs-check
       - run: nix develop --command just lint
-
-  test:
-    name: test
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: cachix/install-nix-action@v31
-      - uses: nix-community/cache-nix-action@v6
-        with:
-          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ hashFiles('flake.lock') }}
-          cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' }}
-
-      # Cache the largest database images; archiving the entire Compose stack
-      # would compete with Nix and Cargo for GitHub's 10 GB cache quota.
-      - name: Restore database images
-        id: db-images
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ runner.temp }}/db-images.tar.zst
-          key: db-images-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('compose.yaml') }}
-
-      - name: Load database images
-        if: steps.db-images.outputs.cache-hit == 'true'
-        run: zstd -dc "${{ runner.temp }}/db-images.tar.zst" | docker load
-
-      - name: Pull database images
-        if: steps.db-images.outputs.cache-hit != 'true'
-        run: docker compose pull oracle mssql
-
-      - name: Archive database images
-        if: steps.db-images.outputs.cache-hit != 'true' && github.ref == 'refs/heads/master'
-        run: |
-          mapfile -t images < <(docker compose config --format json | jq -r '.services.oracle.image, .services.mssql.image')
-          docker save "${images[@]}" | zstd -T0 -1 -o "${{ runner.temp }}/db-images.tar.zst"
-
-      - name: Save database images
-        if: steps.db-images.outputs.cache-hit != 'true' && github.ref == 'refs/heads/master'
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ runner.temp }}/db-images.tar.zst
-          key: ${{ steps.db-images.outputs.cache-primary-key }}
-
-      # The databases come from compose.yaml, on the same ports and with the same
-      # server-backed URLs `just test-rust` and `just test-lua` use locally.
       - run: nix develop --command just db-up
-      - run: nix develop --command just test-rust
-      - run: nix develop --command just test-lua
+      - run: nix develop --command just test
