@@ -123,6 +123,7 @@ impl DuckDbAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl Adapter for DuckDbAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::DuckDb

@@ -218,6 +218,7 @@ impl MongoAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl Adapter for MongoAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::MongoDb

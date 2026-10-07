@@ -86,6 +86,7 @@ impl SqliteAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl Adapter for SqliteAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::Sqlite
