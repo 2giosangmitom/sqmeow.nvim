@@ -50,7 +50,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-          # Release binaries (especially bundled DuckDB) exhaust the cache quota.
+          # Release binaries exhaust the cache quota.
           cache-targets: false
 
       - name: Install cross
@@ -58,7 +58,7 @@ jobs:
         run: cargo install cross --locked
 
       - name: Build
-        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }} -p sqmeow-core --features bundled-duckdb
+        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }} -p sqmeow-core
 
       - name: Package
         shell: bash

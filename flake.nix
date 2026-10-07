@@ -52,6 +52,8 @@
               duckdb
               git
             ];
+            SQLITE3_LIB_DIR = "${lib.getLib pkgs.sqlite}/lib";
+            SQLITE3_INCLUDE_DIR = "${lib.getDev pkgs.sqlite}/include";
             DUCKDB_LIB_DIR = "${lib.getLib pkgs.duckdb}/lib";
             DUCKDB_INCLUDE_DIR = "${lib.getDev pkgs.duckdb}/include";
             # Cargo-built binaries (tests, engine subprocesses) link this
@@ -59,10 +61,10 @@
             # LD_LIBRARY_PATH empty in the shell: without this, they fail to start.
             shellHook =
               lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-                export LD_LIBRARY_PATH="${lib.getLib pkgs.duckdb}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+                export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.sqlite pkgs.duckdb ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               ''
               + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
-                export DYLD_LIBRARY_PATH="${lib.getLib pkgs.duckdb}/lib''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+                export DYLD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.sqlite pkgs.duckdb ]}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
               '';
           };
         }
