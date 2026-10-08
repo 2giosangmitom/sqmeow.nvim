@@ -165,15 +165,17 @@ T['prompts']['supplied values including an empty map bypass discovery and prompt
 end
 
 T['prompts']['ordinary SQL avoids discovery while server can reject literal candidates'] = function()
-  eq(query.execute('select 1'), 42)
-  eq(requests[1].method == 'query_parameters', false)
-  requests = {}
-  eq(query.execute("select 'https://example.com'"), 42)
-  eq(requests[1].method, 'query_parameters')
+  for _, sql in ipairs({ 'select 1', "select 'https://example.com'", 'select 1::int' }) do
+    requests = {}
+    eq(query.execute(sql), 42)
+    eq(requests[1].method == 'query_parameters', false)
+  end
+  for _, sql in ipairs({ "select ':literal'", '-- @param unused text\nselect 1' }) do
+    requests = {}
+    eq(query.execute(sql), 42)
+    eq(requests[1].method, 'query_parameters')
+  end
   eq(#prompts, 0)
-  requests = {}
-  eq(query.execute('-- @param unused text\nselect 1'), 42)
-  eq(requests[1].method, 'query_parameters')
 end
 
 T['prompts']['discovery errors do not open or replace a result'] = function()

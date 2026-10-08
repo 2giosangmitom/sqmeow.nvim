@@ -109,6 +109,29 @@ T['archived multi-statement results restore together'] = function()
   eq(row()[1].value, '2')
 end
 
+T['a failed batch retains every completed result'] = function()
+  for count, prefix in ipairs({ 'select 1 as first;', 'select 1 as first; select 2 as second;' }) do
+    local summary = run(prefix .. ' select nope from people')
+    eq(summary.state, 'error')
+    helpers.contains(summary.error, 'nope')
+    eq(#(summary.results or {}), count + 1)
+    for index = 1, count do
+      local completed = summary.results[index]
+      eq(completed.state, 'done')
+      eq(rpc.request('row', { call_id = completed.call_id, row = 0 })[1].value, tostring(index))
+    end
+    eq(summary.results[count + 1].state, 'error')
+  end
+end
+
+T['a failed query does not evict the previous result'] = function()
+  setup({ query = { history_size = 1 } })
+  MiniTest.finally(setup)
+  local previous = run('select 42 as kept').call_id
+  eq(run('select nope from people').state, 'error')
+  eq(rpc.request('row', { call_id = previous, row = 0 })[1].value, '42')
+end
+
 T['evicted results can be restored from their archive'] = function()
   setup({ query = { history_size = 1 } })
   MiniTest.finally(setup)

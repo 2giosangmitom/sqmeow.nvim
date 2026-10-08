@@ -25,7 +25,7 @@ end
 
 --- Submit statements and open the result window. Completion arrives via events.
 --- Uses `opts.conn_id` when supplied; otherwise resolves `opts.source_buf` (or
---- the current buffer) with |sqmeow.api.target()|. Pending edits or destructive
+--- the current buffer) with |sqmeow.api.connection.target()|. Pending edits or destructive
 --- statements can defer submission while a confirmation prompt is shown.
 ---@param sql string One or more statements in the connection's dialect.
 ---@param opts table|nil `conn_id` selects a connection; `source_buf` selects the
@@ -179,7 +179,7 @@ end
 
 --- Run the whole current buffer.
 ---@return integer|nil call_id
----@return string|nil error See |sqmeow.api.execute()|, including deferred prompts.
+---@return string|nil error See |sqmeow.api.query.execute()|, including deferred prompts.
 function M.execute_buffer()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   return M.execute(table.concat(lines, '\n'), { source_buf = vim.api.nvim_get_current_buf() })
@@ -187,7 +187,7 @@ end
 
 --- Run the statement the cursor is in.
 ---@return integer|nil call_id
----@return string|nil error See |sqmeow.api.execute()|, including deferred prompts.
+---@return string|nil error See |sqmeow.api.query.execute()|, including deferred prompts.
 function M.execute_statement()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   return M.execute(table.concat(lines, '\n'), {

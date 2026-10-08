@@ -183,7 +183,7 @@ function M.edit(name, changes)
 end
 
 --- Rename an open connection in editor state and refresh its displayed label.
---- Does not update a saved definition; use |sqmeow.api.edit()| for that.
+--- Does not update a saved definition; use |sqmeow.api.connection.edit()| for that.
 ---@param id integer
 ---@param name string
 ---@return boolean renamed

@@ -5,7 +5,7 @@ use crate::edit::{Source, literal};
 use crate::result::ResultSet;
 use crate::value::Cell;
 use polars::prelude::{Column as PolarsColumn, DataFrame};
-use polars_io::prelude::{CsvWriter, JsonFormat, JsonWriter, SerWriter};
+use polars_io::prelude::{CsvWriter, SerWriter};
 
 /// Describes the format an export is written in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,135 +161,14 @@ fn csv_field(text: &str, only_field: bool) -> String {
 /// Write a result as a JSON array of objects.
 pub fn json(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>) -> String {
     let columns = chosen(result, columns);
-    if columns.is_empty() {
-        let records = vec![serde_json::json!({}); rows.len()];
-        return serde_json::to_string_pretty(&records).expect("empty objects serialize");
-    }
-
-    // Polars requires unique, homogeneous columns. Use native types when every non-null
-    // cell agrees; preserve mixed, nested and non-finite values after the Polars writer.
-    let mut overlays = Vec::with_capacity(columns.len());
-    let frame_columns: Vec<PolarsColumn> = columns
+    let records: Vec<serde_json::Value> = rows
         .iter()
-        .enumerate()
-        .map(|(position, &index)| {
-            let cells: Vec<&Cell> = rows
-                .iter()
-                .map(|&row| result.cell(row, index).unwrap_or(&Cell::Null))
-                .collect();
-            let name = format!("column_{position}");
-            if cells
-                .iter()
-                .all(|cell| matches!(cell, Cell::Null | Cell::Bool(_)))
-            {
-                overlays.push(false);
-                PolarsColumn::new(
-                    name.into(),
-                    cells
-                        .iter()
-                        .map(|cell| match cell {
-                            Cell::Bool(value) => Some(*value),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            } else if cells
-                .iter()
-                .all(|cell| matches!(cell, Cell::Null | Cell::Int(_)))
-            {
-                overlays.push(false);
-                PolarsColumn::new(
-                    name.into(),
-                    cells
-                        .iter()
-                        .map(|cell| match cell {
-                            Cell::Int(value) => Some(*value),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            } else if cells.iter().all(|cell| {
-                matches!(cell, Cell::Null) || matches!(cell, Cell::Float(v) if v.is_finite())
-            }) {
-                // Use the original values for formatting: JSON numbers distinguish 1.0 from 1.
-                overlays.push(true);
-                PolarsColumn::new(
-                    name.into(),
-                    cells
-                        .iter()
-                        .map(|cell| match cell {
-                            Cell::Float(value) => Some(*value),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            } else if cells.iter().all(|cell| {
-                matches!(
-                    cell,
-                    Cell::Null
-                        | Cell::Text(_)
-                        | Cell::Decimal(_)
-                        | Cell::Bytes { .. }
-                        | Cell::Timestamp(_)
-                        | Cell::Date(_)
-                        | Cell::Time(_)
-                        | Cell::Uuid(_)
-                        | Cell::Unsupported { .. }
-                )
-            }) {
-                overlays.push(false);
-                PolarsColumn::new(
-                    name.into(),
-                    cells
-                        .iter()
-                        .map(|cell| match cell {
-                            Cell::Null => None,
-                            other => Some(other.text("").into_owned()),
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            } else {
-                overlays.push(true);
-                PolarsColumn::new(
-                    name.into(),
-                    cells
-                        .iter()
-                        .map(|cell| match cell {
-                            Cell::Null => None,
-                            other => Some(other.text("").into_owned()),
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            }
-        })
-        .collect();
-    let mut frame =
-        DataFrame::new(rows.len(), frame_columns).expect("columns share the same row count");
-    let mut bytes = Vec::new();
-    JsonWriter::new(&mut bytes)
-        .with_json_format(JsonFormat::Json)
-        .finish(&mut frame)
-        .expect("writing a Polars frame to memory cannot fail");
-    let encoded: Vec<serde_json::Map<String, serde_json::Value>> =
-        serde_json::from_slice(&bytes).expect("Polars writes valid JSON records");
-    let records: Vec<serde_json::Value> = encoded
-        .into_iter()
-        .zip(rows)
-        .map(|(record, &row)| {
+        .map(|&row| {
             let mut object = serde_json::Map::with_capacity(columns.len());
-            for (position, &index) in columns.iter().enumerate() {
-                let name = format!("column_{position}");
-                let cell = record
-                    .get(&name)
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
+            for &index in &columns {
                 object.insert(
                     result.columns()[index].name.clone(),
-                    if overlays[position] {
-                        value(result.cell(row, index).unwrap_or(&Cell::Null))
-                    } else {
-                        cell
-                    },
+                    value(result.cell(row, index).unwrap_or(&Cell::Null)),
                 );
             }
             serde_json::Value::Object(object)

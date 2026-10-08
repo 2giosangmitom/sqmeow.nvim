@@ -254,6 +254,8 @@ pub trait Adapter: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     struct Unsupported;
@@ -303,67 +305,39 @@ mod tests {
         );
     }
 
-    #[test]
-    fn recognises_the_schemes_people_type() {
-        assert_eq!(
-            Dialect::from_url("mssql://sa@host/app"),
-            Some(Dialect::MsSql)
-        );
-        assert_eq!(
-            Dialect::from_url("SQLSERVER://sa@host/app"),
-            Some(Dialect::MsSql)
-        );
-        assert_eq!(Dialect::from_url("sqlite://app.db"), Some(Dialect::Sqlite));
-        assert_eq!(Dialect::from_url("sqlite::memory:"), Some(Dialect::Sqlite));
-        assert_eq!(
-            Dialect::from_url("duckdb:app.duckdb"),
-            Some(Dialect::DuckDb)
-        );
-        assert_eq!(
-            Dialect::from_url("postgres://localhost/x"),
-            Some(Dialect::Postgres)
-        );
-        assert_eq!(
-            Dialect::from_url("postgresql://localhost/x"),
-            Some(Dialect::Postgres)
-        );
-        assert_eq!(
-            Dialect::from_url("mysql://localhost/x"),
-            Some(Dialect::MySql)
-        );
-        assert_eq!(
-            Dialect::from_url("mariadb://localhost/x"),
-            Some(Dialect::MySql)
-        );
-        for url in [
-            "redis://h/0",
-            "rediss://h/0",
-            "valkey://h",
-            "valkeys://h",
-            "redis+cluster://a:7000,b:7001",
-            "redis+sentinel://s:26379/mymaster/0",
-        ] {
-            assert_eq!(Dialect::from_url(url), Some(Dialect::Redis), "{url}");
-        }
-        for url in ["mongodb://h/app", "mongodb+srv://cluster.example.net/app"] {
-            assert_eq!(Dialect::from_url(url), Some(Dialect::MongoDb), "{url}");
-        }
-        for url in ["scylla://h/ks", "cassandra://h"] {
-            assert_eq!(Dialect::from_url(url), Some(Dialect::Scylla), "{url}");
-        }
-        for url in ["surrealdb://h/ns/db", "surrealdbs://h"] {
-            assert_eq!(Dialect::from_url(url), Some(Dialect::SurrealDb), "{url}");
-        }
-        for url in ["clickhouse://h/db", "clickhouses://h:8443"] {
-            assert_eq!(Dialect::from_url(url), Some(Dialect::ClickHouse), "{url}");
-        }
-        for url in [
-            "oracle://h/XEPDB1",
-            "oracledb://h/XEPDB1",
-            "oracletcps://h:2484/XEPDB1",
-        ] {
-            assert_eq!(Dialect::from_url(url), Some(Dialect::Oracle), "{url}");
-        }
+    #[rstest]
+    #[case::mssql("mssql://sa@host/app", Some(Dialect::MsSql))]
+    #[case::sqlserver("SQLSERVER://sa@host/app", Some(Dialect::MsSql))]
+    #[case::sqlite_file("sqlite://app.db", Some(Dialect::Sqlite))]
+    #[case::sqlite_memory("sqlite::memory:", Some(Dialect::Sqlite))]
+    #[case::duckdb("duckdb:app.duckdb", Some(Dialect::DuckDb))]
+    #[case::postgres("postgres://localhost/x", Some(Dialect::Postgres))]
+    #[case::postgresql("postgresql://localhost/x", Some(Dialect::Postgres))]
+    #[case::mixed_case("PostgreSQL://localhost/x", Some(Dialect::Postgres))]
+    #[case::mysql("mysql://localhost/x", Some(Dialect::MySql))]
+    #[case::mariadb("mariadb://localhost/x", Some(Dialect::MySql))]
+    #[case::redis("redis://h/0", Some(Dialect::Redis))]
+    #[case::redis_tls("rediss://h/0", Some(Dialect::Redis))]
+    #[case::valkey("valkey://h", Some(Dialect::Redis))]
+    #[case::valkey_tls("valkeys://h", Some(Dialect::Redis))]
+    #[case::cluster("redis+cluster://a:7000,b:7001", Some(Dialect::Redis))]
+    #[case::sentinel("redis+sentinel://s:26379/mymaster/0", Some(Dialect::Redis))]
+    #[case::mongodb("mongodb://h/app", Some(Dialect::MongoDb))]
+    #[case::mongodb_srv("mongodb+srv://cluster.example.net/app", Some(Dialect::MongoDb))]
+    #[case::scylla("scylla://h/ks", Some(Dialect::Scylla))]
+    #[case::cassandra("cassandra://h", Some(Dialect::Scylla))]
+    #[case::surrealdb("surrealdb://h/ns/db", Some(Dialect::SurrealDb))]
+    #[case::surrealdb_tls("surrealdbs://h", Some(Dialect::SurrealDb))]
+    #[case::clickhouse("clickhouse://h/db", Some(Dialect::ClickHouse))]
+    #[case::clickhouse_tls("clickhouses://h:8443", Some(Dialect::ClickHouse))]
+    #[case::oracle("oracle://h/XEPDB1", Some(Dialect::Oracle))]
+    #[case::oracledb("oracledb://h/XEPDB1", Some(Dialect::Oracle))]
+    #[case::oracle_tls("oracletcps://h:2484/XEPDB1", Some(Dialect::Oracle))]
+    #[case::unknown("unknown://localhost", None)]
+    #[case::missing_scheme("not a url", None)]
+    #[case::empty("", None)]
+    fn recognises_url_schemes(#[case] url: &str, #[case] expected: Option<Dialect>) {
+        assert_eq!(Dialect::from_url(url), expected);
     }
 
     #[test]
@@ -381,20 +355,5 @@ mod tests {
         assert_eq!(Dialect::MySql.quote_ident("od`d"), "`od``d`");
         assert_eq!(Dialect::MsSql.quote_ident("plain"), "[plain]");
         assert_eq!(Dialect::MsSql.quote_ident("a]b"), "[a]]b]");
-    }
-
-    #[test]
-    fn the_scheme_is_case_insensitive() {
-        assert_eq!(
-            Dialect::from_url("PostgreSQL://localhost/x"),
-            Some(Dialect::Postgres)
-        );
-    }
-
-    #[test]
-    fn an_unknown_scheme_is_rejected() {
-        assert_eq!(Dialect::from_url("unknown://localhost"), None);
-        assert_eq!(Dialect::from_url("not a url"), None);
-        assert_eq!(Dialect::from_url(""), None);
     }
 }
