@@ -95,6 +95,7 @@ M.defaults = {
     },
     { action = 'filter', lhs = 'gf', desc = 'Filter the rows with a WHERE condition' },
     { action = 'order', lhs = 'go', desc = 'Order the rows with an ORDER BY list' },
+    { action = 'group', lhs = 'gG', desc = 'Group and aggregate retained rows with Polars' },
     { action = 'sort', lhs = 's', desc = 'Sort by this column: ascending, descending, off' },
     { action = 'sort_add', lhs = 'S', desc = 'Add this column to the sort' },
     { action = 'hide_column', lhs = '-', desc = 'Hide this column' },
@@ -102,7 +103,7 @@ M.defaults = {
     {
       action = 'reset_view',
       lhs = 'R',
-      desc = 'Clear filters, sort and hidden columns',
+      desc = 'Clear filters, aggregation, sort and hidden columns',
     },
     {
       action = 'toggle_float',

@@ -305,7 +305,7 @@
 --- NoSQL results, disconnected connections, and restored history. Filtering
 --- preserves staged edits without rerunning the database query. It covers every
 --- retained page but cannot recover rows omitted by the query or `query.max_rows`.
---- `R` clears filters, sorting, and hidden columns, restoring the snapshot.
+--- `R` clears filters, aggregation, sorting, and hidden columns, restoring the snapshot.
 --- Run the original query again for fresh data. Refreshing after applying edits
 --- reapplies the local view to the new result.
 ---
@@ -322,6 +322,32 @@
 --- Integers and booleans are typed. Numeric-looking strings remain strings;
 --- use CAST(value AS DOUBLE) for numeric comparison/sorting of Redis strings.
 --- Exact decimals, temporal values, and nested JSON remain text.
+---
+--- Snapshot aggregation ~
+--- `gG` opens GROUP BY in the same bar. Use column names in GROUP BY and
+--- built-in aggregates with explicit aliases in AGGREGATE: >
+---   WHERE     active = 1
+---   ORDER BY  total DESC
+---   GROUP BY  country
+---   AGGREGATE COUNT(*) AS users, SUM(amount) AS total
+---   HAVING    users >= 10
+--- <
+--- All work is local Polars processing of the queried snapshot, including
+--- retained/restored history after disconnect. No database query is rerun.
+--- GROUP BY accepts native Bool/Int/Text keys (multiple keys are allowed).
+--- COUNT(*) counts rows; COUNT(column) ignores NULL. SUM/AVG require native
+--- numeric columns; MIN/MAX accept native numeric/text columns. Empty GROUP BY
+--- computes one global aggregate row. NULL keys form one group; an all-NULL
+--- SUM/AVG/MIN/MAX returns NULL. Integer sums are checked for overflow; AVG
+--- returns Float64. Mixed/special Object values and NaN/infinity are rejected.
+--- WHERE runs before grouping; HAVING uses output names after aggregation.
+--- `=` on an aggregate cell adds HAVING rather than changing the source WHERE.
+--- Groups keep first-appearance order unless ORDER BY or grid sorting is used.
+--- Results have their own schema, support paging/details/export, and are
+--- read-only. Discard/apply staged edits before aggregating. A truncated result
+--- only aggregates retained rows. `R` restores the original editable snapshot.
+--- Lua callers can use `require('sqmeow.api.view').aggregate({...})` with
+--- `group_by`, `aggregates`, `having`, `where`, and `order_by` string fields.
 --- Explicit casts can enable numeric/temporal comparisons;
 --- floating-point casts can lose precision. Nested JSON fields are not flattened.
 ---

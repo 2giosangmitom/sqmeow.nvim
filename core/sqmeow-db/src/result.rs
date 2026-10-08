@@ -110,6 +110,44 @@ fn retained_column(index: usize, cells: Vec<RetainedCell>) -> FrameColumn {
 }
 
 impl ResultSet {
+    /// Adopt a computed native frame without rebuilding row-shaped Cells.
+    /// Derived results deliberately carry no editable database provenance.
+    pub(crate) fn from_frame(statement: &str, mut frame: DataFrame, truncated: bool) -> Self {
+        let columns = frame
+            .columns()
+            .iter()
+            .map(|column| {
+                Column::new(
+                    column.name().as_str(),
+                    match column.dtype() {
+                        DataType::Boolean => "BOOLEAN",
+                        DataType::Int64 => "BIGINT",
+                        DataType::Float64 => "DOUBLE",
+                        DataType::String => "TEXT",
+                        _ => "UNKNOWN",
+                    },
+                )
+            })
+            .collect();
+        let row_count = frame.height();
+        let renamed = frame
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(index, column)| {
+                column
+                    .clone()
+                    .with_name(format!("__sqmeow_cell_{index}").into())
+            })
+            .collect();
+        frame = DataFrame::new(row_count, renamed).expect("computed columns have equal height");
+        let mut result = Self::new(statement, columns);
+        result.row_count = row_count;
+        result.truncated = truncated;
+        result.frame.set(frame).expect("new frame slot");
+        result
+    }
+
     /// Keep the parameterized source rather than the driver's rewritten placeholders.
     pub fn set_statement(&mut self, statement: impl Into<String>) {
         self.statement = statement.into();

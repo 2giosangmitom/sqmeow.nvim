@@ -9,7 +9,7 @@ use sqmeow_db::export::{self, Format, Rows};
 use super::{Core, Started, params};
 use crate::server::args::Args;
 use crate::server::payload::map;
-use crate::server::session::{Call, CallId};
+use crate::server::session::CallId;
 
 /// The most rows an export preview renders: enough to see what the file will look like.
 const PREVIEW_ROWS: usize = 100;
@@ -53,16 +53,16 @@ impl Core {
 
         self.session
             .with_call(call_id, |call| {
+                let (derived, view) = call.display();
+                let result = derived.as_deref().unwrap_or(&call.result);
+                let view = if every { None } else { view };
                 let rows = Rows {
                     start,
                     end: start.saturating_add(limit),
                 }
-                .resolve(
-                    &call.result,
-                    shown(call, every).as_deref().map(Vec::as_slice),
-                );
+                .resolve(result, view.as_deref().map(Vec::as_slice));
                 Value::from(export::write(
-                    &call.result,
+                    result,
                     &format,
                     &rows,
                     columns.as_deref(),
@@ -83,11 +83,11 @@ impl Core {
         path: Option<String>,
     ) {
         let Some((text, count)) = self.session.with_call(call_id, |call| {
-            let rows = rows.resolve(
-                &call.result,
-                shown(call, every).as_deref().map(Vec::as_slice),
-            );
-            let text = export::write(&call.result, &format, &rows, columns.as_deref(), headers);
+            let (derived, view) = call.display();
+            let result = derived.as_deref().unwrap_or(&call.result);
+            let view = if every { None } else { view };
+            let rows = rows.resolve(result, view.as_deref().map(Vec::as_slice));
+            let text = export::write(result, &format, &rows, columns.as_deref(), headers);
             (text, rows.len())
         }) else {
             return self.emit_export(call_id, Err("the result is no longer held".into()));
@@ -158,9 +158,4 @@ impl Core {
         }
         self.emit("export:done", map(payload));
     }
-}
-
-/// The rows positions count through: the view, unless every row is wanted.
-fn shown(call: &Call, every: bool) -> Option<Arc<Vec<usize>>> {
-    if every { None } else { call.view() }
 }

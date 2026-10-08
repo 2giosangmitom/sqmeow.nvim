@@ -2,9 +2,11 @@
 //! result's lossless DataFrame; original cells remain authoritative for editing,
 //! paging, and export. Projections infer types within the requested row scope.
 
+mod aggregate;
 pub(crate) mod cache;
 mod polars;
 
+pub use aggregate::{Group, aggregate};
 pub use polars::{Query, condition, select_with};
 
 use crate::result::Column;

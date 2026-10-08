@@ -7,7 +7,7 @@ local utils = require('sqmeow.core.utils')
 local NAMESPACE = vim.api.nvim_create_namespace('sqmeow.filter')
 
 --- The label drawn before each line, padded to one width, by what the bar takes.
-local LABELS = { 'WHERE    ', 'ORDER BY ' }
+local LABELS = { 'WHERE     ', 'ORDER BY  ', 'GROUP BY  ', 'AGGREGATE ', 'HAVING    ' }
 
 --- Words completion offers after the column names.
 local KEYWORDS = {
@@ -24,6 +24,12 @@ local KEYWORDS = {
   'DESC',
   'NULLS FIRST',
   'NULLS LAST',
+  'COUNT(',
+  'SUM(',
+  'AVG(',
+  'MIN(',
+  'MAX(',
+  'AS',
 }
 
 --- How many past filters each connection keeps.
@@ -38,11 +44,17 @@ local grid = nil
 local recent = {}
 
 --- What the bar opened with, and which recent filter it shows instead, 0 for none.
-local opened, recalled = { '', '' }, 0
+local opened, recalled = { '', '', '', '', '' }, 0
 
 --- Put a WHERE and an ORDER BY in the bar, under their labels.
-local function show(bufnr, where, order_by)
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { where, order_by })
+local function show(bufnr, where, order_by, group_by, aggregates, having)
+  vim.api.nvim_buf_set_lines(
+    bufnr,
+    0,
+    -1,
+    false,
+    { where, order_by, group_by or '', aggregates or '', having or '' }
+  )
   vim.api.nvim_buf_clear_namespace(bufnr, NAMESPACE, 0, -1)
   for number, label in ipairs(LABELS) do
     vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, number - 1, 0, {
@@ -54,14 +66,17 @@ local function show(bufnr, where, order_by)
   end
 end
 
-local function remember(conn_id, where, order_by)
-  if where == '' and order_by == '' then
+local function remember(conn_id, where, order_by, group_by, aggregates, having)
+  local current = { where, order_by, group_by or '', aggregates or '', having or '' }
+  if not vim.tbl_filter(function(value)
+    return value ~= ''
+  end, current)[1] then
     return
   end
   local list = vim.tbl_filter(function(entry)
-    return entry[1] ~= where or entry[2] ~= order_by
+    return not vim.deep_equal(entry, current)
   end, recent[conn_id] or {})
-  table.insert(list, 1, { where, order_by })
+  table.insert(list, 1, current)
   recent[conn_id] = vim.list_slice(list, 1, RECENT_LIMIT)
 end
 
@@ -77,7 +92,7 @@ local function recall(step)
   end
   recalled = at
   local entry = at == 0 and opened or list[at]
-  show(bar.bufnr, entry[1], entry[2])
+  show(bar.bufnr, unpack(entry))
 end
 
 --- Whether the bar is open.
@@ -119,11 +134,21 @@ function M.apply()
     return vim.api.nvim_feedkeys(vim.keycode('<C-y>'), 'n', false)
   end
 
-  local lines = vim.api.nvim_buf_get_lines(bar.bufnr, 0, 2, false)
+  local lines = vim.api.nvim_buf_get_lines(bar.bufnr, 0, 5, false)
   local where, order_by = vim.trim(lines[1] or ''), vim.trim(lines[2] or '')
   local conn_id = grid.conn_id
-  if require('sqmeow.ui.result').filter(where, order_by) then
-    remember(conn_id, where, order_by)
+  local group_by, aggregates, having =
+    vim.trim(lines[3] or ''), vim.trim(lines[4] or ''), vim.trim(lines[5] or '')
+  if
+    require('sqmeow.ui.result').aggregate({
+      where = where,
+      order_by = order_by,
+      group_by = group_by,
+      aggregates = aggregates,
+      having = having,
+    })
+  then
+    remember(conn_id, where, order_by, group_by, aggregates, having)
     M.close()
   end
 end
@@ -142,8 +167,12 @@ function M.complete(findstart, base)
   local call = require('sqmeow.core.state').call
   local prefix = base:lower()
   local items = {}
-  local names = call and result.filter_names(call) or {}
-  for index, column in ipairs(call and call.columns or {}) do
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local columns = call
+      and ((line == 1 or line == 3 or line == 4) and call.original_columns or call.columns)
+    or {}
+  local names = result.filter_names({ columns = columns })
+  for index, column in ipairs(columns or {}) do
     local name = names[index]
     if vim.startswith(name:lower(), prefix) then
       local bare = name:match('^[%l_][%l%d_]*$') ~= nil
@@ -222,7 +251,7 @@ function M.open(line)
     bar = nui.Popup(vim.tbl_extend('force', options, {
       relative = { type = 'win', winid = win },
       position = { row = 0, col = 0 },
-      size = { width = vim.api.nvim_win_get_width(win), height = 2 },
+      size = { width = vim.api.nvim_win_get_width(win), height = 5 },
       zindex = 50,
     }))
   else
@@ -230,14 +259,21 @@ function M.open(line)
     bar = nui.Split(vim.tbl_extend('force', options, {
       relative = { type = 'win', winid = win },
       position = 'top',
-      size = 2,
+      size = 5,
     }))
   end
   bar:mount()
 
   local spec = result.spec()
-  opened, recalled = { spec.where or '', spec.order_by or '' }, 0
-  show(bar.bufnr, opened[1], opened[2])
+  opened, recalled =
+    {
+      spec.where or '',
+      spec.order_by or '',
+      spec.group_by or '',
+      spec.aggregates or '',
+      spec.having or '',
+    }, 0
+  show(bar.bufnr, unpack(opened))
   -- Highlighted as its language without being a buffer a language server would attach to.
   if not pcall(vim.treesitter.start, bar.bufnr, 'sql') then
     vim.bo[bar.bufnr].syntax = 'sql'

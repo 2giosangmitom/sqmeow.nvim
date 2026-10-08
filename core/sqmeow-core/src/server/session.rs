@@ -110,8 +110,8 @@ pub struct Connection {
 /// A finished result, kept so its rows can be read and reopened.
 ///
 /// The result data is immutable after insertion. Filtering/sorting replaces the
-/// optional row-index view under a short lock instead of copying or mutating
-/// cells. Existing readers may keep an `Arc` to an older view safely.
+/// row-index or aggregate-frame view under a short lock instead of mutating
+/// source cells. Existing readers may keep an `Arc` to an older view safely.
 #[derive(Debug)]
 pub struct Call {
     pub id: CallId,
@@ -121,10 +121,16 @@ pub struct Call {
     pub result: ResultSet,
     /// Bound inputs stay in memory, never in summaries or result archives.
     pub parameters: QueryParameters,
-    /// The rows the editor is paging through, when it filtered or sorted them.
-    pub view: Mutex<Option<Arc<Vec<usize>>>>,
+    /// The displayed row selection or read-only native aggregate result.
+    pub view: Mutex<Option<View>>,
     /// Orders view requests independently of their computation/completion order.
     view_generation: Mutex<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub enum View {
+    Rows(Arc<Vec<usize>>),
+    Aggregate(Arc<ResultSet>),
 }
 
 impl Call {
@@ -153,9 +159,20 @@ impl Call {
         self
     }
 
-    /// The rows the editor pages through: the view when there is one.
-    pub fn view(&self) -> Option<Arc<Vec<usize>>> {
-        self.view.lock().expect("view poisoned").clone()
+    /// Snapshot schema/data/row selection under one lock, then release it.
+    pub fn display(&self) -> (Option<Arc<ResultSet>>, Option<Arc<Vec<usize>>>) {
+        match self.view.lock().expect("view poisoned").as_ref() {
+            Some(View::Rows(rows)) => (None, Some(Arc::clone(rows))),
+            Some(View::Aggregate(result)) => (Some(Arc::clone(result)), None),
+            None => (None, None),
+        }
+    }
+
+    pub fn aggregated(&self) -> bool {
+        matches!(
+            *self.view.lock().expect("view poisoned"),
+            Some(View::Aggregate(_))
+        )
     }
 
     pub fn begin_view(&self) -> u64 {
@@ -420,10 +437,10 @@ mod tests {
         call.finish_view(reset, || *call.view.lock().unwrap() = None);
         let mut notified = false;
         call.finish_view(old, || {
-            *call.view.lock().unwrap() = Some(Arc::new(vec![2]));
+            *call.view.lock().unwrap() = Some(View::Rows(Arc::new(vec![2])));
             notified = true;
         });
-        assert!(call.view().is_none());
+        assert!(call.display().1.is_none());
         assert!(!notified);
         // Errors from the older computation are discarded by the same completion gate.
         call.finish_view(old, || notified = true);

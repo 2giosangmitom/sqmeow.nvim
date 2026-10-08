@@ -23,6 +23,7 @@ local content_widths = {}
 local specs = {}
 --- Previous free-form views awaiting asynchronous Polars validation, by call id.
 local pending_views = {}
+local view_summaries = {}
 --- Page/cursor bookmarks awaiting local filtering after a refresh.
 local resuming_views = {}
 
@@ -168,7 +169,16 @@ end
 
 --- A view that shows everything as the query returned it.
 local function fresh()
-  return { filters = {}, sort = {}, hidden = {}, where = '', order_by = '' }
+  return {
+    filters = {},
+    sort = {},
+    hidden = {},
+    where = '',
+    order_by = '',
+    group_by = '',
+    aggregates = '',
+    having = '',
+  }
 end
 
 --- How the current result is shown. `where` and `order_by` are run in its query, which `base`
@@ -188,6 +198,7 @@ end
 function M.forget()
   specs, drawn, carried, pending, resume = {}, nil, nil, nil, nil
   pending_views = {}
+  view_summaries = {}
   has_grid = false
   close_sticky()
 end
@@ -241,6 +252,9 @@ function M.describe(summary, highlight)
   end
 
   local parts = { position }
+  if summary.aggregate_pending then
+    table.insert(parts, 'aggregating…')
+  end
 
   if summary.rows and summary.rows > 0 then
     table.insert(parts, ('%d row%s'):format(summary.rows, summary.rows == 1 and '' or 's'))
@@ -255,6 +269,12 @@ function M.describe(summary, highlight)
 
   if summary.truncated then
     table.insert(parts, 'truncated')
+  end
+  if summary.aggregated then
+    table.insert(
+      parts,
+      ('aggregate · read-only · %d source rows'):format(summary.source_rows or 0)
+    )
   end
   if summary.view_rows then
     table.insert(parts, ('%d shown'):format(summary.view_rows))
@@ -271,6 +291,12 @@ function M.describe(summary, highlight)
     end
     if (spec.where or '') ~= '' then
       clause('where ', spec.where)
+    end
+    if (spec.group_by or '') ~= '' then
+      clause('group by ', spec.group_by)
+    end
+    if (spec.having or '') ~= '' then
+      clause('having ', spec.having)
     end
 
     local keys = {}
@@ -778,6 +804,13 @@ function M.send_view(opts)
 
   local spec = M.spec()
   local rpc = require('sqmeow.rpc.client')
+  if (spec.aggregates or '') ~= '' and require('sqmeow.ui.edit').count() > 0 then
+    utils.notify(
+      'discard or apply staged edits before aggregating the snapshot',
+      vim.log.levels.WARN
+    )
+    return false
+  end
   local source_id = call.call_id
   -- Only a new query replaces the result and drops staged changes. Ask the same Rust
   -- router before prompting; the actual request rechecks if the connection changed.
@@ -810,11 +843,15 @@ function M.send_view(opts)
     sort = spec.sort,
     where = spec.where,
     order_by = spec.order_by,
+    group_by = spec.group_by,
+    aggregates = spec.aggregates,
+    having = spec.having,
   })
   if err then
     utils.notify(err, vim.log.levels.WARN)
     return false
   end
+  call.aggregate_pending = (spec.aggregates or '') ~= ''
   if reply.route == 'query' then
     spec.base = base
     carried = vim.deepcopy(spec)
@@ -830,13 +867,39 @@ function M.send_view(opts)
       history = false,
     }
     M.update_winbar(state.call)
+  else
+    M.update_winbar(call)
   end
   return true
 end
 
 --- The engine finished building a view.
 ---@param payload { call_id: integer, rows: integer|nil, error: string|nil }
+local function apply_view_summary(call, payload)
+  if not payload.summary then
+    return
+  end
+  local schema_changed = not vim.deep_equal(call.columns, payload.summary.columns)
+  call.original_columns = payload.aggregated and payload.original_columns or nil
+  call.columns = payload.summary.columns
+  call.source = payload.summary.source
+  call.rows = payload.summary.rows
+  call.truncated = payload.summary.truncated
+  call.capabilities = payload.summary.capabilities
+  call.aggregated = payload.aggregated
+  call.source_rows = payload.source_rows
+  call.view_rows = payload.rows ~= call.rows and payload.rows or nil
+  content_widths = {}
+  if schema_changed then
+    M.spec().hidden = {}
+  end
+end
+
 function M.on_view(payload)
+  local active = require('sqmeow.core.state').call
+  if active and active.call_id == payload.call_id then
+    active.aggregate_pending = nil
+  end
   local at = resuming_views[payload.call_id]
   resuming_views[payload.call_id] = nil
   if payload.error then
@@ -849,6 +912,7 @@ function M.on_view(payload)
       -- A refreshed schema can invalidate the old filter. Show the new original rows instead.
       local spec = specs[payload.call_id]
       spec.where, spec.order_by, spec.filters, spec.sort = '', '', {}, {}
+      spec.group_by, spec.aggregates, spec.having = '', '', ''
       local call = require('sqmeow.core.state').call
       if call and call.call_id == payload.call_id then
         M.show_page(at.offset)
@@ -857,8 +921,25 @@ function M.on_view(payload)
     return utils.notify(payload.error, vim.log.levels.WARN)
   end
   pending_views[payload.call_id] = nil
-  local call = require('sqmeow.core.state').call
+  local state = require('sqmeow.core.state')
+  local call = state.call
+  if payload.summary then
+    local source = call and call.call_id == payload.call_id and call or nil
+    if not source then
+      for _, summary in ipairs(state.calls) do
+        if summary.call_id == payload.call_id then
+          source = summary
+          break
+        end
+      end
+    end
+    local previous = view_summaries[payload.call_id]
+    payload.original_columns = (previous and previous.original_columns)
+      or (source and (source.original_columns or source.columns))
+    view_summaries[payload.call_id] = payload
+  end
   if call and call.call_id == payload.call_id then
+    apply_view_summary(call, payload)
     call.view_rows = payload.rows ~= call.rows and payload.rows or nil
     M.show_page(at and at.offset or 0)
     if at and at.cursor and M.window() then
@@ -939,7 +1020,7 @@ end
 
 --- Narrow held rows with Polars SQL, restoring the previous view if validation fails.
 ---@return boolean sent
-local function narrow(where, order_by, sort)
+local function narrow(where, order_by, sort, grouping)
   local call = require('sqmeow.core.state').call
   local id = call and call.call_id
   if not id then
@@ -948,6 +1029,10 @@ local function narrow(where, order_by, sort)
   local spec = M.spec()
   local before = vim.deepcopy(spec)
   spec.where, spec.order_by, spec.sort = where, order_by, sort
+  if grouping then
+    spec.group_by, spec.aggregates, spec.having =
+      grouping.group_by or '', grouping.aggregates or '', grouping.having or ''
+  end
   if M.send_view() then
     local shown = require('sqmeow.core.state').call
     if shown and shown.call_id == id then
@@ -957,6 +1042,28 @@ local function narrow(where, order_by, sort)
   end
   specs[id] = before
   return false
+end
+
+--- Group/aggregate retained snapshots with Polars; never execute database SQL.
+--- Empty grouping fields restore an ordinary filtered view.
+function M.aggregate(view)
+  local call = require('sqmeow.core.state').call
+  local allowed, err = M.filterable(call)
+  if not allowed then
+    utils.notify(err or 'there is no retained result to aggregate', vim.log.levels.WARN)
+    return false
+  end
+  local requested = vim.deepcopy(view)
+  if (requested.aggregates or '') ~= '' and require('sqmeow.ui.edit').count() > 0 then
+    require('sqmeow.ui.edit').settle(function()
+      if require('sqmeow.core.state').call == call then
+        M.aggregate(requested)
+      end
+    end)
+    return false
+  end
+  local spec = M.spec()
+  return narrow(requested.where or spec.where, requested.order_by or '', {}, requested)
 end
 
 --- Filter and order retained rows with Polars SQL, never rerunning the database query.
@@ -979,6 +1086,9 @@ function M.render(summary)
   page = { offset = 0, rows = {}, indices = {} }
 
   local id = summary and summary.call_id
+  if id and view_summaries[id] then
+    apply_view_summary(summary, view_summaries[id])
+  end
   if id ~= drawn then
     drawn = id
     content_widths = {}
@@ -1010,7 +1120,13 @@ function M.render(summary)
   if pending == id then
     pending, at, resume = nil, resume, nil
     local spec = M.spec()
-    if spec.where ~= '' or spec.order_by ~= '' or #spec.filters > 0 or #spec.sort > 0 then
+    if
+      spec.where ~= ''
+      or spec.order_by ~= ''
+      or #spec.filters > 0
+      or #spec.sort > 0
+      or (spec.aggregates or '') ~= ''
+    then
       resuming_views[id] = at or { offset = 0 }
       if M.send_view() then
         draw()
@@ -1231,6 +1347,13 @@ end
 local function editing()
   local state = require('sqmeow.core.state')
   local call = state.call
+  if call and (call.aggregated or call.aggregate_pending) then
+    utils.notify(
+      'aggregate results are read-only; reset the view to edit original rows',
+      vim.log.levels.WARN
+    )
+    return false
+  end
   local connection = call and call.conn_id and state.connections[call.conn_id]
   if connection and connection.read_only then
     utils.notify(
@@ -1472,6 +1595,17 @@ function M.actions.filter_cell()
       return utils.notify(err or 'the value could not be matched', vim.log.levels.WARN)
     end
     local spec = M.spec()
+    if call.aggregated then
+      local having = (spec.having or '') == '' and condition
+        or ('(%s) AND %s'):format(spec.having, condition)
+      narrow(
+        spec.where,
+        spec.order_by,
+        spec.sort,
+        { group_by = spec.group_by, aggregates = spec.aggregates, having = having }
+      )
+      return
+    end
     local where = spec.where == '' and condition or ('(%s) AND %s'):format(spec.where, condition)
     narrow(where, spec.order_by, spec.sort)
     return
@@ -1484,6 +1618,10 @@ end
 
 function M.actions.order()
   require('sqmeow.ui.filter').open(2)
+end
+
+function M.actions.group()
+  require('sqmeow.ui.filter').open(3)
 end
 
 function M.actions.sort()
@@ -1529,8 +1667,10 @@ function M.actions.reset_view()
   local before = spec
   specs[call.call_id] = fresh()
   specs[call.call_id].base = before.base
+  pending_views[call.call_id] = vim.deepcopy(before)
   if not M.send_view() then
     specs[call.call_id] = before
+    pending_views[call.call_id] = nil
   end
 end
 

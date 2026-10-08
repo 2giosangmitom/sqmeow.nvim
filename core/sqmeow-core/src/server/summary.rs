@@ -45,7 +45,8 @@ pub(super) fn cell_value(result: &ResultSet, row: usize, column: usize) -> Value
 
 /// What the editor needs to describe a result and lay its columns out.
 pub(super) fn summarize(call: &Call, connected: bool) -> Vec<(&'static str, Value)> {
-    let result = &call.result;
+    let (derived, _) = call.display();
+    let result = derived.as_deref().unwrap_or(&call.result);
 
     let columns: Vec<Value> = result
         .columns()

@@ -20,7 +20,7 @@ use super::{Core, Started, params};
 use crate::server::archive;
 use crate::server::args::Args;
 use crate::server::payload::{map, optional, strings};
-use crate::server::session::{Call, CallId, ConnId, Connection, QueryParameters};
+use crate::server::session::{Call, CallId, ConnId, Connection, QueryParameters, View};
 use tokio_util::sync::CancellationToken;
 
 struct Run {
@@ -84,6 +84,14 @@ impl Core {
     /// without local filters and returns a new call id; Lua reapplies its view afterward.
     pub(super) fn result_view(self: Arc<Self>, args: &Args) -> Started {
         let call_id = args.call_id()?;
+        if args.opt_bool("refresh").unwrap_or(false)
+            && ["group_by", "aggregates", "having"].iter().any(|key| {
+                args.opt_string(key)
+                    .is_some_and(|value| !value.trim().is_empty())
+            })
+        {
+            return Err("aggregation is snapshot-only; reset aggregation before refreshing the original query".into());
+        }
         let query = self.query_view(call_id, args.opt_bool("refresh").unwrap_or(false))?;
         let conn_id = self
             .session
@@ -603,7 +611,8 @@ impl Core {
         let row = self
             .session
             .with_call(call_id, |call| {
-                let result = &call.result;
+                let (derived, _) = call.display();
+                let result = derived.as_deref().unwrap_or(&call.result);
                 (index < result.row_count()).then(|| {
                     Value::Array(
                         result
@@ -637,7 +646,10 @@ impl Core {
         let gone = || format!("result {call_id} is no longer held");
 
         self.session
-            .with_call(call_id, |call| view::condition(&call.result, row, column))
+            .with_call(call_id, |call| {
+                let (derived, _) = call.display();
+                view::condition(derived.as_deref().unwrap_or(&call.result), row, column)
+            })
             .ok_or_else(gone)?
             .map(Value::from)
     }
@@ -649,8 +661,8 @@ impl Core {
         let limit = args.opt_usize("limit").unwrap_or(0);
 
         let rows = self.session.with_call(call_id, |call| {
-            let result = &call.result;
-            let view = call.view();
+            let (derived, view) = call.display();
+            let result = derived.as_deref().unwrap_or(&call.result);
             let total = view.as_ref().map_or(result.row_count(), |view| view.len());
             let end = offset.saturating_add(limit).min(total);
             // An out-of-range offset yields no rows rather than an error.
@@ -705,12 +717,24 @@ impl Core {
         let scope = params::indices(args.get("rows"));
         let condition = args.opt_string("where").unwrap_or_default();
         let order = args.opt_string("order_by").unwrap_or_default();
+        let group_by = args.opt_string("group_by").unwrap_or_default();
+        let aggregates = args.opt_string("aggregates").unwrap_or_default();
+        let having = args.opt_string("having").unwrap_or_default();
         // Compiled first, so a mistake in the filter is answered before any work starts.
         let call = self
             .session
             .call(call_id)
             .ok_or_else(|| format!("result {call_id} is no longer held"))?;
-        let query = view::Query::parse(&condition, &order, &view::names(call.result.columns()))?;
+        let names = view::names(call.result.columns());
+        let group = view::Group::parse(&group_by, &aggregates, &names)?;
+        if group.is_none() && !having.trim().is_empty() {
+            return Err("HAVING requires AGGREGATE".into());
+        }
+        let query = view::Query::parse(
+            &condition,
+            if group.is_some() { "" } else { &order },
+            &names,
+        )?;
         // Reserve ordering before returning the RPC reply, not when a worker starts.
         let generation = call.begin_view();
 
@@ -719,16 +743,27 @@ impl Core {
             let retained = Arc::clone(&call);
             let built = tokio::task::spawn_blocking(move || {
                 let call = retained;
+                if let Some(group) = group {
+                    return view::aggregate(
+                        &call.result,
+                        &group,
+                        &filters,
+                        scope.as_deref(),
+                        query.as_ref(),
+                        (&having, &order, &sort),
+                    )
+                    .map(|result| Some(View::Aggregate(Arc::new(result))));
+                }
                 let narrowed =
                     !filters.is_empty() || !sort.is_empty() || scope.is_some() || query.is_some();
                 let view = if narrowed {
-                    Some(Arc::new(view::select_with(
+                    Some(View::Rows(Arc::new(view::select_with(
                         &call.result,
                         &filters,
                         &sort,
                         scope.as_deref(),
                         query.as_ref(),
-                    )?))
+                    )?)))
                 } else {
                     None
                 };
@@ -740,11 +775,23 @@ impl Core {
                 let mut payload = vec![("call_id", Value::from(call_id))];
                 match built {
                     Ok(Ok(view)) => {
-                        let rows = view
-                            .as_ref()
-                            .map_or(call.result.row_count(), |view| view.len());
+                        let rows = match &view {
+                            Some(View::Rows(rows)) => rows.len(),
+                            Some(View::Aggregate(result)) => result.row_count(),
+                            None => call.result.row_count(),
+                        };
                         *call.view.lock().expect("view poisoned") = view;
                         payload.push(("rows", Value::from(rows as u64)));
+                        let aggregated = call.aggregated();
+                        payload.push(("aggregated", Value::from(aggregated)));
+                        payload.push(("source_rows", Value::from(call.result.row_count() as u64)));
+                        payload.push((
+                            "summary",
+                            map(summarize(
+                                &call,
+                                self.session.connection(call.conn_id).is_some(),
+                            )),
+                        ));
                     }
                     Ok(Err(error)) => payload.push(("error", Value::from(error))),
                     Err(error) => payload.push(("error", Value::from(error.to_string()))),

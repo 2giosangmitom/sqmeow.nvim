@@ -38,6 +38,21 @@ function M.filter(view)
   return require('sqmeow.ui.result').filter(view.where or '', view.order_by or '')
 end
 
+--- Group queried/history data locally, including disconnected/restored snapshots.
+--- Built-in Polars aggregates only; outputs are read-only and exportable.
+--- Empty group_by/aggregates/having remove aggregation, preserving the source.
+---@param view { group_by: string|nil, aggregates: string|nil, having: string|nil, where: string|nil, order_by: string|nil }
+---@return boolean started
+---@usage >lua
+---   require('sqmeow.api.view').aggregate({
+---     group_by = 'country', aggregates = 'COUNT(*) AS users, SUM(amount) AS total',
+---     having = 'users >= 10', order_by = 'total DESC',
+---   })
+--- <
+function M.aggregate(view)
+  return require('sqmeow.ui.result').aggregate(view)
+end
+
 --- Filter and sort the current result's rows in the engine's memory, without querying again.
 --- Columns are zero-based; a filter without one searches every column.
 ---@param view { filters: { column: integer|nil, op: string, value: string|nil }[]|nil, sort: { column: integer, descending: boolean|nil }[]|nil }
