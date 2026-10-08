@@ -258,8 +258,8 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
 
     let after = run(&backend, "select id, name from people order by id").await;
     assert_eq!(
-        after.column_cells(0),
-        &[Cell::Int(1), Cell::Int(3), Cell::Int(9)]
+        after.column_cells(0).cloned().collect::<Vec<_>>(),
+        vec![Cell::Int(1), Cell::Int(3), Cell::Int(9)]
     );
     assert_eq!(after.cell(0, 1), Some(&Cell::Text("o'ally".into())));
     assert_eq!(after.cell(2, 1), Some(&Cell::Text("zed".into())));

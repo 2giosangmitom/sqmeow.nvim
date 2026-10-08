@@ -1,6 +1,8 @@
-//! Retained-result filtering and sorting. Polars owns the view; the result set remains the
-//! source of truth for cells, editing, paging, and export.
+//! Retained-result filtering and sorting. Typed Polars projections operate on the
+//! result's lossless DataFrame; original cells remain authoritative for editing,
+//! paging, and export. Projections infer types within the requested row scope.
 
+pub(crate) mod cache;
 mod polars;
 
 pub use polars::{Query, condition, select_with};

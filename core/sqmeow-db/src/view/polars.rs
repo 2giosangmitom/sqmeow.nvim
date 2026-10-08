@@ -1,7 +1,9 @@
 //! Polars is the only retained-result view engine. Original row positions travel through the
 //! frame as an ordinary column; no Polars value is written back to the retained result.
 
-use polars::prelude::{Column, DataFrame, DataType, Expr, IntoLazy, SortMultipleOptions, col, lit};
+use polars::prelude::{
+    Column, DataFrame, DataType, Expr, IntoLazy, PlSmallStr, SortMultipleOptions, col, lit,
+};
 use polars_sql::SQLContext;
 use sqlparser::ast::{SetExpr, Statement, Visit, Visitor};
 use sqlparser::dialect::GenericDialect;
@@ -103,24 +105,135 @@ pub fn select_with(
     scope: Option<&[usize]>,
     query: Option<&Query>,
 ) -> Result<Vec<usize>, String> {
-    let positions: Vec<usize> = scope.map_or_else(
-        || (0..result.row_count()).collect(),
-        |rows| {
-            rows.iter()
-                .copied()
-                .filter(|row| *row < result.row_count())
-                .collect()
-        },
-    );
+    let positions = || {
+        scope.map_or_else(
+            || (0..result.row_count()).collect(),
+            |rows| {
+                rows.iter()
+                    .copied()
+                    .filter(|row| *row < result.row_count())
+                    .collect()
+            },
+        )
+    };
+    if filters.is_empty() && sort.is_empty() && query.is_none() {
+        return Ok(positions());
+    }
     let names = super::names(result.columns());
     let row_name = (0..)
         .map(|number| format!("__sqmeow_row_{number}"))
         .find(|name| !names.iter().any(|column| column.eq_ignore_ascii_case(name)))
         .expect("there is always a free internal column name");
+    let needed = projection_columns(names.len(), filters, sort, query);
+    let build = || projection(result, &positions(), &names, &row_name, &needed);
+    let frame = if scope.is_none() && needed.iter().all(|needed| *needed) {
+        result.view_cache.get_or_build(build)?
+    } else if let Some(frame) = scope.is_none().then(|| result.view_cache.get()).flatten() {
+        let columns: Vec<&str> = names
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| needed[*index])
+            .map(|(_, name)| name.as_str())
+            .chain(std::iter::once(row_name.as_str()))
+            .collect();
+        frame.select(columns).map_err(|error| error.to_string())?
+    } else {
+        build()?
+    };
+    let schema = frame.schema().clone();
+    let mut lazy = frame.lazy();
+    for filter in filters {
+        let expr = match filter.column {
+            Some(index) => names.get(index).map_or_else(
+                || lit(false),
+                |name| predicate(col(name), schema.get(name.as_str()), filter),
+            ),
+            None => names
+                .iter()
+                .map(|name| predicate(col(name), schema.get(name.as_str()), filter))
+                .reduce(|left, right| left.or(right))
+                .unwrap_or_else(|| lit(false)),
+        };
+        lazy = lazy.filter(expr);
+    }
+    if let Some(query) = query {
+        let mut context = SQLContext::new();
+        context.register("sqmeow_view", lazy);
+        let mut sql = sql_text(&query.where_clause, &query.order_by);
+        if query.orders() {
+            // Stable ties follow original row positions, independently of Polars' sort defaults.
+            sql.push_str(&format!("\n, \"{row_name}\" ASC"));
+        }
+        lazy = context.execute(&sql).map_err(|error| error.to_string())?;
+    }
+    if !query.is_some_and(Query::orders) && !sort.is_empty() {
+        let keys: Vec<PlSmallStr> = sort
+            .iter()
+            .filter_map(|key| names.get(key.column).map(|name| name.as_str().into()))
+            .collect();
+        if !keys.is_empty() {
+            let descending = sort
+                .iter()
+                .filter(|key| key.column < names.len())
+                .map(|key| key.descending);
+            lazy = lazy.sort(
+                keys,
+                SortMultipleOptions::new()
+                    .with_order_descending_multi(descending)
+                    .with_nulls_last(true)
+                    .with_maintain_order(true),
+            );
+        }
+    }
+    let frame = lazy
+        .select([col(&row_name)])
+        .collect()
+        .map_err(|error| error.to_string())?;
+    Ok(frame
+        .column(&row_name)
+        .map_err(|error| error.to_string())?
+        .u64()
+        .map_err(|error| error.to_string())?
+        .into_no_null_iter()
+        .map(|index| index as usize)
+        .collect())
+}
+
+fn projection_columns(
+    width: usize,
+    filters: &[Filter],
+    sort: &[Sort],
+    query: Option<&Query>,
+) -> Vec<bool> {
+    if query.is_some() || filters.iter().any(|filter| filter.column.is_none()) {
+        return vec![true; width];
+    }
+    let mut needed = vec![false; width];
+    for index in filters
+        .iter()
+        .filter_map(|filter| filter.column)
+        .chain(sort.iter().map(|key| key.column))
+    {
+        if let Some(needed) = needed.get_mut(index) {
+            *needed = true;
+        }
+    }
+    needed
+}
+
+fn projection(
+    result: &ResultSet,
+    positions: &[usize],
+    names: &[String],
+    row_name: &str,
+    needed: &[bool],
+) -> Result<DataFrame, String> {
     let mut data = Vec::with_capacity(names.len() + 1);
-    for (index, name) in names.iter().enumerate() {
-        let cells = result.column_cells(index);
-        let dtype = column_type(result, index, &positions);
+    for (index, name) in names.iter().enumerate().filter(|(index, _)| needed[*index]) {
+        let cells = result
+            .column_values(index)
+            .expect("projection column exists");
+        let dtype = column_type(result, index, positions);
         if dtype == DataType::Boolean {
             let values: Vec<Option<bool>> = positions
                 .iter()
@@ -146,87 +259,21 @@ pub fn select_with(
                 .collect();
             data.push(Column::new(name.as_str().into(), values));
         } else {
-            let values: Vec<Option<String>> = positions
-                .iter()
-                .map(|&row| {
-                    cells
-                        .get(row)
-                        .filter(|cell| !cell.is_null())
-                        .map(|cell| cell.text("").into_owned())
-                })
-                .collect();
-            data.push(Column::new(name.as_str().into(), values));
+            data.push(result.text_column(index, positions, name, None));
         }
     }
     data.push(Column::new(
-        row_name.as_str().into(),
+        row_name.into(),
         positions.iter().map(|&row| row as u64).collect::<Vec<_>>(),
     ));
-    let frame = DataFrame::new(positions.len(), data).map_err(|error| error.to_string())?;
-    let schema = frame.schema().clone();
-    let mut lazy = frame.lazy();
-    for filter in filters {
-        let expr = match filter.column {
-            Some(index) => names.get(index).map_or_else(
-                || lit(false),
-                |name| predicate(col(name), schema.get(name.as_str()), filter),
-            ),
-            None => names
-                .iter()
-                .map(|name| predicate(col(name), schema.get(name.as_str()), filter))
-                .reduce(|left, right| left.or(right))
-                .unwrap_or_else(|| lit(false)),
-        };
-        lazy = lazy.filter(expr);
-    }
-    let mut frame = lazy.collect().map_err(|error| error.to_string())?;
-    if let Some(query) = query {
-        let mut context = SQLContext::new();
-        context.register("sqmeow_view", frame.lazy());
-        let mut sql = sql_text(&query.where_clause, &query.order_by);
-        if query.orders() {
-            // Stable ties follow original row positions, independently of Polars' sort defaults.
-            sql.push_str(&format!("\n, \"{row_name}\" ASC"));
-        }
-        frame = context
-            .execute(&sql)
-            .and_then(|lazy| lazy.collect())
-            .map_err(|error| error.to_string())?;
-    }
-    if !query.is_some_and(Query::orders) && !sort.is_empty() {
-        let keys: Vec<&str> = sort
-            .iter()
-            .filter_map(|key| names.get(key.column).map(String::as_str))
-            .collect();
-        if !keys.is_empty() {
-            let descending = sort
-                .iter()
-                .filter(|key| key.column < names.len())
-                .map(|key| key.descending);
-            frame = frame
-                .sort(
-                    keys,
-                    SortMultipleOptions::new()
-                        .with_order_descending_multi(descending)
-                        .with_nulls_last(true)
-                        .with_maintain_order(true),
-                )
-                .map_err(|error| error.to_string())?;
-        }
-    }
-    Ok(frame
-        .column(&row_name)
-        .map_err(|error| error.to_string())?
-        .u64()
-        .map_err(|error| error.to_string())?
-        .into_no_null_iter()
-        .map(|index| index as usize)
-        .collect())
+    DataFrame::new(positions.len(), data).map_err(|error| error.to_string())
 }
 
 /// Choose one column type for both the frame and generated cell-match predicates.
 fn column_type(result: &ResultSet, index: usize, positions: &[usize]) -> DataType {
-    let cells = result.column_cells(index);
+    let cells = result
+        .column_values(index)
+        .expect("projection column exists");
     let populated = positions
         .iter()
         .any(|&row| cells.get(row).is_some_and(|cell| !cell.is_null()));
@@ -362,6 +409,156 @@ fn predicate(column: Expr, dtype: Option<&DataType>, filter: &Filter) -> Expr {
 mod tests {
     use super::*;
     use crate::result::Column as ResultColumn;
+
+    #[test]
+    fn cache_preserves_scoped_types_and_is_invalidated_by_appends_and_metadata() {
+        let mut result = ResultSet::new("mixed", vec![ResultColumn::new("v", "TEXT")]);
+        result.push_row(vec![Cell::Int(2)]);
+        result.push_row(vec![Cell::Text("x".into())]);
+        let names = super::super::names(result.columns());
+        let scoped = Query::parse("v > 1", "", &names).unwrap();
+        assert_eq!(
+            select_with(&result, &[], &[], Some(&[0]), scoped.as_ref()).unwrap(),
+            vec![0]
+        );
+        assert!(
+            result.view_cache.get().is_none(),
+            "a scoped query must not create a full-result cache"
+        );
+        let full = Query::parse("v = '2'", "", &names).unwrap();
+        assert_eq!(
+            select_with(&result, &[], &[], None, full.as_ref()).unwrap(),
+            vec![0]
+        );
+        assert_eq!(
+            result
+                .view_cache
+                .get()
+                .unwrap()
+                .column("v")
+                .unwrap()
+                .dtype(),
+            &DataType::String
+        );
+        assert_eq!(
+            select_with(&result, &[], &[], Some(&[0]), scoped.as_ref()).unwrap(),
+            vec![0]
+        );
+        let snapshot = result.clone();
+        result.push_row(vec![Cell::Int(3)]);
+        assert!(result.view_cache.get().is_none());
+        let appended = Query::parse("v = '3'", "", &names).unwrap();
+        assert_eq!(
+            select_with(&result, &[], &[], None, appended.as_ref()).unwrap(),
+            vec![2]
+        );
+        assert_eq!(
+            select_with(&snapshot, &[], &[], None, full.as_ref()).unwrap(),
+            vec![0]
+        );
+        result.columns_mut()[0].name = "renamed".into();
+        assert!(result.view_cache.get().is_none());
+        let renamed = Query::parse("renamed = '3'", "", &["renamed".into()]).unwrap();
+        assert_eq!(
+            select_with(&result, &[], &[], None, renamed.as_ref()).unwrap(),
+            vec![2]
+        );
+        let mut nullable = ResultSet::new("nullable", vec![ResultColumn::new("v", "INTEGER")]);
+        nullable.push_row(vec![Cell::Null]);
+        let null_query = Query::parse("v IS NULL", "", &names).unwrap();
+        assert_eq!(
+            select_with(&nullable, &[], &[], None, null_query.as_ref()).unwrap(),
+            vec![0]
+        );
+        assert_eq!(
+            nullable
+                .view_cache
+                .get()
+                .unwrap()
+                .column("v")
+                .unwrap()
+                .dtype(),
+            &DataType::Int64
+        );
+        nullable.columns_mut()[0].class = TypeClass::Boolean;
+        assert_eq!(
+            select_with(&nullable, &[], &[], None, null_query.as_ref()).unwrap(),
+            vec![0]
+        );
+        assert_eq!(
+            nullable
+                .view_cache
+                .get()
+                .unwrap()
+                .column("v")
+                .unwrap()
+                .dtype(),
+            &DataType::Boolean
+        );
+    }
+
+    #[test]
+    fn structured_projection_prunes_only_unreferenced_columns() {
+        let mut result = people();
+        let filters = [Filter {
+            column: Some(0),
+            op: Op::Gt,
+            value: "2".into(),
+        }];
+        let sort = [Sort {
+            column: 2,
+            descending: true,
+        }];
+        assert_eq!(
+            projection_columns(3, &filters, &sort, None),
+            vec![true, false, true]
+        );
+        assert_eq!(
+            select_with(&result, &filters, &sort, None, None).unwrap(),
+            vec![3, 4, 2]
+        );
+        assert!(
+            result.view_cache.get().is_none(),
+            "a pruned cold query must not build the full frame"
+        );
+        let all = [Filter {
+            column: None,
+            op: Op::Contains,
+            value: "AL".into(),
+        }];
+        assert_eq!(
+            select_with(&result, &all, &[], None, None).unwrap(),
+            vec![0, 3, 4]
+        );
+        assert!(result.view_cache.get().is_some());
+        assert_eq!(
+            select_with(&result, &filters, &sort, None, None).unwrap(),
+            vec![3, 4, 2]
+        );
+        let invalid = [Filter {
+            column: Some(99),
+            op: Op::Eq,
+            value: "2".into(),
+        }];
+        assert!(
+            select_with(&result, &invalid, &[], None, None)
+                .unwrap()
+                .is_empty()
+        );
+        let invalid_sort = [Sort {
+            column: 99,
+            descending: true,
+        }];
+        assert_eq!(
+            select_with(&result, &[], &invalid_sort, Some(&[4, 1, 4, 99]), None).unwrap(),
+            vec![4, 1, 4]
+        );
+        result.push_row(vec![Cell::Int(6), Cell::Text("AL".into()), Cell::Null]);
+        assert_eq!(
+            select_with(&result, &all, &[], None, None).unwrap(),
+            vec![0, 3, 4, 5]
+        );
+    }
 
     fn people() -> ResultSet {
         let mut result = ResultSet::new(

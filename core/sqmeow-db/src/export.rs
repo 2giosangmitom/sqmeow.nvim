@@ -129,17 +129,12 @@ pub fn csv(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>, header
         .iter()
         .enumerate()
         .map(|(position, &index)| {
-            let cells: Vec<Option<String>> = rows
-                .iter()
-                .map(|&row| {
-                    result
-                        .cell(row, index)
-                        .filter(|cell| !cell.is_null())
-                        .map(|cell| cell.text("").into_owned())
-                        .or_else(|| (columns.len() == 1).then(String::new))
-                })
-                .collect();
-            PolarsColumn::new(format!("column_{position}").into(), cells)
+            result.text_column(
+                index,
+                rows,
+                &format!("column_{position}"),
+                (columns.len() == 1).then_some(""),
+            )
         })
         .collect();
     let mut frame = DataFrame::new(rows.len(), values).expect("columns share the same row count");

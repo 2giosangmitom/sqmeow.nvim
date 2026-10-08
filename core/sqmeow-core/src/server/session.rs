@@ -129,6 +129,9 @@ pub struct Call {
 
 impl Call {
     pub fn new(id: CallId, conn_id: ConnId, result: ResultSet) -> Self {
+        // Transfer adapter ingestion buffers into the shared retained frame
+        // before publishing this immutable result to paging/view/export readers.
+        result.frame();
         Self {
             id,
             conn_id,
