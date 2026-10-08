@@ -31,6 +31,9 @@ impl Core {
         let statements = self
             .session
             .with_call(call_id, |call| {
+                if call.aggregated() {
+                    return Err(DbError::driver("aggregate results are read-only"));
+                }
                 connection.backend.plan(&call.result, &changes)
             })
             .ok_or_else(gone)?
@@ -44,6 +47,13 @@ impl Core {
         let conn_id = args.conn_id("conn_id")?;
         let call_id = args.call_id()?;
         let statements = args.opt_strings("statements")?.unwrap_or_default();
+        if self
+            .session
+            .with_call(call_id, |call| call.aggregated())
+            .unwrap_or(false)
+        {
+            return Err("aggregate results are read-only".into());
+        }
         if statements.is_empty() {
             return Err("there is nothing to apply".to_owned());
         }

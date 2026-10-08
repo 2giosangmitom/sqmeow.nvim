@@ -323,7 +323,7 @@ Every adapter uses Polars SQL on retained rows, including MongoDB and other
 NoSQL results, disconnected connections, and restored history. Filtering
 preserves staged edits without rerunning the database query. It covers every
 retained page but cannot recover rows omitted by the query or `query.max_rows`.
-`R` clears filters, sorting, and hidden columns, restoring the snapshot.
+`R` clears filters, aggregation, sorting, and hidden columns, restoring the snapshot.
 Run the original query again for fresh data. Refreshing after applying edits
 reapplies the local view to the new result.
 
@@ -340,6 +340,32 @@ place nulls last; ORDER BY expressions can specify NULLS FIRST or NULLS LAST.
 Integers and booleans are typed. Numeric-looking strings remain strings;
 use CAST(value AS DOUBLE) for numeric comparison/sorting of Redis strings.
 Exact decimals, temporal values, and nested JSON remain text.
+
+Snapshot aggregation ~
+`gG` opens GROUP BY in the same bar. Use column names in GROUP BY and
+built-in aggregates with explicit aliases in AGGREGATE: >
+  WHERE     active = 1
+  ORDER BY  total DESC
+  GROUP BY  country
+  AGGREGATE COUNT(*) AS users, SUM(amount) AS total
+  HAVING    users >= 10
+<
+All work is local Polars processing of the queried snapshot, including
+retained/restored history after disconnect. No database query is rerun.
+GROUP BY accepts native Bool/Int/Text keys (multiple keys are allowed).
+COUNT(*) counts rows; COUNT(column) ignores NULL. SUM/AVG require native
+numeric columns; MIN/MAX accept native numeric/text columns. Empty GROUP BY
+computes one global aggregate row. NULL keys form one group; an all-NULL
+SUM/AVG/MIN/MAX returns NULL. Integer sums are checked for overflow; AVG
+returns Float64. Mixed/special Object values and NaN/infinity are rejected.
+WHERE runs before grouping; HAVING uses output names after aggregation.
+`=` on an aggregate cell adds HAVING rather than changing the source WHERE.
+Groups keep first-appearance order unless ORDER BY or grid sorting is used.
+Results have their own schema, support paging/details/export, and are
+read-only. Discard/apply staged edits before aggregating. A truncated result
+only aggregates retained rows. `R` restores the original editable snapshot.
+Lua callers can use `require('sqmeow.api.view').aggregate({...})` with
+`group_by`, `aggregates`, `having`, `where`, and `order_by` string fields.
 Explicit casts can enable numeric/temporal comparisons;
 floating-point casts can lose precision. Nested JSON fields are not flattened.
 
@@ -787,11 +813,12 @@ result
  =             Filter by this cell value
  gf            Filter the rows with a WHERE condition
  go            Order the rows with an ORDER BY list
+ gG            Group and aggregate retained rows with Polars
  s             Sort by this column: ascending, descending, off
  S             Add this column to the sort
  -             Hide this column
  g-            Show every hidden column
- R             Clear filters, sort and hidden columns
+ R             Clear filters, aggregation, sort and hidden columns
  Z             Toggle between a floating window and a split
  i, <CR>       Change this cell
  X             Set this cell to NULL
@@ -1139,6 +1166,23 @@ Return ~
 Usage ~
 >lua
   require('sqmeow.api.view').filter({ where = "name like 'a%'", order_by = 'age desc' })
+<
+------------------------------------------------------------------------------
+                                                   *sqmeow.api.view.aggregate()*
+                      `sqmeow.api.view.aggregate`({view})
+Group queried/history data locally, including disconnected/restored snapshots.
+Built-in Polars aggregates only; outputs are read-only and exportable.
+Empty group_by/aggregates/having remove aggregation, preserving the source.
+Parameters ~
+{view} `({ group_by: string|nil, aggregates: string|nil, having: string|nil, where: string|nil, order_by: string|nil })`
+Return ~
+`(boolean)` started
+Usage ~
+>lua
+  require('sqmeow.api.view').aggregate({
+    group_by = 'country', aggregates = 'COUNT(*) AS users, SUM(amount) AS total',
+    having = 'users >= 10', order_by = 'total DESC',
+  })
 <
 ------------------------------------------------------------------------------
                                                         *sqmeow.api.view.view()*

@@ -2,8 +2,8 @@
 //! frame as an ordinary column; no Polars value is written back to the retained result.
 
 use polars::prelude::{
-    Column, DataFrame, DataType, Expr, IdxCa, IdxSize, IntoLazy, PlSmallStr, SortMultipleOptions,
-    col, lit,
+    Column, DataFrame, DataType, Expr, IdxCa, IdxSize, IntoLazy, LazyFrame, PlSmallStr,
+    SortMultipleOptions, col, lit,
 };
 use polars_sql::SQLContext;
 use sqlparser::ast::{SetExpr, Statement, Visit, Visitor};
@@ -106,7 +106,43 @@ pub fn select_with(
     scope: Option<&[usize]>,
     query: Option<&Query>,
 ) -> Result<Vec<usize>, String> {
-    let positions = || {
+    if filters.is_empty() && sort.is_empty() && query.is_none() {
+        return Ok(scope.map_or_else(
+            || (0..result.row_count()).collect(),
+            |rows| {
+                rows.iter()
+                    .copied()
+                    .filter(|row| *row < result.row_count())
+                    .collect()
+            },
+        ));
+    }
+    let (lazy, row_name, _) = plan_with(result, filters, sort, scope, query, &[])?;
+    let frame = lazy
+        .select([col(&row_name)])
+        .collect()
+        .map_err(|error| error.to_string())?;
+    Ok(frame
+        .column(&row_name)
+        .map_err(|error| error.to_string())?
+        .u64()
+        .map_err(|error| error.to_string())?
+        .into_no_null_iter()
+        .map(|index| index as usize)
+        .collect())
+}
+
+/// Keep filter and downstream aggregation in one Polars plan. Raw native
+/// aliases preserve group identities even when filter projections coerce text.
+pub(super) fn plan_with(
+    result: &ResultSet,
+    filters: &[Filter],
+    sort: &[Sort],
+    scope: Option<&[usize]>,
+    query: Option<&Query>,
+    native: &[usize],
+) -> Result<(LazyFrame, String, Vec<String>), String> {
+    let positions = || -> Vec<usize> {
         scope.map_or_else(
             || (0..result.row_count()).collect(),
             |rows| {
@@ -117,9 +153,6 @@ pub fn select_with(
             },
         )
     };
-    if filters.is_empty() && sort.is_empty() && query.is_none() {
-        return Ok(positions());
-    }
     let names = super::names(result.columns());
     let row_name = (0..)
         .map(|number| format!("__sqmeow_row_{number}"))
@@ -136,7 +169,7 @@ pub fn select_with(
             scope.is_none(),
         )
     };
-    let frame = if scope.is_none() && needed.iter().all(|needed| *needed) {
+    let mut frame = if scope.is_none() && needed.iter().all(|needed| *needed) {
         result.view_cache.get_or_build(build)?
     } else if let Some(frame) = scope.is_none().then(|| result.view_cache.get()).flatten() {
         let columns: Vec<&str> = names
@@ -150,6 +183,35 @@ pub fn select_with(
     } else {
         build()?
     };
+    let indices = scope.map(|_| {
+        IdxCa::from_vec(
+            "".into(),
+            positions().iter().map(|&row| row as IdxSize).collect(),
+        )
+    });
+    let mut native_names = Vec::new();
+    for &index in native {
+        let name = (0..)
+            .map(|number| format!("__sqmeow_native_{number}"))
+            .find(|name| {
+                !names
+                    .iter()
+                    .chain(native_names.iter())
+                    .any(|column| column.eq_ignore_ascii_case(name))
+            })
+            .expect("there is always a free native alias");
+        let source = result
+            .column_values(index)
+            .expect("validated native column");
+        let values = match &indices {
+            Some(indices) => source.take(indices).map_err(|error| error.to_string())?,
+            None => source.clone(),
+        };
+        frame
+            .with_column(values.with_name(name.as_str().into()))
+            .map_err(|error| error.to_string())?;
+        native_names.push(name);
+    }
     let schema = frame.schema().clone();
     let mut lazy = frame.lazy();
     for filter in filters {
@@ -195,18 +257,7 @@ pub fn select_with(
             );
         }
     }
-    let frame = lazy
-        .select([col(&row_name)])
-        .collect()
-        .map_err(|error| error.to_string())?;
-    Ok(frame
-        .column(&row_name)
-        .map_err(|error| error.to_string())?
-        .u64()
-        .map_err(|error| error.to_string())?
-        .into_no_null_iter()
-        .map(|index| index as usize)
-        .collect())
+    Ok((lazy, row_name, native_names))
 }
 
 fn projection_columns(
