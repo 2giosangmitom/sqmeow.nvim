@@ -23,6 +23,7 @@ local M = {}
 ---@field rows integer|nil How many rows the engine is holding.
 ---@field view_rows integer|nil How many rows the current view holds.
 ---@field aggregated boolean|nil A read-only Polars aggregate view, not database rows.
+---@field aggregate_pending boolean|nil Local aggregation is being computed.
 ---@field source_rows integer|nil Retained input rows before grouping.
 ---@field original_columns sqmeow.ResultColumn[]|nil Snapshot columns for GROUP BY/WHERE completion.
 ---@field capabilities { query: boolean, memory: boolean, filter: boolean }|nil Local views are always available; `query` indicates the original connection is open for refresh.

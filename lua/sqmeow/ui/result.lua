@@ -183,7 +183,7 @@ end
 
 --- How the current result is shown. `where` and `order_by` are run in its query, which `base`
 --- holds as written once it has been filtered.
----@return { filters: table[], sort: table[], hidden: table<integer, boolean>, where: string, order_by: string, base: string|nil }
+---@return { filters: table[], sort: table[], hidden: table<integer, boolean>, where: string, order_by: string, group_by: string, aggregates: string, having: string, base: string|nil }
 function M.spec()
   local call = require('sqmeow.core.state').call
   local id = call and call.call_id
@@ -873,8 +873,18 @@ function M.send_view(opts)
   return true
 end
 
---- The engine finished building a view.
----@param payload { call_id: integer, rows: integer|nil, error: string|nil }
+---@class sqmeow.ViewReply
+---@field call_id integer
+---@field rows integer|nil
+---@field error string|nil
+---@field summary sqmeow.CallSummary|nil
+---@field aggregated boolean|nil
+---@field source_rows integer|nil
+---@field original_columns sqmeow.ResultColumn[]|nil
+
+--- Apply the displayed schema without changing the original snapshot.
+---@param call sqmeow.CallSummary
+---@param payload sqmeow.ViewReply
 local function apply_view_summary(call, payload)
   if not payload.summary then
     return
@@ -895,6 +905,8 @@ local function apply_view_summary(call, payload)
   end
 end
 
+--- The engine finished building a view.
+---@param payload sqmeow.ViewReply
 function M.on_view(payload)
   local active = require('sqmeow.core.state').call
   if active and active.call_id == payload.call_id then
@@ -966,7 +978,7 @@ function M.filterable(call)
 end
 
 --- Polars column names, with numeric suffixes for duplicates.
----@param call sqmeow.CallSummary
+---@param call { columns: sqmeow.ResultColumn[]|nil }
 ---@return string[]
 function M.filter_names(call)
   local taken, names = {}, {}
@@ -1086,7 +1098,7 @@ function M.render(summary)
   page = { offset = 0, rows = {}, indices = {} }
 
   local id = summary and summary.call_id
-  if id and view_summaries[id] then
+  if summary and id and view_summaries[id] then
     apply_view_summary(summary, view_summaries[id])
   end
   if id ~= drawn then
