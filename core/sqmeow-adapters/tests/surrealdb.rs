@@ -66,14 +66,17 @@ async fn native_parameters_repeat_without_interpolating_text() {
         .unwrap();
     assert_eq!(result.row_count(), 3);
     assert_eq!(
-        result.cell(0, 0),
+        result.cell(0, 0).as_deref(),
         Some(&sqmeow_db::value::Cell::Text(text.into()))
     );
     assert_eq!(
-        result.cell(1, 0),
+        result.cell(1, 0).as_deref(),
         Some(&sqmeow_db::value::Cell::Text(text.into()))
     );
-    assert_eq!(result.cell(2, 0), Some(&sqmeow_db::value::Cell::Null));
+    assert_eq!(
+        result.cell(2, 0).as_deref(),
+        Some(&sqmeow_db::value::Cell::Null)
+    );
     assert_eq!(run(&backend, "SELECT * FROM person").await.row_count(), 1);
     run(&backend, "REMOVE DATABASE bound_text").await;
     backend.close().await;
@@ -124,7 +127,8 @@ async fn stale_edits_roll_back_and_computed_results_are_not_editable() {
     assert_eq!(
         run(&backend, "SELECT age FROM person:alice")
             .await
-            .cell(0, 0),
+            .cell(0, 0)
+            .as_deref(),
         Some(&sqmeow_db::value::Cell::Int(3))
     );
     run(&backend, "REMOVE DATABASE edit_safety").await;
@@ -138,14 +142,15 @@ async fn commands_create_read_update_and_delete_rows() {
     let selected = run(&backend, "SELECT name FROM person:alice").await;
     assert_eq!(selected.row_count(), 1);
     assert_eq!(
-        selected.cell(0, 0),
+        selected.cell(0, 0).as_deref(),
         Some(&sqmeow_db::value::Cell::Text("alice".into()))
     );
     run(&backend, "UPDATE person:alice SET name = 'bob'").await;
     assert_eq!(
         run(&backend, "SELECT name FROM person:alice")
             .await
-            .cell(0, 0),
+            .cell(0, 0)
+            .as_deref(),
         Some(&sqmeow_db::value::Cell::Text("bob".into()))
     );
     run(&backend, "DELETE person:alice").await;

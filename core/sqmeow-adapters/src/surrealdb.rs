@@ -541,7 +541,7 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
         .ok_or_else(edit::not_editable)?;
     let record = |row: usize| -> Result<String> {
         check_row(result, row)?;
-        match result.cell(row, id_column) {
+        match result.cell(row, id_column).as_deref() {
             Some(Cell::Text(id)) => Ok(id.clone()),
             _ => Err(Error::driver("this record has no id to find it by")),
         }
@@ -972,8 +972,11 @@ mod tests {
         let result = people();
         let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["id", "name"]);
-        assert_eq!(result.cell(0, 0), Some(&Cell::Text("person:alice".into())));
-        assert_eq!(result.cell(1, 1), Some(&Cell::Null));
+        assert_eq!(
+            result.cell(0, 0).as_deref(),
+            Some(&Cell::Text("person:alice".into()))
+        );
+        assert_eq!(result.cell(1, 1).as_deref(), Some(&Cell::Null));
         assert_eq!(result.columns()[0].type_name, "record");
         assert_eq!(result.columns()[1].type_name, "string");
         assert!(matches!(
@@ -986,7 +989,7 @@ mod tests {
     fn anything_but_records_is_one_result_column_and_cannot_be_edited() {
         let result = to_result("RETURN 1", Value::Number(Number::Int(1)), 100);
         assert_eq!(result.columns()[0].name, "result");
-        assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
+        assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Int(1)));
         assert!(result.source().is_none());
 
         let mut object = Object::new();

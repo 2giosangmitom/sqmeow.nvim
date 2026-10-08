@@ -799,7 +799,7 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
             .columns()
             .first()
             .map_or("", |column| column.type_name.as_str());
-        id_bson(result.cell(row, 0).unwrap_or(&Cell::Null), kind)
+        id_bson(result.cell(row, 0).as_deref().unwrap_or(&Cell::Null), kind)
     };
 
     let mut commands = Vec::new();
@@ -1188,8 +1188,11 @@ mod tests {
 
         let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["_id", "name", "tags", "age"]);
-        assert_eq!(result.cell(0, 2), Some(&Cell::Json(r#"["a","b"]"#.into())));
-        assert_eq!(result.cell(1, 1), Some(&Cell::Null));
+        assert_eq!(
+            result.cell(0, 2).as_deref(),
+            Some(&Cell::Json(r#"["a","b"]"#.into()))
+        );
+        assert_eq!(result.cell(1, 1).as_deref(), Some(&Cell::Null));
         assert_eq!(result.columns()[3].class, TypeClass::Number);
         assert_eq!(result.columns()[2].class, TypeClass::Json);
     }

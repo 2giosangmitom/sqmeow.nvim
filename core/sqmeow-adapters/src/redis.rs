@@ -680,7 +680,7 @@ fn plan(result: &ResultSet, changes: &Changes) -> Result<Vec<String>> {
 
     let original = |row: usize, column: usize| -> Result<String> {
         check_row(result, row)?;
-        Ok(match result.cell(row, column) {
+        Ok(match result.cell(row, column).as_deref() {
             Some(Cell::Bytes { head, .. }) => quote_bytes(head),
             Some(cell) => quote(&cell.text("")),
             None => quote(""),
@@ -1408,7 +1408,7 @@ mod tests {
         let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["field", "value"]);
         assert_eq!(result.row_count(), 2);
-        assert_eq!(result.cell(1, 1), Some(&Cell::Text("30".into())));
+        assert_eq!(result.cell(1, 1).as_deref(), Some(&Cell::Text("30".into())));
     }
 
     #[test]
@@ -1421,7 +1421,10 @@ mod tests {
 
         let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["1", "2"]);
-        assert_eq!(result.cell(1, 0), Some(&Cell::Text("bob".into())));
+        assert_eq!(
+            result.cell(1, 0).as_deref(),
+            Some(&Cell::Text("bob".into()))
+        );
         assert_eq!(result.columns()[1].class, TypeClass::Number);
     }
 
@@ -1429,10 +1432,10 @@ mod tests {
     fn a_scalar_is_one_row() {
         let result = to_result("GET absent", Value::Nil, usize::MAX);
         assert_eq!(result.row_count(), 1);
-        assert_eq!(result.cell(0, 0), Some(&Cell::Null));
+        assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Null));
 
         let result = to_result("SET k v", Value::Okay, usize::MAX);
-        assert_eq!(result.cell(0, 0), Some(&Cell::Text("OK".into())));
+        assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Text("OK".into())));
     }
 
     #[test]

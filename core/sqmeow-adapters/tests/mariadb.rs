@@ -38,7 +38,10 @@ async fn selects_rows_with_their_columns() {
 
     let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["id", "name"]);
-    assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
-    assert_eq!(result.cell(0, 1), Some(&Cell::Text("alice".into())));
+    assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Int(1)));
+    assert_eq!(
+        result.cell(0, 1).as_deref(),
+        Some(&Cell::Text("alice".into()))
+    );
     backend.close().await;
 }

@@ -1,144 +1,119 @@
-//! Typed read handles share the retained frame's buffers, not its values.
-//! Downcast once when publishing/appending; hot cell reads use ordinary slices.
+//! Native scalar columns, with Object fallback only where conversion would lose values.
 
-use polars::chunked_array::object::ObjectArray;
-use polars::prelude::{DataFrame, ObjectChunked};
+use std::borrow::Cow;
+
+use polars::prelude::{AnyValue, Column, DataFrame, DataType, IntoSeries, ObjectChunked, Series};
 
 use crate::value::{Cell, RetainedCell};
 
-#[derive(Debug, Clone)]
-pub(super) struct RetainedFrame {
-    pub frame: DataFrame,
-    columns: Vec<CellColumn>,
-}
-
-impl RetainedFrame {
-    pub fn new(frame: DataFrame) -> Self {
-        let mut held = Self {
-            frame,
-            columns: Vec::new(),
-        };
-        held.refresh();
-        held
-    }
-
-    fn refresh(&mut self) {
-        self.columns = self
-            .frame
-            .columns()
+pub(super) fn column(name: &str, cells: Vec<RetainedCell>) -> Column {
+    let values: Option<Vec<_>> = cells
+        .iter()
+        .map(|cell| match &cell.0 {
+            Cell::Null => Some(AnyValue::Null),
+            Cell::Bool(value) => Some(AnyValue::Boolean(*value)),
+            Cell::Int(value) => Some(AnyValue::Int64(*value)),
+            Cell::Float(value) => Some(AnyValue::Float64(*value)),
+            Cell::Text(value) => Some(AnyValue::String(value)),
+            Cell::Bytes { head, len } if head.len() == *len => Some(AnyValue::Binary(head)),
+            _ => None,
+        })
+        .collect();
+    if let Some(values) = values {
+        let dtype = values
             .iter()
-            .map(|column| {
-                let values = column
-                    .as_materialized_series()
-                    .as_any()
-                    .downcast_ref::<ObjectChunked<RetainedCell>>()
-                    .expect("retained cell column");
-                let chunks: Vec<_> = values.downcast_iter().cloned().collect();
-                let mut end = 0;
-                let ends = chunks
-                    .iter()
-                    .map(|chunk| {
-                        end += chunk.values_iter().len();
-                        end
-                    })
-                    .collect();
-                CellColumn { chunks, ends }
-            })
-            .collect();
-    }
-
-    pub fn append(&mut self, appended: Self) {
-        self.frame
-            .vstack_mut_owned(appended.frame)
-            .expect("same retained schema");
-        for (held, appended) in self.columns.iter_mut().zip(appended.columns) {
-            let mut end = held.ends.last().copied().unwrap_or(0);
-            for chunk in appended.chunks {
-                end += chunk.values_iter().len();
-                held.chunks.push(chunk);
-                held.ends.push(end);
-            }
+            .find(|value| !value.is_null())
+            .map(AnyValue::dtype)
+            .unwrap_or(DataType::Null);
+        // Even strict Polars construction can coerce some numeric types. Do not
+        // let mixed Int/Float columns round large integer keys or change variants.
+        if values
+            .iter()
+            .all(|value| value.is_null() || value.dtype() == dtype)
+        {
+            return Series::from_any_values_and_dtype(name.into(), &values, &dtype, true)
+                .expect("matching native scalar values")
+                .into();
         }
     }
-
-    #[inline]
-    pub fn column(&self, index: usize) -> Option<&CellColumn> {
-        self.columns.get(index)
-    }
+    object(name, cells)
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct CellColumn {
-    chunks: Vec<ObjectArray<RetainedCell>>,
-    ends: Vec<usize>,
+fn object(name: &str, cells: Vec<RetainedCell>) -> Column {
+    ObjectChunked::new_from_vec(name.into(), cells)
+        .into_series()
+        .into()
 }
 
-impl CellColumn {
-    #[inline]
-    pub fn get(&self, row: usize) -> Option<&Cell> {
-        // Ordinary retained results have one chunk; appends keep older chunks
-        // shared and use a prefix index for random reads across chunk boundaries.
-        if let Some(value) = self.chunks.first()?.values_iter().as_slice().get(row) {
-            return Some(&value.0);
-        }
-        self.get_appended(row)
+/// Only native scalar access materializes a Cell. Fallback values stay borrowed.
+pub(super) fn cell(column: &Column, row: usize) -> Option<Cow<'_, Cell>> {
+    if row >= column.len() {
+        return None;
     }
-
-    fn get_appended(&self, row: usize) -> Option<&Cell> {
-        let chunk = self.ends.partition_point(|&end| end <= row);
-        let offset = if chunk == 0 { 0 } else { self.ends[chunk - 1] };
-        self.chunks
-            .get(chunk)?
-            .values_iter()
-            .as_slice()
-            .get(row - offset)
-            .map(|value| &value.0)
+    if let Some(values) = column
+        .as_materialized_series()
+        .as_any()
+        .downcast_ref::<ObjectChunked<RetainedCell>>()
+    {
+        return values.get(row).map(|value| Cow::Borrowed(&value.0));
     }
-
-    pub(super) fn iter(&self) -> Cells<'_> {
-        Cells {
-            chunks: self.chunks.iter(),
-            current: [].iter(),
-            remaining: self.ends.last().copied().unwrap_or(0),
-        }
-    }
-}
-
-pub(super) struct Cells<'a> {
-    chunks: std::slice::Iter<'a, ObjectArray<RetainedCell>>,
-    current: std::slice::Iter<'a, RetainedCell>,
-    remaining: usize,
-}
-
-impl<'a> Cells<'a> {
-    pub(super) fn new(column: Option<&'a CellColumn>) -> Self {
-        column.map_or(
-            Self {
-                chunks: [].iter(),
-                current: [].iter(),
-                remaining: 0,
+    Some(Cow::Owned(
+        match column.as_materialized_series().get(row).ok()? {
+            AnyValue::Null => Cell::Null,
+            AnyValue::Boolean(value) => Cell::Bool(value),
+            AnyValue::Int64(value) => Cell::Int(value),
+            AnyValue::Float64(value) => Cell::Float(value),
+            AnyValue::String(value) => Cell::Text(value.into()),
+            AnyValue::Binary(value) => Cell::Bytes {
+                head: value.into(),
+                len: value.len(),
             },
-            CellColumn::iter,
-        )
-    }
+            other => unreachable!("retained native scalar dtype: {other:?}"),
+        },
+    ))
 }
 
-impl<'a> Iterator for Cells<'a> {
-    type Item = &'a Cell;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(value) = self.current.next() {
-                self.remaining -= 1;
-                return Some(&value.0);
+/// Appends preserve exact variants. A type change promotes only that column to Object.
+pub(super) fn append(frame: &mut DataFrame, row: Vec<Cell>) {
+    let height = frame.height();
+    let columns = frame
+        .columns()
+        .iter()
+        .zip(row)
+        .map(|(held, value)| {
+            let name = held.name().as_str();
+            let mut tail = if matches!(held.dtype(), DataType::Object(_)) {
+                object(name, vec![RetainedCell(value)])
+            } else {
+                column(name, vec![RetainedCell(value)])
+            };
+            let mut head = held.clone();
+            if tail.dtype() == &DataType::Null {
+                tail = tail
+                    .cast(head.dtype())
+                    .expect("null casts to retained dtype");
+            } else if head.dtype() == &DataType::Null {
+                head = if matches!(tail.dtype(), DataType::Object(_)) {
+                    object(name, vec![RetainedCell(Cell::Null); height])
+                } else {
+                    head.cast(tail.dtype())
+                        .expect("null casts to appended dtype")
+                };
+            } else if head.dtype() != tail.dtype() {
+                let mut cells: Vec<_> = (0..height)
+                    .map(|row| RetainedCell(cell(held, row).expect("retained row").into_owned()))
+                    .collect();
+                cells.push(RetainedCell(
+                    cell(&tail, 0).expect("appended row").into_owned(),
+                ));
+                return object(name, cells);
             }
-            self.current = self.chunks.next()?.values_iter();
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
-    }
+            let mut series = head.take_materialized_series();
+            series
+                .append(tail.as_materialized_series())
+                .expect("matching retained dtype");
+            series.into()
+        })
+        .collect();
+    *frame = DataFrame::new(height + 1, columns).expect("rectangular appended frame");
 }
-
-impl ExactSizeIterator for Cells<'_> {}

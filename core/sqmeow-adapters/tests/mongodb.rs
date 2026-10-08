@@ -61,7 +61,7 @@ async fn only_a_find_keeping_its_ids_can_be_edited() {
         .iter()
         .position(|name| *name == "v")
         .unwrap();
-    assert_eq!(updated.cell(0, value), Some(&Cell::Int(2)));
+    assert_eq!(updated.cell(0, value).as_deref(), Some(&Cell::Int(2)));
     run(&backend, r#"{"drop": "projected"}"#).await;
     backend.close().await;
 }
@@ -146,17 +146,26 @@ async fn commands_create_read_update_and_delete_rows() {
 
     let found = run(&backend, r#"{"find": "insert_find", "sort": {"_id": 1}}"#).await;
     assert_eq!(names(&found), vec!["_id", "name", "tags", "age"]);
-    assert_eq!(found.cell(0, 1), Some(&Cell::Text("alice".into())));
-    assert_eq!(found.cell(0, 2), Some(&Cell::Json(r#"["a"]"#.into())));
-    assert_eq!(found.cell(1, 2), Some(&Cell::Null));
-    assert_eq!(found.cell(1, 3), Some(&Cell::Int(30)));
+    assert_eq!(
+        found.cell(0, 1).as_deref(),
+        Some(&Cell::Text("alice".into()))
+    );
+    assert_eq!(
+        found.cell(0, 2).as_deref(),
+        Some(&Cell::Json(r#"["a"]"#.into()))
+    );
+    assert_eq!(found.cell(1, 2).as_deref(), Some(&Cell::Null));
+    assert_eq!(found.cell(1, 3).as_deref(), Some(&Cell::Int(30)));
     run(&backend, r#"{"update": "insert_find", "updates": [{"q": {"_id": 1}, "u": {"$set": {"name": "updated"}}}]}"#).await;
     let updated = run(&backend, r#"{"find": "insert_find", "filter": {"_id": 1}}"#).await;
     let name = names(&updated)
         .iter()
         .position(|name| *name == "name")
         .unwrap();
-    assert_eq!(updated.cell(0, name), Some(&Cell::Text("updated".into())));
+    assert_eq!(
+        updated.cell(0, name).as_deref(),
+        Some(&Cell::Text("updated".into()))
+    );
     empty(&backend, "insert_find").await;
     assert_eq!(
         run(&backend, r#"{"find": "insert_find"}"#)

@@ -189,10 +189,14 @@ impl Planner<'_> {
     /// The `WHERE` condition that finds a row's table row by its key.
     fn locate(&self, table: &Table, row: usize) -> Result<String> {
         check_row(self.result, row)?;
-        let cells: Vec<&Cell> = table
+        let cells: Vec<_> = table
             .key
             .iter()
-            .map(|&index| self.result.cell(row, index).unwrap_or(&Cell::Null))
+            .map(|&index| {
+                self.result
+                    .cell(row, index)
+                    .unwrap_or(std::borrow::Cow::Borrowed(&Cell::Null))
+            })
             .collect();
         // An outer join leaves rows with nothing from the table on its other side.
         if cells.iter().all(|cell| cell.is_null()) {
@@ -204,7 +208,7 @@ impl Planner<'_> {
         let parts = table
             .key
             .iter()
-            .zip(cells)
+            .zip(cells.iter().map(|cell| cell.as_ref()))
             // A JSON, array or unread value has no dependable equality; applying checks that
             // exactly one row matched what is left.
             .filter(|(_, cell)| {

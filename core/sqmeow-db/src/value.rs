@@ -230,7 +230,7 @@ fn format_float(value: f64) -> String {
     text.strip_suffix(".0").map(str::to_owned).unwrap_or(text)
 }
 
-fn format_bytes(head: &[u8], len: usize) -> String {
+pub(crate) fn format_bytes(head: &[u8], len: usize) -> String {
     let mut out = String::with_capacity(head.len() * 2 + 16);
     out.push_str("0x");
     for byte in head {
@@ -250,7 +250,7 @@ fn format_array(items: &[Cell], null_text: &str) -> String {
 }
 
 /// Replace the characters that would break a one-line cell, allocating only when one is present.
-fn escape(text: &str) -> Cow<'_, str> {
+pub(crate) fn escape(text: &str) -> Cow<'_, str> {
     if !text.contains(['\n', '\r', '\t']) {
         return Cow::Borrowed(text);
     }

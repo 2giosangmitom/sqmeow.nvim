@@ -2,9 +2,9 @@
 
 use crate::adapter::Dialect;
 use crate::edit::{Source, literal};
-use crate::result::ResultSet;
+use crate::result::{AnyValue, ResultSet};
 use crate::value::Cell;
-use polars::prelude::{Column as PolarsColumn, DataFrame};
+use polars::prelude::{Column as PolarsColumn, DataFrame, DataType, IdxCa, IdxSize};
 use polars_io::prelude::{CsvWriter, SerWriter};
 
 /// Describes the format an export is written in.
@@ -111,8 +111,7 @@ pub fn csv(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>, header
     let columns = chosen(result, columns);
     let mut bytes = Vec::new();
     if headers {
-        // Polars requires unique frame column names, but result headers may repeat.
-        // Write the original names before the Polars rows instead of renaming the export.
+        // Keep duplicate/original names outside the uniquely named Polars frame.
         let names = columns
             .iter()
             .map(|&index| csv_field(&result.columns()[index].name, columns.len() == 1))
@@ -125,24 +124,12 @@ pub fn csv(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>, header
         bytes.extend(std::iter::repeat_n(b'\n', rows.len()));
         return String::from_utf8(bytes).expect("CSV contains only UTF-8");
     }
-    let values: Vec<PolarsColumn> = columns
-        .iter()
-        .enumerate()
-        .map(|(position, &index)| {
-            result.text_column(
-                index,
-                rows,
-                &format!("column_{position}"),
-                (columns.len() == 1).then_some(""),
-            )
-        })
-        .collect();
-    let mut frame = DataFrame::new(rows.len(), values).expect("columns share the same row count");
+    let mut frame = csv_frame(result, rows, &columns);
     CsvWriter::new(&mut bytes)
         .include_header(false)
         .finish(&mut frame)
-        .expect("writing a string frame to memory cannot fail");
-    String::from_utf8(bytes).expect("every field written was a string")
+        .expect("writing a compatible frame to memory cannot fail");
+    String::from_utf8(bytes).expect("every field written was UTF-8")
 }
 
 fn csv_field(text: &str, only_field: bool) -> String {
@@ -151,6 +138,42 @@ fn csv_field(text: &str, only_field: bool) -> String {
     } else {
         text.to_owned()
     }
+}
+
+fn csv_frame(result: &ResultSet, rows: &[usize], columns: &[usize]) -> DataFrame {
+    let valid = rows.iter().all(|&row| row < result.row_count());
+    let contiguous = rows
+        .windows(2)
+        .all(|pair| pair[0].checked_add(1) == Some(pair[1]));
+    // Build gather indices once for the whole export, not once per column.
+    let indices = (valid && !contiguous)
+        .then(|| IdxCa::from_vec("".into(), rows.iter().map(|&row| row as IdxSize).collect()));
+    let values: Vec<PolarsColumn> = columns
+        .iter()
+        .enumerate()
+        .map(|(position, &index)| {
+            let name = format!("column_{position}");
+            let cells = result.column_values(index).expect("chosen column exists");
+            // These dtypes have the same CSV text as Cell. Floats, binary and
+            // Object values still need the lossless compatibility formatter.
+            if valid
+                && matches!(
+                    cells.dtype(),
+                    DataType::Boolean | DataType::Int64 | DataType::String
+                )
+                && (columns.len() != 1 || cells.null_count() == 0)
+            {
+                let selected = match &indices {
+                    Some(indices) => cells.take(indices).expect("valid retained rows"),
+                    None => cells.slice(rows.first().copied().unwrap_or(0) as i64, rows.len()),
+                };
+                selected.with_name(name.into())
+            } else {
+                result.text_column(index, rows, &name, (columns.len() == 1).then_some(""))
+            }
+        })
+        .collect();
+    DataFrame::new(rows.len(), values).expect("columns share the same row count")
 }
 
 /// Write a result as a JSON array of objects.
@@ -163,7 +186,14 @@ pub fn json(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>) -> St
             for &index in &columns {
                 object.insert(
                     result.columns()[index].name.clone(),
-                    value(result.cell(row, index).unwrap_or(&Cell::Null)),
+                    match result.scalar(row, index) {
+                        None | Some(AnyValue::Null) => serde_json::Value::Null,
+                        Some(AnyValue::Boolean(flag)) => serde_json::Value::Bool(flag),
+                        Some(AnyValue::Int64(number)) => serde_json::Value::from(number),
+                        Some(AnyValue::Float64(number)) => value(&Cell::Float(number)),
+                        Some(AnyValue::String(text)) => serde_json::Value::from(text),
+                        _ => value(result.cell(row, index).as_deref().unwrap_or(&Cell::Null)),
+                    },
                 );
             }
             serde_json::Value::Object(object)
@@ -196,7 +226,12 @@ pub fn sql(result: &ResultSet, rows: &[usize], columns: Option<&[usize]>, option
     let values = |row: usize| {
         let values = columns
             .iter()
-            .map(|&column| literal(dialect, result.cell(row, column).unwrap_or(&Cell::Null)))
+            .map(|&column| {
+                literal(
+                    dialect,
+                    result.cell(row, column).as_deref().unwrap_or(&Cell::Null),
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         format!("({values})")
@@ -477,6 +512,179 @@ mod tests {
         assert_eq!(csv(&result, &[0, 1], Some(&[]), false), "\n\n");
         let empty_name = ResultSet::new("select", vec![column("")]);
         assert_eq!(csv(&empty_name, &[], None, true), "\"\"\n");
+    }
+
+    #[test]
+    fn csv_streams_native_and_fallback_cells_without_changing_text() {
+        let values = vec![
+            Cell::Null,
+            Cell::Bool(true),
+            Cell::Int(i64::MAX),
+            Cell::Float(-0.0),
+            Cell::Float(f64::NAN),
+            Cell::Float(f64::INFINITY),
+            Cell::Text("中\r\n\"comma,\0\t".into()),
+            Cell::bytes(&[255; 128]),
+            Cell::Decimal("12345678901234567890.00100".into()),
+            Cell::Json("{\"x\":1}\n".into()),
+            Cell::Timestamp("infinity".into()),
+            Cell::Array(vec![Cell::Int(1), Cell::Text("x,y".into()), Cell::Null]),
+            Cell::Unsupported {
+                type_name: "custom".into(),
+                raw: "a\r\nb".into(),
+            },
+        ];
+        let mut native = ResultSet::new(
+            "native",
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, _)| column(&index.to_string()))
+                .collect(),
+        );
+        native.push_row(values.clone());
+        let text = csv(&native, &[0, 99, 0], None, true);
+        let expected: Vec<_> = values
+            .iter()
+            .map(|cell| cell.text("").into_owned())
+            .collect();
+        let record = expected
+            .iter()
+            .map(|text| csv_field(text, false))
+            .collect::<Vec<_>>()
+            .join(",");
+        let headers = (0..values.len())
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(
+            text,
+            format!(
+                "{headers}\n{record}\n{}\n{record}\n",
+                ",".repeat(values.len() - 1)
+            )
+        );
+        let mut fallback = ResultSet::new("mixed", vec![column("v")]);
+        for value in &values {
+            fallback.push_row(vec![value.clone()]);
+        }
+        let text = csv(
+            &fallback,
+            &(0..values.len()).collect::<Vec<_>>(),
+            None,
+            false,
+        );
+        assert_eq!(
+            text,
+            expected
+                .iter()
+                .map(|text| format!("{}\n", csv_field(text, true)))
+                .collect::<String>()
+        );
+        assert_eq!(csv(&native, &[0], Some(&[]), true), "\n\n");
+    }
+
+    #[test]
+    fn csv_distinguishes_empty_text_from_null_in_multiple_columns() {
+        let mut result = ResultSet::new("empty", vec![column("v"), column("v")]);
+        result.push_row(vec![Cell::Text(String::new()), Cell::Null]);
+        result.push_row(vec![Cell::Null, Cell::Text(String::new())]);
+        assert_eq!(csv(&result, &[0, 1], None, false), "\"\",\n,\"\"\n");
+    }
+
+    #[test]
+    fn csv_escapes_long_quoted_fields_with_native_strings() {
+        let text = "中\"\r\n,".repeat(4096);
+        let mut result = ResultSet::new("long", vec![column("v")]);
+        result.push_row(vec![Cell::Text(text.clone())]);
+        let frame = csv_frame(&result, &[0, 0], &[0]);
+        assert_eq!(frame.columns()[0].dtype(), &DataType::String);
+        let encoded = csv(&result, &[0, 0], None, false);
+        assert_eq!(
+            encoded,
+            format!(
+                "\"{}\"\n\"{}\"\n",
+                text.replace('"', "\"\""),
+                text.replace('"', "\"\"")
+            )
+        );
+    }
+
+    #[test]
+    fn csv_native_projection_matches_compatibility_for_every_selection() {
+        let mut result = ResultSet::new(
+            "native",
+            vec![column("b"), column("i"), column("s"), column("f")],
+        );
+        result.push_row(vec![
+            Cell::Bool(true),
+            Cell::Int(i64::MAX),
+            Cell::Text(String::new()),
+            Cell::Float(-0.0),
+        ]);
+        result.push_row(vec![Cell::Null, Cell::Null, Cell::Null, Cell::Null]);
+        result.push_row(vec![
+            Cell::Bool(false),
+            Cell::Int(i64::MIN),
+            Cell::Text("a,\"\r\n中".into()),
+            Cell::Float(f64::INFINITY),
+        ]);
+        for rows in [
+            vec![0, 1, 2],
+            vec![1, 2],
+            vec![2, 0, 2],
+            vec![],
+            vec![99, 0],
+        ] {
+            for columns in [
+                vec![0, 1, 2, 3],
+                vec![2, 0, 1, 2],
+                vec![0],
+                vec![1],
+                vec![2],
+            ] {
+                let frame = csv_frame(&result, &rows, &columns);
+                let direct = rows.iter().all(|&row| row < 3) && columns.len() > 1;
+                for (position, &index) in columns.iter().enumerate() {
+                    let expected = if direct && index != 3 {
+                        result.column_values(index).unwrap().dtype().clone()
+                    } else {
+                        DataType::String
+                    };
+                    assert_eq!(frame.columns()[position].dtype(), &expected);
+                }
+                let values = columns
+                    .iter()
+                    .enumerate()
+                    .map(|(position, &index)| {
+                        result.text_column(
+                            index,
+                            &rows,
+                            &format!("c{position}"),
+                            (columns.len() == 1).then_some(""),
+                        )
+                    })
+                    .collect();
+                let mut compatible = DataFrame::new(rows.len(), values).unwrap();
+                let mut bytes = Vec::new();
+                CsvWriter::new(&mut bytes)
+                    .include_header(false)
+                    .finish(&mut compatible)
+                    .unwrap();
+                assert_eq!(
+                    csv(&result, &rows, Some(&columns), false).as_bytes(),
+                    bytes,
+                    "rows={rows:?}, columns={columns:?}"
+                );
+            }
+        }
+        let mut integers = ResultSet::new("non-null", vec![column("i")]);
+        integers.push_row(vec![Cell::Int(i64::MAX)]);
+        assert_eq!(
+            csv_frame(&integers, &[0], &[0]).columns()[0].dtype(),
+            &DataType::Int64
+        );
+        assert_eq!(csv(&integers, &[0], None, false), format!("{}\n", i64::MAX));
     }
 
     #[test]

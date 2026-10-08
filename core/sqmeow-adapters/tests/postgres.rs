@@ -87,7 +87,7 @@ async fn aborted_apply_cannot_be_committed_by_a_later_apply() {
     let mut active = false;
     for _ in 0..100 {
         let result = run(&observer, "select count(*)::int8 from pg_stat_activity where state = 'active' and query = 'select pg_sleep(2) /* native_aborted_apply */'").await;
-        if result.cell(0, 0) == Some(&Cell::Int(1)) {
+        if result.cell(0, 0).as_deref() == Some(&Cell::Int(1)) {
             active = true;
             break;
         }
@@ -108,7 +108,8 @@ async fn aborted_apply_cannot_be_committed_by_a_later_apply() {
     assert_eq!(
         run(&observer, "select v from native_aborted_apply")
             .await
-            .cell(0, 0),
+            .cell(0, 0)
+            .as_deref(),
         Some(&Cell::Int(10)),
         "later apply must not commit abandoned edits (reuse outcome: {reuse:?})"
     );
@@ -148,6 +149,9 @@ async fn selects_rows_with_their_columns() {
 
     let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["id", "name"]);
-    assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
-    assert_eq!(result.cell(0, 1), Some(&Cell::Text("alice".into())));
+    assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Int(1)));
+    assert_eq!(
+        result.cell(0, 1).as_deref(),
+        Some(&Cell::Text("alice".into()))
+    );
 }

@@ -156,8 +156,11 @@ async fn reads_back_rows_it_wrote() {
 
     let result = run(&backend, "select id, name from people order by id").await;
     assert_eq!(result.row_count(), 2);
-    assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
-    assert_eq!(result.cell(1, 1), Some(&Cell::Text("bob".into())));
+    assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Int(1)));
+    assert_eq!(
+        result.cell(1, 1).as_deref(),
+        Some(&Cell::Text("bob".into()))
+    );
 }
 
 #[tokio::test]

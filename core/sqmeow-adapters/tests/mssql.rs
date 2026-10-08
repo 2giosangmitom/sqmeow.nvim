@@ -81,7 +81,7 @@ async fn selects_a_literal_row() {
     let db = Backend::connect(&server!()).await.unwrap();
     let result = run(&db, "SELECT 1 AS id").await;
     assert_eq!(result.row_count(), 1);
-    assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
+    assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Int(1)));
     db.close().await;
 }
 

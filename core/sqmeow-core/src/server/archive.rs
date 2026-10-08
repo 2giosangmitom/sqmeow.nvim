@@ -118,7 +118,7 @@ fn write_to(file: File, result: &ResultSet) -> io::Result<()> {
     let width = result.columns().len();
     for row in 0..result.row_count() {
         let cells = (0..width)
-            .map(|column| encode_cell(result.cell(row, column).unwrap_or(&Cell::Null)))
+            .map(|column| encode_cell(result.cell(row, column).as_deref().unwrap_or(&Cell::Null)))
             .collect();
         encode(&mut out, &Value::Array(cells))?;
     }
@@ -398,8 +398,8 @@ mod tests {
         let restored = read(&scratch.file()).expect("the result should be read");
         assert_eq!(restored.row_count(), 2);
         for (index, expected) in every_kind().iter().enumerate() {
-            assert_eq!(restored.cell(0, index), Some(expected));
-            assert_eq!(restored.cell(1, index), Some(&Cell::Null));
+            assert_eq!(restored.cell(0, index).as_deref(), Some(expected));
+            assert_eq!(restored.cell(1, index).as_deref(), Some(&Cell::Null));
         }
         assert_eq!(restored.statement(), "select everything");
     }
