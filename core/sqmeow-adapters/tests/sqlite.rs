@@ -159,7 +159,7 @@ async fn opens_an_in_memory_database_with_each_sqlite_scheme() {
             .await
             .unwrap_or_else(|error| panic!("{url}: {error}"));
         assert_eq!(
-            run(&backend, "select 42").await.cell(0, 0),
+            run(&backend, "select 42").await.cell(0, 0).as_deref(),
             Some(&Cell::Int(42))
         );
         backend.close().await;
@@ -180,8 +180,11 @@ async fn selects_rows_with_their_columns() {
     assert_eq!(result.row_count(), 3);
     let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["id", "name"]);
-    assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
-    assert_eq!(result.cell(0, 1), Some(&Cell::Text("alice".into())));
+    assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Int(1)));
+    assert_eq!(
+        result.cell(0, 1).as_deref(),
+        Some(&Cell::Text("alice".into()))
+    );
 }
 
 #[tokio::test]
@@ -258,9 +261,15 @@ async fn a_select_from_one_table_is_edited_through_its_primary_key() {
 
     let after = run(&backend, "select id, name from people order by id").await;
     assert_eq!(
-        after.column_cells(0).cloned().collect::<Vec<_>>(),
+        after
+            .column_cells(0)
+            .map(std::borrow::Cow::into_owned)
+            .collect::<Vec<_>>(),
         vec![Cell::Int(1), Cell::Int(3), Cell::Int(9)]
     );
-    assert_eq!(after.cell(0, 1), Some(&Cell::Text("o'ally".into())));
-    assert_eq!(after.cell(2, 1), Some(&Cell::Text("zed".into())));
+    assert_eq!(
+        after.cell(0, 1).as_deref(),
+        Some(&Cell::Text("o'ally".into()))
+    );
+    assert_eq!(after.cell(2, 1).as_deref(), Some(&Cell::Text("zed".into())));
 }

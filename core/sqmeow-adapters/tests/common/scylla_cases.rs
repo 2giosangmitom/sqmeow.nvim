@@ -53,9 +53,9 @@ async fn native_binds_preserve_text_nulls_and_complete_edit_keys() {
     let text = "it's \\ data; ' OR true -- :name ?";
     backend.execute_bound("INSERT INTO sqmeow.bound_smoke (pk, ck, first, repeated, missing) VALUES (?, ?, ?, ?, ?)", &[Value::Int(1), Value::Int(2), Value::Text(text.into()), Value::Text(text.into()), Value::Null(Kind::Int)], NO_CAP, CancellationToken::new()).await.unwrap();
     let result = backend.execute_bound("SELECT pk, ck, first, repeated, missing FROM sqmeow.bound_smoke WHERE pk = ? AND ck = ?", &[Value::Int(1), Value::Int(2)], NO_CAP, CancellationToken::new()).await.unwrap();
-    assert_eq!(result.cell(0, 2), Some(&Cell::Text(text.into())));
-    assert_eq!(result.cell(0, 3), Some(&Cell::Text(text.into())));
-    assert_eq!(result.cell(0, 4), Some(&Cell::Null));
+    assert_eq!(result.cell(0, 2).as_deref(), Some(&Cell::Text(text.into())));
+    assert_eq!(result.cell(0, 3).as_deref(), Some(&Cell::Text(text.into())));
+    assert_eq!(result.cell(0, 4).as_deref(), Some(&Cell::Null));
     assert!(result.source().is_some());
     assert!(
         run(&backend, "SELECT pk, first FROM sqmeow.bound_smoke")
@@ -85,7 +85,7 @@ async fn native_binds_preserve_text_nulls_and_complete_edit_keys() {
             "SELECT first FROM sqmeow.bound_smoke WHERE pk = 1 AND ck = 2"
         )
         .await
-        .cell(0, 0),
+        .cell(0, 0).as_deref(),
         Some(&Cell::Text("updated".into()))
     );
     let duplicate = Changes {
@@ -135,10 +135,10 @@ async fn commands_create_read_update_and_delete_rows() {
 
     let result = run(&backend, "SELECT id, name, seen FROM sqmeow.typed").await;
     assert_eq!(result.row_count(), 1);
-    assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
-    assert_eq!(result.cell(0, 1), Some(&Cell::Text("alice".into())));
+    assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Int(1)));
+    assert_eq!(result.cell(0, 1).as_deref(), Some(&Cell::Text("alice".into())));
     assert_eq!(
-        result.cell(0, 2),
+        result.cell(0, 2).as_deref(),
         Some(&Cell::Timestamp("2024-01-02 03:04:05.678+0000".into()))
     );
     run(
@@ -149,7 +149,7 @@ async fn commands_create_read_update_and_delete_rows() {
     assert_eq!(
         run(&backend, "SELECT name FROM sqmeow.typed WHERE id = 1")
             .await
-            .cell(0, 0),
+            .cell(0, 0).as_deref(),
         Some(&Cell::Text("bob".into()))
     );
     run(&backend, "DELETE FROM sqmeow.typed WHERE id = 1").await;

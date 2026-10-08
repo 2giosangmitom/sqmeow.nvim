@@ -1,22 +1,23 @@
 //! Defines the lossless retained Polars DataFrame and its database metadata.
 //!
 //! Adapters append row-shaped data into ingestion buffers, transferred to
-//! Object columns on first read or publication. Typed view/CSV projections share
+//! native columns on first read or publication, with a lossless Object fallback.
+//! Typed view/CSV projections share
 //! this source without changing its cells. Source metadata links editable
 //! cells back to table keys and is separate from display column metadata.
 
+use std::borrow::Cow;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use polars::prelude::{Column as FrameColumn, DataFrame, IntoSeries, ObjectChunked};
+pub use polars::prelude::AnyValue;
+use polars::prelude::{Column as FrameColumn, DataFrame, DataType, IdxCa, IdxSize};
 
 use crate::edit::Source;
 use crate::types::{KeyKind, TypeClass};
 use crate::value::{Cell, RetainedCell};
 
 mod retained;
-pub(crate) use retained::CellColumn;
-use retained::RetainedFrame;
 
 /// Describes one column of a result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +74,7 @@ pub struct ResultSet {
     /// Ingestion buffers, moved (not copied) into `frame` on the first read.
     pending: Mutex<Vec<Vec<RetainedCell>>>,
     /// The single retained data model; labels/provenance remain separate metadata.
-    frame: OnceLock<RetainedFrame>,
+    frame: OnceLock<DataFrame>,
     pub(crate) view_cache: crate::view::cache::FrameCache,
     row_count: usize,
     truncated: bool,
@@ -105,9 +106,7 @@ impl Clone for ResultSet {
 }
 
 fn retained_column(index: usize, cells: Vec<RetainedCell>) -> FrameColumn {
-    ObjectChunked::new_from_vec(format!("__sqmeow_cell_{index}").into(), cells)
-        .into_series()
-        .into()
+    retained::column(&format!("__sqmeow_cell_{index}"), cells)
 }
 
 impl ResultSet {
@@ -142,13 +141,7 @@ impl ResultSet {
         // INSERT readback appends a chunk without copying existing values.
         // Polars copy-on-write keeps previously cloned results unchanged.
         if let Some(frame) = self.frame.get_mut() {
-            let columns = row
-                .into_iter()
-                .enumerate()
-                .map(|(index, cell)| retained_column(index, vec![RetainedCell(cell)]))
-                .collect();
-            let appended = DataFrame::new(1, columns).expect("rectangular appended row");
-            frame.append(RetainedFrame::new(appended));
+            retained::append(frame, row);
             self.row_count += 1;
             return;
         }
@@ -178,6 +171,18 @@ impl ResultSet {
 
     /// Describe one column's values without formatting or measuring them.
     pub fn column_stats(&self, index: usize) -> ColumnStats {
+        if let Some(column) = self.column_values(index)
+            && !matches!(column.dtype(), DataType::Object(_))
+        {
+            return ColumnStats {
+                nulls: column.null_count() > 0,
+                numeric: !column.is_empty()
+                    && (matches!(
+                        column.dtype(),
+                        DataType::Int64 | DataType::Float64 | DataType::Null
+                    ) || column.null_count() == column.len()),
+            };
+        }
         let cells = self.column_cells(index);
 
         let mut stats = ColumnStats {
@@ -210,26 +215,59 @@ impl ResultSet {
     }
 
     /// Every value in one column, in row order.
-    pub fn column_cells(&self, column: usize) -> impl ExactSizeIterator<Item = &Cell> {
-        retained::Cells::new(self.column_values(column))
+    pub fn column_cells(&self, column: usize) -> impl ExactSizeIterator<Item = Cow<'_, Cell>> {
+        let values = self.column_values(column);
+        (0..values.map_or(0, FrameColumn::len)).map(move |row| {
+            retained::cell(values.expect("column exists"), row).expect("retained row")
+        })
     }
 
-    /// One cell, or `None` if either index is out of range.
+    /// One lossless cell, or `None` if either index is out of range.
+    /// Native scalars are materialized on demand; Object fallback cells are borrowed.
     #[inline]
-    pub fn cell(&self, row: usize, column: usize) -> Option<&Cell> {
-        self.column_values(column)?.get(row)
+    pub fn cell(&self, row: usize, column: usize) -> Option<Cow<'_, Cell>> {
+        retained::cell(self.column_values(column)?, row)
+    }
+
+    /// Borrow a Polars scalar directly; Object fallback values remain opaque here.
+    pub fn scalar(&self, row: usize, column: usize) -> Option<AnyValue<'_>> {
+        self.column_values(column)?
+            .as_materialized_series()
+            .get(row)
+            .ok()
+    }
+
+    /// Grid text without materializing native strings or copying binary payloads.
+    pub fn cell_display<'a>(
+        &'a self,
+        row: usize,
+        column: usize,
+        null: &'a str,
+    ) -> Option<Cow<'a, str>> {
+        match self.scalar(row, column)? {
+            AnyValue::Null => Some(Cow::Borrowed(null)),
+            AnyValue::String(value) => Some(crate::value::escape(value)),
+            AnyValue::Boolean(value) => Some(Cow::Borrowed(if value { "true" } else { "false" })),
+            AnyValue::Binary(value) => Some(Cow::Owned(crate::value::format_bytes(
+                &value[..value.len().min(crate::value::BYTES_SHOWN)],
+                value.len(),
+            ))),
+            _ => self
+                .cell(row, column)
+                .map(|cell| Cow::Owned(cell.display(null).into_owned())),
+        }
     }
 
     /// Lossless shared DataFrame. Internal names are positional, so duplicate
     /// database labels never violate Polars' unique-name invariant.
-    /// SQL NULL is an explicit Cell inside an Object, not an Arrow null. Use
-    /// typed/text projections for Polars predicates and writers, and `cell`
+    /// Native columns use Arrow nulls; fallback Object columns retain explicit
+    /// Cell::Null values. Use typed/text projections for predicates and writers, and `cell`
     /// for lossless database values. Cloning this frame shares cell buffers.
     pub fn frame(&self) -> &DataFrame {
-        &self.storage().frame
+        self.storage()
     }
 
-    fn storage(&self) -> &RetainedFrame {
+    fn storage(&self) -> &DataFrame {
         self.frame.get_or_init(|| {
             let pending =
                 std::mem::take(&mut *self.pending.lock().expect("result ingestion poisoned"));
@@ -238,18 +276,17 @@ impl ResultSet {
                 .enumerate()
                 .map(|(index, cells)| retained_column(index, cells))
                 .collect();
-            RetainedFrame::new(
-                DataFrame::new(self.row_count, columns).expect("rectangular retained frame"),
-            )
+            DataFrame::new(self.row_count, columns).expect("rectangular retained frame")
         })
     }
 
     #[inline]
-    pub(crate) fn column_values(&self, column: usize) -> Option<&CellColumn> {
+    pub(crate) fn column_values(&self, column: usize) -> Option<&FrameColumn> {
         self.frame
             .get()
             .unwrap_or_else(|| self.storage())
-            .column(column)
+            .columns()
+            .get(column)
     }
 
     /// Text projection shared by views and CSV. Nulls stay null unless the
@@ -263,14 +300,30 @@ impl ResultSet {
         null: Option<&str>,
     ) -> FrameColumn {
         let cells = self.column_values(column);
+        if let Some(cells) = cells
+            && cells.dtype() == &DataType::String
+            && (null.is_none() || cells.null_count() == 0)
+        {
+            let indices =
+                IdxCa::from_vec("".into(), rows.iter().map(|&row| row as IdxSize).collect());
+            // Export callers can include an invalid row; preserve its NULL output.
+            if rows.iter().all(|&row| row < cells.len()) {
+                return cells
+                    .take(&indices)
+                    .expect("valid retained rows")
+                    .with_name(name.into());
+            }
+        }
         let values: Vec<Option<String>> = rows
             .iter()
-            .map(|&row| {
-                cells
-                    .and_then(|cells| cells.get(row))
+            .map(|&row| match cells.and_then(|cells| cells.get(row).ok()) {
+                Some(AnyValue::String(text)) => Some(text.into()),
+                Some(AnyValue::Null) | None => null.map(str::to_owned),
+                _ => self
+                    .cell(row, column)
                     .filter(|cell| !cell.is_null())
                     .map(|cell| cell.text("").into_owned())
-                    .or_else(|| null.map(str::to_owned))
+                    .or_else(|| null.map(str::to_owned)),
             })
             .collect();
         FrameColumn::new(name.into(), values)
@@ -344,6 +397,131 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_scalars_use_polars_buffers_and_preserve_exact_values() {
+        let values = vec![
+            Cell::Bool(true),
+            Cell::Int(i64::MAX),
+            Cell::Float(-0.0),
+            Cell::Text("中\n\"\\".into()),
+            Cell::bytes(&[0, 255]),
+        ];
+        let mut result = ResultSet::new(
+            "native",
+            (0..values.len())
+                .map(|index| Column::new(index.to_string(), "TEXT"))
+                .collect(),
+        );
+        result.push_row(values.clone());
+        result.push_row(vec![Cell::Null; values.len()]);
+        let types: Vec<_> = result
+            .frame()
+            .columns()
+            .iter()
+            .map(|column| column.dtype().clone())
+            .collect();
+        assert_eq!(
+            types,
+            vec![
+                DataType::Boolean,
+                DataType::Int64,
+                DataType::Float64,
+                DataType::String,
+                DataType::Binary
+            ]
+        );
+        for (index, expected) in values.iter().enumerate() {
+            assert_eq!(result.cell(0, index).as_deref(), Some(expected));
+            assert_eq!(result.cell(1, index).as_deref(), Some(&Cell::Null));
+            assert_eq!(result.frame().columns()[index].null_count(), 1);
+        }
+        assert!(
+            matches!(result.cell(0, 2).as_deref(), Some(Cell::Float(value)) if value.to_bits() == (-0.0_f64).to_bits())
+        );
+        assert!(matches!(result.scalar(0, 3), Some(AnyValue::String(_))));
+        assert_eq!(
+            result.cell_display(0, 3, "").unwrap(),
+            values[3].display("")
+        );
+    }
+
+    #[test]
+    fn native_append_promotes_only_changed_columns_and_keeps_snapshots() {
+        let mut result = ResultSet::new("promotion", columns());
+        result.push_row(vec![Cell::Int(i64::MAX), Cell::Null]);
+        let snapshot = result.clone();
+        result.push_row(vec![Cell::Text("mixed".into()), Cell::Text("new".into())]);
+        assert!(matches!(
+            result.frame().columns()[0].dtype(),
+            DataType::Object(_)
+        ));
+        assert_eq!(result.frame().columns()[1].dtype(), &DataType::String);
+        assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Int(i64::MAX)));
+        assert_eq!(
+            result.cell(1, 0).as_deref(),
+            Some(&Cell::Text("mixed".into()))
+        );
+        assert_eq!(snapshot.frame().columns()[0].dtype(), &DataType::Int64);
+        assert_eq!(snapshot.frame().columns()[1].dtype(), &DataType::Null);
+        assert_eq!(snapshot.row_count(), 1);
+        result.push_row(vec![Cell::Null, Cell::Null]);
+        assert_eq!(result.cell(2, 0).as_deref(), Some(&Cell::Null));
+        assert_eq!(result.cell(2, 1).as_deref(), Some(&Cell::Null));
+        let mut bytes = ResultSet::new("partial", vec![Column::new("v", "BLOB")]);
+        bytes.push_row(vec![Cell::Bytes {
+            head: vec![1],
+            len: 8,
+        }]);
+        assert!(matches!(
+            bytes.frame().columns()[0].dtype(),
+            DataType::Object(_)
+        ));
+        assert_eq!(
+            bytes.cell(0, 0).as_deref(),
+            Some(&Cell::Bytes {
+                head: vec![1],
+                len: 8
+            })
+        );
+        let mut nulls = ResultSet::new("null then object", vec![Column::new("v", "TEXT")]);
+        nulls.push_row(vec![Cell::Null]);
+        let empty_snapshot = nulls.clone();
+        nulls.push_row(vec![Cell::Timestamp("infinity".into())]);
+        assert_eq!(nulls.cell(0, 0).as_deref(), Some(&Cell::Null));
+        assert_eq!(
+            nulls.cell(1, 0).as_deref(),
+            Some(&Cell::Timestamp("infinity".into()))
+        );
+        assert_eq!(empty_snapshot.frame().columns()[0].dtype(), &DataType::Null);
+    }
+
+    #[test]
+    fn native_float_bits_and_mixed_numeric_variants_are_lossless() {
+        let values = [
+            (-0.0_f64).to_bits(),
+            0x7ff8_0000_0000_0042,
+            f64::INFINITY.to_bits(),
+        ];
+        let mut floats = ResultSet::new("floats", vec![Column::new("v", "REAL")]);
+        for bits in values {
+            floats.push_row(vec![Cell::Float(f64::from_bits(bits))]);
+        }
+        for (row, expected) in values.iter().enumerate() {
+            assert!(
+                matches!(floats.scalar(row, 0), Some(AnyValue::Float64(value)) if value.to_bits() == *expected)
+            );
+        }
+        let mut mixed = ResultSet::new("mixed", vec![Column::new("v", "REAL")]);
+        mixed.push_row(vec![Cell::Int(i64::MAX)]);
+        mixed.push_row(vec![Cell::Float(0.5)]);
+        assert!(matches!(
+            mixed.frame().columns()[0].dtype(),
+            DataType::Object(_)
+        ));
+        assert_eq!(mixed.cell(0, 0).as_deref(), Some(&Cell::Int(i64::MAX)));
+        assert_eq!(mixed.cell(1, 0).as_deref(), Some(&Cell::Float(0.5)));
+    }
+
+    #[test]
     fn shared_read_handles_cover_empty_initial_chunks_and_many_appends() {
         let mut result = ResultSet::new("appends", vec![Column::new("v", "INTEGER")]);
         result.frame();
@@ -355,11 +533,14 @@ mod tests {
             result.push_row(vec![Cell::Int(row)]);
         }
         for row in 0..80 {
-            assert_eq!(result.cell(row, 0), Some(&Cell::Int(row as i64)));
+            assert_eq!(result.cell(row, 0).as_deref(), Some(&Cell::Int(row as i64)));
         }
         assert_eq!(result.column_cells(0).len(), 80);
         assert_eq!(
-            result.column_cells(0).cloned().collect::<Vec<_>>(),
+            result
+                .column_cells(0)
+                .map(Cow::into_owned)
+                .collect::<Vec<_>>(),
             (0..80).map(Cell::Int).collect::<Vec<_>>()
         );
         assert_eq!(snapshot.row_count(), 64);
@@ -367,10 +548,28 @@ mod tests {
         assert!(result.cell(usize::MAX, 0).is_none());
         assert!(result.cell(0, usize::MAX).is_none());
         assert_eq!(result.column_cells(99).len(), 0);
-        assert!(std::ptr::eq(
-            result.cell(0, 0).unwrap(),
-            snapshot.cell(0, 0).unwrap()
-        ));
+        assert_eq!(
+            result.frame().columns()[0].dtype(),
+            &polars::prelude::DataType::Int64
+        );
+        assert_eq!(
+            result.frame().columns()[0]
+                .i64()
+                .unwrap()
+                .downcast_iter()
+                .next()
+                .unwrap()
+                .values()
+                .as_ptr(),
+            snapshot.frame().columns()[0]
+                .i64()
+                .unwrap()
+                .downcast_iter()
+                .next()
+                .unwrap()
+                .values()
+                .as_ptr()
+        );
     }
 
     #[test]
@@ -405,32 +604,49 @@ mod tests {
             &pending[0][0].0 as *const Cell
         };
         assert_eq!(result.frame().height(), values.len());
-        assert_eq!(ingested, result.cell(0, 0).unwrap() as *const Cell);
+        assert_eq!(
+            ingested,
+            result.cell(0, 0).as_deref().unwrap() as *const Cell
+        );
         assert!(result.pending.lock().unwrap().is_empty());
-        assert_eq!(result.column_cells(0).cloned().collect::<Vec<_>>(), values);
+        assert_eq!(
+            result
+                .column_cells(0)
+                .map(Cow::into_owned)
+                .collect::<Vec<_>>(),
+            values
+        );
         let clone = result.clone();
         assert!(std::ptr::eq(
-            result.cell(0, 0).unwrap(),
-            clone.cell(0, 0).unwrap()
+            result.cell(0, 0).as_deref().unwrap(),
+            clone.cell(0, 0).as_deref().unwrap()
         ));
         result.push_row(vec![Cell::Float(f64::NAN)]);
         result.push_row(vec![Cell::Float(f64::INFINITY)]);
         result.push_row(vec![Cell::Float(f64::NEG_INFINITY)]);
-        assert!(matches!(result.cell(values.len(), 0), Some(Cell::Float(v)) if v.is_nan()));
+        assert!(
+            matches!(result.cell(values.len(), 0).as_deref(), Some(Cell::Float(v)) if v.is_nan())
+        );
         assert_eq!(
-            result.cell(values.len() + 1, 0),
+            result.cell(values.len() + 1, 0).as_deref(),
             Some(&Cell::Float(f64::INFINITY))
         );
         assert_eq!(
-            result.cell(values.len() + 2, 0),
+            result.cell(values.len() + 2, 0).as_deref(),
             Some(&Cell::Float(f64::NEG_INFINITY))
         );
         assert_eq!(clone.row_count(), values.len());
         assert!(std::ptr::eq(
-            result.cell(0, 0).unwrap(),
-            clone.cell(0, 0).unwrap()
+            result.cell(0, 0).as_deref().unwrap(),
+            clone.cell(0, 0).as_deref().unwrap()
         ));
-        assert_eq!(clone.column_cells(0).cloned().collect::<Vec<_>>(), values);
+        assert_eq!(
+            clone
+                .column_cells(0)
+                .map(Cow::into_owned)
+                .collect::<Vec<_>>(),
+            values
+        );
     }
 
     #[test]
@@ -450,8 +666,8 @@ mod tests {
             Cell::Int(i64::MAX),
             Cell::Bool(true),
         ]);
-        assert_eq!(result.cell(0, 1), Some(&Cell::Null));
-        assert_eq!(result.cell(1, 1), Some(&Cell::Int(i64::MAX)));
+        assert_eq!(result.cell(0, 1).as_deref(), Some(&Cell::Null));
+        assert_eq!(result.cell(1, 1).as_deref(), Some(&Cell::Int(i64::MAX)));
         assert_eq!(result.columns()[0].name, result.columns()[1].name);
         assert!(result.cell(usize::MAX, 0).is_none());
         assert!(result.cell(0, usize::MAX).is_none());
@@ -459,7 +675,7 @@ mod tests {
         assert_eq!(empty.frame().width(), 0);
         empty.adopt_columns(vec![Column::new("adopted", "TEXT")]);
         empty.push_row(vec![Cell::Text("ok".into())]);
-        assert_eq!(empty.cell(0, 0), Some(&Cell::Text("ok".into())));
+        assert_eq!(empty.cell(0, 0).as_deref(), Some(&Cell::Text("ok".into())));
         let mut no_columns = ResultSet::default();
         no_columns.push_row(Vec::new());
         assert_eq!(no_columns.frame().height(), 1);
@@ -511,10 +727,16 @@ mod tests {
 
         assert_eq!(result.row_count(), 2);
         assert_eq!(
-            result.column_cells(0).cloned().collect::<Vec<_>>(),
+            result
+                .column_cells(0)
+                .map(Cow::into_owned)
+                .collect::<Vec<_>>(),
             vec![Cell::Int(1), Cell::Int(2)]
         );
-        assert_eq!(result.cell(1, 1), Some(&Cell::Text("bob".into())));
+        assert_eq!(
+            result.cell(1, 1).as_deref(),
+            Some(&Cell::Text("bob".into()))
+        );
     }
 
     #[test]
@@ -542,7 +764,7 @@ mod tests {
     fn a_short_row_is_padded_with_nulls() {
         let mut result = ResultSet::new("select id, name from t", columns());
         result.push_row(vec![Cell::Int(1)]);
-        assert_eq!(result.cell(0, 1), Some(&Cell::Null));
+        assert_eq!(result.cell(0, 1).as_deref(), Some(&Cell::Null));
     }
 
     #[test]

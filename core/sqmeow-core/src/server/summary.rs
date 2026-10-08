@@ -2,6 +2,7 @@
 
 use rmpv::Value;
 use sqmeow_db::edit::Source;
+use sqmeow_db::result::{AnyValue, ResultSet};
 use sqmeow_db::value::Cell;
 
 use crate::server::payload::map;
@@ -17,8 +18,21 @@ pub(super) fn capabilities(connected: bool) -> Value {
 }
 
 /// Encode nulls, booleans, and integers as MessagePack values; send other cells as text.
-pub(super) fn cell_value(cell: &Cell) -> Value {
-    match cell {
+pub(super) fn cell_value(result: &ResultSet, row: usize, column: usize) -> Value {
+    if matches!(
+        result.scalar(row, column),
+        Some(AnyValue::String(_) | AnyValue::Binary(_))
+    ) {
+        return Value::from(
+            result
+                .cell_display(row, column, "")
+                .expect("retained row")
+                .into_owned(),
+        );
+    }
+    // Both native and fallback cells use the same wire-format rules.
+    let cell = result.cell(row, column);
+    match cell.as_deref().unwrap_or(&Cell::Null) {
         Cell::Null => Value::Nil,
         Cell::Bool(value) => Value::from(*value),
         Cell::Int(value) => Value::from(*value),
@@ -113,6 +127,46 @@ pub(super) fn summarize(call: &Call, connected: bool) -> Vec<(&'static str, Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_and_fallback_cells_keep_the_same_rpc_values() {
+        let values = vec![
+            Cell::Null,
+            Cell::Bool(true),
+            Cell::Int(i64::MAX),
+            Cell::Float(0.125),
+            Cell::Float(f64::NAN),
+            Cell::Float(f64::INFINITY),
+            Cell::Text("中\n\t\\\"".into()),
+            Cell::bytes(&[255; 128]),
+            Cell::Decimal("12345678901234567890.00100".into()),
+            Cell::Timestamp("infinity".into()),
+            Cell::Array(vec![Cell::Int(1), Cell::Null]),
+        ];
+        let columns = values
+            .iter()
+            .enumerate()
+            .map(|(index, _)| sqmeow_db::result::Column::new(index.to_string(), "TEXT"))
+            .collect();
+        let mut native = ResultSet::new("native", columns);
+        native.push_row(values.clone());
+        let mut fallback =
+            ResultSet::new("mixed", vec![sqmeow_db::result::Column::new("v", "TEXT")]);
+        for value in &values {
+            fallback.push_row(vec![value.clone()]);
+        }
+        for (index, value) in values.iter().enumerate() {
+            let expected = match value {
+                Cell::Null => Value::Nil,
+                Cell::Bool(value) => Value::from(*value),
+                Cell::Int(value) => Value::from(*value),
+                Cell::Float(value) if value.is_finite() => Value::from(*value),
+                value => Value::from(value.display("").into_owned()),
+            };
+            assert_eq!(cell_value(&native, 0, index), expected);
+            assert_eq!(cell_value(&fallback, index, 0), expected);
+        }
+    }
 
     #[test]
     fn capabilities_distinguish_local_and_remote_results() {

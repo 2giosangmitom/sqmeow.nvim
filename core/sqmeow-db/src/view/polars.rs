@@ -2,7 +2,8 @@
 //! frame as an ordinary column; no Polars value is written back to the retained result.
 
 use polars::prelude::{
-    Column, DataFrame, DataType, Expr, IntoLazy, PlSmallStr, SortMultipleOptions, col, lit,
+    Column, DataFrame, DataType, Expr, IdxCa, IdxSize, IntoLazy, PlSmallStr, SortMultipleOptions,
+    col, lit,
 };
 use polars_sql::SQLContext;
 use sqlparser::ast::{SetExpr, Statement, Visit, Visitor};
@@ -125,7 +126,16 @@ pub fn select_with(
         .find(|name| !names.iter().any(|column| column.eq_ignore_ascii_case(name)))
         .expect("there is always a free internal column name");
     let needed = projection_columns(names.len(), filters, sort, query);
-    let build = || projection(result, &positions(), &names, &row_name, &needed);
+    let build = || {
+        projection(
+            result,
+            &positions(),
+            &names,
+            &row_name,
+            &needed,
+            scope.is_none(),
+        )
+    };
     let frame = if scope.is_none() && needed.iter().all(|needed| *needed) {
         result.view_cache.get_or_build(build)?
     } else if let Some(frame) = scope.is_none().then(|| result.view_cache.get()).flatten() {
@@ -227,6 +237,7 @@ fn projection(
     names: &[String],
     row_name: &str,
     needed: &[bool],
+    full: bool,
 ) -> Result<DataFrame, String> {
     let mut data = Vec::with_capacity(names.len() + 1);
     for (index, name) in names.iter().enumerate().filter(|(index, _)| needed[*index]) {
@@ -234,10 +245,23 @@ fn projection(
             .column_values(index)
             .expect("projection column exists");
         let dtype = column_type(result, index, positions);
+        if cells.dtype() == &dtype {
+            let projected = if full {
+                cells.clone()
+            } else {
+                let indices = IdxCa::from_vec(
+                    "".into(),
+                    positions.iter().map(|&row| row as IdxSize).collect(),
+                );
+                cells.take(&indices).map_err(|error| error.to_string())?
+            };
+            data.push(projected.with_name(name.as_str().into()));
+            continue;
+        }
         if dtype == DataType::Boolean {
             let values: Vec<Option<bool>> = positions
                 .iter()
-                .map(|&row| match cells.get(row) {
+                .map(|&row| match result.cell(row, index).as_deref() {
                     Some(Cell::Bool(value)) => Some(*value),
                     _ => None,
                 })
@@ -246,7 +270,7 @@ fn projection(
         } else if dtype == DataType::Int64 {
             let values: Vec<Option<i64>> = positions
                 .iter()
-                .map(|&row| match cells.get(row) {
+                .map(|&row| match result.cell(row, index).as_deref() {
                     Some(Cell::Int(value)) => Some(*value),
                     _ => None,
                 })
@@ -255,7 +279,7 @@ fn projection(
         } else if dtype == DataType::Float64 {
             let values: Vec<Option<f64>> = positions
                 .iter()
-                .map(|&row| cells.get(row).and_then(number))
+                .map(|&row| result.cell(row, index).as_deref().and_then(number))
                 .collect();
             data.push(Column::new(name.as_str().into(), values));
         } else {
@@ -274,20 +298,40 @@ fn column_type(result: &ResultSet, index: usize, positions: &[usize]) -> DataTyp
     let cells = result
         .column_values(index)
         .expect("projection column exists");
+    let class = result.columns()[index].class;
+    let native = matches!(
+        cells.dtype(),
+        DataType::Boolean | DataType::Int64 | DataType::Float64
+    ) || cells.dtype() == &DataType::String && class != TypeClass::Number;
+    if native
+        && (cells.null_count() == 0 && !positions.is_empty()
+            || positions.iter().any(|&row| {
+                cells
+                    .get(row)
+                    .is_ok_and(|value| !matches!(value, polars::prelude::AnyValue::Null))
+            }))
+    {
+        return cells.dtype().clone();
+    }
     let populated = positions
         .iter()
-        .any(|&row| cells.get(row).is_some_and(|cell| !cell.is_null()));
-    let class = result.columns()[index].class;
+        .any(|&row| result.cell(row, index).is_some_and(|cell| !cell.is_null()));
     if (populated || class == TypeClass::Boolean)
-        && positions
-            .iter()
-            .all(|&row| matches!(cells.get(row), Some(Cell::Bool(_) | Cell::Null)))
+        && positions.iter().all(|&row| {
+            matches!(
+                result.cell(row, index).as_deref(),
+                Some(Cell::Bool(_) | Cell::Null)
+            )
+        })
     {
         DataType::Boolean
     } else if (populated || class == TypeClass::Number)
-        && positions
-            .iter()
-            .all(|&row| matches!(cells.get(row), Some(Cell::Int(_) | Cell::Null)))
+        && positions.iter().all(|&row| {
+            matches!(
+                result.cell(row, index).as_deref(),
+                Some(Cell::Int(_) | Cell::Null)
+            )
+        })
     {
         // Keep integer keys exact, including values outside f64's 53-bit integer range.
         DataType::Int64
@@ -295,11 +339,11 @@ fn column_type(result: &ResultSet, index: usize, positions: &[usize]) -> DataTyp
         && (class == TypeClass::Number
             || positions
                 .iter()
-                .all(|&row| !matches!(cells.get(row), Some(Cell::Text(_)))))
+                .all(|&row| !matches!(result.cell(row, index).as_deref(), Some(Cell::Text(_)))))
         && positions.iter().all(|&row| {
-            cells
-                .get(row)
-                .is_some_and(|cell| cell.is_null() || number(cell).is_some())
+            result
+                .cell(row, index)
+                .is_some_and(|cell| cell.is_null() || number(&cell).is_some())
         })
     {
         // Only declared numeric text may be coerced; string identities remain exact.
@@ -320,7 +364,7 @@ pub fn condition(result: &ResultSet, row: usize, column: usize) -> Result<String
     } else {
         match column_type(result, column, &positions) {
             DataType::Float64 => {
-                let value = number(cell).expect("a numeric column has numeric cells");
+                let value = number(&cell).expect("a numeric column has numeric cells");
                 if value.is_finite() {
                     // Polars identifies float literals by the decimal point, not the exponent.
                     let mut literal = format!("{value:e}");
@@ -335,7 +379,7 @@ pub fn condition(result: &ResultSet, row: usize, column: usize) -> Result<String
                 Cell::Float(value)
             }
             DataType::String => Cell::Text(cell.text("").into_owned()),
-            _ => cell.clone(),
+            _ => cell.into_owned(),
         }
     };
     crate::edit::condition(crate::adapter::Dialect::Postgres, name, &value)
@@ -409,6 +453,47 @@ fn predicate(column: Expr, dtype: Option<&DataType>, filter: &Filter) -> Expr {
 mod tests {
     use super::*;
     use crate::result::Column as ResultColumn;
+
+    #[test]
+    fn native_projection_preserves_null_only_scopes_and_duplicate_positions() {
+        let mut result = ResultSet::new("nullable", vec![ResultColumn::new("v", "TEXT")]);
+        result.push_row(vec![Cell::Int(i64::MAX)]);
+        result.push_row(vec![Cell::Null]);
+        assert_eq!(column_type(&result, 0, &[1]), DataType::String);
+        assert_eq!(column_type(&result, 0, &[0]), DataType::Int64);
+        assert_eq!(column_type(&result, 0, &[]), DataType::String);
+        let query = Query::parse("v IS NULL", "", &["v".into()]).unwrap();
+        assert_eq!(
+            select_with(&result, &[], &[], Some(&[1, 1]), query.as_ref()).unwrap(),
+            vec![1, 1]
+        );
+        let query = Query::parse("v = 9223372036854775807", "", &["v".into()]).unwrap();
+        assert_eq!(
+            select_with(&result, &[], &[], Some(&[0, 0]), query.as_ref()).unwrap(),
+            vec![0, 0]
+        );
+        let frame = projection(&result, &[0, 1], &["v".into()], "row", &[true], true).unwrap();
+        assert_eq!(
+            frame
+                .column("v")
+                .unwrap()
+                .i64()
+                .unwrap()
+                .downcast_iter()
+                .next()
+                .unwrap()
+                .values()
+                .as_ptr(),
+            result.frame().columns()[0]
+                .i64()
+                .unwrap()
+                .downcast_iter()
+                .next()
+                .unwrap()
+                .values()
+                .as_ptr()
+        );
+    }
 
     #[test]
     fn cache_preserves_scoped_types_and_is_invalidated_by_appends_and_metadata() {

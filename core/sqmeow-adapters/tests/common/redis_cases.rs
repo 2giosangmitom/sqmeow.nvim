@@ -39,7 +39,7 @@ async fn commands_create_read_update_and_delete_rows() {
     run(&backend, r#"SET test:string "hello world""#).await;
 
     let result = run(&backend, "GET test:string").await;
-    assert_eq!(result.cell(0, 0), Some(&Cell::Text("hello world".into())));
+    assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Text("hello world".into())));
     let properties = backend
         .details("db0", "test:string")
         .await
@@ -52,12 +52,12 @@ async fn commands_create_read_update_and_delete_rows() {
     );
     run(&backend, "SET test:string updated").await;
     assert_eq!(
-        run(&backend, "GET test:string").await.cell(0, 0),
+        run(&backend, "GET test:string").await.cell(0, 0).as_deref(),
         Some(&Cell::Text("updated".into()))
     );
     run(&backend, "DEL test:string").await;
     assert_eq!(
-        run(&backend, "EXISTS test:string").await.cell(0, 0),
+        run(&backend, "EXISTS test:string").await.cell(0, 0).as_deref(),
         Some(&Cell::Int(0))
     );
     backend.close().await;
@@ -81,7 +81,7 @@ async fn cancelling_a_blocked_command_stops_it() {
     .expect("blocked command must answer cancellation");
     assert!(matches!(result, Err(Error::Cancelled)));
     assert_eq!(
-        run(&backend, "PING").await.cell(0, 0),
+        run(&backend, "PING").await.cell(0, 0).as_deref(),
         Some(&Cell::Text("PONG".into()))
     );
     backend.close().await;
@@ -100,7 +100,7 @@ async fn reports_an_error_and_keeps_working() {
         "{error}"
     );
     assert_eq!(
-        run(&backend, "PING").await.cell(0, 0),
+        run(&backend, "PING").await.cell(0, 0).as_deref(),
         Some(&Cell::Text("PONG".into()))
     );
 }

@@ -28,7 +28,7 @@ async fn failed_apply_rolls_back(backend: &Backend, create: &str) {
             "select name from sqmeow_rollback_smoke where id = 1"
         )
         .await
-        .cell(0, 0),
+        .cell(0, 0).as_deref(),
         Some(&sqmeow_db::value::Cell::Text("before".into()))
     );
     backend
@@ -44,7 +44,7 @@ async fn failed_apply_rolls_back(backend: &Backend, create: &str) {
             "select name from sqmeow_rollback_smoke where id = 1"
         )
         .await
-        .cell(0, 0),
+        .cell(0, 0).as_deref(),
         Some(&sqmeow_db::value::Cell::Text("reused".into()))
     );
     run(backend, "drop table sqmeow_rollback_smoke").await;

@@ -90,14 +90,15 @@ async fn commands_create_read_update_and_delete_rows() {
     );
     assert_eq!(selected.row_count(), 1);
     assert_eq!(
-        selected.cell(0, 0),
+        selected.cell(0, 0).as_deref(),
         Some(&sqmeow_db::value::Cell::Text("alice".into()))
     );
     run(&backend, "ALTER TABLE sqmeow_crud_smoke UPDATE name = 'bob' WHERE id = 1 SETTINGS mutations_sync = 1").await;
     assert_eq!(
         run(&backend, "SELECT name FROM sqmeow_crud_smoke WHERE id = 1")
             .await
-            .cell(0, 0),
+            .cell(0, 0)
+            .as_deref(),
         Some(&sqmeow_db::value::Cell::Text("bob".into()))
     );
     run(

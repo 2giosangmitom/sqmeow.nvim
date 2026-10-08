@@ -72,7 +72,8 @@ async fn atomic_edits_reject_a_hidden_commit_before_changing_rows() {
     assert_eq!(
         run(&backend, "select value from guarded_apply")
             .await
-            .cell(0, 0),
+            .cell(0, 0)
+            .as_deref(),
         Some(&Cell::Int(10))
     );
     backend.close().await;
@@ -112,7 +113,7 @@ async fn abandoning_an_edit_batch_does_not_commit_it_on_reuse() {
     let active = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             let result = run(&observer, &format!("select count(*) from information_schema.processlist where id = {id} and info = 'select sleep(2) /* sqmeow_abandoned_apply */'")).await;
-            if result.cell(0, 0) == Some(&Cell::Int(1)) { break; }
+            if result.cell(0, 0).as_deref() == Some(&Cell::Int(1)) { break; }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }).await;
@@ -148,7 +149,7 @@ async fn abandoning_an_edit_batch_does_not_commit_it_on_reuse() {
     .expect("closing must release the abandoned row lock")
     .unwrap();
     assert_eq!(
-        rows.cell(0, 0),
+        rows.cell(0, 0).as_deref(),
         Some(&Cell::Int(10)),
         "abandoned edits must remain uncommitted"
     );
@@ -206,6 +207,9 @@ async fn selects_rows_with_their_columns() {
 
     let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["id", "name"]);
-    assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
-    assert_eq!(result.cell(0, 1), Some(&Cell::Text("alice".into())));
+    assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Int(1)));
+    assert_eq!(
+        result.cell(0, 1).as_deref(),
+        Some(&Cell::Text("alice".into()))
+    );
 }

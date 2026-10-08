@@ -13,7 +13,6 @@ use sqmeow_db::guard;
 use sqmeow_db::result::ResultSet;
 use sqmeow_db::sql;
 use sqmeow_db::sql::parameters::{self as query_parameters, Bound};
-use sqmeow_db::value::Cell;
 use sqmeow_db::view;
 
 use super::summary::{capabilities, cell_value, summarize};
@@ -612,7 +611,7 @@ impl Core {
                             .iter()
                             .enumerate()
                             .map(|(column, meta)| {
-                                let cell = result.cell(index, column).unwrap_or(&Cell::Null);
+                                let cell = result.cell(index, column).expect("retained row");
                                 map(vec![
                                     ("name", Value::from(meta.name.as_str())),
                                     ("type_name", Value::from(cell.type_name())),
@@ -667,9 +666,7 @@ impl Core {
                 .map(|&row| {
                     Value::Array(
                         (0..width)
-                            .map(|column| {
-                                cell_value(result.cell(row, column).unwrap_or(&Cell::Null))
-                            })
+                            .map(|column| cell_value(result, row, column))
                             .collect(),
                     )
                 })

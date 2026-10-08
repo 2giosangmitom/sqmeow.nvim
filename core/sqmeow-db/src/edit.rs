@@ -251,7 +251,7 @@ pub fn append_inserted(result: &mut ResultSet, dialect: Dialect, inserted: &[Res
                     .iter()
                     .position(|column| column.name.eq_ignore_ascii_case(name))
                     .and_then(|at| returned.cell(row, at))
-                    .cloned()
+                    .map(std::borrow::Cow::into_owned)
                     .unwrap_or(Cell::Null)
             };
             let cells: Vec<Cell> = (0..width)
@@ -261,7 +261,7 @@ pub fn append_inserted(result: &mut ResultSet, dialect: Dialect, inserted: &[Res
                 table
                     .key
                     .iter()
-                    .all(|&key| result.cell(held, key) == Some(&cells[key]))
+                    .all(|&key| result.cell(held, key).as_deref() == Some(&cells[key]))
             });
             if !held {
                 result.push_row(cells);
@@ -313,8 +313,8 @@ mod tests {
             1
         );
         assert_eq!(result.row_count(), 2);
-        assert_eq!(result.cell(1, 1), Some(&Cell::Text("b".into())));
-        assert_eq!(result.cell(1, 2), Some(&Cell::Null));
+        assert_eq!(result.cell(1, 1).as_deref(), Some(&Cell::Text("b".into())));
+        assert_eq!(result.cell(1, 2).as_deref(), Some(&Cell::Null));
     }
 
     #[test]

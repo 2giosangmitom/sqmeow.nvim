@@ -8,7 +8,7 @@ async fn crud_round_trip(backend: &Backend, create: &str) {
     let selected = run(backend, "select name from sqmeow_crud_smoke where id = 1").await;
     assert_eq!(selected.row_count(), 1);
     assert_eq!(
-        selected.cell(0, 0),
+        selected.cell(0, 0).as_deref(),
         Some(&sqmeow_db::value::Cell::Text("alice".into()))
     );
 
@@ -19,7 +19,7 @@ async fn crud_round_trip(backend: &Backend, create: &str) {
     .await;
     let updated = run(backend, "select name from sqmeow_crud_smoke where id = 1").await;
     assert_eq!(
-        updated.cell(0, 0),
+        updated.cell(0, 0).as_deref(),
         Some(&sqmeow_db::value::Cell::Text("bob".into()))
     );
 
@@ -51,7 +51,7 @@ async fn crud_round_trip(backend: &Backend, create: &str) {
     assert_eq!(
         run(backend, "select name from sqmeow_crud_smoke where id = 1")
             .await
-            .cell(0, 0),
+            .cell(0, 0).as_deref(),
         Some(&sqmeow_db::value::Cell::Text("planned".into()))
     );
 

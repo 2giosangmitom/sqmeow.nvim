@@ -115,7 +115,10 @@ async fn cancelling_queued_work_does_not_interrupt_the_active_request_or_write()
         .await
         .unwrap();
     assert_eq!(rows.row_count(), 1);
-    assert_eq!(rows.cell(0, 0), Some(&sqmeow_db::value::Cell::Int(1)));
+    assert_eq!(
+        rows.cell(0, 0).as_deref(),
+        Some(&sqmeow_db::value::Cell::Int(1))
+    );
     backend.close().await;
     owner.close().await;
     std::fs::remove_file(path).unwrap();
@@ -153,7 +156,10 @@ async fn cancelling_a_busy_write_is_prompt_and_does_not_poison_the_next_request(
         .await
         .unwrap();
     assert_eq!(rows.row_count(), 1);
-    assert_eq!(rows.cell(0, 0), Some(&sqmeow_db::value::Cell::Int(2)));
+    assert_eq!(
+        rows.cell(0, 0).as_deref(),
+        Some(&sqmeow_db::value::Cell::Int(2))
+    );
     backend.close().await;
     owner.close().await;
     std::fs::remove_file(path).unwrap();
@@ -186,7 +192,10 @@ async fn abandoning_an_apply_rolls_back_before_the_next_request() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(rows.cell(0, 0), Some(&sqmeow_db::value::Cell::Int(10)));
+    assert_eq!(
+        rows.cell(0, 0).as_deref(),
+        Some(&sqmeow_db::value::Cell::Int(10))
+    );
     backend.close().await;
 }
 
