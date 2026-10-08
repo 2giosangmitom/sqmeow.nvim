@@ -1,6 +1,10 @@
 //! Defines a single decoded cell value.
 
 use std::borrow::Cow;
+use std::hash::{Hash, Hasher};
+
+use polars::prelude::PolarsObject;
+use polars_utils::total_ord::{TotalEq, TotalHash};
 
 /// How much of a binary value a grid cell shows.
 pub const BYTES_SHOWN: usize = 64;
@@ -34,6 +38,105 @@ pub enum Cell {
         type_name: String,
         raw: String,
     },
+}
+
+// Object columns are the lossless retained representation. Typed view/export
+// projections must never replace these values (notably decimals and mixed types).
+#[derive(Debug, Clone)]
+pub(crate) struct RetainedCell(pub Cell);
+
+impl Default for RetainedCell {
+    fn default() -> Self {
+        Self(Cell::Null)
+    }
+}
+
+impl std::fmt::Display for RetainedCell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.text("NULL"))
+    }
+}
+
+impl TotalEq for RetainedCell {
+    fn tot_eq(&self, other: &Self) -> bool {
+        total_cell_eq(&self.0, &other.0)
+    }
+}
+
+fn total_cell_eq(a: &Cell, b: &Cell) -> bool {
+    match (a, b) {
+        (Cell::Float(a), Cell::Float(b)) => a == b || (a.is_nan() && b.is_nan()),
+        (Cell::Array(a), Cell::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| total_cell_eq(a, b))
+        }
+        _ => a == b,
+    }
+}
+
+impl PartialEq for RetainedCell {
+    fn eq(&self, other: &Self) -> bool {
+        self.tot_eq(other)
+    }
+}
+
+impl Eq for RetainedCell {}
+
+impl Hash for RetainedCell {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.tot_hash(state);
+    }
+}
+
+impl TotalHash for RetainedCell {
+    fn tot_hash<H: Hasher>(&self, state: &mut H) {
+        hash_cell(&self.0, state);
+    }
+}
+
+fn hash_cell<H: Hasher>(cell: &Cell, state: &mut H) {
+    std::mem::discriminant(cell).hash(state);
+    match cell {
+        Cell::Float(value) => {
+            let bits = if value.is_nan() {
+                f64::NAN.to_bits()
+            } else if *value == 0.0 {
+                0
+            } else {
+                value.to_bits()
+            };
+            bits.hash(state);
+        }
+        Cell::Array(values) => {
+            values.len().hash(state);
+            for value in values {
+                hash_cell(value, state);
+            }
+        }
+        Cell::Null => {}
+        Cell::Bool(value) => value.hash(state),
+        Cell::Int(value) => value.hash(state),
+        Cell::Decimal(value)
+        | Cell::Text(value)
+        | Cell::Json(value)
+        | Cell::Timestamp(value)
+        | Cell::Date(value)
+        | Cell::Time(value)
+        | Cell::Uuid(value) => value.hash(state),
+        Cell::Bytes { head, len } => {
+            head.hash(state);
+            len.hash(state);
+        }
+        Cell::Unsupported { type_name, raw } => {
+            type_name.hash(state);
+            raw.hash(state);
+        }
+    }
+}
+
+impl PolarsObject for RetainedCell {
+    fn type_name() -> &'static str {
+        "sqmeow.cell"
+    }
 }
 
 impl Cell {
@@ -167,6 +270,24 @@ fn escape(text: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[rstest::rstest]
+    #[case::signed_zero(0.0, -0.0)]
+    #[case::nan_payload(f64::NAN, f64::from_bits(0x7ff8_0000_0000_0001))]
+    fn object_equality_and_hash_are_total_without_changing_cells(#[case] a: f64, #[case] b: f64) {
+        use std::collections::hash_map::DefaultHasher;
+        let left = RetainedCell(Cell::Array(vec![Cell::Float(a)]));
+        let right = RetainedCell(Cell::Array(vec![Cell::Float(b)]));
+        assert_eq!(left, right);
+        let mut left_hash = DefaultHasher::new();
+        let mut right_hash = DefaultHasher::new();
+        left.hash(&mut left_hash);
+        right.hash(&mut right_hash);
+        assert_eq!(left_hash.finish(), right_hash.finish());
+        if a.is_nan() {
+            assert_ne!(Cell::Float(a), Cell::Float(a));
+        }
+    }
 
     #[test]
     fn null_and_empty_text_remain_distinct() {
