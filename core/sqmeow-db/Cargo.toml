@@ -19,3 +19,6 @@ polars = { version = "0.55.2", default-features = false, features = ["lazy", "st
 polars-io = { version = "0.55.2", default-features = false, features = ["csv", "json"] }
 # Preserve SQL JSON expressions without enabling streaming.
 polars-sql = { version = "0.55.2", default-features = false, features = ["json"] }
+
+[dev-dependencies]
+rstest.workspace = true

@@ -433,6 +433,11 @@ impl Core {
                 Err(error) => {
                     let error = error.to_string();
                     let mut payload = elapsed(started);
+                    if let Some(previous) = last.take() {
+                        let (call, summary) = self.keep(conn_id, previous, None);
+                        kept.push(call.with_parameters(parameters.clone()));
+                        earlier.push(map(summary));
+                    }
                     if !earlier.is_empty() {
                         earlier.push(map(vec![
                             ("call_id", Value::from(call_id)),
@@ -443,7 +448,9 @@ impl Core {
                         payload.push(("results", Value::Array(earlier)));
                     }
                     payload.push(("error", Value::from(error)));
-                    self.session.store_run(kept);
+                    if !kept.is_empty() {
+                        self.session.store_run(kept);
+                    }
                     return self.emit_call(call_id, conn_id, "error", payload);
                 }
             }

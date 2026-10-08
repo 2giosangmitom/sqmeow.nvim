@@ -203,173 +203,57 @@ pub struct ForeignKey {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[track_caller]
-    fn assert_class(class: TypeClass, names: &[&str]) {
+    #[rstest]
+    #[case::postgres_numbers(TypeClass::Number, &["INT2", "INT4", "INT8", "NUMERIC", "FLOAT4", "FLOAT8", "OID", "MONEY"])]
+    #[case::postgres_text(TypeClass::Text, &["TEXT", "VARCHAR", "BPCHAR", "CHAR", "NAME", "CITEXT"])]
+    #[case::postgres_boolean(TypeClass::Boolean, &["BOOL"])]
+    #[case::postgres_temporal(TypeClass::Temporal, &["DATE", "TIME", "TIMETZ", "TIMESTAMP", "TIMESTAMPTZ", "INTERVAL"])]
+    #[case::postgres_json(TypeClass::Json, &["JSON", "JSONB"])]
+    #[case::postgres_uuid(TypeClass::Uuid, &["UUID"])]
+    #[case::postgres_binary(TypeClass::Binary, &["BYTEA"])]
+    #[case::declared_text(TypeClass::Text, &["character varying(10)", "character(4)", "text"])]
+    #[case::declared_numbers(TypeClass::Number, &["integer", "bigint", "numeric(30,3)", "double precision"])]
+    #[case::declared_temporal(TypeClass::Temporal, &["timestamp with time zone", "time without time zone"])]
+    #[case::declared_boolean(TypeClass::Boolean, &["boolean"])]
+    #[case::mysql_numbers(TypeClass::Number, &["INT", "BIGINT", "SMALLINT", "TINYINT", "MEDIUMINT", "DECIMAL", "DOUBLE", "int(11) unsigned", "bigint unsigned"])]
+    #[case::mysql_text(TypeClass::Text, &["VARCHAR", "TINYTEXT", "MEDIUMTEXT", "LONGTEXT", "ENUM", "SET", "varchar(255)"])]
+    #[case::mysql_temporal(TypeClass::Temporal, &["DATETIME", "TIMESTAMP", "YEAR"])]
+    #[case::mysql_binary(TypeClass::Binary, &["BLOB", "TINYBLOB", "LONGBLOB", "VARBINARY", "BINARY", "varbinary(16)"])]
+    #[case::mysql_json(TypeClass::Json, &["JSON"])]
+    #[case::sqlite_text(TypeClass::Text, &["TEXT", "VARCHAR(10)", "CLOB"])]
+    #[case::sqlite_numbers(TypeClass::Number, &["INTEGER", "REAL", "NUMERIC"])]
+    #[case::sqlite_boolean(TypeClass::Boolean, &["BOOLEAN"])]
+    #[case::sqlite_unknown(TypeClass::Unknown, &["any", "", "NULL"])]
+    #[case::cql_collections(TypeClass::Json, &["frozen<map<text, uuid>>", "set<int>"])]
+    #[case::cql_uuid(TypeClass::Uuid, &["timeuuid"])]
+    #[case::cql_text(TypeClass::Text, &["ascii"])]
+    #[case::cql_numbers(TypeClass::Number, &["counter"])]
+    #[case::cql_temporal(TypeClass::Temporal, &["duration"])]
+    #[case::surreal_numbers(TypeClass::Number, &["int", "float", "decimal", "option<int>", "none | int"])]
+    #[case::surreal_text(TypeClass::Text, &["string", "record", "record<person>"])]
+    #[case::surreal_temporal(TypeClass::Temporal, &["datetime", "duration"])]
+    #[case::surreal_json(TypeClass::Json, &["object", "array<string>", "set<int>"])]
+    #[case::surreal_binary(TypeClass::Binary, &["bytes"])]
+    #[case::surreal_unknown(TypeClass::Unknown, &["geometry<point>", "int | string"])]
+    #[case::mongo_numbers(TypeClass::Number, &["int", "long", "double", "decimal"])]
+    #[case::mongo_text(TypeClass::Text, &["string"])]
+    #[case::mongo_boolean(TypeClass::Boolean, &["bool"])]
+    #[case::mongo_temporal(TypeClass::Temporal, &["date", "timestamp"])]
+    #[case::mongo_json(TypeClass::Json, &["object", "array"])]
+    #[case::mongo_uuid(TypeClass::Uuid, &["objectId"])]
+    #[case::mongo_binary(TypeClass::Binary, &["binData"])]
+    #[case::numeric_array(TypeClass::Number, &["INT4[]"])]
+    #[case::text_array(TypeClass::Text, &["text[]"])]
+    #[case::geometry_is_not_numeric(TypeClass::Unknown, &["POINT", "polygon"])]
+    #[case::unknown(TypeClass::Unknown, &["tsvector", "hstore"])]
+    fn classifies_type_names(#[case] class: TypeClass, #[case] names: &[&str]) {
         for name in names {
-            assert_eq!(
-                TypeClass::from_type_name(name),
-                class,
-                "{name} should classify as {}",
-                class.name()
-            );
+            assert_eq!(TypeClass::from_type_name(name), class, "{name}");
         }
-    }
-
-    #[test]
-    fn postgres_driver_names_classify() {
-        assert_class(
-            TypeClass::Number,
-            &[
-                "INT2", "INT4", "INT8", "NUMERIC", "FLOAT4", "FLOAT8", "OID", "MONEY",
-            ],
-        );
-        assert_class(
-            TypeClass::Text,
-            &["TEXT", "VARCHAR", "BPCHAR", "CHAR", "NAME", "CITEXT"],
-        );
-        assert_class(TypeClass::Boolean, &["BOOL"]);
-        assert_class(
-            TypeClass::Temporal,
-            &[
-                "DATE",
-                "TIME",
-                "TIMETZ",
-                "TIMESTAMP",
-                "TIMESTAMPTZ",
-                "INTERVAL",
-            ],
-        );
-        assert_class(TypeClass::Json, &["JSON", "JSONB"]);
-        assert_class(TypeClass::Uuid, &["UUID"]);
-        assert_class(TypeClass::Binary, &["BYTEA"]);
-    }
-
-    #[test]
-    fn postgres_declared_names_classify_the_same_way() {
-        // What `format_type` renders, which is what the drawer shows.
-        assert_class(
-            TypeClass::Text,
-            &["character varying(10)", "character(4)", "text"],
-        );
-        assert_class(
-            TypeClass::Number,
-            &["integer", "bigint", "numeric(30,3)", "double precision"],
-        );
-        assert_class(
-            TypeClass::Temporal,
-            &["timestamp with time zone", "time without time zone"],
-        );
-        assert_class(TypeClass::Boolean, &["boolean"]);
-    }
-
-    #[test]
-    fn mysql_names_classify() {
-        assert_class(
-            TypeClass::Number,
-            &[
-                "INT",
-                "BIGINT",
-                "SMALLINT",
-                "TINYINT",
-                "MEDIUMINT",
-                "DECIMAL",
-                "DOUBLE",
-                "int(11) unsigned",
-                "bigint unsigned",
-            ],
-        );
-        assert_class(
-            TypeClass::Text,
-            &[
-                "VARCHAR",
-                "TINYTEXT",
-                "MEDIUMTEXT",
-                "LONGTEXT",
-                "ENUM",
-                "SET",
-                "varchar(255)",
-            ],
-        );
-        assert_class(TypeClass::Temporal, &["DATETIME", "TIMESTAMP", "YEAR"]);
-        assert_class(
-            TypeClass::Binary,
-            &[
-                "BLOB",
-                "TINYBLOB",
-                "LONGBLOB",
-                "VARBINARY",
-                "BINARY",
-                "varbinary(16)",
-            ],
-        );
-        assert_class(TypeClass::Json, &["JSON"]);
-    }
-
-    #[test]
-    fn sqlite_names_classify() {
-        assert_class(TypeClass::Text, &["TEXT", "VARCHAR(10)", "CLOB"]);
-        assert_class(TypeClass::Number, &["INTEGER", "REAL", "NUMERIC"]);
-        assert_class(TypeClass::Binary, &["BLOB"]);
-        assert_class(TypeClass::Boolean, &["BOOLEAN"]);
-        // A SQLite column may be declared with no type at all, which the adapter reports as "any".
-        assert_class(TypeClass::Unknown, &["any", "", "NULL"]);
-    }
-
-    #[test]
-    fn cql_names_classify() {
-        assert_eq!(
-            TypeClass::from_type_name("frozen<map<text, uuid>>"),
-            TypeClass::Json
-        );
-        assert_eq!(TypeClass::from_type_name("set<int>"), TypeClass::Json);
-        assert_eq!(TypeClass::from_type_name("timeuuid"), TypeClass::Uuid);
-        assert_eq!(TypeClass::from_type_name("ascii"), TypeClass::Text);
-        assert_eq!(TypeClass::from_type_name("counter"), TypeClass::Number);
-        assert_eq!(TypeClass::from_type_name("duration"), TypeClass::Temporal);
-    }
-
-    #[test]
-    fn surrealql_names_classify() {
-        assert_class(
-            TypeClass::Number,
-            &["int", "float", "decimal", "option<int>", "none | int"],
-        );
-        assert_class(TypeClass::Text, &["string", "record", "record<person>"]);
-        assert_class(TypeClass::Temporal, &["datetime", "duration"]);
-        assert_class(TypeClass::Json, &["object", "array<string>", "set<int>"]);
-        assert_class(TypeClass::Binary, &["bytes"]);
-        assert_class(TypeClass::Unknown, &["geometry<point>", "int | string"]);
-    }
-
-    #[test]
-    fn mongodb_names_classify() {
-        assert_class(TypeClass::Number, &["int", "long", "double", "decimal"]);
-        assert_class(TypeClass::Text, &["string"]);
-        assert_class(TypeClass::Boolean, &["bool"]);
-        assert_class(TypeClass::Temporal, &["date", "timestamp"]);
-        assert_class(TypeClass::Json, &["object", "array"]);
-        assert_class(TypeClass::Uuid, &["objectId"]);
-        assert_class(TypeClass::Binary, &["binData"]);
-    }
-
-    #[test]
-    fn an_array_takes_the_class_of_what_it_holds() {
-        assert_eq!(TypeClass::from_type_name("INT4[]"), TypeClass::Number);
-        assert_eq!(TypeClass::from_type_name("text[]"), TypeClass::Text);
-    }
-
-    #[test]
-    fn a_point_is_not_a_number_despite_ending_in_int() {
-        assert_eq!(TypeClass::from_type_name("POINT"), TypeClass::Unknown);
-        assert_eq!(TypeClass::from_type_name("polygon"), TypeClass::Unknown);
-    }
-
-    #[test]
-    fn an_unknown_type_is_not_guessed_at() {
-        assert_eq!(TypeClass::from_type_name("tsvector"), TypeClass::Unknown);
-        assert_eq!(TypeClass::from_type_name("hstore"), TypeClass::Unknown);
     }
 
     #[test]

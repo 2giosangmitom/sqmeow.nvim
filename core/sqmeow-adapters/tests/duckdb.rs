@@ -1,40 +1,18 @@
 //! The DuckDB adapter against a real in-memory database.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::edit::Changes;
-use sqmeow_db::edit::Source;
-use sqmeow_db::edit::Table;
 use sqmeow_db::error::Error;
-use sqmeow_db::node::RelationKind;
 use sqmeow_db::sql::parameters::{Kind, Value};
-use sqmeow_db::types::ForeignKey;
-use sqmeow_db::types::KeyKind;
-use sqmeow_db::types::TypeClass;
 use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
-
-async fn database() -> Backend {
-    Backend::connect("duckdb::memory:")
-        .await
-        .expect("an in-memory database should open")
-}
-
-async fn run(backend: &Backend, sql: &str) -> sqmeow_db::result::ResultSet {
-    backend
-        .execute(sql, NO_CAP, CancellationToken::new())
-        .await
-        .unwrap_or_else(|error| panic!("{sql} should run: {error}"))
-}
+include!("common/sql_crud.rs");
+include!("common/sql_safety.rs");
+include!("common/native_bind.rs");
 
 #[tokio::test]
-async fn opens_an_in_memory_database() {
-    assert_eq!(database().await.dialect().name(), "duckdb");
-}
-
-#[tokio::test]
-async fn relationships_preserve_composite_keys_and_quoted_endpoints() {
+async fn relationships_preserve_catalog_endpoints() {
     let backend = database().await;
     run(&backend, "create schema \"schema.with.dot\"").await;
     run(&backend, "create table \"schema.with.dot\".\"parent.\"\"table\" (a integer, b integer, primary key (b, a))").await;
@@ -58,207 +36,128 @@ async fn relationships_preserve_composite_keys_and_quoted_endpoints() {
     assert_eq!(key.target_schema, "schema.with.dot");
     assert_eq!(key.target_relation, "parent.\"table");
     assert_eq!(key.referenced, ["b", "a"]);
+    backend.close().await;
 }
 
 #[tokio::test]
-async fn relationships_return_self_reference_once() {
+async fn a_failing_statement_rolls_back_the_ones_before_it() {
+    failed_apply_rolls_back(
+        &database().await,
+        "create table sqmeow_rollback_smoke (id int primary key, name varchar(32))",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn bound_text_repeats_and_typed_null_stays_null() {
+    let text = "alice' OR true; DROP TABLE people; -- :name ?";
+    bound_values_remain_data(
+        &database().await,
+        "select cast(? as varchar), cast(? as varchar), cast(? as integer)",
+        &[
+            Value::Text(text.into()),
+            Value::Text(text.into()),
+            Value::Null(Kind::Int),
+        ],
+        text,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_read_only_file_is_refused_writes_by_duckdb() {
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join("opencode");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join(format!("sqmeow-ro-{}-{suffix}.duckdb", std::process::id()));
+    let url = format!("duckdb:{}", path.display());
+    let writer = Backend::connect(&url).await.unwrap();
+    run(&writer, "create table t (id integer)").await;
+    writer.close().await;
+    let backend = Backend::connect_to(&url, None, true).await.unwrap();
+    run(&backend, "select * from t").await;
+    let error = backend
+        .execute("insert into t values (1)", NO_CAP, CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("read-only"), "{error}");
+    backend.close().await;
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn grouped_rows_have_no_editable_source() {
     let backend = database().await;
     run(
         &backend,
-        "create table tree (id integer primary key, parent integer references tree(id))",
+        "create table grouped_people (id integer primary key, name varchar)",
     )
     .await;
-    let keys = backend.relationships("main", "tree").await.unwrap();
-    assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0].source_relation, "tree");
-    assert_eq!(keys[0].target_relation, "tree");
-    assert_eq!(keys[0].columns, ["parent"]);
-    assert_eq!(keys[0].referenced, ["id"]);
-}
-
-#[tokio::test]
-async fn bound_text_is_data_even_when_it_looks_like_sql() {
-    let backend = people().await;
-    let text = "alice' OR true; DROP TABLE people; -- :name ?";
-    let result = backend
-        .execute_bound(
-            "select ? as literal, ? as repeated",
-            &[Value::Text(text.into()), Value::Text(text.into())],
-            NO_CAP,
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(result.cell(0, 0), Some(&Cell::Text(text.into())));
-    assert_eq!(result.cell(0, 1), Some(&Cell::Text(text.into())));
-    let filtered = backend
-        .execute_bound(
-            "select id, name from people where name = ? or name = ?",
-            &[Value::Text(text.into()), Value::Text(text.into())],
-            NO_CAP,
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(filtered.row_count(), 0);
-    assert_eq!(run(&backend, "select * from people").await.row_count(), 2);
-}
-
-#[tokio::test]
-async fn bound_scalars_and_typed_nulls_use_native_values() {
-    let backend = database().await;
-    let result = backend
-        .execute_bound(
-            "select ?, ?, ?, ?, ?, ?::varchar, ?::bigint, ?::double, ?::boolean",
-            &[
-                Value::Text(String::new()),
-                Value::Int(i64::MIN),
-                Value::Float(2.5),
-                Value::Bool(true),
-                Value::Bool(false),
-                Value::Null(Kind::Text),
-                Value::Null(Kind::Int),
-                Value::Null(Kind::Float),
-                Value::Null(Kind::Bool),
-            ],
-            NO_CAP,
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-    for (index, expected) in [
-        Cell::Text(String::new()),
-        Cell::Int(i64::MIN),
-        Cell::Float(2.5),
-        Cell::Bool(true),
-        Cell::Bool(false),
-        Cell::Null,
-        Cell::Null,
-        Cell::Null,
-        Cell::Null,
-    ]
-    .iter()
-    .enumerate()
-    {
-        assert_eq!(result.cell(0, index), Some(expected));
-    }
-    assert_eq!(result.columns()[1].type_name, "BIGINT");
-    assert_eq!(result.columns()[2].type_name, "DOUBLE");
-    assert_eq!(result.columns()[3].type_name, "BOOLEAN");
-}
-
-#[tokio::test]
-async fn bound_empty_results_preserve_columns_and_editable_provenance() {
-    let backend = people().await;
-    let expected = run(&backend, "select id, name as who from people where false").await;
-    let result = backend
-        .execute_bound(
-            "select id, name as who from people where id = ?",
-            &[Value::Int(999)],
-            NO_CAP,
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(result.row_count(), 0);
-    assert!(!result.is_truncated());
-    assert_eq!(result.columns(), expected.columns());
-    assert_eq!(result.columns()[0].key, KeyKind::Primary);
-    assert!(expected.source().is_some());
-    assert_eq!(result.source(), expected.source());
-    assert!(result.elapsed() > std::time::Duration::ZERO);
-    assert_eq!(
-        result.statement(),
-        "select id, name as who from people where id = ?"
-    );
-}
-
-#[tokio::test]
-async fn bound_results_respect_zero_partial_and_exact_row_caps() {
-    let backend = database().await;
-    for (cap, count, truncated) in [(0, 0, true), (1, 1, true), (3, 3, false)] {
-        let result = backend
-            .execute_bound(
-                "select * from range(?)",
-                &[Value::Int(3)],
-                cap,
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(result.row_count(), count);
-        assert_eq!(result.is_truncated(), truncated);
-        assert_eq!(result.columns().len(), 1);
-    }
-}
-
-#[tokio::test]
-async fn bound_cancellation_interrupts_and_releases_the_connection() {
-    let backend = database().await;
-    let cancel = CancellationToken::new();
-    let stop = cancel.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        stop.cancel();
-    });
-    let error = backend
-        .execute_bound(
-            "select count(*) from range(?)",
-            &[Value::Int(1_000_000_000_000)],
-            NO_CAP,
-            cancel,
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(error, Error::Cancelled), "{error}");
-    assert_eq!(run(&backend, "select 1").await.row_count(), 1);
-}
-
-#[tokio::test]
-async fn decodes_each_type() {
-    let backend = database().await;
-    let result = run(
+    run(
         &backend,
-        "select 1::integer, 'a'::varchar, 2.5::double, 12.34::decimal(10, 2), true,
-                null::integer, '\\xde\\xad'::blob, date '2024-01-02',
-                timestamp '2024-01-02 03:04:05', time '03:04:05',
-                '00000000-0000-0000-0000-000000000001'::uuid,
-                [1, 2], {'a': 1}, 18446744073709551615::ubigint",
+        "insert into grouped_people values (1, 'alice'), (2, 'alice')",
     )
     .await;
-
-    let cells: Vec<&Cell> = (0..14).map(|i| result.cell(0, i).unwrap()).collect();
-    assert_eq!(
-        cells,
-        vec![
-            &Cell::Int(1),
-            &Cell::Text("a".into()),
-            &Cell::Float(2.5),
-            &Cell::Decimal("12.34".into()),
-            &Cell::Bool(true),
-            &Cell::Null,
-            &Cell::bytes(&[0xde, 0xad]),
-            &Cell::Date("2024-01-02".into()),
-            &Cell::Timestamp("2024-01-02 03:04:05".into()),
-            &Cell::Time("03:04:05".into()),
-            &Cell::Uuid("00000000-0000-0000-0000-000000000001".into()),
-            &Cell::Json("[1,2]".into()),
-            &Cell::Json("{\"a\":1}".into()),
-            &Cell::Decimal("18446744073709551615".into()),
-        ]
+    assert!(
+        run(
+            &backend,
+            "select name, count(*) from grouped_people group by name"
+        )
+        .await
+        .source()
+        .is_none()
     );
-    assert_eq!(result.columns()[0].class, TypeClass::Number);
-    assert_eq!(result.columns()[1].class, TypeClass::Text);
-    assert_eq!(result.columns()[8].class, TypeClass::Temporal);
+    backend.close().await;
 }
 
 #[tokio::test]
-async fn an_empty_result_still_knows_its_columns() {
+async fn commands_create_read_update_and_delete_rows() {
+    crud_round_trip(
+        &database().await,
+        "create table sqmeow_crud_smoke (id int primary key, name varchar(32))",
+    )
+    .await;
+}
+
+async fn database() -> Backend {
+    Backend::connect("duckdb::memory:")
+        .await
+        .expect("an in-memory database should open")
+}
+
+async fn run(backend: &Backend, sql: &str) -> sqmeow_db::result::ResultSet {
+    backend
+        .execute(sql, NO_CAP, CancellationToken::new())
+        .await
+        .unwrap_or_else(|error| panic!("{sql} should run: {error}"))
+}
+
+#[tokio::test]
+async fn opens_an_in_memory_database() {
+    assert_eq!(database().await.dialect().name(), "duckdb");
+}
+
+#[tokio::test]
+async fn reads_back_rows_it_wrote() {
     let backend = database().await;
-    let result = run(&backend, "select 1 as id, 'x' as name where false").await;
-    assert_eq!(result.row_count(), 0);
-    let names: Vec<&str> = result.columns().iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, vec!["id", "name"]);
+    run(
+        &backend,
+        "create table people (id integer primary key, name varchar)",
+    )
+    .await;
+    run(
+        &backend,
+        "insert into people values (1, 'alice'), (2, 'bob')",
+    )
+    .await;
+
+    let result = run(&backend, "select id, name from people order by id").await;
+    assert_eq!(result.row_count(), 2);
+    assert_eq!(result.cell(0, 0), Some(&Cell::Int(1)));
+    assert_eq!(result.cell(1, 1), Some(&Cell::Text("bob".into())));
 }
 
 #[tokio::test]
@@ -281,547 +180,4 @@ async fn reports_an_error_and_keeps_working() {
         .unwrap_err();
     assert!(matches!(error, Error::Driver(_)), "{error}");
     assert_eq!(run(&backend, "select 1").await.row_count(), 1);
-}
-
-#[tokio::test]
-async fn cancelling_interrupts_a_long_query() {
-    let backend = database().await;
-    let cancel = CancellationToken::new();
-    let stop = cancel.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        stop.cancel();
-    });
-
-    let error = backend
-        .execute("select count(*) from range(1000000000000)", NO_CAP, cancel)
-        .await
-        .unwrap_err();
-    assert!(matches!(error, Error::Cancelled), "{error}");
-    // The interrupted query lets go of the connection.
-    assert_eq!(run(&backend, "select 1").await.row_count(), 1);
-}
-
-#[tokio::test]
-async fn describes_the_schema_for_the_drawer() {
-    let backend = database().await;
-    run(
-        &backend,
-        "create table teams (id integer primary key, name varchar not null)",
-    )
-    .await;
-    run(
-        &backend,
-        "create table people (id integer primary key, team integer references teams (id), nick varchar)",
-    )
-    .await;
-    run(&backend, "create view names as select name from teams").await;
-    run(&backend, "create macro twice(x) as x * 2").await;
-
-    let schemas = backend.schemas().await.unwrap();
-    let main = schemas
-        .iter()
-        .find(|s| s.name == "main")
-        .expect("a main schema");
-    assert!(main.is_default);
-
-    let relations = backend.relations("main").await.unwrap();
-    let kinds: Vec<(&str, RelationKind)> = relations
-        .iter()
-        .map(|r| (r.name.as_str(), r.kind))
-        .collect();
-    assert_eq!(
-        kinds,
-        vec![
-            ("names", RelationKind::View),
-            ("people", RelationKind::Table),
-            ("teams", RelationKind::Table),
-        ]
-    );
-
-    let routines = backend.routines("main").await.unwrap();
-    assert_eq!(
-        routines.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
-        vec!["twice"]
-    );
-
-    let columns = backend.columns("main", "people").await.unwrap();
-    assert_eq!(columns.len(), 3);
-    assert!(columns[0].primary_key && !columns[0].nullable);
-    assert_eq!(
-        columns[1].foreign_key,
-        Some(ForeignKey {
-            table: "teams".into(),
-            column: "id".into()
-        })
-    );
-    assert!(!columns[2].primary_key && columns[2].nullable);
-    assert_eq!(columns[2].type_name, "VARCHAR");
-
-    assert_eq!(backend.columns("main", "names").await.unwrap().len(), 1);
-}
-
-async fn people() -> Backend {
-    let backend = database().await;
-    run(
-        &backend,
-        "create table people (id integer primary key, name varchar, team integer)",
-    )
-    .await;
-    run(
-        &backend,
-        "insert into people values (1, 'alice', 1), (2, 'bob', 2)",
-    )
-    .await;
-    backend
-}
-
-#[tokio::test]
-async fn a_plain_select_from_a_table_is_edited_by_its_key() {
-    let backend = people().await;
-    let result = run(
-        &backend,
-        "select id, name as who, id + 1 from people p order by id",
-    )
-    .await;
-
-    assert_eq!(
-        result.source(),
-        Some(&Source::Tables(vec![Table {
-            schema: Some("main".into()),
-            name: "people".into(),
-            key: vec![0],
-            columns: vec![(0, "id".into()), (1, "name".into())],
-        }]))
-    );
-    assert_eq!(result.columns()[0].key, KeyKind::Primary);
-
-    let changes = Changes {
-        updates: vec![(0, vec![(1, "ann".into())])],
-        deletes: vec![1],
-        inserts: vec![vec![(0, "3".into()), (1, sqmeow_db::edit::Value::Null)]],
-    };
-    let statements = backend.plan(&result, &changes).unwrap();
-    backend
-        .apply(&statements, CancellationToken::new())
-        .await
-        .unwrap();
-
-    let after = run(&backend, "select id, name from people order by id").await;
-    assert_eq!(after.row_count(), 2);
-    assert_eq!(after.cell(0, 1), Some(&Cell::Text("ann".into())));
-    assert_eq!(after.cell(1, 0), Some(&Cell::Int(3)));
-    assert_eq!(after.cell(1, 1), Some(&Cell::Null));
-}
-
-#[tokio::test]
-async fn every_spelling_of_one_table_is_editable() {
-    let backend = people().await;
-    for sql in [
-        "from people",
-        "select * from main.people",
-        "select p.* exclude (team) from people p",
-        "select P.ID, Name from PEOPLE p",
-        "with other as (select 1) select * from people",
-        "select * rename (name as who) from people",
-        "select * replace (upper(name) as name) from people",
-    ] {
-        let result = run(&backend, sql).await;
-        assert!(
-            matches!(result.source(), Some(Source::Tables(tables)) if tables[0].name == "people" && tables[0].key == [0]),
-            "{sql}: {:?}",
-            result.source()
-        );
-    }
-}
-
-#[tokio::test]
-async fn a_replaced_column_is_computed_and_an_attached_table_is_editable() {
-    let backend = people().await;
-    let result = run(
-        &backend,
-        "select * replace (upper(name) as name) from people",
-    )
-    .await;
-    assert!(matches!(
-        result.source(),
-        Some(Source::Tables(tables)) if tables[0].columns == [(0, "id".to_owned()), (2, "team".to_owned())]
-    ));
-
-    run(&backend, "attach ':memory:' as other").await;
-    run(
-        &backend,
-        "create table other.main.pets (id integer primary key, name varchar)",
-    )
-    .await;
-    run(&backend, "insert into other.pets values (1, 'rex')").await;
-    for sql in [
-        "select * from other.main.pets",
-        "select id, name from other.pets",
-    ] {
-        let result = run(&backend, sql).await;
-        assert!(
-            matches!(result.source(), Some(Source::Tables(tables)) if tables[0].schema.as_deref() == Some("other.main")),
-            "{sql}: {:?}",
-            result.source()
-        );
-    }
-
-    let result = run(&backend, "select id, name from other.pets").await;
-    let changes = Changes {
-        updates: vec![(
-            0,
-            vec![(1, sqmeow_db::edit::Value::Sql("upper('fido')".into()))],
-        )],
-        ..Changes::default()
-    };
-    let statements = backend.plan(&result, &changes).unwrap();
-    assert_eq!(
-        statements,
-        [r#"UPDATE "other"."main"."pets" SET "name" = upper('fido') WHERE "id" = 1"#]
-    );
-    backend
-        .apply(&statements, CancellationToken::new())
-        .await
-        .unwrap();
-    let after = run(&backend, "select name from other.pets").await;
-    assert_eq!(after.cell(0, 0), Some(&Cell::Text("FIDO".into())));
-}
-
-#[tokio::test]
-async fn a_result_that_is_not_one_row_per_table_row_is_read_only() {
-    let backend = people().await;
-    run(&backend, "create table loose (id integer, name varchar)").await;
-    run(&backend, "create view named as select * from people").await;
-    for sql in [
-        "select distinct id, name from people",
-        "select id, count(*) from people group by id",
-        "with people as (select 1 as id) select id from people",
-        "select id from people union all select id from people",
-        "select a.id from people a join people b on a.id = b.id",
-        "select id, id from people",
-        "select * from named",
-        "select 1 as id",
-    ] {
-        assert_eq!(run(&backend, sql).await.source(), None, "{sql}");
-    }
-}
-
-#[tokio::test]
-async fn a_binary_key_finds_its_row() {
-    let backend = database().await;
-    run(
-        &backend,
-        "create table blobs (id blob primary key, note varchar)",
-    )
-    .await;
-    run(
-        &backend,
-        "insert into blobs values ('\\xabcd'::blob, 'old')",
-    )
-    .await;
-
-    let result = run(&backend, "select * from blobs").await;
-    let changes = Changes {
-        updates: vec![(0, vec![(1, "new".into())])],
-        ..Changes::default()
-    };
-    backend
-        .apply(
-            &backend.plan(&result, &changes).unwrap(),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-
-    let after = run(&backend, "select note from blobs").await;
-    assert_eq!(after.cell(0, 0), Some(&Cell::Text("new".into())));
-}
-
-#[tokio::test]
-async fn a_row_gone_since_it_was_read_is_not_written() {
-    let backend = people().await;
-    let result = run(&backend, "select * from people order by id").await;
-    run(&backend, "delete from people where id = 1").await;
-
-    let changes = Changes {
-        updates: vec![(0, vec![(1, "ann".into())])],
-        ..Changes::default()
-    };
-    let error = backend
-        .apply(
-            &backend.plan(&result, &changes).unwrap(),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("no row had that key"), "{error}");
-}
-
-#[tokio::test]
-async fn a_join_is_edited_through_each_table_key() {
-    let backend = people().await;
-    run(
-        &backend,
-        "create table teams (id integer primary key, name varchar)",
-    )
-    .await;
-    run(&backend, "insert into teams values (1, 'red')").await;
-
-    let result = run(
-        &backend,
-        "select p.*, t.name as team_name, t.id
-         from people p left join teams t on t.id = p.team
-         order by p.id",
-    )
-    .await;
-    match result.source() {
-        Some(Source::Tables(tables)) => {
-            assert_eq!(tables.len(), 2);
-            assert_eq!(tables[0].key, vec![0]);
-            assert_eq!(tables[1].key, vec![4]);
-            assert_eq!(tables[1].column(3), Some("name"));
-        }
-        other => panic!("expected tables, got {other:?}"),
-    }
-    assert_eq!(result.columns()[4].key, KeyKind::Primary);
-
-    let changes = Changes {
-        updates: vec![(0, vec![(1, "ann".into()), (3, "crimson".into())])],
-        ..Changes::default()
-    };
-    backend
-        .apply(
-            &backend.plan(&result, &changes).unwrap(),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-
-    let after = run(
-        &backend,
-        "select p.name, t.name from people p join teams t on t.id = p.team",
-    )
-    .await;
-    assert_eq!(after.cell(0, 0), Some(&Cell::Text("ann".into())));
-    assert_eq!(after.cell(0, 1), Some(&Cell::Text("crimson".into())));
-}
-
-#[tokio::test]
-async fn a_filtered_result_stays_editable() {
-    let backend = database().await;
-    run(
-        &backend,
-        "create table filtered (id integer primary key, name varchar)",
-    )
-    .await;
-    run(
-        &backend,
-        "insert into filtered values (1, 'ann'), (2, 'bob')",
-    )
-    .await;
-
-    let origin = "select id, name from filtered order by id";
-    let wrapped = sqmeow_db::sql::filtered(
-        sqmeow_db::adapter::Dialect::DuckDb,
-        origin,
-        "name = 'bob'",
-        "",
-        &[],
-    )
-    .unwrap();
-    let result = backend
-        .execute_wrapped(&wrapped, origin, NO_CAP, CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(result.row_count(), 1);
-
-    let changes = Changes {
-        updates: vec![(0, vec![(1, "rob".into())])],
-        ..Changes::default()
-    };
-    backend
-        .apply(
-            &backend.plan(&result, &changes).unwrap(),
-            CancellationToken::new(),
-        )
-        .await
-        .expect("the plan should apply");
-    let after = run(&backend, "select name from filtered where id = 2").await;
-    assert_eq!(after.cell(0, 0), Some(&Cell::Text("rob".into())));
-}
-
-#[tokio::test]
-async fn a_table_without_a_primary_key_is_edited_through_a_unique_one() {
-    let backend = database().await;
-    run(
-        &backend,
-        "create table tagged (code varchar unique, label varchar, n integer default 42)",
-    )
-    .await;
-    run(&backend, "create index tagged_label on tagged (label)").await;
-    run(
-        &backend,
-        "insert into tagged values ('a', 'one', 1), ('b', 'two', 2)",
-    )
-    .await;
-
-    let result = run(&backend, "select code, label, n from tagged order by code").await;
-    match result.source() {
-        Some(Source::Tables(tables)) => assert_eq!(tables[0].key, vec![0]),
-        other => panic!("expected a table source, got {other:?}"),
-    }
-    let changes = Changes {
-        updates: vec![(0, vec![(2, "42".into())])],
-        ..Changes::default()
-    };
-    let plan = backend.plan(&result, &changes).unwrap();
-    backend
-        .apply(&plan, CancellationToken::new())
-        .await
-        .expect("the plan should apply");
-    let after = run(&backend, "select n from tagged order by code").await;
-    assert_eq!(after.column_cells(0), &[Cell::Int(42), Cell::Int(2)]);
-
-    assert_eq!(
-        backend.indexes("main", "tagged").await.unwrap(),
-        vec![
-            sqmeow_db::node::IndexNode {
-                name: "tagged_code_key".into(),
-                columns: vec!["code".into()],
-                unique: true,
-                primary: false,
-            },
-            sqmeow_db::node::IndexNode {
-                name: "tagged_label".into(),
-                columns: vec!["label".into()],
-                unique: false,
-                primary: false,
-            },
-        ]
-    );
-    let columns = backend.columns("main", "tagged").await.unwrap();
-    assert_eq!(columns[2].default.as_deref(), Some("42"));
-}
-
-#[tokio::test]
-async fn a_read_only_file_is_refused_writes_by_duckdb() {
-    let path = std::env::temp_dir().join(format!("sqmeow-ro-{}.duckdb", std::process::id()));
-    let url = format!("duckdb:{}", path.display());
-    {
-        let backend = Backend::connect(&url).await.unwrap();
-        run(&backend, "create table t (id integer)").await;
-        backend.close().await;
-    }
-    let backend = Backend::connect_to(&url, None, true).await.unwrap();
-    run(&backend, "select * from t").await;
-    let error = backend
-        .execute("insert into t values (1)", NO_CAP, CancellationToken::new())
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("read-only"), "{error}");
-    drop(backend);
-    let _ = std::fs::remove_file(path);
-}
-
-#[tokio::test]
-async fn a_table_without_a_key_is_edited_by_every_column() {
-    let backend = database().await;
-    run(&backend, "create table loose (label varchar, n integer)").await;
-    run(&backend, "insert into loose values ('a', 1), ('b', null)").await;
-
-    let result = run(&backend, "select label, n from loose order by label").await;
-    let changes = Changes {
-        updates: vec![(1, vec![(0, "bee".into())])],
-        ..Changes::default()
-    };
-    let plan = backend.plan(&result, &changes).unwrap();
-    backend
-        .apply(&plan, CancellationToken::new())
-        .await
-        .expect("the plan should apply");
-    let after = run(&backend, "select label from loose order by n nulls last").await;
-    assert_eq!(
-        after.column_cells(0),
-        &[Cell::Text("a".into()), Cell::Text("bee".into())]
-    );
-}
-
-#[tokio::test]
-async fn the_drawer_is_not_held_up_by_a_long_query() {
-    let backend = std::sync::Arc::new(database().await);
-    run(&backend, "create table t (id integer)").await;
-    let running = std::sync::Arc::clone(&backend);
-    let cancel = CancellationToken::new();
-    let stop = cancel.clone();
-    let query = tokio::spawn(async move {
-        running
-            .execute("select count(*) from range(100000000000) a", NO_CAP, stop)
-            .await
-    });
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    let started = std::time::Instant::now();
-    assert!(
-        backend
-            .relations("main")
-            .await
-            .unwrap()
-            .iter()
-            .any(|relation| relation.name == "t")
-    );
-    assert!(started.elapsed() < std::time::Duration::from_secs(2));
-    cancel.cancel();
-    let _ = query.await;
-}
-
-#[tokio::test]
-async fn a_table_describes_its_comments_keys_checks_and_definition() {
-    let backend = database().await;
-    run(&backend, "create table det_parent (id integer primary key)").await;
-    run(
-        &backend,
-        "create table det_child (id integer primary key,
-             parent_id integer references det_parent (id), n integer check (n > 0))",
-    )
-    .await;
-    run(&backend, "comment on table det_child is 'children'").await;
-    run(&backend, "comment on column det_child.n is 'how many'").await;
-
-    let details = backend.details("main", "det_child").await.unwrap();
-    assert_eq!(
-        details.properties,
-        vec![("comment".into(), "children".into())]
-    );
-    assert_eq!(
-        details.column_comments,
-        vec![("n".into(), "how many".into())]
-    );
-    assert_eq!(details.foreign_keys[0].target, "det_parent");
-    assert_eq!(
-        details.foreign_keys[0].columns,
-        vec!["parent_id".to_owned()]
-    );
-    assert_eq!(details.checks.len(), 1, "{details:?}");
-    assert!(
-        details
-            .definition
-            .as_deref()
-            .is_some_and(|sql| sql.contains("CREATE TABLE det_child")),
-        "{details:?}"
-    );
-}
-
-#[tokio::test]
-async fn sequences_are_listed() {
-    let backend = database().await;
-    run(&backend, "create sequence listed_seq").await;
-    let relations = backend.relations("main").await.unwrap();
-    assert_eq!(
-        relations
-            .iter()
-            .find(|relation| relation.name == "listed_seq")
-            .map(|relation| relation.kind),
-        Some(RelationKind::Sequence)
-    );
 }

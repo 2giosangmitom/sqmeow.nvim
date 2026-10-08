@@ -97,7 +97,7 @@ next connection, while renaming updates the open connection's label.
 Leave the database empty to browse databases on the server where supported.
 PostgreSQL databases open as child connections named `connection/database`.
 `:Sqmeow use` selects an open connection; it does not open a saved one.
-Lua callers can open saved entries with |sqmeow.require('sqmeow.api.connection').connect_named()|.
+Lua callers can open saved entries with |sqmeow.api.connection.connect_named()|.
 
 Common URL forms: >text
   postgres://user:password@localhost:5432/app
@@ -243,7 +243,7 @@ specific database, use `:Sqmeow bind dev`; this sets `b:sqmeow_connection`.
 
 A bound buffer requires that named connection to be open. It never silently
 falls back to another connection. An unbound buffer uses the active one;
-execution fails if there is none. See |sqmeow.require('sqmeow.api.connection').target()| for Lua callers.
+execution fails if there is none. See |sqmeow.api.connection.target()| for Lua callers.
 
 ------------------------------------------------------------------------------
                                                                 *sqmeow-queries*
@@ -961,7 +961,7 @@ Usage ~
                                                 *sqmeow.api.connection.rename()*
                   `sqmeow.api.connection.rename`({id}, {name})
 Rename an open connection in editor state and refresh its displayed label.
-Does not update a saved definition; use |sqmeow.api.edit()| for that.
+Does not update a saved definition; use |sqmeow.api.connection.edit()| for that.
 Parameters ~
 {id} `(integer)`
 {name} `(string)`
@@ -1032,7 +1032,7 @@ Parameters ~
                    `sqmeow.api.query.execute`({sql}, {opts})
 Submit statements and open the result window. Completion arrives via events.
 Uses `opts.conn_id` when supplied; otherwise resolves `opts.source_buf` (or
-the current buffer) with |sqmeow.api.target()|. Pending edits or destructive
+the current buffer) with |sqmeow.api.connection.target()|. Pending edits or destructive
 statements can defer submission while a confirmation prompt is shown.
 Parameters ~
 {sql} `(string)` One or more statements in the connection's dialect.
@@ -1053,7 +1053,7 @@ Run the whole current buffer.
 Return ~
 `(integer|nil)` call_id
 Return ~
-`(string|nil)` error See |sqmeow.api.execute()|, including deferred prompts.
+`(string|nil)` error See |sqmeow.api.query.execute()|, including deferred prompts.
 
 ------------------------------------------------------------------------------
                                           *sqmeow.api.query.execute_statement()*
@@ -1062,7 +1062,7 @@ Run the statement the cursor is in.
 Return ~
 `(integer|nil)` call_id
 Return ~
-`(string|nil)` error See |sqmeow.api.execute()|, including deferred prompts.
+`(string|nil)` error See |sqmeow.api.query.execute()|, including deferred prompts.
 
 ------------------------------------------------------------------------------
                                           *sqmeow.api.query.execute_selection()*

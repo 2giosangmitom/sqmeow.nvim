@@ -28,6 +28,14 @@ async fn relationship_fixture(backend: &sqmeow_adapters::Backend, schema: &str) 
         ["a", "b", "c", "d", "e", "f", "p", "q"].map(|name| backend.quote_ident(name));
     run(backend, &format!("create table {parent} ({a} integer, {b} integer, {p} integer, {q} integer, primary key ({b}, {a}), constraint {self_key} foreign key ({p}, {q}) references {parent} ({b}, {a}))")).await;
     run(backend, &format!("create table {child} ({c} integer, {d} integer, {e} integer, {f} integer, constraint {first_key} foreign key ({d}, {c}) references {parent} ({b}, {a}), constraint {second_key} foreign key ({e}, {f}) references {parent} ({b}, {a}))")).await;
+    assert!(
+        backend
+            .columns(schema, parent_name)
+            .await
+            .unwrap()
+            .iter()
+            .any(|column| column.primary_key)
+    );
     let outgoing = backend.relationships(schema, child_name).await.unwrap();
     assert_eq!(outgoing.len(), 2);
     assert_ne!(outgoing[0].name, outgoing[1].name);
@@ -54,4 +62,5 @@ async fn relationship_fixture(backend: &sqmeow_adapters::Backend, schema: &str) 
     assert_eq!(self_keys[0].referenced, ["b", "a"]);
     run(backend, &format!("drop table {child}")).await;
     run(backend, &format!("drop table {parent}")).await;
+    backend.close().await;
 }

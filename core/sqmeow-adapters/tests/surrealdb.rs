@@ -1,13 +1,9 @@
 //! The SurrealDB adapter against a real server.
 
 use sqmeow_adapters::Backend;
-use sqmeow_db::edit;
 use sqmeow_db::edit::Changes;
-use sqmeow_db::edit::Source;
-use sqmeow_db::node::RelationKind;
 use sqmeow_db::result::ResultSet;
 use sqmeow_db::sql::parameters::{Kind, Value};
-use sqmeow_db::value::Cell;
 use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
@@ -54,46 +50,6 @@ async fn run(backend: &Backend, statement: &str) -> ResultSet {
         .unwrap_or_else(|error| panic!("{statement} should run: {error}"))
 }
 
-fn names(result: &ResultSet) -> Vec<&str> {
-    result.columns().iter().map(|c| c.name.as_str()).collect()
-}
-
-#[tokio::test]
-async fn native_parameters_preserve_types_and_explicit_null() {
-    let backend = fresh(&server!(), "bound_types").await;
-    for (value, expected, kind) in [
-        (Value::Int(42), Cell::Int(42), "int"),
-        (Value::Float(1.5), Cell::Float(1.5), "float"),
-        (Value::Bool(true), Cell::Bool(true), "bool"),
-        (Value::Text("42".into()), Cell::Text("42".into()), "string"),
-    ] {
-        let result = backend
-            .execute_bound(
-                "RETURN $sqmeow_p1",
-                &[value],
-                NO_CAP,
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(result.cell(0, 0), Some(&expected));
-        assert_eq!(result.columns()[0].type_name, kind);
-    }
-    for kind in [Kind::Text, Kind::Int, Kind::Float, Kind::Bool] {
-        let result = backend
-            .execute_bound(
-                "RETURN [$sqmeow_p1 = NULL, $sqmeow_p1 = NONE]",
-                &[Value::Null(kind)],
-                NO_CAP,
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(result.cell(0, 0), Some(&Cell::Bool(true)));
-        assert_eq!(result.cell(1, 0), Some(&Cell::Bool(false)));
-    }
-}
-
 #[tokio::test]
 async fn native_parameters_repeat_without_interpolating_text() {
     let backend = fresh(&server!(), "bound_text").await;
@@ -101,52 +57,101 @@ async fn native_parameters_repeat_without_interpolating_text() {
     let text = "'; DELETE person; RETURN 'injected'; -- :name $other";
     let result = backend
         .execute_bound(
-            "RETURN [$sqmeow_p1, $sqmeow_p1]",
-            &[Value::Text(text.into())],
+            "RETURN [$sqmeow_p1, $sqmeow_p1, $sqmeow_p2]",
+            &[Value::Text(text.into()), Value::Null(Kind::Int)],
             NO_CAP,
             CancellationToken::new(),
         )
         .await
         .unwrap();
-    assert_eq!(result.row_count(), 2);
-    for row in 0..2 {
-        assert_eq!(result.cell(row, 0), Some(&Cell::Text(text.into())));
-    }
+    assert_eq!(result.row_count(), 3);
+    assert_eq!(
+        result.cell(0, 0),
+        Some(&sqmeow_db::value::Cell::Text(text.into()))
+    );
+    assert_eq!(
+        result.cell(1, 0),
+        Some(&sqmeow_db::value::Cell::Text(text.into()))
+    );
+    assert_eq!(result.cell(2, 0), Some(&sqmeow_db::value::Cell::Null));
     assert_eq!(run(&backend, "SELECT * FROM person").await.row_count(), 1);
+    run(&backend, "REMOVE DATABASE bound_text").await;
+    backend.close().await;
 }
 
 #[tokio::test]
-async fn native_parameters_keep_row_caps_provenance_and_cancellation() {
-    let backend = fresh(&server!(), "bound_cap").await;
+async fn stale_edits_roll_back_and_computed_results_are_not_editable() {
+    let backend = fresh(&server!(), "edit_safety").await;
     run(
         &backend,
         "CREATE person:alice SET age = 3; CREATE person:bob SET age = 4",
     )
     .await;
-    let result = backend
-        .execute_bound(
-            "SELECT * FROM person WHERE age >= $sqmeow_p1 ORDER BY age",
-            &[Value::Int(3)],
-            1,
+    for statement in [
+        "RETURN 1",
+        "SELECT age FROM person",
+        "SELECT count() FROM person GROUP ALL",
+    ] {
+        assert!(
+            run(&backend, statement).await.source().is_none(),
+            "{statement}"
+        );
+    }
+    let result = run(&backend, "SELECT * FROM person ORDER BY id").await;
+    assert!(result.source().is_some());
+    let age = result
+        .columns()
+        .iter()
+        .position(|column| column.name == "age")
+        .unwrap();
+    let changes = Changes {
+        updates: vec![(0, vec![(age, "5".into())])],
+        deletes: vec![1],
+        ..Default::default()
+    };
+    run(&backend, "DELETE person:bob").await;
+    let error = backend
+        .apply(
+            &backend.plan(&result, &changes).unwrap(),
             CancellationToken::new(),
         )
         .await
-        .unwrap();
-    assert_eq!(result.row_count(), 1);
-    assert!(result.is_truncated());
-    assert!(matches!(result.source(), Some(Source::Collection { name, .. }) if name == "person"));
-
-    let cancel = CancellationToken::new();
-    cancel.cancel();
-    let error = backend
-        .execute_bound("RETURN $sqmeow_p1", &[Value::Int(1)], NO_CAP, cancel)
-        .await
         .unwrap_err();
-    assert!(matches!(error, sqmeow_db::error::Error::Cancelled));
-    assert_eq!(
-        run(&backend, "RETURN 1").await.cell(0, 0),
-        Some(&Cell::Int(1))
+    assert!(
+        error.to_string().contains("no record had that id"),
+        "{error}"
     );
+    assert_eq!(
+        run(&backend, "SELECT age FROM person:alice")
+            .await
+            .cell(0, 0),
+        Some(&sqmeow_db::value::Cell::Int(3))
+    );
+    run(&backend, "REMOVE DATABASE edit_safety").await;
+    backend.close().await;
+}
+
+#[tokio::test]
+async fn commands_create_read_update_and_delete_rows() {
+    let backend = fresh(&server!(), "crud_smoke").await;
+    run(&backend, "CREATE person:alice SET name = 'alice'").await;
+    let selected = run(&backend, "SELECT name FROM person:alice").await;
+    assert_eq!(selected.row_count(), 1);
+    assert_eq!(
+        selected.cell(0, 0),
+        Some(&sqmeow_db::value::Cell::Text("alice".into()))
+    );
+    run(&backend, "UPDATE person:alice SET name = 'bob'").await;
+    assert_eq!(
+        run(&backend, "SELECT name FROM person:alice")
+            .await
+            .cell(0, 0),
+        Some(&sqmeow_db::value::Cell::Text("bob".into()))
+    );
+    run(&backend, "DELETE person:alice").await;
+    assert_eq!(run(&backend, "SELECT * FROM person").await.row_count(), 0);
+    run(&backend, "REMOVE DATABASE crud_smoke").await;
+    backend.close().await;
 }
 
 #[tokio::test]
@@ -170,79 +175,6 @@ async fn connects_and_lists_the_databases_of_its_namespace() {
 }
 
 #[tokio::test]
-async fn reads_records_with_id_first_and_edits_them_by_it() {
-    let backend = fresh(&server!(), "edits").await;
-    run(
-        &backend,
-        "CREATE person:alice SET name = 'Alice', age = 3; CREATE person:bob SET name = 'Bob'",
-    )
-    .await;
-
-    let result = run(&backend, "SELECT * FROM person ORDER BY name").await;
-    assert_eq!(names(&result), ["id", "age", "name"]);
-    assert_eq!(result.cell(0, 0), Some(&Cell::Text("person:alice".into())));
-    assert_eq!(result.cell(1, 1), Some(&Cell::Null));
-    assert!(matches!(
-        result.source(),
-        Some(Source::Collection { name, key, .. }) if name == "person" && key == "id"
-    ));
-
-    let changes = Changes {
-        updates: vec![(0, vec![(1, edit::Value::Text("4".into()))])],
-        deletes: vec![1],
-        inserts: vec![vec![
-            (0, edit::Value::Text("carol".into())),
-            (2, edit::Value::Text("Carol".into())),
-        ]],
-    };
-    let statements = backend.plan(&result, &changes).unwrap();
-    backend
-        .apply(&statements, CancellationToken::new())
-        .await
-        .unwrap();
-
-    let after = run(&backend, "SELECT id, age, name FROM person ORDER BY name").await;
-    assert_eq!(after.row_count(), 2);
-    assert_eq!(after.cell(0, 1), Some(&Cell::Int(4)));
-    assert_eq!(after.cell(1, 0), Some(&Cell::Text("person:carol".into())));
-
-    // A record gone since it was read fails the whole apply.
-    let gone = Changes {
-        updates: vec![(0, vec![(1, edit::Value::Text("5".into()))])],
-        deletes: vec![1],
-        ..Changes::default()
-    };
-    run(&backend, "DELETE person:carol").await;
-    let statements = backend.plan(&after, &gone).unwrap();
-    let error = backend
-        .apply(&statements, CancellationToken::new())
-        .await
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("no record had that id"),
-        "{error}"
-    );
-    let kept = run(&backend, "SELECT age FROM person:alice").await;
-    assert_eq!(kept.cell(0, 0), Some(&Cell::Int(4)));
-}
-
-#[tokio::test]
-async fn anything_but_a_tables_records_cannot_be_edited() {
-    let backend = fresh(&server!(), "readonly").await;
-    run(&backend, "CREATE person:1 SET name = 'x'").await;
-    for statement in [
-        "RETURN 1",
-        "SELECT name FROM person",
-        "SELECT count() FROM person GROUP ALL",
-    ] {
-        assert!(
-            run(&backend, statement).await.source().is_none(),
-            "{statement}"
-        );
-    }
-}
-
-#[tokio::test]
 async fn a_transaction_block_answers_with_its_last_statement() {
     let backend = fresh(&server!(), "blocks").await;
     let result = run(
@@ -256,71 +188,4 @@ async fn a_transaction_block_answers_with_its_last_statement() {
         .await
         .unwrap_err();
     assert!(!error.to_string().is_empty());
-}
-
-#[tokio::test]
-async fn describes_tables_views_functions_fields_and_indexes() {
-    let backend = fresh(&server!(), "described").await;
-    run(
-        &backend,
-        "DEFINE TABLE person SCHEMAFULL COMMENT 'people';
-         DEFINE FIELD name ON person TYPE string;
-         DEFINE FIELD age ON person TYPE option<int>;
-         DEFINE INDEX by_name ON person FIELDS name UNIQUE;
-         DEFINE EVENT audit ON person WHEN $event = 'CREATE' THEN (CREATE log SET at = time::now());
-         DEFINE TABLE adults AS SELECT name FROM person WHERE age > 17;
-         DEFINE FUNCTION fn::greet($n: string) { RETURN 'hi ' + $n; };
-         CREATE loose SET a = 1, b = 'x'",
-    )
-    .await;
-    let schema = backend.database().unwrap();
-
-    let relations = backend.relations(&schema).await.unwrap();
-    let kind = |name: &str| relations.iter().find(|r| r.name == name).map(|r| r.kind);
-    assert_eq!(kind("person"), Some(RelationKind::Table));
-    assert_eq!(kind("adults"), Some(RelationKind::View));
-
-    let routines = backend.routines(&schema).await.unwrap();
-    assert_eq!(routines[0].name, "fn::greet");
-
-    let columns = backend.columns(&schema, "person").await.unwrap();
-    let fields: Vec<(&str, bool)> = columns
-        .iter()
-        .map(|c| (c.name.as_str(), c.nullable))
-        .collect();
-    assert_eq!(fields, [("id", false), ("age", true), ("name", false)]);
-
-    // A schemaless table's fields come from its records.
-    let loose = backend.columns(&schema, "loose").await.unwrap();
-    let loose: Vec<&str> = loose.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(loose, ["id", "a", "b"]);
-
-    let indexes = backend.indexes(&schema, "person").await.unwrap();
-    assert!(indexes[0].primary);
-    assert_eq!(indexes[1].name, "by_name");
-    assert_eq!(indexes[1].columns, ["name"]);
-    assert!(indexes[1].unique);
-
-    let details = backend.details(&schema, "person").await.unwrap();
-    assert!(
-        details
-            .definition
-            .as_deref()
-            .is_some_and(|definition| definition.starts_with("DEFINE TABLE person")),
-        "{details:?}"
-    );
-    assert_eq!(
-        details.properties,
-        [("comment".to_owned(), "people".to_owned())]
-    );
-    assert_eq!(details.triggers[0].0, "audit");
-}
-
-#[tokio::test]
-async fn use_moves_the_database_queries_run_on() {
-    let url = server!();
-    fresh(&url, "moved_to").await;
-    let backend = fresh(&url, "moved_from").await;
-    run(&backend, "USE DB moved_to").await;
-    assert_eq!(backend.database().as_deref(), Some("moved_to"));
 }

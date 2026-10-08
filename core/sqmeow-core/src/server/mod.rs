@@ -11,9 +11,9 @@
 //! after acceptance are reported by the operation's event stream.
 //!
 //! `result_view` accepts an originating `call_id`, structured filters/sort,
-//! free-form where/order fragments and the base query. Rust selects retained
-//! rows for structured views and disconnected/non-queryable backends, or a
-//! re-query otherwise. Its reply names `route` and `call_id`: memory emits
+//! free-form where/order fragments and the base query. Filtering and sorting use
+//! retained rows; only an explicit refresh reruns the query. Its reply names
+//! `route` and `call_id`: memory emits
 //! `call:view` for the same id; query emits `call:state` for a new id.
 //! `rows` returns original retained-row `indices` for either result.
 //! `result_capabilities` reads the current ability to re-query or filter held

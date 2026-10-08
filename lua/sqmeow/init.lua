@@ -79,7 +79,7 @@
 --- Leave the database empty to browse databases on the server where supported.
 --- PostgreSQL databases open as child connections named `connection/database`.
 --- `:Sqmeow use` selects an open connection; it does not open a saved one.
---- Lua callers can open saved entries with |sqmeow.require('sqmeow.api.connection').connect_named()|.
+--- Lua callers can open saved entries with |sqmeow.api.connection.connect_named()|.
 ---
 --- Common URL forms: >text
 ---   postgres://user:password@localhost:5432/app
@@ -225,7 +225,7 @@
 ---
 --- A bound buffer requires that named connection to be open. It never silently
 --- falls back to another connection. An unbound buffer uses the active one;
---- execution fails if there is none. See |sqmeow.require('sqmeow.api.connection').target()| for Lua callers.
+--- execution fails if there is none. See |sqmeow.api.connection.target()| for Lua callers.
 ---@tag sqmeow-active
 ---@toc_entry Which database a query runs on
 

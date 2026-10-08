@@ -10,7 +10,19 @@ Use [Nix](https://nixos.org/download/) with `nix-command` and `flakes` enabled t
 nix develop
 ```
 
-Build with `cargo build` and run `just` for the checks before submitting. See [Justfile](Justfile) for individual commands.
+Build with `cargo build -j 1`. On resource-limited machines, run individual checks rather than `just`, which runs the full suite. See [Justfile](Justfile) for individual commands.
+
+Select one integration case at a time, limiting both compilation and test concurrency:
+
+```sh
+nix develop --command cargo test -j 1 -p sqmeow-adapters --test sqlite commands_create_read_update_and_delete_rows -- --exact --test-threads=1 --nocapture
+```
+
+For a server-backed target, set its `SQMEOW_TEST_*_URL` and replace `sqlite` with that target. Keep connectivity, a basic CRUD round trip, and focused regression coverage; avoid exhaustive database-backed matrices when unit tests cover the same logic. The full `just` workflow remains available for CI.
+
+`just db-up` starts the databases for integration tests. Without them, server-backed Rust tests return early and Cargo counts them as passed; their skip messages appear with `cargo test -- --nocapture`. SQLite and DuckDB tests run locally. The Lua suite needs a built engine; `just test-lua` builds it first.
+
+Use `rstest` named cases for Rust tests that repeat the same assertion with different inputs. Keep scenario tests for transactions, cancellation, and editor state. Remove duplicate setup or assertions only when the remaining cases cover the same behavior.
 
 Release archives compile SQLite/DuckDB from bundled sources (`just dist-build <target>`, i.e. `-p sqmeow-core --features bundled`), so they run without system database libraries. Linux musl targets build with `cross`; macOS releases require Apple Silicon.
 
