@@ -1,122 +1,181 @@
 # Contributing to sqmeow.nvim
 
-Thanks for your interest in sqmeow.nvim. You don't need to be a Rust expert or a Neovim wizard to help. Bug reports, typo fixes, testing a snapshot, answering an issue, all of it moves the project forward.
+Thanks for your interest in contributing to sqmeow.nvim!
+
+You don't need to be a Rust expert or a Neovim wizard to help out. Whether you're fixing a typo, reporting a bug, testing a feature, or writing code, every contribution makes the project better.
 
 ## Ways to contribute
 
-Pick whatever fits your time and mood:
+There's more than one way to help:
 
-| If you want to... | Start here |
-| --- | --- |
-| Fix a typo or clarify docs | Edit the file, open a PR. No setup needed |
-| Report a bug | [Open an issue](#bug-reports) with steps to reproduce |
-| Try things out | Test-drive a PR or the default branch and comment what you found |
-| Write code | Follow the [5-minute setup](#5-minute-setup) below |
+| Interested in...        | Where to start                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| Improving documentation | Fix typos, clarify instructions, or open a PR                                   |
+| Reporting bugs          | [Open an issue](https://github.com/2giosangmitom/sqmeow.nvim/issues/new/choose) |
+| Testing features        | Try a PR or the latest development branch and share feedback                    |
+| Writing code            | Follow the [development setup](#development-setup) below                        |
 
-New to the codebase? Look for issues labeled `good first issue`, or ask in an issue and we'll help you find a small starting point.
+New to the project? Look for issues labeled `good first issue`, or ask for help finding something to work on.
 
-## 5-minute setup
+## Getting familiar with the codebase
 
-We use [Nix](https://nixos.org/download/) so everyone gets the same Rust, Neovim, formatters, and local databases without version juggling.
+Check out the [DeepWiki documentation](https://deepwiki.com/2giosangmitom/sqmeow.nvim) to explore the architecture, key components, and how everything fits together.
+
+You don't need to understand the entire codebase before contributing. Start with whatever interests you and explore from there.
+
+## Development setup
+
+We use [Nix](https://nixos.org/download/) to provide a consistent development environment with Rust, Neovim, formatters, and local database dependencies.
+
+1. Install Nix with `nix-command` and `flakes` enabled.
+2. Clone the repository and enter its directory.
+3. Run the following commands:
 
 ```sh
-# 1. Install Nix with `nix-command` and `flakes` enabled
-#    (see https://nixos.org/download/ — ask if you get stuck)
-
-# 2. Enter the dev environment (takes ~5 min the first time)
 nix develop
-
-# 3. Build once to confirm everything works
 cargo build -j 1
 ```
 
-> On a weaker machine, pass `-j 1` to cargo commands and run checks one at a time. It takes longer but stays responsive.
+That's it! You're ready to start developing.
 
-**A note on SQLite/DuckDB:** dev builds link the system libraries that Nix provides. Release archives bundle them from source instead (`just dist-build <target>`, which builds `-p sqmeow-core --features bundled`). You only need to care about this when cutting a release.
+The initial setup may take a while as Nix downloads and builds dependencies.
 
-## Making a change
+**Working on a slower machine?** Use `-j 1` with Cargo and run checks individually to reduce memory usage.
 
-A typical flow:
+### SQLite and DuckDB
+
+Development builds link against the system libraries provided by Nix.
+
+Release builds bundle SQLite and DuckDB from source using `just dist-build <target>`, which enables `-p sqmeow-core --features bundled`.
+
+You generally don't need to worry about this unless you're preparing a release.
+
+## Making changes
+
+A typical development workflow looks like this:
 
 ```sh
-# 1. Create a branch
+# Create a branch
 git checkout -b fix/short-description
 
-# 2. Make your change, then get fast feedback
-just lint          # Rust + Lua linters
-just test-rust     # Rust tests
-just test-lua      # Lua tests (builds the engine first)
+# Make your changes, then run the relevant checks
+just lint
+just test-rust
+just test-lua
 ```
 
-`just` with no arguments runs everything CI runs (`lint`, `test`, `docs-check`). That takes 10+ minutes, so while developing, run the single command you need. See the [Justfile](Justfile) for the full list.
+| Command           | Purpose                            |
+| ----------------- | ---------------------------------- |
+| `just lint`       | Run Rust and Lua linters           |
+| `just test-rust`  | Run Rust tests                     |
+| `just test-lua`   | Build the engine and run Lua tests |
+| `just docs-check` | Check documentation                |
+| `just`            | Run the full CI check suite        |
 
-When you're happy, push and open a PR.
+The full suite can take 10+ minutes. While developing, feel free to run only the checks relevant to your changes.
 
-## Testing with databases
+See the [Justfile](Justfile) for all available commands.
 
-- **SQLite and DuckDB** run locally, no setup needed.
-- **Server databases** (Postgres, MySQL, Redis, …) need Docker:
+Once you're happy with your changes, push your branch and open a pull request.
+
+## Testing
+
+### Database tests
+
+SQLite and DuckDB work locally without additional setup.
+
+Integration tests for server-based databases (PostgreSQL, MySQL, Redis, etc.) require Docker.
 
 ```sh
-just db-up     # start test databases
-# ... run tests ...
-just db-down   # stop them and throw away test data
+# Start test databases
+just db-up
+
+# Run your tests
+just test-rust
+just test-lua
+
+# Stop databases and remove test data
+just db-down
 ```
 
-If the servers aren't running, those Rust tests skip themselves (they show as passed; run with `cargo test -- --nocapture` to see the skip messages). The Lua suite behaves the same way. A green run without `just db-up` means local tests passed and server tests were skipped.
+**Important:** Tests that require unavailable database servers are skipped automatically. They may still appear as passed in the test summary.
 
-Running a single integration case keeps things fast on slow machines:
+A successful run without `just db-up` doesn't necessarily mean all integration tests were executed.
+
+To see skip messages, run:
 
 ```sh
-nix develop --command cargo test -j 1 -p sqmeow-adapters --test sqlite commands_create_read_update_and_delete_rows -- --exact --test-threads=1 --nocapture
+cargo test -- --nocapture
 ```
 
-For another database, set its `SQMEOW_TEST_*_URL` (see `just test-rust` for the list) and swap `sqlite` for that target.
+### Running individual tests
 
-**Test style:** prefer unit tests. Save DB-backed tests for connectivity, one CRUD round trip, and focused regressions. When one assertion needs many inputs, use `rstest` named cases instead of copy-pasting tests. Keep full scenario tests for things that really need them: transactions, cancellation, editor state.
+You don't need to run the entire suite for every small change.
+
+For example, to run a single SQLite integration test:
+
+```sh
+nix develop --command cargo test -j 1 \
+  -p sqmeow-adapters \
+  --test sqlite \
+  commands_create_read_update_and_delete_rows \
+  -- --exact --test-threads=1 --nocapture
+```
+
+For other databases, set the corresponding `SQMEOW_TEST_*_URL` environment variable and replace `sqlite` with the appropriate test target.
+
+Check `just test-rust` in the [Justfile](Justfile) for supported environment variables.
+
+### Writing tests
+
+Keep tests focused and easy to maintain.
+
+- **Prefer unit tests** for logic that doesn't need a real database.
+- **Use integration tests** for connectivity, basic CRUD operations, and database-specific regressions.
+- **Use `rstest` named cases** when testing the same behavior with multiple inputs.
+- **Reserve larger scenario tests** for workflows that need them, such as transactions, cancellation, and editor state.
+
+Avoid duplicating entire test scenarios when a smaller, more targeted test would do the job.
 
 ## Pull requests
 
-No strict template. Include enough for a reviewer to follow along:
+Keep your changes focused and easy to review.
 
-- [ ] Keep it small and focused (one fix or feature per PR)
-- [ ] For features or anything large, open an issue first so we agree on direction
-- [ ] Describe what changed and why, link the issue
-- [ ] Tell us what you tested and which checks you skipped
-- [ ] Update tests and docs when behavior changes
-- [ ] Use [Conventional Commits](https://www.conventionalcommits.org) for titles, e.g. `fix: ...`, `feat: ...`, `docs: ...`
+- Discuss major features or architectural changes in an issue first.
+- Update tests and documentation when behavior changes.
+- Run the relevant checks and mention anything you couldn't test.
+- Use [Conventional Commits](https://www.conventionalcommits.org/) for PR titles, such as `fix: ...`, `feat: ...`, or `docs: ...`.
 
-Don't worry about getting everything perfect. We'll review kindly and iterate with you.
+When you're ready, [open a pull request](https://github.com/2giosangmitom/sqmeow.nvim/pulls) and follow the provided template.
+
+Don't worry about getting everything perfect. We'll work through feedback together.
 
 ## Bug reports
 
-Copy this into your issue and fill it in:
+Found something broken? [Open an issue](https://github.com/2giosangmitom/sqmeow.nvim/issues/new/choose) and follow the provided template.
 
-```md
-**What happened:**
+A minimal reproduction is especially helpful. Include the database type, relevant queries, and steps to reproduce when possible.
 
-**Steps to reproduce:**
-1.
-2.
-3.
-
-**Expected:**
-
-**Neovim version** (`:version`):
-**Database type** (postgres / sqlite / redis / …):
-**Anything else:**
-```
-
-Include a minimal query or table definition when you can.
+Please remove credentials and other sensitive information from logs or configuration before sharing them.
 
 ## AI-assisted contributions
 
-AI help is welcome. It goes through the same review as any other change:
+AI-assisted contributions are welcome! Just make sure you understand and take responsibility for the changes you submit.
 
-1. Review every line as if you wrote it.
-2. Make `just` pass (or say which checks you skipped and why).
-3. Be ready to explain each change in review.
+A few simple expectations:
 
-## Stuck? Just ask
+1. **Review the code.** Don't submit changes you haven't read or understood.
+2. **Test your changes.** Run `just` when possible, or explain which checks you skipped and why.
+3. **Be ready to explain.** You should be able to discuss how your changes work and why they're needed.
 
-If setup fails, a test confuses you, or you're unsure where code should go, open an issue or comment on a PR. Telling us where you got stuck also shows us what to document better.
+AI-generated code is held to the same standards as any other contribution.
+
+## Need help?
+
+Stuck on setup, confused by a test, or unsure where something belongs?
+
+Take a look at the [DeepWiki documentation](https://deepwiki.com/2giosangmitom/sqmeow.nvim), or feel free to ask in an issue or pull request.
+
+Questions are always welcome, and knowing where people get stuck helps us improve the project.
+
+Thanks for helping make sqmeow.nvim better! 💛

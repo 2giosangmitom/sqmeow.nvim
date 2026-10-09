@@ -2,9 +2,9 @@
 
 ![Cat typing at a keyboard](https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif)
 
-A database client for Neovim. If you live in the terminal and hate switching to a GUI or browser tab just to check a row, this is for you: browse schemas in a sidebar drawer, write queries in scratchpads, edit rows right in the result grid, and export to CSV, JSON, or SQL.
+A lightweight database client that lives inside Neovim. Browse databases, run queries, edit data, and explore results without leaving your editor.
 
-Queries run in a separate Rust engine, so Neovim never freezes while the database thinks. Results stick around for filtering, sorting, and reopening from history, even after you disconnect.
+If you spend most of your time in the terminal and don't want to switch to a GUI just to inspect a few rows, sqmeow.nvim is for you.
 
 ## Preview
 
@@ -14,11 +14,6 @@ Queries run in a separate Rust engine, so Neovim never freezes while the databas
 ### Overview
 
 ![Overview](assets/overview.png)
-
-</details>
-
-<details>
-<summary>Editing and table structure</summary>
 
 ### Editing results
 
@@ -30,15 +25,27 @@ Queries run in a separate Rust engine, so Neovim never freezes while the databas
 
 </details>
 
+## Features
+
+- **Multiple databases:** Work with SQL, NoSQL, and analytical databases in one place.
+- **Interactive results:** Browse, filter, sort, and edit data directly in Neovim.
+- **Query history:** Revisit previous results without running queries again.
+- **Fast result processing:** Filter and sort retained rows locally using Polars.
+- **Project-local connections:** Keep connections and scratchpads alongside your project.
+- **Smart completion:** Get database-aware suggestions with blink.cmp or nvim-cmp.
+- **Rust-powered engine:** Run database operations through a separate Rust engine.
+
 ## Supported databases
 
-- **SQL**: PostgreSQL, CockroachDB, MySQL, MariaDB, SQLite, DuckDB, ClickHouse, Oracle, SQL Server.
-- **Document / KV**: Redis, Valkey, Dragonfly, MongoDB, SurrealDB.
-- **Wide-column**: ScyllaDB, Cassandra.
+- **Relational & analytical:** PostgreSQL, CockroachDB, MySQL, MariaDB, SQLite, DuckDB, ClickHouse, Oracle Database, Microsoft SQL Server.
+- **Key-value & document:** Redis, Valkey, Dragonfly, MongoDB, SurrealDB.
+- **Wide-column:** ScyllaDB, Cassandra.
 
 ## Installation
 
 Requires Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim).
+
+Calling `setup()` is optional unless you want to customize the defaults.
 
 <details open>
 <summary>lazy.nvim</summary>
@@ -61,6 +68,8 @@ Requires Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim).
 <details>
 <summary>mini.deps</summary>
 
+Add this after setting up `mini.deps`:
+
 ```lua
 local install_engine = function()
   vim.schedule(function()
@@ -71,16 +80,21 @@ end
 MiniDeps.add({
   source = "2giosangmitom/sqmeow.nvim",
   depends = { "MunifTanjim/nui.nvim" },
-  hooks = { post_install = install_engine, post_checkout = install_engine },
+  hooks = {
+    post_install = install_engine,
+    post_checkout = install_engine,
+  },
 })
 ```
 
-Tracks the default branch and builds from source. For a release, set `checkout` to a tag and call `install()` in the hook.
+This tracks the default branch and builds the engine from source. To use a release instead, set `checkout` to a release tag and call `install()` in the hook.
 
 </details>
 
 <details>
 <summary>vim.pack (Neovim 0.12+)</summary>
+
+Register the handler before `vim.pack.add()` to handle the initial installation:
 
 ```lua
 vim.api.nvim_create_autocmd("PackChanged", {
@@ -89,6 +103,7 @@ vim.api.nvim_create_autocmd("PackChanged", {
     if data.spec.name ~= "sqmeow.nvim" or (data.kind ~= "install" and data.kind ~= "update") then
       return
     end
+
     vim.schedule(function()
       require("sqmeow").install()
     end)
@@ -97,51 +112,82 @@ vim.api.nvim_create_autocmd("PackChanged", {
 
 vim.pack.add({
   "https://github.com/MunifTanjim/nui.nvim",
-  { src = "https://github.com/2giosangmitom/sqmeow.nvim", version = vim.version.range(">=0.0.0") },
+  {
+    src = "https://github.com/2giosangmitom/sqmeow.nvim",
+    version = vim.version.range(">=0.0.0"),
+  },
 })
 ```
 
+Run `:packupdate` to update your plugins.
+
 </details>
 
-The hook downloads the matching engine binary (Linux x86_64/ARM64, Apple Silicon, Windows x86_64), so most people never build anything. To compile from source you need Rust and DuckDB; see [CONTRIBUTING.md](CONTRIBUTING.md).
+The install hook downloads the matching engine release. Prebuilt binaries are available for Linux (x86_64/ARM64), macOS (Apple Silicon), and Windows (x86_64).
 
-After installing, run `:checkhealth sqmeow` to confirm everything is found. After rebuilding the engine yourself, run `:Sqmeow restart` so the new binary loads. To follow `master` instead of releases, drop the version pin and use `install("cargo")`.
+Building from source requires Rust and DuckDB. See [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions.
 
-## Usage
+To track `master` with lazy.nvim or vim.pack, remove the release version setting and use `install("cargo")`.
 
-New here? Start with these four steps:
+After installation, run `:checkhealth sqmeow` to verify your setup. Use `:Sqmeow restart` after rebuilding the engine.
 
-1. Run `:Sqmeow` to open the drawer and result window.
-2. Press `A` in the drawer to add a connection.
-3. Press `<CR>` on it to open, then `u` to run queries with it.
-4. Press `a` for a scratchpad. Write a query, press `<CR>` to run.
+## Getting started
 
-To run only part of a file, select lines and press `<CR>`; `<leader>E` runs the whole buffer. Every window has its own shortcuts — press `?` anywhere to see them.
+1. Run `:Sqmeow` to open the drawer and results window.
+2. Press `A` in the drawer to add a database connection.
+3. Press `<CR>` to connect, then `u` to select it for queries.
+4. Press `a` to create a scratchpad, write a query, and press `<CR>` to execute it.
 
-| Key            | Action                                              |
-| -------------- | --------------------------------------------------- |
-| `L` / `H`      | Next / previous result page                         |
-| `K`            | Show the full row                                   |
-| `gf` / `go`    | Open the filter / sort bar                          |
-| `=`            | Filter rows by the value of the current cell        |
-| `s` / `S`      | Sort by this column / add it to a multi-column sort |
-| `i` then `gs`  | Edit a cell, then review; `<C-s>` applies to the DB |
-| `x`            | Export to CSV, JSON, or SQL where supported         |
-| `R`            | Clear filters, sorting, and hidden columns          |
-| `p` / `P`      | Preview a table / open its query in an editor       |
-| `gR`           | Follow foreign keys from a table or result column   |
+Use visual `<CR>` to execute selected text, or `<leader>E` to execute the entire buffer.
 
-Editing works when the result carries real table columns plus the full primary or unique key; each database adapter differs a little. When the database itself must forbid writes, connect with a read-only account rather than relying on the plugin.
+Press `?` in the drawer or results window to see available keymaps.
 
-Each database speaks its own language: SQL databases use their own dialect, Redis takes one command per line, MongoDB takes Extended JSON commands, ScyllaDB/Cassandra take CQL, and SurrealDB takes SurrealQL.
+### Keymaps
 
-Filtering and sorting happen inside the plugin (Polars SQL) over the rows already fetched, including old history, so they work offline and never rerun your query. Rerun the query when you want fresh data.
+| Key         | Action                                                |
+| ----------- | ----------------------------------------------------- |
+| `p` / `P`   | Preview a table / also open its query                 |
+| `gR`        | Follow foreign keys from a table or result column     |
+| `L` / `H`   | Next / previous page                                  |
+| `K`         | Show row details                                      |
+| `gf` / `go` | Open the filter / sort bar                            |
+| `=`         | Filter by the current cell                            |
+| `s` / `S`   | Sort by column / add another sort column              |
+| `i`         | Stage a cell edit                                     |
+| `gs`        | Review staged edits                                   |
+| `<C-s>`     | Apply edits from the review window                    |
+| `x`         | Export results as CSV, JSON, or SQL (where supported) |
+| `R`         | Reset filters, sorting, and hidden columns            |
 
-Full reference: `:h sqmeow-commands`, `:h sqmeow-keymaps`, `:h sqmeow-queries`.
+### Working with results
+
+**Editing**
+
+Edit cells directly in the result grid, review your changes, and apply them when ready.
+
+Editing requires table-backed columns and a complete primary or unique key. Availability varies by database adapter. For server-enforced read-only access, use a read-only database account.
+
+**Filtering and sorting**
+
+sqmeow.nvim uses Polars SQL to filter and sort retained results locally, including results from query history.
+
+You can explore data without rerunning the original query or losing staged edits. Rerun the query whenever you need fresh data.
+
+**Query languages**
+
+Each database uses its own query language:
+
+- SQL databases use their respective SQL dialects.
+- Redis accepts one command per line.
+- MongoDB accepts Extended JSON commands.
+- ScyllaDB and Cassandra use CQL.
+- SurrealDB uses SurrealQL.
+
+For more details, see `:h sqmeow-commands`, `:h sqmeow-keymaps`, and `:h sqmeow-queries`.
 
 ## Connections
 
-You can add connections by hand in the drawer, or describe them per project in `.sqmeow/connections.toml` so teammates get the same setup through git:
+Add and save connections through the drawer, or define project-specific connections in `.sqmeow/connections.toml`:
 
 ```toml
 [dev]
@@ -157,11 +203,11 @@ type = "sqlite"
 path = "app.db"
 ```
 
-When a project file and a saved connection share a name, the project file wins. Relative SQLite/DuckDB paths resolve from the project root, so the example above works for everyone who clones the repo.
+The nearest project configuration overrides saved connections with the same name. Relative database paths are resolved from the project root.
 
 ### Credentials
 
-Already have a full URL? Use it directly and keep the secret in an environment variable:
+You can also connect using a database URL:
 
 ```toml
 [dev]
@@ -169,19 +215,33 @@ url = "{{ env 'DATABASE_URL' }}"
 read_only = true
 ```
 
-Set `DATABASE_URL` in your shell or in a `.env` file next to `.sqmeow/`; the shell wins when both exist. Keep `.env` out of git and reconnect after changing it so the engine picks up the new values.
+Set `DATABASE_URL` in your environment or in a `.env` file next to `.sqmeow/`. Environment variables take precedence over values in `.env`.
 
-When the database hides behind another machine, tunnel through it with `ssh = "user@bastion"` or any Host alias from your `~/.ssh/config`. The database address is then resolved from that machine's point of view.
+Keep `.env` out of version control, and reconnect after changing credentials.
 
-Details: `:h sqmeow-project`, `:h sqmeow-credentials`.
+**SSH tunnels**
+
+To connect through SSH, set `ssh = "user@bastion"` or use a Host alias from `~/.ssh/config`. The database host is resolved from the SSH host.
+
+See `:h sqmeow-project` and `:h sqmeow-credentials` for all connection options.
 
 ### Scratchpads
 
-Keep queries under `.sqmeow/scratchpads/` (`.sql`, `.redis`, `.json`, `.surql`). In local scratchpads: `a` creates, `R` renames/moves, `d` deletes. Queries run on the selected connection.
+Store project queries in `.sqmeow/scratchpads/` using `.sql`, `.redis`, `.json`, or `.surql` files.
+
+Manage them directly from the drawer:
+
+- `a` — Create a file or folder.
+- `R` — Rename or move.
+- `d` — Delete.
+
+Queries run against the currently selected connection.
 
 ## Completion
 
-Works with `blink.cmp` and `nvim-cmp`. Install the `sql` Tree-sitter parser for column and alias completion (`:TSInstall sql`).
+sqmeow.nvim integrates with [blink.cmp](https://github.com/Saghen/blink.cmp) and [nvim-cmp](https://github.com/hrsh7th/nvim-cmp) to provide database-aware completion.
+
+For query-aware column and alias suggestions, install the SQL Tree-sitter parser (for example, with `:TSInstall sql` via nvim-treesitter).
 
 <details>
 <summary>blink.cmp</summary>
@@ -190,7 +250,12 @@ Works with `blink.cmp` and `nvim-cmp`. Install the `sql` Tree-sitter parser for 
 require("blink.cmp").setup({
   sources = {
     default = { "lsp", "path", "buffer", "sqmeow" },
-    providers = { sqmeow = { name = "Sqmeow", module = "sqmeow.completion.blink" } },
+    providers = {
+      sqmeow = {
+        name = "Sqmeow",
+        module = "sqmeow.completion.blink",
+      },
+    },
   },
 })
 ```
@@ -203,16 +268,24 @@ require("blink.cmp").setup({
 ```lua
 local cmp = require("cmp")
 cmp.register_source("sqmeow", require("sqmeow.completion.cmp").new())
-cmp.setup({ sources = cmp.config.sources({ { name = "nvim_lsp" }, { name = "sqmeow" } }) })
+
+cmp.setup({
+  sources = cmp.config.sources({
+    { name = "nvim_lsp" },
+    { name = "sqmeow" },
+  }),
+})
 ```
 
 </details>
 
-See `:h sqmeow-completion`.
+See `:h sqmeow-completion` for more details.
 
 ## Configuration
 
-You only need `setup()` when the defaults don't suit you. The most-changed options, shown with their defaults:
+sqmeow.nvim works out of the box, but you can customize its behavior with `setup()`.
+
+Here are some common options with their default values:
 
 ```lua
 require("sqmeow").setup({
@@ -231,13 +304,15 @@ require("sqmeow").setup({
 })
 ```
 
-`max_rows` limits how many rows are kept per result, while `page_size` limits how many show on one page. Setting either to `0` removes that limit (and `timeout_ms = 0` turns the deadline off).
+`max_rows` limits the number of retained rows, while `page_size` controls how many rows appear per page.
 
-Everything else: `:h sqmeow-config`. Changing shortcuts: `:h sqmeow-keymaps`.
+Set `max_rows = 0` for unlimited rows or `timeout_ms = 0` to disable query deadlines.
+
+See `:h sqmeow-config` for all configuration options and `:h sqmeow-keymaps` for custom keymaps.
 
 ## Acknowledgments
 
-Ideas and some code from:
+A big thanks to these awesome projects for inspiring many of sqmeow.nvim's features and workflows:
 
 - [vim-dadbod](https://github.com/tpope/vim-dadbod)
 - [vim-dadbod-ui](https://github.com/kristijanhusak/vim-dadbod-ui)
@@ -245,10 +320,14 @@ Ideas and some code from:
 - [squix](https://github.com/eduardofuncao/squix)
 - [DBeaver](https://github.com/dbeaver/dbeaver)
 
+I've borrowed plenty of ideas and even some code here and there. That's the beauty of open source! :)
+
 ## Contributing
 
-Issues and PRs welcome. Setup and checks: [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are always welcome! Feel free to open an issue, report a bug, suggest a feature, or submit a pull request.
 
-Thanks to all the [contributors](https://github.com/2giosangmitom/sqmeow.nvim/graphs/contributors) 💛
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+
+Thanks to everyone who has contributed to sqmeow.nvim! 💛
 
 [![Contributors](https://contrib.rocks/image?repo=2giosangmitom/sqmeow.nvim)](https://github.com/2giosangmitom/sqmeow.nvim/graphs/contributors)
