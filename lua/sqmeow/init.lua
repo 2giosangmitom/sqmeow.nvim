@@ -1,8 +1,11 @@
---- Browse databases, run queries, and edit results inside Neovim.
+--- Browse databases, run queries, and edit results without leaving Neovim.
 ---
---- The Lua plugin owns buffers and windows; a separate Rust engine owns database
---- connections and results. See README.md for installation, then follow
---- |sqmeow-quickstart|. Use |sqmeow-commands| for commands and |sqmeow-api| for Lua.
+--- The plugin has two sides: Lua code draws the windows you see (the drawer
+--- on the side, scratchpads where you write queries, the grid that shows
+--- results), while a separate Rust engine talks to your databases and holds
+--- the results. That split keeps the editor responsive while queries run.
+--- See README.md for installation, then follow |sqmeow-quickstart| below.
+--- Use |sqmeow-commands| for commands and |sqmeow-api| for Lua.
 ---@tag sqmeow.nvim
 ---@toc_entry Introduction
 
@@ -17,69 +20,81 @@
 --- 4. Press `a` to create a scratchpad, such as `example.sql`.
 --- 5. Write `SELECT 1;`, then press <CR> to run the statement under the cursor.
 ---
---- In a scratchpad, visual <CR> runs the selection and <leader>E runs the whole
---- buffer. In the result, `L`/`H` change pages and `K` shows the full row.
---- Press `?` in the drawer or result for local mappings. Closing a window does
---- not disconnect its database; use `:Sqmeow disconnect` when finished.
+--- A few words so the steps make sense. The drawer is the sidebar that lists
+--- your connections, tables, scratchpads, and history. A scratchpad is an
+--- ordinary SQL file where you write and run queries. The result window shows
+--- what came back in a grid you can page, filter, and edit.
+---
+--- Visual <CR> runs the selected lines and <leader>E runs the whole buffer.
+--- In the result, `L`/`H` turn pages and `K` shows the full row. Press `?` in
+--- any window to see its mappings. Closing a window only hides it; your
+--- connection stays open until `:Sqmeow disconnect`.
 ---@tag sqmeow-quickstart
 ---@toc_entry Quick start
 
 --- Commands ~
 ---
---- `:Sqmeow` opens the drawer and result window. Subcommands and supported
---- arguments complete with <Tab>. Brackets below mark optional arguments.
+--- `:Sqmeow` opens the drawer and result window. Every subcommand completes
+--- with <Tab>, so you can explore by typing `:Sqmeow ` and pressing <Tab>.
+--- Brackets below mark arguments you may leave out.
 ---
 --- Connections:
----   :Sqmeow add                  Create a connection using the form.
----   :Sqmeow save [name url]      Save the URL, or prompt for the current one.
----   :Sqmeow edit [name]          Edit a saved connection; otherwise choose one.
+---   :Sqmeow add                  Add a connection through an input form.
+---   :Sqmeow save [name url]      Save a connection URL, or prompt for the current one.
+---   :Sqmeow edit [name]          Edit a saved connection; without a name, pick from a list.
 ---   :Sqmeow remove {name}        Delete a saved entry and close its connection.
----   :Sqmeow use [name]           Select an open connection or choose one.
----   :Sqmeow bind [name|none]     Pin this buffer, clear its pin, or show it.
----   :Sqmeow disconnect          Close the current connection and its children.
+---   :Sqmeow use [name]           Make an open connection the active one, or pick from a list.
+---   :Sqmeow bind [name|none]     Pin this buffer to a connection, clear the pin, or show it.
+---   :Sqmeow disconnect          Close the current connection and its child databases.
 ---
 --- Queries and results:
----   :Sqmeow scratch [name]       Create a named scratchpad, or prompt.
----   :Sqmeow execute [sql]        Run SQL, or the whole buffer when omitted.
----   :[range]Sqmeow execute      Run an inclusive line range.
----   :Sqmeow statement           Run the statement under the cursor.
----   :Sqmeow cancel              Request cancellation of a query or edit apply.
----   :Sqmeow next / prev         Change the displayed result page.
+---   :Sqmeow scratch [name]       Create a named scratchpad, or prompt for a name.
+---   :Sqmeow execute [sql]        Run the given SQL, or the whole buffer when omitted.
+---   :[range]Sqmeow execute      Run an inclusive line range, e.g. `:2,5Sqmeow execute`.
+---   :Sqmeow statement           Run the single statement under the cursor.
+---   :Sqmeow cancel              Ask a running query or edit apply to stop.
+---   :Sqmeow next / prev         Turn the displayed result page.
 ---   :Sqmeow review              Review staged edits before applying them.
 ---   :Sqmeow export [format] [path|clipboard]
----                               Export as csv, json, or sql; prompt if no path.
----   :Sqmeow log [clear]         Reopen a logged result, or clear saved history.
+---                               Export as csv, json, or sql; prompts when no destination is given.
+---   :Sqmeow log [clear]         Reopen a logged result, or wipe the saved history.
 ---
 --- Windows and engine:
----   :Sqmeow toggle              Show both windows, or hide them if visible.
+---   :Sqmeow toggle              Show both windows, or hide them when visible.
 ---   :Sqmeow drawer              Open the drawer.
 ---   :Sqmeow open / close        Show or hide the result window.
----   :Sqmeow float               Move the result between a split and a float.
+---   :Sqmeow float               Move the result between a split and a floating window.
 ---   :Sqmeow install [method] [version]
----                               Install by download or cargo build.
+---                               Install the engine by download or cargo build.
 ---   :Sqmeow start / stop / restart
----                               Manage the database engine process.
+---                               Manage the background engine process.
 ---   :Sqmeow messages            Show recent engine log messages.
 ---   :Sqmeow health              Run :checkhealth sqmeow.
 ---
---- For project, environment, and command sources, edit the original source.
---- `remove` can close their open connections but cannot delete their definitions.
---- Stopping or restarting the engine closes connections and loses in-memory
---- results; archived results remain available through |sqmeow-history|.
+--- Project connections live in their TOML file, so edit them there instead of
+--- with these commands. `remove` still closes their open connections; it just
+--- cannot delete the definition itself. Stopping or restarting the engine
+--- closes connections and drops in-memory results, but anything archived to
+--- disk stays available through |sqmeow-history|.
 ---@tag sqmeow-commands
 ---@toc_entry Commands
 
 --- Making a connection ~
 ---
---- `:Sqmeow add` (or `A` in the drawer) builds a URL from named fields. Choose
---- `Connection string` to paste a URL, including driver options or templates.
---- `e` edits a saved entry; URL, read-only, and SSH changes take effect on the
---- next connection, while renaming updates the open connection's label.
+--- `:Sqmeow add` (or `A` in the drawer) opens a form with named fields such
+--- as host, port, and user. Prefer pasting a full URL instead? Choose the
+--- `Connection string` option and paste it there, including any driver
+--- options or credential templates.
+--- Press `e` on a saved entry to change it. New URL, read-only, and SSH
+--- settings apply the next time you connect; renaming only relabels the
+--- already-open connection.
 ---
---- Leave the database empty to browse databases on the server where supported.
+--- You may leave the database field empty. Where the server allows it, the
+--- connection then lists its databases so you can browse and open them.
 --- PostgreSQL databases open as child connections named `connection/database`.
---- `:Sqmeow use` selects an open connection; it does not open a saved one.
---- Lua callers can open saved entries with |sqmeow.api.connection.connect_named()|.
+--- `:Sqmeow use` marks one of the already-open connections as active; it never
+--- opens a saved entry by itself. From Lua, open saved entries with
+--- |sqmeow.api.connection.connect_named()|.
 ---
 --- Common URL forms: >text
 ---   postgres://user:password@localhost:5432/app
@@ -94,19 +109,23 @@
 ---   clickhouse://localhost:8123/default
 ---   oracle://user:password@localhost:1521/FREEPDB1
 --- <
---- In URLs, percent-encode reserved characters in credentials, such as `@` as
---- `%40`. The form and project field loader encode credentials for you.
---- For Redis Cluster or Sentinel, use a URL source with `redis+cluster://` or
---- `redis+sentinel://`; these modes are not fields in project TOML.
+--- In URLs, percent-encode reserved characters in credentials, writing `@`
+--- as `%40` for example. The input form and the project field loader do this
+--- encoding for you, so it only matters for hand-written URLs.
+--- For Redis Cluster or Sentinel, connect through a URL with `redis+cluster://`
+--- or `redis+sentinel://`; project TOML has no separate fields for these modes.
 ---@tag sqmeow-connecting
 ---@toc_entry Making a connection
 
 --- Connection sources ~
 ---
---- Project definitions and saved connections are always loaded, in that order.
---- A duplicate name reports a conflict and the project entry wins.
---- A failing source reports a problem without hiding other sources' entries.
---- Loading definitions does not connect to their databases.
+--- Connections come from two places, and both are always loaded, in this
+--- order. Project definitions are for sharing with your team through git;
+--- saved connections are personal, kept in your Neovim data directory.
+--- When two entries share a name, the conflict is reported and the project
+--- entry wins. When one source fails, its error is reported but the other
+--- source's entries still show up. Listing definitions never touches the
+--- database; nothing connects until you open one.
 ---
 ---   project   Nearest .sqmeow/connections.toml; see |sqmeow-project|.
 ---   file      JSON array in core.path/connections.json.
@@ -121,22 +140,27 @@
 ---     }
 ---   ]
 --- <
---- Only `name` and `url` are required. `read_only` defaults to false; omit `ssh`
---- for a direct connection. Set `core.path` to relocate saved connections along
---- with the plugin's other persistent files. Source order is not configurable.
+--- Only `name` and `url` are required. `read_only` defaults to false, and
+--- leaving out `ssh` means a direct connection. Set `core.path` to move saved
+--- connections together with the plugin's other files.
 ---
---- Adding and saving write to `core.path/connections.json`. They never rewrite
---- project TOML. Environment and command connection sources are not supported;
---- credential templates such as `{{ env "PGPASSWORD" }}` still work.
+--- `:Sqmeow add` and `:Sqmeow save` write to `core.path/connections.json` and
+--- never touch project TOML. Credential templates such as
+--- `{{ env "PGPASSWORD" }}` work in saved URLs too.
 ---@tag sqmeow-sources
 ---@toc_entry Connection sources
 
 --- Project connections ~
 ---
---- Search starts at the current window's working directory (`:pwd`) and walks
---- upward for `.sqmeow/connections.toml`. The nearest file wins; parent configs
---- are not merged. Discovery follows `:cd`, `:lcd`, and `:tcd`, not the current
---- buffer's filename. The file is reread whenever sources are loaded: >toml
+--- Project connections live in a `.sqmeow/connections.toml` file inside your
+--- project, so the whole team shares the same setup through git. Passwords
+--- stay out of the file through credential templates (see the `.env`
+--- paragraph below).
+---
+--- Lookup starts at the current window's directory (`:pwd`) and walks upward
+--- until it finds the file. Only the nearest file counts; parent configs are
+--- never merged. Lookup follows `:cd`, `:lcd`, and `:tcd` rather than the
+--- current buffer's location. The file is reread every time sources load: >toml
 ---   [dev_db]
 ---   type = "postgres"
 ---   host = "localhost"
@@ -150,276 +174,306 @@
 ---   type = "sqlite"
 ---   path = ".sqmeow/test.db"
 --- <
---- Each section supplies the connection name; quote names containing dots, as
---- in `["app.dev"]`. Choose either a complete `url` or `type` with dialect fields.
---- Supported types are:
+--- Each `[section]` names one connection. Quote names that contain dots, as in
+--- `["app.dev"]`. Describe each connection with either a complete `url` or a
+--- `type` plus dialect fields, never both mixed in one entry. Known types:
 ---   postgres, mysql, mssql, sqlite, duckdb, redis, mongodb, scylla,
 ---   surrealdb, clickhouse, oracle.
 ---
---- URL entries need no `type` and may also set `read_only` and `ssh`. Do not mix
---- `url` with `type`, `host`, `path`, or other connection fields: >toml
+--- URL entries need no `type`, and `read_only` with `ssh` work there too: >toml
 ---   [dev_url]
 ---   url = "{{ env 'DATABASE_URL' }}"
 ---   read_only = true
 --- <
---- The engine reads `.env` beside `.sqmeow/` when connecting, using dotenvy.
---- Process variables take precedence over the file; a missing file is ignored.
---- Dotenv values are scoped to that connection, never added to the process
---- environment or sent back to Neovim. Single, double, and backtick quotes work
---- in `env` directives. This also supports field-level credential templates.
---- Reconnect after changing `.env`, and keep it out of version control. Dotenv
---- files are plaintext, not encrypted secrets storage.
+--- Secrets stay out of the TOML through a `.env` file placed next to `.sqmeow/`,
+--- which the engine reads when connecting. Variables from your real
+--- environment win over the file, and a missing file is simply ignored.
+--- These values are scoped to that one connection: they never leak into the
+--- Neovim process and never come back to the editor. Single, double, and
+--- backtick quotes all work inside `env`. After changing `.env`, reconnect so
+--- the engine picks it up, and keep the file out of version control. Remember
+--- that `.env` is plain text, not an encrypted vault.
 ---
---- Fields follow the chosen dialect's form:
+--- Fields available per dialect:
 ---   host, database, user, password   Strings; host defaults to localhost.
----   port                             Integer, 1-65535; omitted uses driver default.
----   read_only                        Boolean; defaults to false.
----   ssh                              String naming the tunnel host.
----   options                          URL query string for dialects supporting it.
----   tls                              Boolean for Redis, SurrealDB, ClickHouse,
----                                    and Oracle.
----   srv                              Boolean for MongoDB; omit port when true.
----   namespace                        String for SurrealDB.
----   path                             Required string for SQLite and DuckDB.
+---   port                             A number from 1 to 65535; leaving it out uses the driver default.
+---   read_only                        True blocks writes; defaults to false.
+---   ssh                              Host to tunnel through, e.g. `user@bastion`.
+---   options                          Extra URL query string, where the dialect supports it.
+---   tls                              Secure transport for Redis, SurrealDB, ClickHouse, Oracle.
+---   srv                              MongoDB SRV mode; leave out `port` when true.
+---   namespace                        SurrealDB namespace.
+---   path                             Database file; required for SQLite and DuckDB.
 ---
---- Relative database paths resolve from the directory containing `.sqmeow`,
---- even when Neovim is in a child directory. `path = ":memory:"` creates an empty
---- in-memory database: its data is lost when the connection closes. Use a file
---- path to retain data between sessions. Absolute paths are used as given.
+--- A relative `path` resolves from the directory that contains `.sqmeow`, so it
+--- works no matter which subdirectory Neovim is in. `path = ":memory:"` gives
+--- you an empty database that disappears when the connection closes; use a
+--- file path whenever the data should survive.
 ---
---- Missing configs are ignored. Invalid TOML, unsupported fields, or wrong value
---- types reject the entire file and report its path. Other sources still load.
---- Reading TOML starts the engine if needed, so use a matching engine build.
---- Project files reject `exec` templates; `env` and `file` templates are supported.
---- If a same-named open connection has different URL, read-only, or SSH settings,
---- disconnect it before connecting to the current project's definition.
---- Edit these connections directly in TOML. Project discovery is always enabled.
+--- A missing file is fine and simply ignored. But invalid TOML, unknown
+--- fields, or wrong value types reject the whole file, and the error names
+--- its path, while other sources keep loading normally. Note that reading the
+--- TOML may start the engine, so keep the engine build matching. Project
+--- files accept `env` and `file` templates but not `exec`. When an open
+--- connection shares its name with a project entry yet differs in URL,
+--- read-only, or SSH settings, disconnect it first, then connect the project
+--- definition. Edit these connections directly in the TOML file.
 ---@tag sqmeow-project
 ---@toc_entry Project connections
 
 --- Credentials and SSH ~
 ---
---- URL templates resolve in the engine when connecting: >text
+--- Connection URLs may contain templates, which the engine fills in when
+--- connecting, so secrets never sit in plain text: >text
 ---   {{ env "PGPASSWORD" }}          Read an environment variable.
----   {{ file "~/.secrets/database" }} Read a UTF-8 file; trim trailing whitespace.
----   {{ exec "pass show db/dev" }}    Run a shell command; trim trailing whitespace.
+---   {{ file "~/.secrets/database" }} Read a UTF-8 file; trailing whitespace is trimmed.
+---   {{ exec "pass show db/dev" }}    Run a shell command; trailing whitespace is trimmed.
 --- <
---- Commands have a 30-second deadline. Expansion is not recursive, and values
---- are inserted literally, not URL-encoded. Templates use the engine process's
---- environment; restart it after changing environment variables in Neovim.
---- Expanded URLs are not sent back to the editor. `redact_urls` masks passwords
---- in displayed URLs; it does not encrypt saved connection definitions.
+--- Shell commands time out after 30 seconds. Templates expand exactly once,
+--- and values are inserted literally without URL-encoding, so percent-encode
+--- them yourself when needed. They read the engine process's environment, so
+--- restart the engine after changing environment variables inside Neovim.
+--- Expanded URLs are never sent back to the editor. `redact_urls` hides
+--- passwords in displayed URLs, but it does not encrypt saved definitions.
 ---
---- Set `ssh = "user@bastion"` or a Host alias from `~/.ssh/config` to tunnel a
---- network connection. OpenSSH uses your existing config, keys, and agent. A
---- custom SSH port can be written as `user@bastion:2222`. The database host is
---- resolved from the SSH server; `localhost` means that remote machine.
+--- When a database is reachable only through another machine, set
+--- `ssh = "user@bastion"` or a Host alias from your `~/.ssh/config`, and the
+--- connection is tunneled through it using your existing SSH config, keys,
+--- and agent. A custom SSH port goes after a colon, as in `user@bastion:2222`.
+--- The database host is resolved from the SSH server's point of view, so
+--- `localhost` there means the remote machine itself.
 ---@tag sqmeow-credentials
 ---@toc_entry Credentials and SSH
 
 --- Which database a query runs on ~
 ---
---- `:Sqmeow use` chooses the active open connection. To keep a buffer on a
---- specific database, use `:Sqmeow bind dev`; this sets `b:sqmeow_connection`.
---- `:Sqmeow bind` shows the binding and `:Sqmeow bind none` clears it.
+--- With several databases open, each query needs to know which one to run
+--- on. `:Sqmeow use` marks one open connection as active, and any scratchpad
+--- without its own pin runs against it. To pin one buffer to a specific
+--- database regardless of the active one, run `:Sqmeow bind dev`; this stores
+--- the name in `b:sqmeow_connection`. Plain `:Sqmeow bind` shows the pin and
+--- `:Sqmeow bind none` removes it.
 ---
---- A bound buffer requires that named connection to be open. It never silently
---- falls back to another connection. An unbound buffer uses the active one;
---- execution fails if there is none. See |sqmeow.api.connection.target()| for Lua callers.
+--- A pinned buffer insists on its named connection being open and reports an
+--- error otherwise; it never quietly runs somewhere else. An unpinned buffer
+--- follows the active connection and fails with a reminder when none is set.
+--- From Lua, resolve the same logic with |sqmeow.api.connection.target()|.
 ---@tag sqmeow-active
 ---@toc_entry Which database a query runs on
 
 --- Query and result workflow ~
 ---
---- Use `:Sqmeow statement` for the statement under the cursor, `:Sqmeow execute`
---- for the buffer, or `:'<,'>Sqmeow execute` for selected lines. Scratchpad
---- mappings are listed under |sqmeow-keymaps|. SQL scripts can return multiple
---- results; `]r` and `[r` switch between them.
+--- Three ways to run code, from narrowest to widest. `:Sqmeow statement`
+--- runs the single statement under the cursor, `:Sqmeow execute` runs the
+--- whole buffer, and `:'<,'>Sqmeow execute` runs only the selected lines. The
+--- matching scratchpad mappings are listed under |sqmeow-keymaps|. When one
+--- script returns several results, `]r` and `[r` flip between them.
 ---
---- `query.max_rows` caps retained rows per result (0 means unlimited). Reaching
---- the cap marks the result truncated. `ui.result.page_size` controls how many
---- retained rows the grid displays per page; increasing it does not fetch rows
---- beyond the cap. `query.timeout_ms` cancels long-running work; 0 disables it.
---- <C-c> or `:Sqmeow cancel` requests cancellation manually.
---- Cancellation is a request, not proof that a write was rolled back. Sent
---- writes on MySQL/PostgreSQL and sent work on Oracle/SurrealDB wait for their
---- actual outcome; cancellation or timeout may therefore finish later.
---- Scylla/Cassandra and MongoDB standalone apply stop between writes and report
---- completed changes if cancellation follows a write. Verify unknown outcomes
---- before retrying. Oracle atomic edits reject DDL, transaction controls and PL/SQL.
+--- Three limits shape every run. `query.max_rows` caps how many rows are kept
+--- per result, with 0 meaning keep everything; results that hit the cap are
+--- marked truncated. `ui.result.page_size` sets how many of those kept rows
+--- one page shows; raising it never fetches rows past the cap. And
+--- `query.timeout_ms` cancels work that runs too long, with 0 turning the
+--- deadline off. You can always stop things by hand with <C-c> or
+--- `:Sqmeow cancel`.
+--- Stopping is a request, not a guarantee: a write already sent to
+--- MySQL/PostgreSQL, or work already sent to Oracle/SurrealDB, runs to its
+--- real outcome, so cancellation may report back late. Scylla/Cassandra and
+--- standalone MongoDB stop between writes and tell you which ones finished.
+--- When in doubt, check the data before retrying. Oracle atomic edits refuse
+--- DDL, transaction controls, and PL/SQL blocks.
 ---
 --- Parameterized scratchpads ~
---- SQL/CQL adapters and SurrealDB accept named values such as
---- `:user_id`. The usual statement, selection and buffer actions prompt once
---- per distinct name. Cancel any prompt to leave the current result and edits
---- alone. Parameter names are case-sensitive and contain ASCII letters, digits
---- and underscores, beginning with a letter or underscore.
+--- Instead of editing values into the query text, write named placeholders
+--- like `:user_id` and answer a prompt each time you run. SQL/CQL adapters
+--- and SurrealDB support this. The statement, selection, and buffer actions
+--- each prompt once per distinct name, and cancelling any prompt leaves the
+--- current result and staged edits untouched. Names are case-sensitive and
+--- hold ASCII letters, digits, and underscores, starting with a letter or
+--- underscore.
 ---
---- No declaration is needed: input integers, finite decimals and true/false bind
---- as native numbers/booleans; other input binds as text. Use a JSON string such
---- as `"42"` to force text. Header comments optionally declare a type and default: >sql
+--- Most of the time you declare nothing: integers, finite decimals, and
+--- true/false bind as native numbers and booleans, while anything else binds
+--- as text. To force text, wrap the input as a JSON string such as `"42"`.
+--- When a parameter needs a fixed type or default, declare it in a header
+--- comment: >sql
 ---   -- @param user_id int = 42
 ---   -- @param status text = active
 ---   SELECT * FROM users WHERE id = :user_id AND status = :status;
 --- <
---- Types are `text`, `int` (signed 64-bit), `float` (finite), and `bool`
---- (`true`/`false`). Input `NULL` binds a typed null; empty text stays empty.
---- For literal text such as NULL, use a JSON string: `"NULL"`. Values bind through
---- the driver, never through SQL interpolation. Parameters cannot replace table
---- or column names, and cannot mix with native positional placeholders.
---- Strings, quoted identifiers, comments and PostgreSQL casts are left alone.
---- Inside PostgreSQL array subscripts, parenthesize inputs: `items[(:index)]`;
---- an unparenthesized colon is treated as a slice separator.
---- Selection/range actions use declarations from the source buffer's header.
+--- The four types are `text`, `int` (signed 64-bit), `float` (finite), and
+--- `bool` (`true`/`false`). Typing `NULL` binds a null of the declared type,
+--- while empty text stays an empty string; for the literal word NULL as text,
+--- enter the JSON string `"NULL"`. Values travel through the driver as bound
+--- parameters, never pasted into the SQL. Placeholders cannot stand in for
+--- table or column names, and they cannot mix with native positional
+--- placeholders. Strings, quoted identifiers, comments, and PostgreSQL casts
+--- are left alone. Inside PostgreSQL array subscripts, wrap the input in
+--- parentheses as `items[(:index)]`, because a bare colon reads as a slice.
+--- Selection and range runs read their declarations from the source buffer's
+--- header.
 ---
---- Lua callers can skip prompts with raw input strings: >lua
+--- From Lua you can answer prompts in code with raw input strings: >lua
 ---   require('sqmeow.api.query').execute(sql, { parameters = { user_id = '42' } })
 --- <
---- An empty parameter map uses declared defaults; missing required values fail
---- before any statement runs. Live-result refreshes reuse the values in memory.
---- Supplied values are not saved as history parameters, but returned rows and
---- edit-source metadata (including Redis keys) may be archived. After restart
---- or result eviction, rerun from the scratchpad to enter values again.
---- Keep secrets out of defaults, which are part of the SQL.
---- Unannotated NULL uses a text null; declare the type when the SQL context needs
---- a numeric/boolean null. Driver-specific value limits still apply. Oracle
---- treats empty strings as NULL, following its own database semantics.
---- Oracle bound EXPLAIN and stored-program definitions are not yet supported;
---- ordinary bound SQL and anonymous PL/SQL blocks use native named binds.
+--- An empty parameter map falls back to declared defaults, while missing
+--- required values fail before anything runs. Refreshing a live result reuses
+--- the values already in memory. Supplied values are not written to history,
+--- though returned rows and edit-source metadata (including Redis keys) may be
+--- archived. After a restart or result eviction, rerun from the scratchpad and
+--- enter values again. Never put secrets in defaults; they are part of the
+--- SQL text. A bare NULL binds a text null, so declare the type when the SQL
+--- context needs a numeric or boolean null. Driver-specific value limits still
+--- apply. Oracle treats empty strings as NULL, following its own semantics.
+--- Oracle bound EXPLAIN and stored-program definitions are not supported yet;
+--- plain bound SQL and anonymous PL/SQL blocks bind natively.
 ---
---- MongoDB uses whole JSON string values, not raw JSON substitution: >json
+--- MongoDB commands take whole JSON string values rather than raw
+--- substitution: >json
 ---   {"find":"users","filter":{"name":":name","age":{"$gte":":age"}}}
 --- <
---- Values bind as BSON scalars; command, database, collection and field names
---- cannot be parameters. Aggregation expression operands require `$literal`,
+--- Values bind as BSON scalars. Command, database, collection, and field names
+--- can never be parameters. Aggregation expression operands need `$literal`,
 --- for example `{"$project":{"value":{"$literal":":value"}}}`. Executable
---- JavaScript and structural stage options cannot be parameters.
---- Bind ordinary scalars, not fields inside Extended JSON type wrappers.
---- Redis/Valkey/Dragonfly use whole unquoted arguments: >
+--- JavaScript and structural stage options cannot be parameters either. Bind
+--- plain scalars, never fields tucked inside Extended JSON type wrappers.
+--- Redis/Valkey/Dragonfly take whole unquoted arguments: >
 ---   HSET user:1 name :name
 --- <
---- A supplied value stays one Redis argument even with spaces or newlines.
---- Quoted `':name'` stays literal. Redis has no NULL command argument; use empty
---- text instead. Redis script bodies/subcommands cannot be bound parameters.
---- Neither adapter changes or reparses the user's query source.
+--- One supplied value always stays one Redis argument, even with spaces or
+--- newlines inside. A quoted `':name'` stays literal text. Redis has no NULL
+--- argument, so use empty text instead. Redis script bodies and subcommands
+--- cannot be bound parameters. Neither adapter rewrites your query source.
 ---
 --- Filtering and sorting ~
---- `gf` opens WHERE and `go` opens ORDER BY above the grid. Enter expressions
---- without the clause keyword; <CR> applies them. `=` filters by the current
---- cell, `s` cycles column sorting, and `S` adds another sort column.
---- Every adapter uses Polars SQL on retained rows, including MongoDB and other
---- NoSQL results, disconnected connections, and restored history. Filtering
---- preserves staged edits without rerunning the database query. It covers every
---- retained page but cannot recover rows omitted by the query or `query.max_rows`.
---- `R` clears filters, aggregation, sorting, and hidden columns, restoring the snapshot.
---- Run the original query again for fresh data. Refreshing after applying edits
---- reapplies the local view to the new result.
+--- Filtering happens inside the plugin, not in the database. Press `gf` for a
+--- WHERE bar and `go` for an ORDER BY bar above the grid. Type only the
+--- expression, without the clause keyword, and press <CR> to apply it. For
+--- shortcuts, `=` filters by the cell under the cursor, `s` cycles the
+--- column's sort order, and `S` adds the column to a multi-column sort.
+--- Every adapter shares the same Polars SQL dialect over the kept rows, so
+--- this works for MongoDB and other NoSQL results, for disconnected
+--- connections, and for restored history alike. The database query never
+--- reruns, and staged edits survive filtering. Filtering sees every kept page
+--- but cannot bring back rows the query itself left out or `max_rows` cut.
+--- `R` clears filters, aggregation, sorting, and hidden columns, bringing back
+--- the original snapshot. Rerun the query for fresh data; refreshing after
+--- applying edits re-applies your local view on top of the new result.
 ---
---- The bar supplies the labels; type only the expressions: >
+--- The bar already prints the keywords, so type only the expressions: >
 ---   WHERE     age >= 18 AND status = 'active'
 ---   ORDER BY  age DESC NULLS LAST, id ASC
 --- <
---- Polars SQL supports `AND`/`OR`/`NOT`, `IS NULL`, `LIKE`/`ILIKE`, `IN`, and
---- `BETWEEN`. Quote columns with double quotes and strings with single quotes.
---- Names are case-sensitive and match the result; completion supplies them.
---- Repeated column names become `name`, `name_2`, etc. Full queries and subqueries
---- are not accepted. Invalid conditions preserve the previous view. `s`/`S`
---- place nulls last; ORDER BY expressions can specify NULLS FIRST or NULLS LAST.
---- Integers and booleans are typed. Numeric-looking strings remain strings;
---- use CAST(value AS DOUBLE) for numeric comparison/sorting of Redis strings.
---- Exact decimals, temporal values, and nested JSON remain text.
+--- The dialect covers `AND`/`OR`/`NOT`, `IS NULL`, `LIKE`/`ILIKE`, `IN`, and
+--- `BETWEEN`. Quote column names with double quotes and string values with
+--- single quotes. Names are case-sensitive and must match the result; the
+--- completion menu lists them. Repeated column names are numbered as `name`,
+--- `name_2`, and so on. Full queries and subqueries are rejected; invalid
+--- input simply keeps the previous view. `s` and `S` sort nulls last, while
+--- ORDER BY expressions may say NULLS FIRST or NULLS LAST explicitly. Integers
+--- and booleans are typed. Strings that look numeric still compare as strings,
+--- so CAST Redis values for numeric work: CAST(value AS DOUBLE). Exact
+--- decimals, temporal values, and nested JSON stay as text.
 ---
 --- Snapshot aggregation ~
---- `gG` opens GROUP BY in the same bar. Use column names in GROUP BY and
---- built-in aggregates with explicit aliases in AGGREGATE: >
+--- Press `gG` for GROUP BY in the same bar. List plain column names in GROUP
+--- BY and built-in aggregates with explicit aliases in AGGREGATE: >
 ---   WHERE     active = 1
 ---   ORDER BY  total DESC
 ---   GROUP BY  country
 ---   AGGREGATE COUNT(*) AS users, SUM(amount) AS total
 ---   HAVING    users >= 10
 --- <
---- All work is local Polars processing of the queried snapshot, including
---- retained/restored history after disconnect. No database query is rerun.
---- GROUP BY accepts native Bool/Int/Text keys (multiple keys are allowed).
---- COUNT(*) counts rows; COUNT(column) ignores NULL. SUM/AVG require native
---- numeric columns; MIN/MAX accept native numeric/text columns. Empty GROUP BY
---- computes one global aggregate row. NULL keys form one group; an all-NULL
---- SUM/AVG/MIN/MAX returns NULL. Integer sums are checked for overflow; AVG
---- returns Float64. Mixed/special Object values and NaN/infinity are rejected.
---- WHERE runs before grouping; HAVING uses output names after aggregation.
---- `=` on an aggregate cell adds HAVING rather than changing the source WHERE.
---- Groups keep first-appearance order unless ORDER BY or grid sorting is used.
---- Results have their own schema, support paging/details/export, and are
---- read-only. Discard/apply staged edits before aggregating. A truncated result
---- only aggregates retained rows. `R` restores the original editable snapshot.
---- Lua callers can use `require('sqmeow.api.view').aggregate({...})` with
---- `group_by`, `aggregates`, `having`, `where`, and `order_by` string fields.
---- Explicit casts can enable numeric/temporal comparisons;
---- floating-point casts can lose precision. Nested JSON fields are not flattened.
+--- Everything runs locally through Polars over the snapshot you already
+--- queried, including kept or restored history after a disconnect. The
+--- database query never reruns. GROUP BY accepts native Bool, Int, and Text
+--- keys, and several keys at once. COUNT(*) counts rows while COUNT(column)
+--- skips NULLs. SUM and AVG need native numeric columns; MIN and MAX accept
+--- native numeric or text columns. An empty GROUP BY folds everything into one
+--- global aggregate row. NULL keys form a single group, and an all-NULL
+--- SUM/AVG/MIN/MAX yields NULL. Integer sums are overflow-checked and AVG
+--- returns Float64. Mixed or special Object values and NaN/infinity are
+--- rejected. WHERE filters before grouping; HAVING filters on the output
+--- names after aggregation. Pressing `=` on an aggregate cell adds a HAVING
+--- condition rather than touching the source WHERE. Groups keep their
+--- first-seen order unless ORDER BY or grid sorting says otherwise. Aggregate
+--- outputs get their own schema with paging, details, and export, but they are
+--- read-only. Settle or discard staged edits before aggregating. A truncated
+--- result aggregates only its kept rows. `R` brings back the original editable
+--- snapshot. From Lua, call `require('sqmeow.api.view').aggregate({...})` with
+--- the `group_by`, `aggregates`, `having`, `where`, and `order_by` strings.
+--- Explicit casts can unlock numeric and temporal comparisons, though floats
+--- may lose precision. Nested JSON fields are never flattened.
 ---
 --- Editing ~
---- `i` or <CR> stages a cell edit, `X` stages NULL, and `dd` stages deletion.
---- `u` undoes the last change; `U` discards all staged changes. `gs` or <C-s>
---- opens a review; <C-s> in that review applies the changes to the database.
---- SQL editing requires direct table-column mappings and a complete primary
---- or unique key in the result. Joined rows update their respective tables;
---- insertion is limited to single-table results. Read-only connections reject
---- edits. Transaction guarantees depend on the database adapter.
+--- Edits are staged first and applied later, a little like git. Press `i` or
+--- <CR> to stage a cell edit, `X` to stage NULL, and `dd` to stage deleting
+--- the row. `u` undoes the last staged change; `U` discards every staged
+--- change. `gs` or <C-s> opens a review of what will run; pressing <C-s> in
+--- that review applies the changes to the database. Editing SQL results needs
+--- direct table-column mappings plus the complete primary or unique key in the
+--- result. Joined rows update each of their tables, while inserting rows works
+--- only for single-table results. Read-only connections refuse edits, and
+--- transaction guarantees depend on the database adapter.
 ---
 --- Exporting ~
---- Press `x` for the export dialog, or visual `x` for selected rows. Formats are
---- CSV, JSON, and SQL where supported. Exports use retained result rows, not a
---- fresh database query; a truncated result cannot export rows never fetched.
---- For a direct export: >vim
+--- Press `x` for the export dialog, or select rows first and press visual `x`
+--- to export just those. Formats are CSV, JSON, and SQL where the dialect
+--- supports them. Exports use the kept result rows, never a fresh database
+--- query, so a truncated result cannot export rows that were never fetched.
+--- For a one-shot export without the dialog: >vim
 ---   Sqmeow export csv /tmp/result.csv
 ---   Sqmeow export json clipboard
 --- <
 --- Dialect differences ~
---- Redis accepts one command per line; MongoDB accepts Extended JSON commands.
---- ScyllaDB/Cassandra use CQL and SurrealDB uses SurrealQL. SQL Server accepts
---- standalone GO batch separators, but not GO repetition or sqlcmd directives.
---- The destructive-query prompt is controlled by `query.confirm_destructive`;
---- use read-only database credentials when server-enforced restrictions matter.
+--- Redis expects one command per line. MongoDB expects Extended JSON commands.
+--- ScyllaDB/Cassandra speak CQL and SurrealDB speaks SurrealQL. SQL Server
+--- accepts standalone GO batch separators, but not GO repetition counts or
+--- sqlcmd directives. `query.confirm_destructive` asks before destructive
+--- statements; for guarantees the server itself must enforce, connect with a
+--- read-only database account.
 ---@tag sqmeow-queries
 ---@toc_entry Query and result workflow
 
 --- The query log ~
 ---
---- `:Sqmeow log` reopens a prior result without executing its query again.
---- `query.history_size` controls how many query runs the engine keeps in memory.
---- With `query.persist_history = true`, logged results are also archived on disk
---- and can be restored after eviction or restart. `query.history_limit` controls
---- the displayed log length. `:Sqmeow log clear` removes the saved log/results.
+--- Every run is remembered in a query log. `:Sqmeow log` lists past runs and
+--- reopens any result without executing its query again.
+--- `query.history_size` caps how many runs the engine keeps in memory.
+--- With `persist_history = true`, results are also archived to disk, so they
+--- survive eviction and even a restart. `query.history_limit` caps how many
+--- entries the log shows. `:Sqmeow log clear` deletes the saved log and its
+--- archived results.
 ---
---- Persistent files live under `core.path`, which defaults to
+--- These files live under `core.path`, which defaults to
 --- `stdpath('data') .. '/sqmeow'`:
----   bin/                 Installed engine binary.
----   connections.json     Saved connection definitions.
----   scratch/             Scratchpad files; write buffers normally with :write.
+---   bin/                 The installed engine binary.
+---   connections.json     Your saved connection definitions.
+---   scratch/             Scratchpad files; save them with `:write` like normal buffers.
 ---   history/log.jsonl    Query log metadata.
 ---   history/results/    Archived result data.
----   session.json        Saved connection names and drawer expansion.
+---   session.json        Open connection names and expanded drawer nodes.
 ---
---- `ui.persist_session = true` saves the session on editor exit and reconnects
---- named connections once when the drawer next opens. Definitions must still
---- be available in the configured sources. It does not preserve live database
---- sessions, temporary tables, or in-memory databases. Project TOML lives in
---- `.sqmeow/`; scratchpads and history still use `core.path`.
+--- With `ui.persist_session = true`, Neovim saves the session on exit and
+--- reconnects the named connections the next time the drawer opens. Their
+--- definitions must still exist in the configured sources. This restores
+--- which connections were open, not live database sessions, temporary tables,
+--- or in-memory databases. Project TOML stays in `.sqmeow/`; scratchpads and
+--- history always live under `core.path`.
 ---@tag sqmeow-history
 ---@toc_entry The query log
 
 --- Auto-completion ~
 ---
---- Use `blink.cmp` or `nvim-cmp` to complete schemas, tables, views, and columns
---- from the active connection.
---- Columns are loaded on demand for relations in the current statement, including
---- multiline SELECT, WHERE, JOIN, GROUP BY, and ORDER BY clauses. Table aliases and
---- double-quoted, backtick-quoted, and bracket-quoted identifiers are supported.
---- Metadata comes from the active adapter; opening tables in the drawer is unnecessary.
---- Query context uses Neovim's built-in Tree-sitter API and the `sql` parser
---- (derekstride/tree-sitter-sql). Install it with `:TSInstall sql` using
---- nvim-treesitter. Without the parser, metadata and explicit `table.` column
---- completion remain available, but query-aware and alias completion require it.
+--- `blink.cmp` or `nvim-cmp` can complete schema, table, view, and column
+--- names from the active connection as you type. Columns load on demand for
+--- the relations in the current statement, including multiline SELECT, WHERE,
+--- JOIN, GROUP BY, and ORDER BY. Table aliases and double-quoted, backtick,
+--- and bracket-quoted identifiers all work, and you never need to open a
+--- table in the drawer first. Smarter query-aware and alias completion needs
+--- the `sql` Tree-sitter parser (derekstride/tree-sitter-sql); install it with
+--- `:TSInstall sql` through nvim-treesitter. Without the parser, plain
+--- metadata and `table.` column completion keep working.
 ---
 --- To use with `blink.cmp`: >lua
 ---   require('blink.cmp').setup({
@@ -449,27 +503,30 @@
 
 --- Troubleshooting ~
 ---
---- Engine missing or incompatible:
----   Run `:Sqmeow health`, then `:Sqmeow install`. For a master checkout, build
----   with `:Sqmeow install cargo`. Use `:Sqmeow restart` after rebuilding.
+--- Engine missing or outdated:
+---   Run `:Sqmeow health` to see what is wrong, then `:Sqmeow install` to fix
+---   it. On a master checkout, build with `:Sqmeow install cargo` and follow
+---   with `:Sqmeow restart`.
 --- Connection missing from the drawer:
----   Check `:pwd`, the nearest project config, and `sources` order. Duplicate
----   names keep the first entry. Inspect source errors with: >lua
+---   Check `:pwd` for the working directory, the nearest project config, and
+---   the `sources` order. The first entry wins on duplicate names. List source
+---   errors with: >lua
 ---     local _, errors = require('sqmeow.api.connection').available()
 ---     vim.print(errors)
 --- <
---- Query goes to the wrong database:
----   Check `:Sqmeow bind` before changing `:Sqmeow use`. A buffer pin takes
----   precedence over the active connection.
+--- Query went to the wrong database:
+---   Check `:Sqmeow bind` before `:Sqmeow use`. A buffer pin always wins over
+---   the active connection.
 --- Result cannot be edited:
----   Include the table's complete primary/unique key and direct table columns.
----   Expressions and read-only connections cannot be edited as table cells.
+---   The result must carry the table's full primary or unique key plus direct
+---   table columns. Computed expressions and read-only connections never edit.
 --- Completion lacks aliases or query context:
----   Install the SQL Tree-sitter parser and open the target connection; see
+---   Install the SQL parser and open the target connection first; see
 ---   |sqmeow-completion|.
 --- Need more diagnostics:
----   Set `core.log_level = 'debug'`, restart the engine, reproduce the problem,
----   then run `:Sqmeow messages`. Restarting closes live connections.
+---   Set `core.log_level = 'debug'`, restart the engine, reproduce the
+---   problem, then run `:Sqmeow messages`. Note that restarting drops all live
+---   connections.
 ---@tag sqmeow-troubleshooting
 ---@toc_entry Troubleshooting
 
@@ -479,7 +536,7 @@ local M = {}
 ---@type table|nil
 M.user_config = nil
 
---- Configure the plugin. Optional; a partial table overrides only what it names.
+--- Configure the plugin. Optional; partial tables override only named keys.
 ---@param opts table|nil See |sqmeow-config|.
 ---@usage >lua
 ---   require('sqmeow').setup({
@@ -520,7 +577,7 @@ function M.setup(opts)
   require('sqmeow.rpc.client').configure()
 end
 
---- Install the engine binary. Nothing installs it automatically; call it from a build hook: >lua
+--- Install the engine binary. Call it from a build hook, nothing else installs it: >lua
 ---   {
 ---     '2giosangmitom/sqmeow.nvim',
 ---     dependencies = { 'MunifTanjim/nui.nvim' },
@@ -530,7 +587,7 @@ end
 ---     opts = {},
 ---   }
 --- <
---- Without a method it downloads a release, falling back to a cargo build. Methods are `'cargo'`,
+--- Without a method, downloads a release then falls back to cargo. Methods: `'cargo'`,
 --- `'curl'`, `'wget'` and `'powershell'`: >lua
 ---   require('sqmeow').install('cargo')
 ---   require('sqmeow').install('wget')

@@ -1,7 +1,7 @@
---- Buffer-local mappings for the drawer, result grid, filter bar, and editor.
+--- Buffer-local mappings for drawer, result, filter bar, and editor.
 ---
---- Configure mappings by window and action name. A string sets
---- one key, a list sets aliases, and `false` disables the action: >lua
+--- Set by window and action. String sets one key, list sets aliases, `false`
+--- disables: >lua
 ---   require('sqmeow').setup({
 ---     keymaps = {
 ---       drawer = { close = { 'q', '<Esc>' } },
@@ -10,9 +10,9 @@
 ---     },
 ---   })
 --- <
---- Unspecified actions retain their defaults. The `?` popup shows resolved
---- mappings for its window; `:checkhealth sqmeow` reports unknown action names.
---- The tables below show defaults; <leader> uses your `mapleader` setting.
+--- Unset keeps defaults. `?` shows the window's resolved mappings;
+--- `:checkhealth sqmeow` flags unknown action names. Below are defaults;
+--- <leader> is your `mapleader`.
 ---@tag sqmeow-keymaps
 ---@toc_entry Keymaps
 

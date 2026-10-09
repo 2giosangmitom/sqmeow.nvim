@@ -23,18 +23,18 @@ local function turn_page(to)
   result.show_page(to(result.offset(), size, call.view_rows or call.rows or 0))
 end
 
---- Submit statements and open the result window. Completion arrives via events.
---- Uses `opts.conn_id` when supplied; otherwise resolves `opts.source_buf` (or
---- the current buffer) with |sqmeow.api.connection.target()|. Pending edits or destructive
---- statements can defer submission while a confirmation prompt is shown.
+--- Run statements and open the result window. Done arrives via events.
+--- `opts.conn_id` wins; else resolves `opts.source_buf` (or current buffer)
+--- with |sqmeow.api.connection.target()|. Staged edits or destructive SQL can
+--- pause submission for a prompt.
 ---@param sql string One or more statements in the connection's dialect.
----@param opts table|nil `conn_id` selects a connection; `source_buf` selects the
---- buffer used for binding lookup; `line` selects a statement by zero-based line.
---- `where` and `order_by` wrap a single query; `history = false` skips logging
---- and archiving; `confirmed = true` bypasses the destructive-statement prompt.
---- `parameters` maps names to raw input strings, bypassing parameter prompts.
----@return integer|nil call_id Accepted run id; nil if rejected or awaiting input.
----@return string|nil error Failure reason, or an explanation of deferred work.
+---@param opts table|nil `conn_id` picks a connection; `source_buf` picks the
+--- buffer for binding lookup; `line` picks a statement by zero-based line.
+--- `where`/`order_by` wrap one query; `history = false` skips log+archive;
+--- `confirmed = true` skips the destructive prompt; `parameters` maps names to
+--- raw input strings, skipping prompts.
+---@return integer|nil call_id Accepted run id; nil when rejected or waiting input.
+---@return string|nil error Reason, or what is being waited on.
 function M.execute(sql, opts)
   opts = opts or {}
   local state = require('sqmeow.core.state')
@@ -220,7 +220,7 @@ function M.execute_selection()
   return M.execute(table.concat(lines, '\n'), { source_buf = buf })
 end
 
---- Run an explicit one-based, inclusive line range from the current buffer.
+--- Run a one-based, inclusive line range from the current buffer.
 ---@param first integer First line, counted from one.
 ---@param last integer Last line, inclusive.
 ---@return integer|nil call_id
@@ -231,9 +231,8 @@ function M.execute_range(first, last)
   return M.execute(table.concat(lines, '\n'), { source_buf = buf })
 end
 
---- Request cancellation of an edit apply, or otherwise the current query.
---- Completion is asynchronous; true means cancellation was requested, not that
---- the database has already stopped or that arbitrary SQL was rolled back.
+--- Cancel the edit apply, else the current query.
+--- Async: true means asked, not that the DB stopped or rolled back SQL.
 ---@return boolean stopped Whether the engine accepted cancellation.
 function M.cancel()
   local state = require('sqmeow.core.state')

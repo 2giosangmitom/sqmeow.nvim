@@ -10,9 +10,9 @@ local function engine()
   return require('sqmeow.rpc.client')
 end
 
---- Export retained result rows to a file or the clipboard, asynchronously.
---- Without `path` or `clipboard`, opens a dialog with a preview. Uses visible
---- columns and the current view unless `all` is true. Does not rerun the query.
+--- Export kept rows to a file or clipboard, async.
+--- No `path`/`clipboard`: opens a preview dialog. Uses visible columns and the
+--- current view unless `all` is true. Never reruns the query.
 ---@param opts table|nil `format`: `csv` (default), `json`, or `sql`; `path`: file
 --- destination; `clipboard = true`: copy instead. `headers = false` omits CSV
 --- headers. `offset` (zero-based) and `limit` select rows. SQL options: `table`
