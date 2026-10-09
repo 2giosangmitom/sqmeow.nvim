@@ -44,7 +44,7 @@ The initial setup may take a while as Nix downloads and builds dependencies.
 
 ### SQLite and DuckDB
 
-Development builds link against the system libraries provided by Nix.
+Development builds dynamically link against the system SQLite and DuckDB libraries provided by Nix.
 
 Release builds bundle SQLite and DuckDB from source using `just dist-build <target>`, which enables `-p sqmeow-core --features bundled`.
 
