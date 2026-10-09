@@ -1,5 +1,70 @@
 # Changelog
 
+## [3.0.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.5.0...v3.0.0) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **result:** filter and sort retained rows uniformly
+* **export:** write CSV and JSON with Polars
+* **result:** use Polars for retained views
+
+### Features
+
+* browse relationships with native drivers ([738aab0](https://github.com/2giosangmitom/sqmeow.nvim/commit/738aab099d8ff2345052677e0ad37aba3b4c5730))
+* **export:** write CSV and JSON with Polars ([ebb0b26](https://github.com/2giosangmitom/sqmeow.nvim/commit/ebb0b26791df0c1a88dfd8b6a3e65b227cfd41eb))
+* **query:** add parameterized scratchpads ([1cf3a2a](https://github.com/2giosangmitom/sqmeow.nvim/commit/1cf3a2a68e05607fd7f73659df92fd45357e1e56))
+* **query:** bind parameters across all adapters ([27082d1](https://github.com/2giosangmitom/sqmeow.nvim/commit/27082d1e9385c1b1f12522c9bfb17d78f53ee8fb))
+* **result:** filter and sort retained rows uniformly ([0bd5891](https://github.com/2giosangmitom/sqmeow.nvim/commit/0bd589115e9f00a31e253132fb8b2cbfc960f17d))
+* **result:** unify view requests ([f78a1ef](https://github.com/2giosangmitom/sqmeow.nvim/commit/f78a1ef50d1ff115738bbe089ac7dd76123db087))
+* **result:** use Polars for retained views ([2c1f30e](https://github.com/2giosangmitom/sqmeow.nvim/commit/2c1f30ecef0414b193313be354d3ffd5cfd68a43))
+* **scratchpads:** add project-local query files ([226e81d](https://github.com/2giosangmitom/sqmeow.nvim/commit/226e81d375b4e4f0c8499f0c1f666084798e8337))
+* support project dotenv files and connection URLs ([c1287db](https://github.com/2giosangmitom/sqmeow.nvim/commit/c1287dbcb53f6a398969f463da1a869a3de06bd9))
+* **view:** aggregate retained snapshots with Polars ([b66fb37](https://github.com/2giosangmitom/sqmeow.nvim/commit/b66fb3781cfe4bd29b8312f92feea8eafb5e55b6))
+
+
+### Fixes
+
+* **adapters:** preserve actual cancellation outcomes ([80dd26f](https://github.com/2giosangmitom/sqmeow.nvim/commit/80dd26fd0dc895a1bdcf016300f3149bf2301366))
+* **adapters:** preserve writes and result schemas ([2f723fc](https://github.com/2giosangmitom/sqmeow.nvim/commit/2f723fcf68ced38c4046dee03e3831e0d9d89593))
+* **build:** link Nix database libraries ([190158d](https://github.com/2giosangmitom/sqmeow.nvim/commit/190158de43e214f7c594a9881295130d94a02b7a))
+* fence cancellation and retain batch results ([220960f](https://github.com/2giosangmitom/sqmeow.nvim/commit/220960f4b40facfcb74eedddd9fdfdd4d0e7cd5f))
+* **history:** exclude failed runs and yank commands ([dfccefb](https://github.com/2giosangmitom/sqmeow.nvim/commit/dfccefb30113fcde9ce15b58a567e5eaf4a0d9d3))
+* nil guards, rpc strictness, archive and float handling ([45430fb](https://github.com/2giosangmitom/sqmeow.nvim/commit/45430fbe2180bfa4f53a1b254104d0889aa02c97))
+* retain query results and focus adapter tests ([520071f](https://github.com/2giosangmitom/sqmeow.nvim/commit/520071f0336da03f86253a07fc57d5943feca8ed))
+* **view:** correct aggregate Lua types ([b02f0dd](https://github.com/2giosangmitom/sqmeow.nvim/commit/b02f0dda71be3d28fd5c65b56f1ee8d42c8a17a1))
+
+
+### Performance
+
+* **db:** reduce text scan and buffer overhead ([eb04e6c](https://github.com/2giosangmitom/sqmeow.nvim/commit/eb04e6c3a00ab6c722624b944491c3ef9e08e0b2))
+* **db:** retain native Polars columns ([0fb941e](https://github.com/2giosangmitom/sqmeow.nvim/commit/0fb941e39251a34a7d076aeb0e82a808714982e8))
+* **db:** share retained frames and cache views ([82a718e](https://github.com/2giosangmitom/sqmeow.nvim/commit/82a718e4eb6318b02b1374b7b42f62d8db284f13))
+* **rpc:** encode result pages by native column ([01d0c8e](https://github.com/2giosangmitom/sqmeow.nvim/commit/01d0c8e5ab94ba9678f98fd8eedf0a6c5ee78155))
+* **ui:** avoid redundant grid width scans ([3e4934e](https://github.com/2giosangmitom/sqmeow.nvim/commit/3e4934e367da2a81e3c702ec581c4a76b76aef9a))
+* **view:** avoid intermediate aggregate gathers ([8b711e5](https://github.com/2giosangmitom/sqmeow.nvim/commit/8b711e510a44ed8e814bd901b72d02da60a13a9e))
+
+
+### Refactoring
+
+* declare async Adapter methods with async-trait ([5630f2d](https://github.com/2giosangmitom/sqmeow.nvim/commit/5630f2d16a35422f85f3619722f79ba92c59503d))
+* measure column widths in the editor, not the engine ([7854d62](https://github.com/2giosangmitom/sqmeow.nvim/commit/7854d624f0147bf16499d941c377fc3a94742f23))
+* simplify connection sources and preview controls ([85f9dcd](https://github.com/2giosangmitom/sqmeow.nvim/commit/85f9dcdcfb6aa6d50702f54628e2441078af9bf5))
+
+
+### Documentation
+
+* clarify PR and issue templates ([96b535a](https://github.com/2giosangmitom/sqmeow.nvim/commit/96b535a5d7da3d5ff1469a4df6334d038e3da196))
+* correct the compile from source ([a5daafd](https://github.com/2giosangmitom/sqmeow.nvim/commit/a5daafdad34146e9b089df03212269b2afe74804))
+* credit Squix workflow ideas ([f3365ef](https://github.com/2giosangmitom/sqmeow.nvim/commit/f3365efee6d94efa1a91609c25af78f833a84c1e))
+* improve documents ([0255e01](https://github.com/2giosangmitom/sqmeow.nvim/commit/0255e01d13c51bfd0dc612a4f09e01666930c824))
+* improve readme and contributing guide ([b03eae0](https://github.com/2giosangmitom/sqmeow.nvim/commit/b03eae052511f95f832fed5b8ebc7f3d31192340))
+* simplify README and explain acknowledgments ([9f983ff](https://github.com/2giosangmitom/sqmeow.nvim/commit/9f983ffa0cc752fa67de8772baf7fcf76564ebc3))
+* trim filler from comments and guides ([f8feb50](https://github.com/2giosangmitom/sqmeow.nvim/commit/f8feb50a900b906afc93f517b6572479d8a678b5))
+* update CONTRIBUTING.md ([9f09caf](https://github.com/2giosangmitom/sqmeow.nvim/commit/9f09caf47e4c21e840be42dbae1f294eb0602ae8))
+* update doc ([72b9b5b](https://github.com/2giosangmitom/sqmeow.nvim/commit/72b9b5bdbb98e24b3910a748e9f1491f2faaf68d))
+* update README ([0a1aa2e](https://github.com/2giosangmitom/sqmeow.nvim/commit/0a1aa2e7bed884b6cc48e9e123eaede1b00824e6))
+
 ## [2.5.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.4.0...v2.5.0) (2026-10-04)
 
 
