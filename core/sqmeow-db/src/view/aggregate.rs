@@ -9,7 +9,7 @@ use sqlparser::ast::{
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
-use super::{Filter, Query, Sort, select_with};
+use super::{Filter, Query, Sort};
 use crate::result::ResultSet;
 
 #[derive(Debug, Clone)]
@@ -190,8 +190,33 @@ pub fn aggregate(
             return Err("floating-point GROUP BY keys are not supported; use Bool/Int/Text".into());
         }
     }
-    let (lazy, _, native_names) =
-        super::polars::plan_with(result, filters, &[], scope, before, &needed)?;
+    let (lazy, native_names) = if filters.is_empty() && scope.is_none() && before.is_none() {
+        // No row selection is needed. Project shared native columns straight
+        // into Polars, without an O(rows) row-id buffer or typed view cache.
+        let columns = needed
+            .iter()
+            .map(|&index| {
+                result
+                    .column_values(index)
+                    .expect("validated native column")
+                    .clone()
+                    .with_name(names[index].as_str().into())
+            })
+            .collect();
+        let frame =
+            DataFrame::new(result.row_count(), columns).map_err(|error| error.to_string())?;
+        (
+            frame.lazy(),
+            needed
+                .iter()
+                .map(|&index| names[index].clone())
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        let (lazy, _, native_names) =
+            super::polars::plan_with(result, filters, &[], scope, before, &needed)?;
+        (lazy, native_names)
+    };
     let native = |index: usize| {
         col(&native_names[needed
             .binary_search(&index)
@@ -340,14 +365,31 @@ pub fn aggregate(
             ));
         }
     }
-    let mut derived =
-        ResultSet::from_frame(result.statement(), computed.clone(), result.is_truncated());
+    let derived = ResultSet::from_frame(result.statement(), computed, result.is_truncated());
     let post = Query::parse(having, order, &super::names(derived.columns()))?;
     if post.is_some() || !sort.is_empty() {
-        let rows = select_with(&derived, &[], sort, None, post.as_ref())?;
-        let indices = IdxCa::from_vec("".into(), rows.iter().map(|&row| row as IdxSize).collect());
-        computed = computed.take(&indices).map_err(|error| error.to_string())?;
-        derived = ResultSet::from_frame(result.statement(), computed, result.is_truncated());
+        // Keep typed filter projections separate from raw output columns: a
+        // numeric-looking text MIN/MAX must not become a floating-point value.
+        // Collect the selected/sorted columns directly, not row ids followed
+        // by a second gather of the entire aggregate frame.
+        let columns: Vec<usize> = (0..derived.columns().len()).collect();
+        let (lazy, _, native_names) =
+            super::polars::plan_with(&derived, &[], sort, None, post.as_ref(), &columns)?;
+        let computed = lazy
+            .select(
+                native_names
+                    .iter()
+                    .zip(&output_names)
+                    .map(|(native, output)| col(native).alias(output))
+                    .collect::<Vec<_>>(),
+            )
+            .collect()
+            .map_err(|error| error.to_string())?;
+        return Ok(ResultSet::from_frame(
+            result.statement(),
+            computed,
+            result.is_truncated(),
+        ));
     }
     Ok(derived)
 }
@@ -559,6 +601,46 @@ mod tests {
             aggregate(&result, &group, &[], None, before.as_ref(), ("", "", &[])).unwrap();
         assert_eq!(grouped.cell(0, 0).as_deref(), Some(&Cell::Int(1)));
         assert_eq!(grouped.cell(0, 1).as_deref(), Some(&Cell::Float(2.5)));
+    }
+
+    #[test]
+    fn post_view_preserves_raw_text_and_stable_ties() {
+        let mut result = ResultSet::new(
+            "text outputs",
+            vec![Column::new("key", "BIGINT"), Column::new("text", "TEXT")],
+        );
+        for (key, text) in [(2, "001"), (1, "1"), (3, "002")] {
+            result.push_row(vec![Cell::Int(key), Cell::Text(text.into())]);
+        }
+        let grouped = run(
+            &result,
+            "key",
+            "MIN(text) AS label, COUNT(*) AS n",
+            "label >= '001'",
+            "n DESC",
+        )
+        .unwrap();
+        assert_eq!(grouped.row_count(), 3);
+        for (row, text) in ["001", "1", "002"].iter().enumerate() {
+            assert_eq!(
+                grouped.cell(row, 1).as_deref(),
+                Some(&Cell::Text((*text).into()))
+            );
+        }
+        let empty = run(&result, "key", "COUNT(*) AS n", "n > 10", "n DESC").unwrap();
+        assert_eq!(empty.row_count(), 0);
+        assert_eq!(empty.columns()[1].name, "n");
+    }
+
+    #[test]
+    fn having_cannot_hide_nonfinite_or_overflow_errors() {
+        let mut result = ResultSet::new("invalid", vec![Column::new("v", "DOUBLE")]);
+        result.push_row(vec![Cell::Float(f64::INFINITY)]);
+        assert!(run(&result, "", "COUNT(v) AS n", "n < 0", "").is_err());
+        let mut result = ResultSet::new("overflow", vec![Column::new("v", "BIGINT")]);
+        result.push_row(vec![Cell::Int(i64::MAX)]);
+        result.push_row(vec![Cell::Int(1)]);
+        assert!(run(&result, "", "SUM(v) AS total", "total < 0", "").is_err());
     }
 
     #[test]
