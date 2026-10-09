@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing to sqmeow.nvim!
 
-You don't need to be a Rust expert or a Neovim wizard to help out. Whether you're fixing a typo, reporting a bug, testing a feature, or writing code, every contribution makes the project better.
+You don't need to be a Rust expert or a Neovim wizard to help out.
 
 ## Ways to contribute
 
@@ -19,7 +19,7 @@ New to the project? Look for issues labeled `good first issue`, or ask for help 
 
 ## Getting familiar with the codebase
 
-Check out the [DeepWiki documentation](https://deepwiki.com/2giosangmitom/sqmeow.nvim) to explore the architecture, key components, and how everything fits together.
+Read the [DeepWiki documentation](https://deepwiki.com/2giosangmitom/sqmeow.nvim) for the architecture and key components.
 
 You don't need to understand the entire codebase before contributing. Start with whatever interests you and explore from there.
 
@@ -36,11 +36,11 @@ nix develop
 cargo build -j 1
 ```
 
-That's it! You're ready to start developing.
+You're ready to develop.
 
 The initial setup may take a while as Nix downloads and builds dependencies.
 
-**Working on a slower machine?** Use `-j 1` with Cargo and run checks individually to reduce memory usage.
+On slower machines, use `-j 1` with Cargo and run checks individually to reduce memory usage.
 
 ### SQLite and DuckDB
 
@@ -52,7 +52,7 @@ You generally don't need to worry about this unless you're preparing a release.
 
 ## Making changes
 
-A typical development workflow looks like this:
+Typical workflow:
 
 ```sh
 # Create a branch
@@ -72,7 +72,7 @@ just test-lua
 | `just docs-check` | Check documentation                |
 | `just`            | Run the full CI check suite        |
 
-The full suite can take 10+ minutes. While developing, feel free to run only the checks relevant to your changes.
+The full suite can take 10+ minutes. While developing, run only the checks relevant to your changes.
 
 See the [Justfile](Justfile) for all available commands.
 
@@ -110,9 +110,7 @@ cargo test -- --nocapture
 
 ### Running individual tests
 
-You don't need to run the entire suite for every small change.
-
-For example, to run a single SQLite integration test:
+To run a single SQLite integration test:
 
 ```sh
 nix develop --command cargo test -j 1 \
@@ -127,8 +125,6 @@ For other databases, set the corresponding `SQMEOW_TEST_*_URL` environment varia
 Check `just test-rust` in the [Justfile](Justfile) for supported environment variables.
 
 ### Writing tests
-
-Keep tests focused and easy to maintain.
 
 - **Prefer unit tests** for logic that doesn't need a real database.
 - **Use integration tests** for connectivity, basic CRUD operations, and database-specific regressions.
@@ -152,7 +148,7 @@ Don't worry about getting everything perfect. We'll work through feedback togeth
 
 ## Bug reports
 
-Found something broken? [Open an issue](https://github.com/2giosangmitom/sqmeow.nvim/issues/new/choose) and follow the provided template.
+[Open an issue](https://github.com/2giosangmitom/sqmeow.nvim/issues/new/choose) and follow the provided template.
 
 A minimal reproduction is especially helpful. Include the database type, relevant queries, and steps to reproduce when possible.
 
@@ -160,9 +156,9 @@ Please remove credentials and other sensitive information from logs or configura
 
 ## AI-assisted contributions
 
-AI-assisted contributions are welcome! Just make sure you understand and take responsibility for the changes you submit.
+AI-assisted contributions are welcome. Make sure you understand and take responsibility for the changes you submit.
 
-A few simple expectations:
+Expectations:
 
 1. **Review the code.** Don't submit changes you haven't read or understood.
 2. **Test your changes.** Run `just` when possible, or explain which checks you skipped and why.
@@ -172,10 +168,8 @@ AI-generated code is held to the same standards as any other contribution.
 
 ## Need help?
 
-Stuck on setup, confused by a test, or unsure where something belongs?
+For setup, test, or codebase questions, read the [DeepWiki documentation](https://deepwiki.com/2giosangmitom/sqmeow.nvim) or ask in an issue or pull request.
 
-Take a look at the [DeepWiki documentation](https://deepwiki.com/2giosangmitom/sqmeow.nvim), or feel free to ask in an issue or pull request.
-
-Questions are always welcome, and knowing where people get stuck helps us improve the project.
+Questions are welcome; they show where the docs need work.
 
 Thanks for helping make sqmeow.nvim better! 💛

@@ -32,8 +32,8 @@ If you spend most of your time in the terminal and don't want to switch to a GUI
 - **Query history:** Revisit previous results without running queries again.
 - **Fast result processing:** Filter and sort retained rows locally using Polars.
 - **Project-local connections:** Keep connections and scratchpads alongside your project.
-- **Smart completion:** Get database-aware suggestions with blink.cmp or nvim-cmp.
-- **Rust-powered engine:** Run database operations through a separate Rust engine.
+- **Completion:** Database-aware suggestions with blink.cmp or nvim-cmp.
+- **Rust engine:** Database operations run in a separate Rust process.
 
 ## Supported databases
 
@@ -94,7 +94,7 @@ This tracks the default branch and builds the engine from source. To use a relea
 <details>
 <summary>vim.pack (Neovim 0.12+)</summary>
 
-Register the handler before `vim.pack.add()` to handle the initial installation:
+Register the handler before `vim.pack.add()`:
 
 ```lua
 vim.api.nvim_create_autocmd("PackChanged", {
@@ -231,9 +231,9 @@ Store project queries in `.sqmeow/scratchpads/` using `.sql`, `.redis`, `.json`,
 
 Manage them directly from the drawer:
 
-- `a` — Create a file or folder.
-- `R` — Rename or move.
-- `d` — Delete.
+- `a`: Create a file or folder.
+- `R`: Rename or move.
+- `d`: Delete.
 
 Queries run against the currently selected connection.
 
@@ -283,9 +283,9 @@ See `:h sqmeow-completion` for more details.
 
 ## Configuration
 
-sqmeow.nvim works out of the box, but you can customize its behavior with `setup()`.
+You can customize behavior with `setup()`.
 
-Here are some common options with their default values:
+Common options with their defaults:
 
 ```lua
 require("sqmeow").setup({
@@ -312,7 +312,7 @@ See `:h sqmeow-config` for all configuration options and `:h sqmeow-keymaps` for
 
 ## Acknowledgments
 
-A big thanks to these awesome projects for inspiring many of sqmeow.nvim's features and workflows:
+Thanks to these projects for ideas and workflows:
 
 - [vim-dadbod](https://github.com/tpope/vim-dadbod)
 - [vim-dadbod-ui](https://github.com/kristijanhusak/vim-dadbod-ui)
@@ -324,7 +324,7 @@ I've borrowed plenty of ideas and even some code here and there. That's the beau
 
 ## Contributing
 
-Contributions are always welcome! Feel free to open an issue, report a bug, suggest a feature, or submit a pull request.
+Contributions welcome. Open an issue, report a bug, suggest a feature, or submit a pull request.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
