@@ -50,7 +50,10 @@ end
 ---@param marker string
 ---@return string
 function M.truncate(text, limit, marker)
-  if vim.api.nvim_strwidth(text) <= limit then
+  -- Printable ASCII has one display column per byte under Neovim's width rules.
+  local ascii = not text:find('[^\32-\126]')
+  local width = ascii and #text or vim.api.nvim_strwidth(text)
+  if width <= limit then
     return text
   end
   if limit <= 0 then
@@ -62,11 +65,19 @@ function M.truncate(text, limit, marker)
   end
 
   local budget = limit - vim.api.nvim_strwidth(marker)
+  if ascii then
+    return text:sub(1, budget) .. marker
+  end
   local out, at = {}, 0
+  local widths = {}
 
   -- One character at a time, because cutting by byte would split a wide one in half.
   for char in M.characters(text) do
-    local step = vim.api.nvim_strwidth(char)
+    local step = widths[char]
+    if step == nil then
+      step = vim.api.nvim_strwidth(char)
+      widths[char] = step
+    end
     if at + step > budget then
       break
     end
