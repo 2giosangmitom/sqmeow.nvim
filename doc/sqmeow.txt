@@ -259,6 +259,12 @@ the cap marks the result truncated. `ui.result.page_size` controls how many
 retained rows the grid displays per page; increasing it does not fetch rows
 beyond the cap. `query.timeout_ms` cancels long-running work; 0 disables it.
 <C-c> or `:Sqmeow cancel` requests cancellation manually.
+Cancellation is a request, not proof that a write was rolled back. Sent
+writes on MySQL/PostgreSQL and sent work on Oracle/SurrealDB wait for their
+actual outcome; cancellation or timeout may therefore finish later.
+Scylla/Cassandra and MongoDB standalone apply stop between writes and report
+completed changes if cancellation follows a write. Verify unknown outcomes
+before retrying. Oracle atomic edits reject DDL, transaction controls and PL/SQL.
 
 Parameterized scratchpads ~
 SQL/CQL adapters and SurrealDB accept named values such as

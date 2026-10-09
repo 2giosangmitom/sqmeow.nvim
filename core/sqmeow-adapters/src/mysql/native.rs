@@ -343,21 +343,28 @@ fn decode(value: &Value, column: &WireColumn, timezone: &str) -> Cell {
     }
 }
 
+fn execution_error(error: mysql_async::Error) -> Error {
+    if matches!(&error, mysql_async::Error::Server(server) if server.code == 1317) {
+        Error::Cancelled
+    } else {
+        Error::driver(error)
+    }
+}
+
+pub(super) type Results = Vec<(ResultSet, Vec<Origin>)>;
+
 async fn collect<P: mysql_async::prelude::Protocol>(
     mut output: mysql_async::QueryResult<'_, '_, P>,
     statement: &str,
     max_rows: usize,
     timezone: &str,
-) -> Result<(ResultSet, Vec<Origin>)> {
+) -> Result<Results> {
+    let mut results = Vec::new();
     let mut result = ResultSet::new(statement, result_columns(output.columns_ref()));
     let mut provenance = origins(output.columns_ref());
     loop {
-        if result.columns().is_empty() && !output.columns_ref().is_empty() {
-            result.adopt_columns(result_columns(output.columns_ref()));
-            provenance = origins(output.columns_ref());
-        }
         let affected = output.affected_rows();
-        match output.next().await.map_err(Error::driver)? {
+        match output.next().await.map_err(execution_error)? {
             Some(row) => {
                 if result.row_count() >= max_rows {
                     result.mark_truncated();
@@ -371,14 +378,17 @@ async fn collect<P: mysql_async::prelude::Protocol>(
             }
             None => {
                 result.set_affected(affected);
+                results.push((result, provenance));
                 if output.is_empty() {
                     break;
                 }
+                result = ResultSet::new(statement, result_columns(output.columns_ref()));
+                provenance = origins(output.columns_ref());
             }
         }
     }
     output.drop_result().await.map_err(Error::driver)?;
-    Ok((result, provenance))
+    Ok(results)
 }
 pub(super) async fn execute(
     connection: &mut Conn,
@@ -387,7 +397,7 @@ pub(super) async fn execute(
     max_rows: usize,
     cancel: &tokio_util::sync::CancellationToken,
     timezone: &str,
-) -> Result<(ResultSet, Vec<Origin>)> {
+) -> Result<Results> {
     if cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
@@ -403,7 +413,7 @@ pub(super) async fn execute(
                 Bound::Null(_) => Value::NULL,
             })
             .collect::<Vec<_>>();
-        let prepared = connection.prep(statement).await.map_err(Error::driver)?;
+        let prepared = connection.prep(statement).await.map_err(execution_error)?;
         let outcome = async {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
@@ -411,13 +421,13 @@ pub(super) async fn execute(
             let output = connection
                 .exec_iter(&prepared, Params::Positional(values))
                 .await
-                .map_err(Error::driver)?;
+                .map_err(execution_error)?;
             collect(output, statement, max_rows, timezone).await
         }
         .await;
         let closed = connection.close(prepared).await;
         let result = outcome?;
-        closed.map_err(Error::driver)?;
+        closed.map_err(execution_error)?;
         Ok(result)
     } else {
         if cancel.is_cancelled() {
@@ -427,7 +437,7 @@ pub(super) async fn execute(
             connection
                 .query_iter(statement)
                 .await
-                .map_err(Error::driver)?,
+                .map_err(execution_error)?,
             statement,
             max_rows,
             timezone,

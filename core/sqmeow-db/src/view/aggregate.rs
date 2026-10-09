@@ -490,24 +490,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rejects_unsafe_syntax_and_unsupported_dtypes() {
+    #[rstest::rstest]
+    #[case::extra_statement("v; SELECT 1", "COUNT(*) AS n")]
+    #[case::alias_collision("v", "COUNT(*) AS v")]
+    #[case::distinct("", "COUNT(DISTINCT v) AS n")]
+    #[case::external_function("", "read_csv('x') AS n")]
+    #[case::expression_argument("", "SUM(v + 1) AS n")]
+    #[case::duplicate_key("v, v", "COUNT(*) AS n")]
+    #[case::window("", "SUM(v) OVER () AS n")]
+    #[case::injected_from("", "COUNT(*) AS n FROM read_csv('x') --")]
+    fn rejects_unsafe_syntax(#[case] keys: &str, #[case] expressions: &str) {
         let names = vec!["v".into()];
-        for (keys, expressions) in [
-            ("v; SELECT 1", "COUNT(*) AS n"),
-            ("v", "COUNT(*) AS v"),
-            ("", "COUNT(DISTINCT v) AS n"),
-            ("", "read_csv('x') AS n"),
-            ("", "SUM(v + 1) AS n"),
-            ("v, v", "COUNT(*) AS n"),
-            ("", "SUM(v) OVER () AS n"),
-            ("", "COUNT(*) AS n FROM read_csv('x') --"),
-        ] {
-            assert!(
-                Group::parse(keys, expressions, &names).is_err(),
-                "{keys}, {expressions}"
-            );
-        }
+        assert!(
+            Group::parse(keys, expressions, &names).is_err(),
+            "{keys}, {expressions}"
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_dtypes() {
         let mut result = ResultSet::new("special", vec![Column::new("v", "DECIMAL")]);
         result.push_row(vec![Cell::Decimal("1.000".into())]);
         assert!(run(&result, "v", "COUNT(*) AS n", "", "").is_err());

@@ -1,6 +1,79 @@
 //! The MySQL and MariaDB adapter.
 
 mod native;
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use std::{
+        future::{Future, poll_fn},
+        task::Poll,
+        time::Duration,
+    };
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn late_cancel_keeps_a_commit_confirmed_by_another_session() {
+        let Ok(url) = std::env::var("SQMEOW_TEST_MYSQL_URL") else {
+            eprintln!("skipped: set SQMEOW_TEST_MYSQL_URL");
+            return;
+        };
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let adapter = MySqlAdapter::connect(&url, false).await.unwrap();
+        let observer = MySqlAdapter::connect(&url, false).await.unwrap();
+        adapter
+            .execute(
+                "drop table if exists audit_commit_reply",
+                usize::MAX,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        adapter
+            .execute(
+                "create table audit_commit_reply (id int)",
+                usize::MAX,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let mut session = adapter.pool.lock().await;
+        let connection = session.as_mut().unwrap();
+        connection.query_drop("start transaction").await.unwrap();
+        connection
+            .query_drop("insert into audit_commit_reply values (1)")
+            .await
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let work = adapter.run_owned(connection, "commit", None, usize::MAX, &cancel);
+        tokio::pin!(work);
+        poll_fn(|cx| {
+            assert!(work.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let rows = observer
+                    .execute(
+                        "select * from audit_commit_reply",
+                        usize::MAX,
+                        CancellationToken::new(),
+                    )
+                    .await
+                    .unwrap();
+                if rows.row_count() == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("server must commit before the reply is consumed");
+        cancel.cancel();
+        work.await
+            .expect("a confirmed COMMIT cannot become Cancelled");
+    }
+}
 use mysql_async::{Conn, Opts, prelude::Queryable};
 use native::{Session, foreign_key, query, query_as, query_scalar};
 use sqmeow_db::adapter::Adapter;
@@ -64,7 +137,7 @@ impl MySqlAdapter {
         values: Option<&[sqmeow_db::sql::parameters::Value]>,
         max_rows: usize,
         cancel: &CancellationToken,
-    ) -> Result<(ResultSet, Vec<stream::Origin>)> {
+    ) -> Result<native::Results> {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -98,13 +171,20 @@ impl MySqlAdapter {
         let outcome = tokio::select! {
             biased;
             () = cancel.cancelled() => {
+                if !stream::interruptible(Dialect::MySql, statement) {
+                    work.await
+                } else {
                 // Keep the original protocol future alive. KILL finishes before we release
                 // execution ownership, so it cannot target the next request.
                 if !self.stop_query().await { self.unusable.store(true, Ordering::Release); }
-                if tokio::time::timeout(crate::STOP_TIMEOUT, &mut work).await.is_err() {
-                    self.unusable.store(true, Ordering::Release);
+                match tokio::time::timeout(crate::STOP_TIMEOUT, &mut work).await {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        self.unusable.store(true, Ordering::Release);
+                        Err(Error::driver("cancel cleanup timed out; query/write outcome may be unknown, verify before retrying"))
+                    }
                 }
-                Err(Error::Cancelled)
+                }
             }
             result = &mut work => result,
         };
@@ -119,9 +199,9 @@ impl MySqlAdapter {
         values: Option<&[sqmeow_db::sql::parameters::Value]>,
         max_rows: usize,
         cancel: &CancellationToken,
-    ) -> Result<ResultSet> {
+    ) -> Result<Vec<ResultSet>> {
         let started = std::time::Instant::now();
-        let (mut result, origins) = {
+        let results = {
             let mut session = tokio::select! {
                 biased;
                 () = cancel.cancelled() => return Err(Error::Cancelled),
@@ -135,27 +215,33 @@ impl MySqlAdapter {
                 .await;
             if self.unusable.load(Ordering::Acquire) {
                 session.take();
-                return Err(Error::driver(
-                    "cancel cleanup failed; execution session was closed",
-                ));
+                if outcome.is_err() {
+                    return Err(Error::driver(
+                        "cancel cleanup failed; execution session was closed",
+                    ));
+                }
             }
             if stream::may_change_schema(statement) {
                 self.keys.forget();
             }
             outcome?
         };
-        self.keys
-            .mark(&origins, result.columns_mut(), |table| {
-                self.read_keys(table)
-            })
-            .await;
-        result.set_source(self.keys.source(
-            &origins,
-            sqmeow_db::sql::plain(Dialect::MySql, origin),
-            sqmeow_db::sql::Sides::read(Dialect::MySql, origin),
-        ));
-        result.set_elapsed(started.elapsed());
-        Ok(result)
+        let mut retained = Vec::with_capacity(results.len());
+        for (mut result, origins) in results {
+            self.keys
+                .mark(&origins, result.columns_mut(), |table| {
+                    self.read_keys(table)
+                })
+                .await;
+            result.set_source(self.keys.source(
+                &origins,
+                sqmeow_db::sql::plain(Dialect::MySql, origin),
+                sqmeow_db::sql::Sides::read(Dialect::MySql, origin),
+            ));
+            result.set_elapsed(started.elapsed());
+            retained.push(result);
+        }
+        Ok(retained)
     }
 
     /// Open a connection.
@@ -306,6 +392,19 @@ impl MySqlAdapter {
     }
 }
 
+/// Single-result callers see the last tabular answer, not CALL's trailing OK.
+fn last(mut results: Vec<ResultSet>, statement: &str) -> ResultSet {
+    let index = results
+        .iter()
+        .rposition(|result| !result.columns().is_empty());
+    match index {
+        Some(index) => results.swap_remove(index),
+        None => results
+            .pop()
+            .unwrap_or_else(|| ResultSet::new(statement, Vec::new())),
+    }
+}
+
 /// Which key an `information_schema` row says a column is.
 fn key_kind(row: &native::Row) -> KeyKind {
     // Both come back as integers: MySQL has no boolean, and a comparison yields 1 or 0.
@@ -368,14 +467,18 @@ impl Adapter for MySqlAdapter {
             let outcome = self
                 .run_owned(connection, statement, None, usize::MAX, &cancel)
                 .await;
-            let outcome = outcome.and_then(|(result, _)| {
-                stream::check_affected(statement, result.affected().unwrap_or(0))?;
-                Ok(result)
+            let outcome = outcome.and_then(|results| {
+                for (result, _) in &results {
+                    stream::check_affected(statement, result.affected().unwrap_or(0))?;
+                }
+                Ok(results)
             });
             match outcome {
-                Ok(result) => {
-                    if result.row_count() > 0 {
-                        returned.push(result);
+                Ok(results) => {
+                    for (result, _) in results {
+                        if result.row_count() > 0 {
+                            returned.push(result);
+                        }
                     }
                 }
                 Err(error) => {
@@ -422,8 +525,11 @@ impl Adapter for MySqlAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        self.run(statement, statement, None, max_rows, &cancel)
-            .await
+        Ok(last(
+            self.run(statement, statement, None, max_rows, &cancel)
+                .await?,
+            statement,
+        ))
     }
 
     async fn execute_bound(
@@ -433,8 +539,11 @@ impl Adapter for MySqlAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        self.run(statement, statement, Some(values), max_rows, &cancel)
-            .await
+        Ok(last(
+            self.run(statement, statement, Some(values), max_rows, &cancel)
+                .await?,
+            statement,
+        ))
     }
 
     async fn execute_wrapped(
@@ -444,7 +553,31 @@ impl Adapter for MySqlAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
+        Ok(last(
+            self.run(statement, origin, None, max_rows, &cancel).await?,
+            statement,
+        ))
+    }
+
+    async fn execute_results(
+        &self,
+        statement: &str,
+        origin: &str,
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
         self.run(statement, origin, None, max_rows, &cancel).await
+    }
+
+    async fn execute_bound_results(
+        &self,
+        statement: &str,
+        values: &[sqmeow_db::sql::parameters::Value],
+        max_rows: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        self.run(statement, statement, Some(values), max_rows, &cancel)
+            .await
     }
 
     /// MySQL has no schemas within a database, so its databases fill that level of the tree.

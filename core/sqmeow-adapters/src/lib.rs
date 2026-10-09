@@ -55,6 +55,18 @@ pub(crate) fn cancelled_after(done: usize, total: usize) -> Error {
     ))
 }
 
+/// A sent nontransactional write cannot be rolled back by dropping its reply.
+/// Cancellation stops the next write, not the observation of this one's outcome.
+pub(crate) async fn await_sent<T>(
+    cancel: &CancellationToken,
+    work: impl std::future::Future<Output = T>,
+) -> Result<T> {
+    if cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    Ok(work.await)
+}
+
 /// Retry transient connection-establishment failures, using the driver's error classification.
 /// Never use this to replay queries or writes whose outcome might already be committed.
 pub(crate) async fn connect_retrying_with<T, E, F, Fut>(
@@ -419,6 +431,30 @@ pub fn supported() -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn sent_write_keeps_its_success_after_cancel() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let stopped = cancel.clone();
+        let outcome = super::await_sent(&cancel, async move {
+            stopped.cancel();
+            Ok::<_, super::Error>(7)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(outcome, 7);
+    }
+
+    #[tokio::test]
+    async fn pre_cancelled_write_never_polls_the_operation() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        let outcome = super::await_sent(&cancel, async {
+            panic!("cancelled work was polled");
+        })
+        .await;
+        assert!(matches!(outcome, Err(super::Error::Cancelled)));
+    }
     use std::io::ErrorKind;
 
     use super::connect_retrying_with;

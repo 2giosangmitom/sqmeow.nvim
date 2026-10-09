@@ -800,31 +800,43 @@ impl Adapter for OracleAdapter {
         statements: &[String],
         cancel: CancellationToken,
     ) -> Result<Vec<ResultSet>> {
+        if statements
+            .iter()
+            .any(|statement| !sqmeow_db::sql::oracle_edit(statement))
+        {
+            return Err(Error::driver(
+                "atomic Oracle edits accept only INSERT/UPDATE/DELETE/MERGE; DDL, transaction controls and PL/SQL may commit implicitly",
+            ));
+        }
         let statements = statements.to_vec();
         let stopped = cancel.clone();
         self.run_cancellable(&stopped, move |connection, cancel| {
+            let rollback = || connection.rollback().map_err(|error| Error::driver(format!(
+                "Oracle rollback failed; write outcome may be unknown, verify before retrying: {error}"
+            )));
             for statement in &statements {
                 if cancel.is_cancelled() {
-                    let _ = connection.rollback();
+                    rollback()?;
                     return Err(Error::Cancelled);
                 }
-                let affected = connection
-                    .execute(statement.as_str(), &[])
-                    .map_err(|error| {
-                        let _ = connection.rollback();
-                        Error::driver(format!("nothing was applied: {error}\nin: {statement}"))
-                    })?;
+                let affected = match connection.execute(statement.as_str(), &[]) {
+                    Ok(affected) => affected,
+                    Err(error) => {
+                        rollback()?;
+                        return Err(Error::driver(format!("nothing was applied: {error}\nin: {statement}")));
+                    }
+                };
                 let affected = affected.rows_affected();
                 if let Err(error) = crate::stream::check_affected(statement, affected) {
-                    let _ = connection.rollback();
+                    rollback()?;
                     return Err(crate::stream::rolled_back(error));
                 }
             }
             if cancel.is_cancelled() {
-                connection.rollback().map_err(Error::driver)?;
+                rollback()?;
                 return Err(Error::Cancelled);
             }
-            connection.commit().map_err(Error::driver)?;
+            connection.commit().map_err(|error| Error::driver(format!("Oracle commit outcome may be unknown; verify before retrying: {error}")))?;
             Ok(Vec::new())
         })
         .await

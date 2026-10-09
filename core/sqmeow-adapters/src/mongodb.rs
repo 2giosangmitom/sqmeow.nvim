@@ -119,21 +119,19 @@ impl MongoAdapter {
         for (done, (db, command)) in commands.iter().enumerate() {
             let failed = |error: String| {
                 Error::driver(format!(
-                    "{done} of {} commands were applied before one failed: {error}",
+                    "{done} of {} commands completed before one failed; the current write outcome may be unknown, verify before retrying: {error}",
                     commands.len()
                 ))
             };
-            let (command, tag) = tagged(command.clone());
+            let (command, _tag) = tagged(command.clone());
             let database = self.client.database(db);
-            let reply = tokio::select! {
-                biased;
-                () = cancel.cancelled() => {
-                    self.kill(&tag).await;
-                    return Err(crate::cancelled_after(done, commands.len()));
-                }
-                reply = database.run_command(command) => reply,
+            if cancel.is_cancelled() {
+                return Err(crate::cancelled_after(done, commands.len()));
             }
-            .map_err(|error| failed(error.to_string()))?;
+            let reply = crate::await_sent(cancel, async { database.run_command(command).await })
+                .await
+                .map_err(|_| crate::cancelled_after(done, commands.len()))?
+                .map_err(|error| failed(error.to_string()))?;
             written(&reply).map_err(failed)?;
         }
         Ok(Vec::new())
@@ -240,6 +238,9 @@ impl Adapter for MongoAdapter {
         statements: &[String],
         cancel: CancellationToken,
     ) -> Result<Vec<ResultSet>> {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
         let commands = statements
             .iter()
             .map(|statement| match parse(statement)? {
@@ -265,7 +266,7 @@ impl Adapter for MongoAdapter {
             let outcome = match reply {
                 Err(None) => {
                     self.kill(&tag).await;
-                    let _ = session.abort_transaction().await;
+                    session.abort_transaction().await.map_err(Error::driver)?;
                     return Err(Error::Cancelled);
                 }
                 // A standalone server has no transactions, and says so to the first command.
@@ -277,11 +278,21 @@ impl Adapter for MongoAdapter {
                 Ok(reply) => written(&reply),
             };
             if let Err(error) = outcome {
-                let _ = session.abort_transaction().await;
+                session.abort_transaction().await.map_err(|abort| {
+                    Error::driver(format!("MongoDB rollback failed; write outcome may be unknown, verify before retrying: {abort}; original error: {error}"))
+                })?;
                 return Err(Error::driver(format!("nothing was applied: {error}")));
             }
         }
-        session.commit_transaction().await.map_err(Error::driver)?;
+        if cancel.is_cancelled() {
+            session.abort_transaction().await.map_err(Error::driver)?;
+            return Err(Error::Cancelled);
+        }
+        session.commit_transaction().await.map_err(|error| {
+            Error::driver(format!(
+                "MongoDB commit outcome may be unknown; verify before retrying: {error}"
+            ))
+        })?;
         Ok(Vec::new())
     }
 
@@ -1018,6 +1029,56 @@ fn cell(value: Bson) -> Cell {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test(flavor = "current_thread")]
+    async fn standalone_cancel_after_server_write_reports_partial_progress() {
+        use mongodb::event::{EventHandler, command::CommandEvent};
+        let Ok(url) = std::env::var("SQMEOW_TEST_MONGODB_URL") else {
+            eprintln!("skipped: set SQMEOW_TEST_MONGODB_URL");
+            return;
+        };
+        let cancel = CancellationToken::new();
+        let stopped = cancel.clone();
+        let mut options = ClientOptions::parse(&url).await.unwrap();
+        let db = options
+            .default_database
+            .clone()
+            .unwrap_or_else(|| "test".into());
+        // Monitoring runs before run_command returns the successful reply.
+        // Cancel exactly after a server-confirmed insert, not on a timer.
+        options.command_event_handler = Some(EventHandler::callback(move |event| {
+            if matches!(event, CommandEvent::Succeeded(event) if event.command_name == "insert") {
+                stopped.cancel();
+            }
+        }));
+        let adapter = MongoAdapter {
+            client: Client::with_options(options).unwrap(),
+            db: RwLock::new(db),
+            cluster: false,
+        };
+        let observer = MongoAdapter::connect(&url, None).await.unwrap();
+        let collection = observer
+            .client
+            .database(&observer.database())
+            .collection::<Document>("audit_cancel_reply");
+        collection.delete_many(doc! {}).await.unwrap();
+        let commands = [
+            (
+                adapter.database(),
+                doc! {"insert":"audit_cancel_reply", "documents":[{"_id":1}]},
+            ),
+            (
+                adapter.database(),
+                doc! {"insert":"audit_cancel_reply", "documents":[{"_id":2}]},
+            ),
+        ];
+        let error = adapter.apply_in_turn(&commands, &cancel).await.unwrap_err();
+        assert!(!matches!(error, Error::Cancelled));
+        assert!(error.to_string().contains("1 of 2"), "{error}");
+        assert_eq!(collection.count_documents(doc! {"_id":1}).await.unwrap(), 1);
+        assert_eq!(collection.count_documents(doc! {"_id":2}).await.unwrap(), 0);
+        collection.drop().await.unwrap();
+    }
+
     #[test]
     fn aggregation_bindings_require_literal_expression_protection() {
         let source = r#"{"aggregate":"users","pipeline":[{"$project":{"value":{"$literal":":value"}}}],"cursor":{}}"#;

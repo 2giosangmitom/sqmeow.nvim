@@ -251,16 +251,18 @@ impl Adapter for ScyllaAdapter {
         for (done, statement) in statements.iter().enumerate() {
             let failed = |error: String| {
                 Error::driver(format!(
-                    "{done} of {} statements were applied before one failed: {error}\nin: {statement}",
+                    "{done} of {} statements completed before one failed; the current write outcome may be unknown, verify before retrying: {error}\nin: {statement}",
                     statements.len()
                 ))
             };
-            let reply = tokio::select! {
-                biased;
-                () = cancel.cancelled() => return Err(crate::cancelled_after(done, statements.len())),
-                reply = self.session.query_unpaged(statement.as_str(), ()) => reply,
+            if cancel.is_cancelled() {
+                return Err(crate::cancelled_after(done, statements.len()));
             }
-            .map_err(|error| failed(error.to_string()))?;
+            let reply =
+                crate::await_sent(&cancel, self.session.query_unpaged(statement.as_str(), ()))
+                    .await
+                    .map_err(|_| crate::cancelled_after(done, statements.len()))?
+                    .map_err(|error| failed(error.to_string()))?;
             // `IF EXISTS` and `IF NOT EXISTS` answer `[applied]`, false when the row is gone or taken.
             if let Ok(rows) = reply.into_rows_result()
                 && let Ok(Some(row)) = rows.maybe_first_row::<Row>()

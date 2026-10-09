@@ -177,3 +177,33 @@ async fn an_error_keeps_the_connection() {
     assert!(matches!(error, Error::Driver(_)), "{error}");
     run(&backend, "SELECT release_version FROM system.local").await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancel_after_server_write_reports_partial_progress() {
+    use std::{future::{Future, poll_fn}, task::Poll, time::Duration};
+    let url = server!();
+    let backend = connect(&url).await;
+    let observer = connect(&url).await;
+    table(&backend, "audit_cancel_reply", "id int PRIMARY KEY").await;
+    let cancel = CancellationToken::new();
+    let statements = [
+        "INSERT INTO sqmeow.audit_cancel_reply (id) VALUES (1)".into(),
+        "INSERT INTO sqmeow.audit_cancel_reply (id) VALUES (2)".into(),
+    ];
+    let work = backend.apply(&statements, cancel.clone());
+    tokio::pin!(work);
+    poll_fn(|cx| { assert!(work.as_mut().poll(cx).is_pending()); Poll::Ready(()) }).await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while run(&observer, "SELECT id FROM sqmeow.audit_cancel_reply WHERE id=1").await.row_count() == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.expect("first write must reach the server before cancellation");
+    cancel.cancel();
+    let error = work.await.unwrap_err();
+    assert!(!matches!(error, Error::Cancelled));
+    assert!(error.to_string().contains("1 of 2"), "{error}");
+    assert_eq!(run(&observer, "SELECT id FROM sqmeow.audit_cancel_reply WHERE id=2").await.row_count(), 0);
+    run(&backend, "DROP TABLE sqmeow.audit_cancel_reply").await;
+    backend.close().await;
+    observer.close().await;
+}
