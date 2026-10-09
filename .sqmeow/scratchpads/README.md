@@ -12,7 +12,9 @@ bind queries to connections.
 3. Execute `01_setup`, then `02_create`, then `03_read`.
 4. Execute `04_update`, re-run reads, then `05_delete` and read again.
 5. Run the adapter's `07_parameters` before cleanup.
-6. Run `06_cleanup` when finished. Confirm destructive-operation prompts.
+6. Run `08_advanced` any time after `02_create`; it is tolerant of
+   `04_update`/`05_delete` results and cleans up after itself.
+7. Run `06_cleanup` when finished. Confirm destructive-operation prompts.
 
 Use `<leader>E` for the whole buffer and `<CR>` for the current statement.
 Use a line selection to test range execution. Create files contain 100 rows;
@@ -45,6 +47,21 @@ The seed includes apostrophes, Unicode, nullable notes and literal colons.
 - `05_delete`: deletes payment 20, line item 20 and order 20, in that order.
   Counts become 20 customers, 20 products, 19 orders, 19 items, and 19 payments.
   Customer/product records remain, so this does not violate foreign keys.
+- `08_advanced`: one file per adapter exercising the popular commands beyond
+  CRUD: aggregates with GROUP BY/HAVING, DISTINCT, paging, string/math/date
+  functions, CASE, subqueries (IN/EXISTS/scalar/derived), CTEs, window
+  functions (ranking, LAG/LEAD, running totals, buckets), join flavors,
+  set operations and grouping extensions. Procedural coverage follows each
+  database: variables + FOR/WHILE loops + stored procedures/functions on
+  PostgreSQL, MySQL, MSSQL (batches separated by GO) and Oracle (anonymous
+  PL/SQL, sequences, MERGE/MINUS); macros on DuckDB; lambda functions on
+  ClickHouse; scalar UDFs on CockroachDB (no stored procedures there);
+  TEMP TRIGGERs on SQLite; batches/LWT/secondary indexes on CQL; lookup,
+  bucket, facet and index commands on MongoDB; hashes/lists/sets/sorted
+  sets/HyperLogLog plus Lua EVAL loops on Redis/Dragonfly; LET/FOR/DEFINE
+  FUNCTION on SurrealDB. Fixtures stay read-only: writes use self-cleaning
+  `sqmeow_tmp_adv*` objects (confirm the prompts), so `08_advanced` runs any
+  time after `02_create`, including after `04_update`/`05_delete`.
 - `06_cleanup`: removes only the five named fixture entities. Redis cleanup
   deletes only the 100 explicitly listed fixture keys, never `FLUSHDB`.
 

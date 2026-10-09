@@ -1,0 +1,80 @@
+-- Advanced smoke checks: run after 02_create. Tolerant of 04_update/05_delete.
+-- Reference fields are string IDs; follow them manually. Writes below touch
+-- only sqmeow:smoke:tmp:* keys (confirm destructive prompts); fixtures stay
+-- read-only. Run line-by-line with <CR>; EVAL covers server-side scripting
+-- with locals and FOR loops. Delete checks return 0.
+
+TYPE sqmeow:smoke:customers:2
+-- OBJECT ENCODING is a Redis-only introspection command; Dragonfly omits it.
+OBJECT ENCODING sqmeow:smoke:customers:2
+HLEN sqmeow:smoke:customers:2
+HKEYS sqmeow:smoke:customers:2
+HVALS sqmeow:smoke:customers:2
+HSTRLEN sqmeow:smoke:customers:2 name
+HEXISTS sqmeow:smoke:customers:1 note
+HEXISTS sqmeow:smoke:customers:2 note
+
+-- Strings on scratch keys.
+SET sqmeow:smoke:tmp:str hello
+GET sqmeow:smoke:tmp:str
+APPEND sqmeow:smoke:tmp:str " world"
+STRLEN sqmeow:smoke:tmp:str
+GETRANGE sqmeow:smoke:tmp:str 0 4
+SET sqmeow:smoke:tmp:counter 10
+INCR sqmeow:smoke:tmp:counter
+INCRBY sqmeow:smoke:tmp:counter 5
+GET sqmeow:smoke:tmp:counter
+EXPIRE sqmeow:smoke:tmp:str 300
+TTL sqmeow:smoke:tmp:str
+MGET sqmeow:smoke:tmp:str sqmeow:smoke:tmp:counter missing:key
+
+-- Hashes on scratch keys.
+HSET sqmeow:smoke:tmp:order id 9001 total 1234 status new
+HGET sqmeow:smoke:tmp:order total
+HMGET sqmeow:smoke:tmp:order id status total
+HGETALL sqmeow:smoke:tmp:order
+HINCRBY sqmeow:smoke:tmp:order total 100
+HSCAN sqmeow:smoke:tmp:order 0
+
+-- Lists on scratch keys.
+RPUSH sqmeow:smoke:tmp:queue 1 2 3 2
+LRANGE sqmeow:smoke:tmp:queue 0 -1
+LLEN sqmeow:smoke:tmp:queue
+LINDEX sqmeow:smoke:tmp:queue 0
+LPOP sqmeow:smoke:tmp:queue
+LRANGE sqmeow:smoke:tmp:queue 0 -1
+
+-- Sets on scratch keys.
+SADD sqmeow:smoke:tmp:cities Berlin Tokyo Berlin
+SMEMBERS sqmeow:smoke:tmp:cities
+SCARD sqmeow:smoke:tmp:cities
+SISMEMBER sqmeow:smoke:tmp:cities Berlin
+SADD sqmeow:smoke:tmp:cities2 Berlin Hanoi
+SINTER sqmeow:smoke:tmp:cities sqmeow:smoke:tmp:cities2
+SUNION sqmeow:smoke:tmp:cities sqmeow:smoke:tmp:cities2
+SDIFF sqmeow:smoke:tmp:cities sqmeow:smoke:tmp:cities2
+
+-- Sorted set: order totals ranked on a scratch key.
+ZADD sqmeow:smoke:tmp:totals 3450 1 8850 2 2600 3 6250 5
+ZRANGE sqmeow:smoke:tmp:totals 0 -1 WITHSCORES
+ZREVRANGE sqmeow:smoke:tmp:totals 0 1 WITHSCORES
+ZRANK sqmeow:smoke:tmp:totals 2
+ZSCORE sqmeow:smoke:tmp:totals 2
+ZCOUNT sqmeow:smoke:tmp:totals 3000 9000
+ZCARD sqmeow:smoke:tmp:totals
+
+-- HyperLogLog estimate on scratch keys.
+PFADD sqmeow:smoke:tmp:hll Berlin Tokyo Berlin Hanoi
+PFCOUNT sqmeow:smoke:tmp:hll
+
+-- Lua scripting: locals, FOR loop, and a read of a fixture hash.
+EVAL "local total = 0; for i = 1, 5 do total = total + i end; return total" 0
+EVAL "return redis.call('HGET', KEYS[1], 'name')" 1 sqmeow:smoke:customers:1
+EVAL "local n = 0; for _, k in ipairs(redis.call('HKEYS', KEYS[1])) do n = n + 1 end; return n" 1 sqmeow:smoke:orders:2
+
+-- Keyspace scan; a non-zero cursor means: keep scanning with that cursor.
+SCAN 0 MATCH sqmeow:smoke:tmp:* COUNT 100
+EXISTS sqmeow:smoke:tmp:str sqmeow:smoke:tmp:missing
+
+-- Cleanup: only the scratch keys above, never the fixture keys or FLUSHDB.
+DEL sqmeow:smoke:tmp:str sqmeow:smoke:tmp:counter sqmeow:smoke:tmp:order sqmeow:smoke:tmp:queue sqmeow:smoke:tmp:cities sqmeow:smoke:tmp:cities2 sqmeow:smoke:tmp:totals sqmeow:smoke:tmp:hll
