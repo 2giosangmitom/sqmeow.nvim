@@ -250,7 +250,7 @@ fn format_array(items: &[Cell], null_text: &str) -> String {
 }
 
 /// Replace the characters that would break a one-line cell, allocating only when one is present.
-pub(crate) fn escape(text: &str) -> Cow<'_, str> {
+pub fn escape(text: &str) -> Cow<'_, str> {
     if !text.contains(['\n', '\r', '\t']) {
         return Cow::Borrowed(text);
     }

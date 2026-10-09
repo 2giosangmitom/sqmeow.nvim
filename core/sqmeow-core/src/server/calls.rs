@@ -15,7 +15,7 @@ use sqmeow_db::sql;
 use sqmeow_db::sql::parameters::{self as query_parameters, Bound};
 use sqmeow_db::view;
 
-use super::summary::{capabilities, cell_value, summarize};
+use super::summary::{capabilities, page_values, summarize};
 use super::{Core, Started, params};
 use crate::server::archive;
 use crate::server::args::Args;
@@ -672,17 +672,7 @@ impl Core {
                 (None, true) => (offset..end).collect(),
             };
 
-            let width = result.columns().len();
-            let rows: Vec<Value> = chosen
-                .iter()
-                .map(|&row| {
-                    Value::Array(
-                        (0..width)
-                            .map(|column| cell_value(result, row, column))
-                            .collect(),
-                    )
-                })
-                .collect();
+            let rows = page_values(result, &chosen);
 
             map(vec![
                 // Which row of the result each one is.
