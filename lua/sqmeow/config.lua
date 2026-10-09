@@ -1,15 +1,13 @@
 --- Configuration defaults and validation.
 ---
---- Pass only the options you want to change to |sqmeow.setup()|. Each setup
---- starts from the defaults and discards the previous setup call's options.
---- Nested option tables are merged. See |sqmeow-sources| for connection discovery
---- and |sqmeow-keymaps| for mappings.
+--- Pass only changed options to |sqmeow.setup()|. Each setup starts from
+--- defaults; nested tables merge. Sources: |sqmeow-sources|. Mappings:
+--- |sqmeow-keymaps|.
 ---
---- Limits include `query.max_rows` (retained rows),
---- `ui.result.page_size` (displayed rows per page), and `query.timeout_ms`
---- (execution deadline). A zero row limit is unlimited; a zero timeout is off.
---- `query.history_size` is in-memory retention, while `query.history_limit`
---- controls the visible persistent log. See |sqmeow-history| for storage paths.
+--- `query.max_rows` caps kept rows, `ui.result.page_size` caps shown rows per
+--- page, `query.timeout_ms` caps run time. Zero rows = all; zero timeout = off.
+--- `query.history_size` is memory retention, `query.history_limit` is shown log.
+--- Paths: |sqmeow-history|.
 ---@tag sqmeow-config
 ---@toc_entry Configuration
 
@@ -37,7 +35,7 @@ M.defaults = {
       max_column_width = 48,
       -- Show type and key icons in column headers.
       column_icons = true,
-      -- What a SQL `NULL` reads as. Distinct from an empty string, which is drawn as nothing.
+      -- What SQL `NULL` shows as. Empty string draws as nothing.
       null_text = 'NULL',
       -- Pin column header when scrolling down past the first visible lines.
       sticky_header = true,
@@ -47,21 +45,20 @@ M.defaults = {
     -- The border of every dialog.
     border = 'default',
     winbar = true,
-    -- Reopen the saved connections, the current one, and the drawer nodes that were open when
-    -- Neovim last quit, the first time the drawer opens.
+    -- Reopen saved connections and expanded drawer nodes on next drawer open.
     persist_session = false,
   },
 
   query = {
-    -- Maximum retained rows per result. Results exceeding the cap are truncated. 0 keeps all rows.
+    -- Maximum kept rows per result. Over-cap results truncate. 0 keeps all.
     max_rows = 100000,
     -- Milliseconds before a query is cancelled. 0 disables the timeout.
     timeout_ms = 0,
-    -- Query results kept in memory. Older archived results are loaded from disk when reopened.
+    -- Query runs kept in memory. Evicted archives reload from disk on reopen.
     history_size = 32,
     -- Save the queries you run, and the rows they returned, under `core.path`.
     persist_history = true,
-    -- Queries shown in the log. Prune the oldest entries when storage exceeds twice this limit.
+    -- Queries shown in the log. Prunes oldest past twice this limit.
     history_limit = 500,
     -- Ask before a DELETE or UPDATE without WHERE, a DROP, a TRUNCATE, or emptying a database.
     confirm_destructive = true,

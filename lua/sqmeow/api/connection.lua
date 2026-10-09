@@ -10,7 +10,7 @@ local function engine()
   return require('sqmeow.rpc.client')
 end
 
---- Open a connection. Returns once the engine accepts the request; success arrives as an event.
+--- Open a connection. Returns when the engine accepts; success arrives as an event.
 ---@param url string A database URL, such as `sqlite://app.db` or `postgres://localhost/app`.
 ---@param opts table|nil `name` labels it; `database` and `parent` identify a child
 --- database; `read_only` rejects writes; `ssh` selects an SSH host or alias.
@@ -60,10 +60,10 @@ function M.connect(url, opts)
   return id
 end
 
---- Open a named source entry, carrying over its read-only and SSH settings.
---- Reuses an existing non-closed connection only when its current definition matches.
---- Changed definitions must be disconnected before reconnecting.
---- A returned id may still be connecting; it does not prove login succeeded.
+--- Open a named source entry with its read-only and SSH settings.
+--- Reuses an open connection only when its definition matches.
+--- Disconnect first when definitions changed.
+--- Returned id may still be connecting; it never proves login worked.
 ---@param name string The name the source gave it.
 ---@return integer|nil id
 ---@return string|nil error
@@ -100,19 +100,18 @@ function M.connect_named(name)
   )
 end
 
---- Read configured sources without connecting to their databases.
---- Entries are returned in source order, with duplicate names removed. The
---- problems list includes source failures and conflicts; usable entries remain.
---- Project parsing can start the engine. Credential templates resolve only when connecting.
+--- Read configured sources without connecting.
+--- Returns entries in source order, dupes removed. Problems lists failures and
+--- conflicts; usable entries stay. Project parsing may start the engine.
+--- Templates resolve only on connect.
 ---@return sqmeow.ConnectionSpec[] connections
 ---@return string[] problems
 function M.available()
   return require('sqmeow.sources').load()
 end
 
---- Persist a connection to the first configured file source (or its default).
---- Replaces the same-named file entry. Does not open a connection or write back
---- to project, environment, or command sources. Templates remain unexpanded.
+--- Persist a connection to the file source. Replaces same-named file entries.
+--- Never opens a connection or writes to project sources. Templates stay raw.
 ---@param name string
 ---@param url string
 ---@param opts table|nil `read_only` saves it as a connection that runs only statements that read,
@@ -132,9 +131,9 @@ function M.save(name, url, opts)
   return written
 end
 
---- Update a file-source connection and rename its open connection to match.
---- URL, read-only, and tunnel changes take effect only after reconnecting.
---- Entries from project, environment, and command sources cannot be edited here.
+--- Update a file-source connection and rename its open copy.
+--- URL, read-only, and tunnel apply after reconnect.
+--- Project entries cannot be edited here.
 ---@param name string The name it is saved under now.
 ---@param changes table `name`, `url`, `read_only` and `ssh`, `''` for no tunnel; any may be left out
 ---  to keep what is there.
@@ -182,8 +181,8 @@ function M.edit(name, changes)
   return true
 end
 
---- Rename an open connection in editor state and refresh its displayed label.
---- Does not update a saved definition; use |sqmeow.api.connection.edit()| for that.
+--- Rename an open connection and refresh its label.
+--- Saved definitions stay; use |sqmeow.api.connection.edit()| for those.
 ---@param id integer
 ---@param name string
 ---@return boolean renamed
@@ -200,9 +199,8 @@ function M.rename(id, name)
   return true
 end
 
---- Delete a connection: close it while it is open, and forget the saved entry.
---- A connection from a source other than the file is only closed, since its entry cannot be
---- removed.
+--- Delete a connection: close it when open, forget its saved entry.
+--- Non-file entries only close; their definitions stay.
 ---@param name string The name it is saved or open under.
 ---@return boolean removed Whether anything was closed or forgotten.
 function M.remove(name)
@@ -287,8 +285,8 @@ function M.disconnect(id)
   state.remove_connection(id)
 end
 
---- Select the default target for buffers without a connection binding.
---- Does not connect or wait for readiness. Bound buffers retain their own target.
+--- Pick the default target for unbound buffers.
+--- Never connects or waits. Bound buffers keep their own target.
 ---@param id integer
 ---@return sqmeow.Connection|nil connection The one now active, or nil if there is no such id.
 function M.use(id)
@@ -305,9 +303,9 @@ function M.use(id)
   return connection
 end
 
---- Resolve a buffer's target: its named binding first, then the active connection.
---- A missing bound connection is an error, not a reason to fall back. This only
---- looks up editor state; it neither opens a connection nor waits for readiness.
+--- Resolve a buffer's target: named binding first, then active connection.
+--- Missing bound connection is an error, never a fallback. Reads editor state
+--- only; never opens a connection or waits.
 ---@param buf integer|nil Defaults to the current buffer.
 ---@return sqmeow.Connection|nil connection
 ---@return string|nil error Why there is none.
@@ -336,8 +334,8 @@ function M.connections()
   return require('sqmeow.core.state').connection_list()
 end
 
---- Discovered databases of a connection, if it is a cluster. Uses cached schema nodes
---- if already introspected, or queries the engine otherwise.
+--- Databases of a cluster connection. Uses cached schema nodes when present,
+--- else asks the engine.
 ---@param conn_id integer
 ---@param callback fun(databases: string[]|nil, error: string|nil)
 function M.databases(conn_id, callback)

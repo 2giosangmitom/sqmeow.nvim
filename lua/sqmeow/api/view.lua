@@ -26,9 +26,8 @@ function M.review()
   require('sqmeow.ui.edit').review()
 end
 
---- Filter and order retained rows with a Polars SQL WHERE condition and ORDER BY list.
---- Every adapter uses the same syntax, including disconnected and restored historical results.
---- No query is rerun. Empty strings clear the clauses; only retained rows can be matched.
+--- Filter kept rows with Polars SQL WHERE + ORDER BY. Same syntax everywhere,
+--- incl. disconnected and restored history. No rerun. Empty clears; kept rows only.
 ---@param view { where: string|nil, order_by: string|nil }
 ---@return boolean started
 ---@usage >lua
@@ -38,9 +37,8 @@ function M.filter(view)
   return require('sqmeow.ui.result').filter(view.where or '', view.order_by or '')
 end
 
---- Group queried/history data locally, including disconnected/restored snapshots.
---- Built-in Polars aggregates only; outputs are read-only and exportable.
---- Empty group_by/aggregates/having remove aggregation, preserving the source.
+--- Group the snapshot locally with Polars aggregates. Output is read-only,
+--- exportable. Empty group_by/aggregates/having clears, source stays.
 ---@param view { group_by: string|nil, aggregates: string|nil, having: string|nil, where: string|nil, order_by: string|nil }
 ---@return boolean started
 ---@usage >lua
@@ -53,8 +51,8 @@ function M.aggregate(view)
   return require('sqmeow.ui.result').aggregate(view)
 end
 
---- Filter and sort the current result's rows in the engine's memory, without querying again.
---- Columns are zero-based; a filter without one searches every column.
+--- Filter/sort current rows in engine memory, no requery.
+--- Columns are zero-based; filter without column searches all.
 ---@param view { filters: { column: integer|nil, op: string, value: string|nil }[]|nil, sort: { column: integer, descending: boolean|nil }[]|nil }
 --- `op`: `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `starts_with`, `is_null`, `not_null`.
 ---@usage >lua
@@ -72,17 +70,14 @@ function M.view(view)
   result.send_view()
 end
 
---- Browse a connected table's declared foreign keys.
---- Press `gR` on a drawer table or result column. The popup shows Belongs to
---- and Referenced by. Each constraint lists its columns in order, including
---- composite keys and self-references. `<CR>` follows a relationship to the other
---- table; `K` opens its structure. `?` shows configured mappings.
---- Override popup actions under `keymaps.relationships`.
+--- Browse a table's foreign keys. `gR` on a drawer table or result column.
+--- Popup shows Belongs to / Referenced by, columns in order, incl. composite
+--- and self-references. <CR> follows, `K` shows structure, `?` maps.
+--- Remap under `keymaps.relationships`.
 ---
---- Empty sections say `None`; unsupported adapters and metadata failures show an
---- error. An open connection is required. Closing the browser, disconnecting or
---- restarting invalidates pending replies. The browser does not fetch related rows
---- or infer cardinality or many-to-many relationships.
+--- Empty sections show `None`; unsupported adapters and metadata failures
+--- error. Needs an open connection. Close/disconnect/restart voids pending
+--- replies. Never fetches rows or infers cardinality.
 ---@tag sqmeow-relationships
 ---@toc_entry Relationships
 ---@param conn_id integer
@@ -128,7 +123,7 @@ function M.reopen(call_id)
   result.render(state.call)
 end
 
---- Show a logged result the engine no longer holds, from the copy saved beside the log.
+--- Show an archived result the engine dropped, from the copy next to the log.
 ---@param entry table From the query log, with a saved result.
 ---@return integer|nil call_id
 ---@return string|nil error
@@ -165,8 +160,8 @@ function M.restore(entry)
   return call_id
 end
 
---- Create a scratchpad, asking what to call it. `/` in the name makes folders.
----@param name string|nil Raw name with extension (e.g. `report.sql`, `cache.redis`, `reports/monthly.sql`). If given, it is created directly; otherwise the user is prompted.
+--- Create a scratchpad. `/` in the name makes folders.
+---@param name string|nil Name with extension (`report.sql`, `reports/monthly.sql`). Given: created directly; missing: prompts.
 ---@param default string|nil Prefilled prompt when asking, such as a folder followed by `/`.
 ---@param store table|nil Internal file operations for the selected drawer section.
 function M.scratchpad(name, default, store)
@@ -218,7 +213,7 @@ function M.open_all()
   resume()
 end
 
---- Show everything, or hide it all if any of it is showing.
+--- Show everything, or hide all when anything shows.
 function M.toggle()
   local layout = require('sqmeow.ui.layout')
   if layout.anything_open() then
