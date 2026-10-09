@@ -2,7 +2,9 @@
 
 use std::borrow::Cow;
 
-use polars::prelude::{AnyValue, Column, DataFrame, DataType, IntoSeries, ObjectChunked, Series};
+use polars::prelude::{
+    AnyValue, Column, CompatLevel, DataFrame, DataType, IntoSeries, ObjectChunked, Series,
+};
 
 use crate::value::{Cell, RetainedCell};
 
@@ -31,12 +33,46 @@ pub(super) fn column(name: &str, cells: Vec<RetainedCell>) -> Column {
             .iter()
             .all(|value| value.is_null() || value.dtype() == dtype)
         {
-            return Series::from_any_values_and_dtype(name.into(), &values, &dtype, true)
-                .expect("matching native scalar values")
-                .into();
+            let series = Series::from_any_values_and_dtype(name.into(), &values, &dtype, true)
+                .expect("matching native scalar values");
+            return compact_text(series).into();
         }
     }
     object(name, cells)
+}
+
+/// Large string-view builders retain spare capacity in their growing buffers.
+/// Polars' Arrow compatibility conversion packs the bytes into one buffer;
+/// importing it restores native String storage without changing values/nulls.
+/// Pay this one-time copy only for substantial out-of-line text, before sharing.
+fn compact_text(series: Series) -> Series {
+    const MIN_BUFFER_BYTES: usize = 1024 * 1024;
+    // Bound the transient copy. Larger columns already benefit from native
+    // storage; copying them again can raise ingest peak RSS and latency.
+    const MAX_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+    if series.str().is_ok_and(|strings| {
+        strings.downcast_iter().any(|array| {
+            let buffer_bytes = array.total_buffer_len();
+            // Offset-based Arrow export also copies inline strings into the
+            // byte buffer. Skip inline-heavy columns rather than duplicate
+            // substantial text that already fits inside native views.
+            let inline_bytes = array.total_bytes_len().saturating_sub(buffer_bytes);
+            (MIN_BUFFER_BYTES..=MAX_BUFFER_BYTES).contains(&buffer_bytes)
+                && inline_bytes <= buffer_bytes / 8
+        })
+    }) {
+        let compacted = Series::from_arrow(
+            series.name().clone(),
+            series.to_arrow(0, CompatLevel::oldest()),
+        )
+        .expect("native text Arrow roundtrip");
+        // Arrow import leaves string-byte statistics lazy. Populate them before
+        // views clone the array, rather than scanning it during cache admission.
+        let _ = compacted.estimated_size();
+        compacted
+    } else {
+        series
+    }
 }
 
 fn object(name: &str, cells: Vec<RetainedCell>) -> Column {
@@ -116,4 +152,75 @@ pub(super) fn append(frame: &mut DataFrame, row: Vec<Cell>) {
         })
         .collect();
     *frame = DataFrame::new(height + 1, columns).expect("rectangular appended frame");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn large_text_buffers_are_packed_without_changing_cells() {
+        let cells: Vec<_> = (0..12_000)
+            .map(|index| {
+                RetainedCell(match index % 7 {
+                    0 => Cell::Null,
+                    1 => Cell::Text(String::new()),
+                    2 => Cell::Text("中🙂".into()),
+                    _ => Cell::Text(format!("{index}\n\t{}", "é".repeat(128))),
+                })
+            })
+            .collect();
+        let expected: Vec<_> = cells.iter().map(|value| value.0.clone()).collect();
+        let column = column("text", cells);
+        assert_eq!(column.dtype(), &DataType::String);
+        let values = column.str().unwrap();
+        assert_eq!(values.chunks().len(), 1);
+        assert_eq!(
+            values.downcast_iter().next().unwrap().data_buffers().len(),
+            1
+        );
+        for (index, expected) in expected.iter().enumerate() {
+            assert_eq!(cell(&column, index).unwrap().as_ref(), expected);
+        }
+    }
+
+    #[test]
+    fn small_large_and_inline_heavy_text_keep_their_original_buffers() {
+        for (rows, long_every) in [(100, 1), (8_000, 1), (20_000, 10)] {
+            let text: Vec<_> = (0..rows)
+                .map(|index| {
+                    if index % long_every == 0 {
+                        "x".repeat(600)
+                    } else {
+                        "short-inline".into()
+                    }
+                })
+                .collect();
+            let values: Vec<_> = text.iter().map(|value| AnyValue::String(value)).collect();
+            let series =
+                Series::from_any_values_and_dtype("text".into(), &values, &DataType::String, true)
+                    .unwrap();
+            let before = series
+                .str()
+                .unwrap()
+                .downcast_iter()
+                .next()
+                .unwrap()
+                .data_buffers()
+                .as_ptr();
+            let compacted = compact_text(series);
+            let after = compacted
+                .str()
+                .unwrap()
+                .downcast_iter()
+                .next()
+                .unwrap()
+                .data_buffers()
+                .as_ptr();
+            assert_eq!(
+                before, after,
+                "skip compaction outside the byte/copy budget"
+            );
+        }
+    }
 }

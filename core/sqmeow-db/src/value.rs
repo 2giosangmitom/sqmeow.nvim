@@ -251,7 +251,10 @@ fn format_array(items: &[Cell], null_text: &str) -> String {
 
 /// Replace the characters that would break a one-line cell, allocating only when one is present.
 pub fn escape(text: &str) -> Cow<'_, str> {
-    if !text.contains(['\n', '\r', '\t']) {
+    // These ASCII bytes cannot appear inside a multibyte UTF-8 character.
+    // Slice searches avoid decoding every character in the common plain-text case.
+    let bytes = text.as_bytes();
+    if !bytes.contains(&b'\n') && !bytes.contains(&b'\r') && !bytes.contains(&b'\t') {
         return Cow::Borrowed(text);
     }
 
@@ -308,6 +311,20 @@ mod tests {
         assert!(Cell::Decimal("1.00".into()).is_numeric());
         assert!(!Cell::Text("1".into()).is_numeric());
         assert!(!Cell::Null.is_numeric());
+    }
+
+    #[test]
+    fn escape_preserves_unicode_and_only_replaces_line_controls() {
+        for text in ["", "plain \\\" text", "中🙂é", "\u{85}\u{2028}", "a\0b"] {
+            assert!(matches!(escape(text), Cow::Borrowed(value) if value == text));
+        }
+        for text in ["\n", "\r", "\t", "中\n🙂\r\té", "a\r\nb", "\n\n\t"] {
+            let expected = text
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t");
+            assert_eq!(escape(text), expected);
+        }
     }
 
     #[test]
