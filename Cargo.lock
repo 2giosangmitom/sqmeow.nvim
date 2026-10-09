@@ -5673,7 +5673,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-adapters"
-version = "2.5.0"
+version = "3.0.0"
 dependencies = [
  "async-trait",
  "bigdecimal",
@@ -5706,7 +5706,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-core"
-version = "2.5.0"
+version = "3.0.0"
 dependencies = [
  "dotenvy",
  "rmpv",
@@ -5722,7 +5722,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-db"
-version = "2.5.0"
+version = "3.0.0"
 dependencies = [
  "async-trait",
  "polars",
@@ -5738,7 +5738,7 @@ dependencies = [
 
 [[package]]
 name = "sqmeow-rpc"
-version = "2.5.0"
+version = "3.0.0"
 dependencies = [
  "rmpv",
  "thiserror",
