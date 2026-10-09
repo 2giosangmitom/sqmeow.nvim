@@ -3,7 +3,7 @@
 use rmpv::Value;
 use sqmeow_db::edit::Source;
 use sqmeow_db::result::{AnyValue, ResultSet};
-use sqmeow_db::value::Cell;
+use sqmeow_db::value::{Cell, escape};
 
 use crate::server::payload::map;
 use crate::server::session::Call;
@@ -19,16 +19,23 @@ pub(super) fn capabilities(connected: bool) -> Value {
 
 /// Encode nulls, booleans, and integers as MessagePack values; send other cells as text.
 pub(super) fn cell_value(result: &ResultSet, row: usize, column: usize) -> Value {
-    if matches!(
-        result.scalar(row, column),
-        Some(AnyValue::String(_) | AnyValue::Binary(_))
-    ) {
-        return Value::from(
-            result
-                .cell_display(row, column, "")
-                .expect("retained row")
-                .into_owned(),
-        );
+    // Read native scalars once. Falling through to Cell would repeat Polars
+    // dispatch and materialize a value that MessagePack can encode directly.
+    match result.scalar(row, column) {
+        Some(AnyValue::Null) | None => return Value::Nil,
+        Some(AnyValue::Boolean(value)) => return Value::from(value),
+        Some(AnyValue::Int64(value)) => return Value::from(value),
+        Some(AnyValue::Float64(value)) if value.is_finite() => return Value::from(value),
+        Some(AnyValue::String(value)) => return Value::from(escape(value).into_owned()),
+        Some(AnyValue::Binary(_)) => {
+            return Value::from(
+                result
+                    .cell_display(row, column, "")
+                    .expect("retained row")
+                    .into_owned(),
+            );
+        }
+        _ => {}
     }
     // Both native and fallback cells use the same wire-format rules.
     let cell = result.cell(row, column);
@@ -41,6 +48,48 @@ pub(super) fn cell_value(result: &ResultSet, row: usize, column: usize) -> Value
         // Exact numerics stay text.
         other => Value::from(other.display("").into_owned()),
     }
+}
+
+/// Dispatch native column types once per page, not once per displayed cell.
+/// Object/binary columns keep the lossless compatibility encoder.
+pub(super) fn page_values(result: &ResultSet, chosen: &[usize]) -> Vec<Value> {
+    let mut rows: Vec<Vec<Value>> = chosen
+        .iter()
+        .map(|_| Vec::with_capacity(result.columns().len()))
+        .collect();
+    for (index, column) in result.frame().columns().iter().enumerate() {
+        let series = column.as_materialized_series();
+        if let Ok(values) = series.str() {
+            for (row, &source) in rows.iter_mut().zip(chosen) {
+                row.push(
+                    values
+                        .get(source)
+                        .map_or(Value::Nil, |value| Value::from(escape(value).into_owned())),
+                );
+            }
+        } else if let Ok(values) = series.i64() {
+            for (row, &source) in rows.iter_mut().zip(chosen) {
+                row.push(values.get(source).map_or(Value::Nil, Value::from));
+            }
+        } else if let Ok(values) = series.f64() {
+            for (row, &source) in rows.iter_mut().zip(chosen) {
+                row.push(match values.get(source) {
+                    Some(value) if value.is_finite() => Value::from(value),
+                    Some(value) => Value::from(Cell::Float(value).display("").into_owned()),
+                    None => Value::Nil,
+                });
+            }
+        } else if let Ok(values) = series.bool() {
+            for (row, &source) in rows.iter_mut().zip(chosen) {
+                row.push(values.get(source).map_or(Value::Nil, Value::from));
+            }
+        } else {
+            for (row, &source) in rows.iter_mut().zip(chosen) {
+                row.push(cell_value(result, source, index));
+            }
+        }
+    }
+    rows.into_iter().map(Value::Array).collect()
 }
 
 /// What the editor needs to describe a result and lay its columns out.
@@ -134,11 +183,15 @@ mod tests {
         let values = vec![
             Cell::Null,
             Cell::Bool(true),
+            Cell::Bool(false),
             Cell::Int(i64::MAX),
+            Cell::Int(i64::MIN),
             Cell::Float(0.125),
+            Cell::Float(-0.0),
             Cell::Float(f64::NAN),
             Cell::Float(f64::INFINITY),
             Cell::Text("中\n\t\\\"".into()),
+            Cell::Text("plain\rtext".into()),
             Cell::bytes(&[255; 128]),
             Cell::Decimal("12345678901234567890.00100".into()),
             Cell::Timestamp("infinity".into()),
@@ -166,6 +219,61 @@ mod tests {
             };
             assert_eq!(cell_value(&native, 0, index), expected);
             assert_eq!(cell_value(&fallback, index, 0), expected);
+        }
+        assert_eq!(cell_value(&native, 1, 0), Value::Nil);
+        assert_eq!(cell_value(&native, 0, values.len()), Value::Nil);
+    }
+
+    #[test]
+    fn page_encoding_matches_cell_encoding_for_native_and_fallback_columns() {
+        use sqmeow_db::result::Column;
+        let mut result = ResultSet::new(
+            "paging",
+            vec![
+                Column::new("text", "TEXT"),
+                Column::new("int", "BIGINT"),
+                Column::new("float", "DOUBLE"),
+                Column::new("bool", "BOOLEAN"),
+                Column::new("object", "DECIMAL"),
+                Column::new("bytes", "BLOB"),
+            ],
+        );
+        result.push_row(vec![
+            Cell::Text("中\r\n\t".into()),
+            Cell::Int(i64::MAX),
+            Cell::Float(f64::INFINITY),
+            Cell::Bool(false),
+            Cell::Decimal("9999999999999999.00100".into()),
+            Cell::bytes(&[255; 128]),
+        ]);
+        result.push_row(vec![
+            Cell::Null,
+            Cell::Null,
+            Cell::Float(f64::NAN),
+            Cell::Null,
+            Cell::Null,
+            Cell::Null,
+        ]);
+        result.push_row(vec![
+            Cell::Text("plain".into()),
+            Cell::Int(i64::MIN),
+            Cell::Float(-0.0),
+            Cell::Bool(true),
+            Cell::Text("mixed".into()),
+            Cell::bytes(&[]),
+        ]);
+        for chosen in [vec![], vec![0, 1, 2], vec![2, 0, 2, 1]] {
+            let expected: Vec<Value> = chosen
+                .iter()
+                .map(|&row| {
+                    Value::Array(
+                        (0..result.columns().len())
+                            .map(|column| cell_value(&result, row, column))
+                            .collect(),
+                    )
+                })
+                .collect();
+            assert_eq!(page_values(&result, &chosen), expected);
         }
     }
 
