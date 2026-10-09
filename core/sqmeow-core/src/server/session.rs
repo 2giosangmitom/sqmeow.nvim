@@ -508,6 +508,58 @@ mod tests {
     }
 
     #[test]
+    fn evicted_calls_and_row_views_drop_after_the_last_reader() {
+        let session = Session::default();
+        session.configure(OptionsPatch {
+            history_size: Some(1),
+            ..OptionsPatch::default()
+        });
+        let first = session.store_call(call(1, 250));
+        let rows = Arc::new(vec![249, 0]);
+        let weak_rows = Arc::downgrade(&rows);
+        *first.view.lock().unwrap() = Some(View::Rows(rows));
+        let weak_call = Arc::downgrade(&first);
+        let (_, displayed) = first.display();
+
+        session.store_call(call(2, 1));
+        assert!(session.call(CallId(1)).is_none());
+        assert_eq!(first.result.row_count(), 250);
+        drop(first);
+        assert!(weak_call.upgrade().is_none());
+        assert!(
+            weak_rows.upgrade().is_some(),
+            "an active page still owns its selection"
+        );
+        drop(displayed);
+        assert!(weak_rows.upgrade().is_none());
+    }
+
+    #[test]
+    fn reset_and_eviction_release_aggregate_frames_after_the_last_reader() {
+        let session = Session::default();
+        session.configure(OptionsPatch {
+            history_size: Some(1),
+            ..OptionsPatch::default()
+        });
+        let first = session.store_call(call(1, 250));
+        let derived = Arc::new(call(9, 2).result);
+        let weak_derived = Arc::downgrade(&derived);
+        *first.view.lock().unwrap() = Some(View::Aggregate(derived));
+        let (displayed, _) = first.display();
+        *first.view.lock().unwrap() = None;
+        assert!(weak_derived.upgrade().is_some());
+        drop(displayed);
+        assert!(weak_derived.upgrade().is_none());
+
+        let derived = Arc::new(call(10, 2).result);
+        let weak_derived = Arc::downgrade(&derived);
+        *first.view.lock().unwrap() = Some(View::Aggregate(derived));
+        drop(first);
+        session.store_call(call(2, 1));
+        assert!(weak_derived.upgrade().is_none());
+    }
+
+    #[test]
     fn a_stored_result_keeps_every_row_for_the_editor_to_ask_for() {
         let session = Session::default();
         session.store_call(call(1, 250));
