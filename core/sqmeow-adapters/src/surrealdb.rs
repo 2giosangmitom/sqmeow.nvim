@@ -1,7 +1,7 @@
 //! The SurrealDB adapter.
 
 use std::collections::HashSet;
-use std::sync::{PoisonError, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Instant;
 
 use percent_encoding::percent_decode_str;
@@ -38,12 +38,21 @@ const DEFAULT_NAME: &str = "main";
 /// How many records a schemaless table's fields are read from.
 const SAMPLE_SIZE: usize = 100;
 
+struct CancelOnDrop(CancellationToken);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 /// One connection to a SurrealDB server, on one namespace and database.
+#[derive(Clone)]
 pub struct SurrealAdapter {
     db: Surreal<Client>,
     namespace: String,
     /// The database queries run on. `USE DB` changes it.
-    database: RwLock<String>,
+    database: Arc<RwLock<String>>,
+    execution: Arc<tokio::sync::Mutex<()>>,
     /// Whether the URL named no database, so the drawer lists every one in the namespace.
     cluster: bool,
 }
@@ -132,9 +141,37 @@ impl SurrealAdapter {
         Ok(Self {
             db,
             namespace: target.namespace,
-            database: RwLock::new(database),
+            database: Arc::new(RwLock::new(database)),
+            execution: Arc::new(tokio::sync::Mutex::new(())),
             cluster,
         })
+    }
+
+    /// Dropping a sent SDK query does not roll it back. Keep it alive and retain
+    /// execution ownership until its actual outcome is known.
+    async fn run<T, F, Fut>(&self, cancel: &CancellationToken, work: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(Self) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<T>> + Send + 'static,
+    {
+        let guard = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(Error::Cancelled),
+            guard = Arc::clone(&self.execution).lock_owned() => guard,
+        };
+        let stopped = cancel.child_token();
+        let _cancel = CancelOnDrop(stopped.clone());
+        let adapter = self.clone();
+        tokio::spawn(async move {
+            let _guard = guard;
+            if stopped.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            work(adapter).await
+        })
+        .await
+        .map_err(Error::driver)?
     }
 
     /// Every database in the namespace when the URL named none, and `None` otherwise.
@@ -253,16 +290,15 @@ impl Adapter for SurrealAdapter {
         cancel: CancellationToken,
     ) -> Result<Vec<ResultSet>> {
         let query = transaction(statements);
-        let reply = tokio::select! {
-            biased;
-            () = cancel.cancelled() => return Err(Error::Cancelled),
-            reply = self.db.query(query) => reply,
-        };
-        let mut response = reply.map_err(Error::driver)?;
-        if let Some(error) = first_error(&mut response.take_errors()) {
-            return Err(Error::driver(format!("nothing was applied: {error}")));
-        }
-        Ok(Vec::new())
+        self.run(&cancel, move |adapter| async move {
+            let reply = adapter.db.query(query).await;
+            let mut response = reply.map_err(Error::driver)?;
+            if let Some(error) = first_error(&mut response.take_errors()) {
+                return Err(Error::driver(format!("nothing was applied: {error}")));
+            }
+            Ok(Vec::new())
+        })
+        .await
     }
 
     async fn execute(
@@ -271,11 +307,11 @@ impl Adapter for SurrealAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(Error::Cancelled),
-            result = self.read(statement, &[], max_rows) => result,
-        }
+        let statement = statement.to_owned();
+        self.run(&cancel, move |adapter| async move {
+            adapter.read(&statement, &[], max_rows).await
+        })
+        .await
     }
 
     async fn execute_bound(
@@ -285,11 +321,12 @@ impl Adapter for SurrealAdapter {
         max_rows: usize,
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(Error::Cancelled),
-            result = self.read(statement, values, max_rows) => result,
-        }
+        let statement = statement.to_owned();
+        let values = values.to_vec();
+        self.run(&cancel, move |adapter| async move {
+            adapter.read(&statement, &values, max_rows).await
+        })
+        .await
     }
 
     /// The database queries run on.

@@ -5,8 +5,8 @@
 //! a second serves the drawer, which a long query does not hold up.
 //!
 //! The driver cannot stop a running query from another connection, so a
-//! cancel returns at once while the query runs on in the background. The next
-//! query waits for it, since they share one session.
+//! cancellation prevents queued work from starting. Once SQL starts, await its
+//! actual outcome rather than reporting cancellation for a committed write.
 
 use std::sync::{
     Arc, Mutex,
@@ -48,6 +48,7 @@ const DEFAULT_TCPS_PORT: u16 = 2484;
 pub struct OracleAdapter {
     connection: Arc<Mutex<Session>>,
     meta: Arc<Mutex<Session>>,
+    execution: Arc<tokio::sync::Mutex<()>>,
     /// The user queries run as, in upper case, which unqualified names resolve to.
     default_schema: String,
 }
@@ -59,6 +60,13 @@ struct Session {
     connection: Option<oracledb::Connection>,
     config: oracledb::Config,
     metadata: bool,
+}
+
+struct CancelOnDrop(CancellationToken);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 impl Session {
@@ -201,6 +209,7 @@ impl OracleAdapter {
         let adapter = Self {
             connection: Arc::new(Mutex::new(connection)),
             meta: Arc::new(Mutex::new(meta)),
+            execution: Arc::new(tokio::sync::Mutex::new(())),
             default_schema: String::new(),
         };
         let default_schema = adapter
@@ -212,24 +221,43 @@ impl OracleAdapter {
         })
     }
 
-    /// Run `work` against the session on a blocking thread, giving up when
-    /// `cancel` trips. The work itself keeps running: the driver cannot stop
-    /// it, so the next query waits for it.
+    /// Prevent cancelled work from starting; running SQL reports its real outcome.
     async fn run<T, F>(&self, cancel: &CancellationToken, work: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce(&oracledb::Connection) -> Result<T> + Send + 'static,
     {
+        self.run_cancellable(cancel, move |connection, _| work(connection))
+            .await
+    }
+
+    async fn run_cancellable<T, F>(&self, cancel: &CancellationToken, work: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&oracledb::Connection, &CancellationToken) -> Result<T> + Send + 'static,
+    {
+        let guard = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(Error::Cancelled),
+            guard = Arc::clone(&self.execution).lock_owned() => guard,
+        };
+        let stopped = cancel.child_token();
+        let _cancel = CancelOnDrop(stopped.clone());
         let connection = Arc::clone(&self.connection);
         let task = tokio::task::spawn_blocking(move || {
+            let _guard = guard;
             let mut connection = connection.lock().map_err(Error::driver)?;
-            connection.run(work)
+            if stopped.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            connection.run(|connection| {
+                if stopped.is_cancelled() {
+                    return Err(Error::Cancelled);
+                }
+                work(connection, &stopped)
+            })
         });
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(Error::Cancelled),
-            outcome = task => outcome.map_err(Error::driver)?,
-        }
+        task.await.map_err(Error::driver)?
     }
 
     /// Run `work` against the drawer's session on a blocking thread.
@@ -774,7 +802,7 @@ impl Adapter for OracleAdapter {
     ) -> Result<Vec<ResultSet>> {
         let statements = statements.to_vec();
         let stopped = cancel.clone();
-        self.run(&stopped, move |connection| {
+        self.run_cancellable(&stopped, move |connection, cancel| {
             for statement in &statements {
                 if cancel.is_cancelled() {
                     let _ = connection.rollback();
@@ -791,6 +819,10 @@ impl Adapter for OracleAdapter {
                     let _ = connection.rollback();
                     return Err(crate::stream::rolled_back(error));
                 }
+            }
+            if cancel.is_cancelled() {
+                connection.rollback().map_err(Error::driver)?;
+                return Err(Error::Cancelled);
             }
             connection.commit().map_err(Error::driver)?;
             Ok(Vec::new())
