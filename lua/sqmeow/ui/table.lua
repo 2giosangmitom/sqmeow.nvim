@@ -233,7 +233,9 @@ local function prepare_header_grid(kind, columns, grid, max_depth)
       raw = raw({ column = column })
     end
     local segments = normalize(raw == nil and '' or raw, HEADER_HL)
-    fit_col_width(column, segments_width(segments))
+    if not column._fixed_width then
+      fit_col_width(column, segments_width(segments))
+    end
 
     local cell = {
       type = kind == 1 and 'header' or 'footer',
@@ -407,7 +409,9 @@ function M:_prepare_grid()
       cell.content = prepare_cell_content(cell)
       cell.segments = normalize(cell.content, column.hl)
       cell.fill = type(cell.content) == 'table' and cell.content.fill or nil
-      fit_col_width(column, segments_width(cell.segments))
+      if not column._fixed_width then
+        fit_col_width(column, segments_width(cell.segments))
+      end
       data_grid[row_idx][column_idx] = cell
     end
   end
