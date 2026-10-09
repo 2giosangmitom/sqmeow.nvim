@@ -423,42 +423,54 @@ impl Core {
                         }
                     }
                 }
-                Err(DbError::Cancelled) if deadline.passed() => {
-                    let mut payload = elapsed(started);
-                    payload.push((
-                        "error",
-                        Value::from(format!(
-                            "the query ran past the {} ms timeout, so it was cancelled",
-                            options.timeout_ms
-                        )),
-                    ));
-                    return self.emit_call(call_id, conn_id, "error", payload);
-                }
-                Err(DbError::Cancelled) => {
-                    return self.emit_call(call_id, conn_id, "cancelled", elapsed(started));
-                }
                 Err(error) => {
-                    let error = error.to_string();
+                    let (state, error) = match error {
+                        DbError::Cancelled if deadline.passed() => (
+                            "error",
+                            Some(format!(
+                                "the query ran past the {} ms timeout, so it was cancelled",
+                                options.timeout_ms
+                            )),
+                        ),
+                        DbError::Cancelled => ("cancelled", None),
+                        error => ("error", Some(error.to_string())),
+                    };
                     let mut payload = elapsed(started);
                     if let Some(previous) = last.take() {
-                        let (call, summary) = self.keep(conn_id, previous, None);
+                        let (call, mut summary) = self.keep(conn_id, previous, None);
+                        if let Some(path) = archive
+                            .as_deref()
+                            .filter(|_| !call.result.columns().is_empty())
+                        {
+                            let path = sibling(path, kept.len());
+                            summary.push(("archive", Value::from(path.display().to_string())));
+                            saves.push((kept.len(), path));
+                        }
                         kept.push(call.with_parameters(parameters.clone()));
                         earlier.push(map(summary));
                     }
                     if !earlier.is_empty() {
-                        earlier.push(map(vec![
+                        let mut terminal = vec![
                             ("call_id", Value::from(call_id)),
                             ("conn_id", Value::from(conn_id)),
-                            ("state", Value::from("error")),
-                            ("error", Value::from(error.as_str())),
-                        ]));
+                            ("state", Value::from(state)),
+                        ];
+                        if let Some(error) = &error {
+                            terminal.push(("error", Value::from(error.as_str())));
+                        }
+                        earlier.push(map(terminal));
                         payload.push(("results", Value::Array(earlier)));
                     }
-                    payload.push(("error", Value::from(error)));
-                    if !kept.is_empty() {
-                        self.session.store_run(kept);
+                    if let Some(error) = error {
+                        payload.push(("error", Value::from(error)));
                     }
-                    return self.emit_call(call_id, conn_id, "error", payload);
+                    if !kept.is_empty() {
+                        let stored = self.session.store_run(kept);
+                        for (index, path) in saves {
+                            save(path, Arc::clone(&stored[index]));
+                        }
+                    }
+                    return self.emit_call(call_id, conn_id, state, payload);
                 }
             }
         }

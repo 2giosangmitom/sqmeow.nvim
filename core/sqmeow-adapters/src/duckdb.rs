@@ -37,6 +37,82 @@ pub struct DuckDbAdapter {
     interrupt: Arc<InterruptHandle>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Queued,
+    Running,
+    Committing,
+    Finishing,
+    Finished,
+}
+
+struct Request {
+    cancel: CancellationToken,
+    finished: CancellationToken,
+    phase: Mutex<Phase>,
+}
+
+impl Request {
+    fn check(&self) -> Result<()> {
+        if self.cancel.is_cancelled() {
+            Err(Error::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn commit(&self) -> Result<()> {
+        let mut phase = self.phase.lock().expect("DuckDB request poisoned");
+        let ready = self.check();
+        *phase = if ready.is_ok() {
+            Phase::Committing
+        } else {
+            Phase::Finishing
+        };
+        ready
+    }
+
+    fn statement(&self, sql: &str) -> Result<()> {
+        if matches!(sqmeow_db::sql::first_word(sql).as_str(), "commit" | "end") {
+            self.commit()
+        } else {
+            self.check()
+        }
+    }
+}
+
+// Dropping an async request cancels its blocking work, not a later request.
+struct CancelOnDrop(CancellationToken);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+// Also stop the watcher on unwinding, before the connection lock is released.
+struct FinishOnDrop<'a>(&'a Request);
+impl Drop for FinishOnDrop<'_> {
+    fn drop(&mut self) {
+        *self
+            .0
+            .phase
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Phase::Finished;
+        self.0.finished.cancel();
+    }
+}
+
+// Stop interrupts before a transaction's destructor rolls it back on errors.
+struct CleanupFence<'a>(&'a Request);
+impl Drop for CleanupFence<'_> {
+    fn drop(&mut self) {
+        let mut phase = self.0.phase.lock().expect("DuckDB request poisoned");
+        if *phase != Phase::Committing {
+            *phase = Phase::Finishing;
+        }
+    }
+}
+
 impl std::fmt::Debug for DuckDbAdapter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DuckDbAdapter").finish_non_exhaustive()
@@ -67,15 +143,6 @@ impl DuckDbAdapter {
         })
     }
 
-    /// Run `work` against the connection on a blocking thread.
-    async fn run<T, F>(&self, work: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
-    {
-        Self::on(Arc::clone(&self.connection), work).await
-    }
-
     /// Run `work` against the drawer's connection on a blocking thread.
     async fn run_meta<T, F>(&self, work: F) -> Result<T>
     where
@@ -85,26 +152,88 @@ impl DuckDbAdapter {
         Self::on(Arc::clone(&self.meta), work).await
     }
 
-    /// Await `work`, interrupting it once `cancel` trips: `Ok` with what it returned uncancelled,
-    /// `Err` with what it returned after the cancel.
-    async fn interrupting<T>(
-        &self,
-        work: impl Future<Output = Result<T>>,
-        cancel: &CancellationToken,
-    ) -> std::result::Result<Result<T>, Result<T>> {
-        tokio::pin!(work);
+    /// Only interrupt work that owns the connection. Queued cancellations never
+    /// reach SQL, and commit/rollback are fenced through their actual outcome.
+    async fn cancellable<T, F>(&self, cancel: &CancellationToken, work: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Connection, &Request) -> Result<T> + Send + 'static,
+    {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let request = Arc::new(Request {
+            cancel: cancel.child_token(),
+            finished: CancellationToken::new(),
+            phase: Mutex::new(Phase::Queued),
+        });
+        let _cancel = CancelOnDrop(request.cancel.clone());
+        let watching = Arc::clone(&request);
+        let interrupt = Arc::clone(&self.interrupt);
+        tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                () = watching.finished.cancelled() => return,
+                () = watching.cancel.cancelled() => {}
+            }
+            loop {
+                {
+                    let phase = watching.phase.lock().expect("DuckDB request poisoned");
+                    if *phase == Phase::Finished {
+                        return;
+                    }
+                    if *phase == Phase::Running {
+                        interrupt.interrupt();
+                    }
+                }
+                tokio::select! {
+                    () = watching.finished.cancelled() => return,
+                    () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+                }
+            }
+        });
+        let connection = Arc::clone(&self.connection);
+        let executing = Arc::clone(&request);
+        let mut job = tokio::task::spawn_blocking(move || {
+            let outcome = match connection.lock() {
+                Ok(connection) => {
+                    let _finished = FinishOnDrop(&executing);
+                    let ready = {
+                        let mut phase = executing.phase.lock().expect("DuckDB request poisoned");
+                        let ready = executing.check();
+                        if ready.is_ok() {
+                            *phase = Phase::Running;
+                        }
+                        ready
+                    };
+                    let outcome = ready.and_then(|()| work(&connection, &executing));
+                    // Finish before releasing the connection: no late interrupt
+                    // from this request may hit the next owner.
+                    let mut phase = executing.phase.lock().expect("DuckDB request poisoned");
+                    let outcome = if outcome.is_err()
+                        && matches!(*phase, Phase::Running | Phase::Finishing)
+                        && executing.cancel.is_cancelled()
+                    {
+                        Err(Error::Cancelled)
+                    } else {
+                        outcome
+                    };
+                    *phase = Phase::Finished;
+                    outcome
+                }
+                Err(error) => Err(Error::driver(error)),
+            };
+            executing.finished.cancel();
+            outcome
+        });
         tokio::select! {
             biased;
-
-            () = cancel.cancelled() => {}
-            outcome = &mut work => return Ok(outcome),
-        }
-        // An interrupt that lands before the query starts is lost, so repeat it until the query stops.
-        loop {
-            self.interrupt.interrupt();
-            tokio::select! {
-                outcome = &mut work => return Err(outcome),
-                () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+            outcome = &mut job => outcome.map_err(Error::driver)?,
+            () = request.cancel.cancelled() => {
+                if *request.phase.lock().expect("DuckDB request poisoned") == Phase::Queued {
+                    return Err(Error::Cancelled);
+                }
+                job.await.map_err(Error::driver)?
             }
         }
     }
@@ -135,13 +264,16 @@ impl Adapter for DuckDbAdapter {
         cancel: CancellationToken,
     ) -> Result<Vec<ResultSet>> {
         let statements = statements.to_vec();
-        let work = self.run(move |connection| {
+        self.cancellable(&cancel, move |connection, request| {
+            request.check()?;
             let transaction = connection.unchecked_transaction().map_err(Error::driver)?;
+            let _cleanup = CleanupFence(request);
             let failed = |statement: &str, error: duckdb::Error| {
                 rolled_back(format!("{error}\nin: {statement}"))
             };
             let mut returned = Vec::new();
             for statement in &statements {
+                request.check()?;
                 if !statement.ends_with(" RETURNING *") {
                     let affected = transaction
                         .execute(statement, [])
@@ -171,15 +303,11 @@ impl Adapter for DuckDbAdapter {
                 }
                 returned.push(result);
             }
+            request.commit()?;
             transaction.commit().map_err(Error::driver)?;
             Ok(returned)
-        });
-        match self.interrupting(work, &cancel).await {
-            Ok(outcome) => outcome,
-            // A commit the interrupt missed still counts.
-            Err(Ok(returned)) => Ok(returned),
-            Err(Err(_)) => Err(Error::Cancelled),
-        }
+        })
+        .await
     }
 
     async fn execute(
@@ -200,10 +328,11 @@ impl Adapter for DuckDbAdapter {
         cancel: CancellationToken,
     ) -> Result<ResultSet> {
         let (statement, origin) = (statement.to_owned(), origin.to_owned());
-        let work = self.run(move |connection| read(connection, &statement, &origin, &[], max_rows));
-        self.interrupting(work, &cancel)
-            .await
-            .unwrap_or(Err(Error::Cancelled))
+        self.cancellable(&cancel, move |connection, request| {
+            request.statement(&statement)?;
+            read(connection, &statement, &origin, &[], max_rows)
+        })
+        .await
     }
 
     async fn execute_bound(
@@ -224,11 +353,11 @@ impl Adapter for DuckDbAdapter {
                 ParameterValue::Bool(value) => Value::Boolean(*value),
             })
             .collect();
-        let work =
-            self.run(move |connection| read(connection, &statement, &statement, &values, max_rows));
-        self.interrupting(work, &cancel)
-            .await
-            .unwrap_or(Err(Error::Cancelled))
+        self.cancellable(&cancel, move |connection, request| {
+            request.statement(&statement)?;
+            read(connection, &statement, &statement, &values, max_rows)
+        })
+        .await
     }
 
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
@@ -1003,7 +1132,59 @@ fn json(value: Value) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::database_path;
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn completed_writes_keep_their_actual_outcome_after_late_cancel() {
+        let adapter = DuckDbAdapter::connect("duckdb::memory:", false)
+            .await
+            .unwrap();
+        adapter
+            .execute("SET threads=1", usize::MAX, CancellationToken::new())
+            .await
+            .unwrap();
+        adapter
+            .execute(
+                "CREATE TABLE writes(id INTEGER)",
+                usize::MAX,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        for committing in [false, true] {
+            adapter
+                .cancellable(&CancellationToken::new(), move |connection, request| {
+                    if committing {
+                        let transaction =
+                            connection.unchecked_transaction().map_err(Error::driver)?;
+                        let _cleanup = CleanupFence(request);
+                        transaction
+                            .execute("INSERT INTO writes VALUES (1)", [])
+                            .map_err(Error::driver)?;
+                        request.commit()?;
+                        request.cancel.cancel();
+                        transaction.commit().map_err(Error::driver)?;
+                    } else {
+                        connection
+                            .execute("INSERT INTO writes VALUES (1)", [])
+                            .map_err(Error::driver)?;
+                        request.cancel.cancel();
+                    }
+                    Ok(())
+                })
+                .await
+                .unwrap();
+        }
+        let rows = adapter
+            .execute(
+                "SELECT COUNT(*) FROM writes",
+                usize::MAX,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows.cell(0, 0).as_deref(), Some(&Cell::Int(2)));
+    }
 
     #[test]
     fn reads_the_file_from_each_url_spelling() {

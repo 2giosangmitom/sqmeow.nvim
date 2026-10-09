@@ -124,6 +124,47 @@ T['a failed batch retains every completed result'] = function()
   end
 end
 
+local slow_batch = [[select 1 as first; select 2 as second;
+with recursive n(x) as (select 1 union all select x+1 from n where x<100000000)
+select sum(x) from n]]
+
+local function completed_batch(summary, terminal)
+  eq(summary.state, terminal)
+  eq(#(summary.results or {}), 3)
+  for index = 1, 2 do
+    local completed = summary.results[index]
+    eq(completed.state, 'done')
+    eq(rpc.request('row', { call_id = completed.call_id, row = 0 })[1].value, tostring(index))
+    helpers.wait_for('completed results should be archived', function()
+      return completed.archive and vim.uv.fs_stat(completed.archive) ~= nil
+    end)
+  end
+  eq(summary.results[3].state, terminal)
+end
+
+T['a timed out batch retains and archives completed results'] = function()
+  setup({ query = { timeout_ms = 50, persist_history = true } })
+  MiniTest.finally(setup)
+  local summary = run(slow_batch)
+  helpers.contains(summary.error, 'timeout')
+  completed_batch(summary, 'error')
+  eq(run('select 1').state, 'done')
+end
+
+T['a cancelled batch retains and archives completed results'] = function()
+  setup({ query = { timeout_ms = 0, persist_history = true } })
+  MiniTest.finally(setup)
+  local id = assert(require('sqmeow.api.query').execute(slow_batch, { confirmed = true }))
+  vim.defer_fn(function()
+    rpc.request('cancel', { call_id = id })
+  end, 50)
+  helpers.wait_for('the batch should stop', function()
+    return state.call ~= nil and state.call.call_id == id and state.call.state ~= 'executing'
+  end)
+  completed_batch(state.call, 'cancelled')
+  eq(run('select 1').state, 'done')
+end
+
 T['a failed query does not evict the previous result'] = function()
   setup({ query = { history_size = 1 } })
   MiniTest.finally(setup)
