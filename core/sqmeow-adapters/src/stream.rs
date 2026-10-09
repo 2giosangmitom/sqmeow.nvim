@@ -18,6 +18,19 @@ pub(crate) fn rolled_back(error: impl std::fmt::Display) -> Error {
     Error::driver(format!("nothing was applied: {error}"))
 }
 
+/// Only read-shaped statements may be interrupted. Writes and transaction
+/// controls must retain their response: cancellation is not proof of rollback.
+pub(crate) fn interruptible(dialect: sqmeow_db::adapter::Dialect, statement: &str) -> bool {
+    let statements = sqmeow_db::sql::split(statement, dialect);
+    !statements.is_empty()
+        && statements.iter().all(|statement| {
+            matches!(
+                sqmeow_db::sql::first_word(&statement.sql).as_str(),
+                "select" | "with" | "values" | "table" | "show" | "explain" | "describe" | "desc"
+            ) && !sqmeow_db::guard::writes(dialect, &statement.sql)
+        })
+}
+
 /// Refuse a planned `UPDATE` or `DELETE` that did not change exactly one row.
 pub(crate) fn check_affected(statement: &str, affected: u64) -> Result<()> {
     if !matches!(
@@ -144,6 +157,26 @@ impl TableKeys {
 
 #[cfg(test)]
 mod tests {
+    #[rstest::rstest]
+    #[case::read("SELECT 1", true)]
+    #[case::write("INSERT INTO t VALUES (1)", false)]
+    #[case::commit("COMMIT", false)]
+    #[case::read_then_commit("SELECT 1; COMMIT", false)]
+    #[case::read_then_write("SELECT 1; INSERT INTO t VALUES (1)", false)]
+    #[case::procedure("CALL write_data()", false)]
+    fn only_read_batches_are_interruptible(#[case] sql: &str, #[case] expected: bool) {
+        for dialect in [
+            sqmeow_db::adapter::Dialect::MySql,
+            sqmeow_db::adapter::Dialect::Postgres,
+        ] {
+            assert_eq!(
+                super::interruptible(dialect, sql),
+                expected,
+                "{dialect:?}: {sql}"
+            );
+        }
+    }
+
     use super::may_change_schema;
 
     #[test]

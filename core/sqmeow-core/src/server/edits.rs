@@ -42,7 +42,8 @@ impl Core {
     }
 
     /// Run the statements a review approved, together, and report through `apply:done`. A cancel
-    /// of the result's call id, or `query.timeout_ms`, stops them.
+    /// of the result's call id, or `query.timeout_ms`, requests cancellation.
+    /// Adapters must report sent writes' actual or uncertain outcomes.
     pub(super) fn apply(self: Arc<Self>, args: &Args) -> Started {
         let conn_id = args.conn_id("conn_id")?;
         let call_id = args.call_id()?;

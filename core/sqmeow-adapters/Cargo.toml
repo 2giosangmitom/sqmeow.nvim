@@ -37,6 +37,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+rstest.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
 # Release archives link SQLite/DuckDB from compiled sources instead of the

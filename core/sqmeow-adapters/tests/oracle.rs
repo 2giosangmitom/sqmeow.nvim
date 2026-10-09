@@ -94,11 +94,12 @@ async fn cancelling_apply_rolls_back_before_commit_and_reuse() {
     run(&db, "drop table if exists audit_cancel_apply").await;
     run(&db, "create table audit_cancel_apply (id number)").await;
     run(&db, "insert into audit_cancel_apply values (1)").await;
+    run(&db, "create or replace function audit_pause return number as begin dbms_session.sleep(0.3); return 0; end;").await;
     let cancel = CancellationToken::new();
     let stopped = cancel.clone();
     let statements = [
         "update audit_cancel_apply set id=2".into(),
-        "begin dbms_session.sleep(0.3); end;".into(),
+        "update audit_cancel_apply set id=id + audit_pause()".into(),
     ];
     let timer = async move {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -114,6 +115,7 @@ async fn cancelling_apply_rolls_back_before_commit_and_reuse() {
         Some(&Cell::Int(1))
     );
     run(&db, "drop table audit_cancel_apply").await;
+    run(&db, "drop function audit_pause").await;
     db.close().await;
 }
 
@@ -123,9 +125,10 @@ async fn abandoning_apply_rolls_back_before_the_next_request() {
     run(&db, "drop table if exists audit_abandoned_apply").await;
     run(&db, "create table audit_abandoned_apply (id number)").await;
     run(&db, "insert into audit_abandoned_apply values (1)").await;
+    run(&db, "create or replace function audit_pause return number as begin dbms_session.sleep(0.3); return 0; end;").await;
     let statements = [
         "update audit_abandoned_apply set id=2".into(),
-        "begin dbms_session.sleep(0.3); end;".into(),
+        "update audit_abandoned_apply set id=id + audit_pause()".into(),
     ];
     assert!(
         tokio::time::timeout(
@@ -143,12 +146,39 @@ async fn abandoning_apply_rolls_back_before_the_next_request() {
         Some(&Cell::Int(1))
     );
     run(&db, "drop table audit_abandoned_apply").await;
+    run(&db, "drop function audit_pause").await;
     db.close().await;
 }
 
 #[tokio::test]
 async fn relationships_preserve_catalog_endpoints() {
     relationship_fixture(&connect(&server!("SQMEOW_TEST_ORACLE_URL")).await, "SQMEOW").await;
+}
+
+#[tokio::test]
+async fn atomic_edits_reject_hidden_commit_before_any_write() {
+    let db = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
+    run(&db, "drop table if exists audit_atomic_guard").await;
+    run(&db, "create table audit_atomic_guard (id number)").await;
+    let error = db
+        .apply(
+            &[
+                "insert into audit_atomic_guard values (1)".into(),
+                "commit".into(),
+            ],
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("atomic Oracle edits"), "{error}");
+    assert_eq!(
+        run(&db, "select * from audit_atomic_guard")
+            .await
+            .row_count(),
+        0
+    );
+    run(&db, "drop table audit_atomic_guard").await;
+    db.close().await;
 }
 
 #[tokio::test]

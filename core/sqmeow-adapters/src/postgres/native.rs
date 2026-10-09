@@ -382,6 +382,9 @@ fn retryable(error: &tokio_postgres::Error) -> bool {
 }
 
 pub(super) fn driver(error: tokio_postgres::Error) -> Error {
+    if error.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED) {
+        return Error::Cancelled;
+    }
     Error::driver(
         error
             .as_db_error()

@@ -5686,6 +5686,7 @@ dependencies = [
  "oracledb",
  "percent-encoding",
  "redis",
+ "rstest",
  "rusqlite",
  "rustls",
  "rustls-native-certs",

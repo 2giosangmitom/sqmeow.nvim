@@ -11,6 +11,51 @@ include!("common/native_bind.rs");
 include!("common/relationships.rs");
 
 #[tokio::test]
+async fn cancellation_after_insert_preserves_success_and_reuse() {
+    let db = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    run(&db, "drop table if exists audit_late_cancel").await;
+    run(&db, "create table audit_late_cancel (id int)").await;
+    let cancel = CancellationToken::new();
+    let stopped = cancel.clone();
+    let timer = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stopped.cancel();
+    };
+    let (outcome, ()) = tokio::join!(
+        db.execute(
+            "do $$ begin insert into audit_late_cancel values (1); perform pg_sleep(0.3); end $$",
+            NO_CAP,
+            cancel
+        ),
+        timer
+    );
+    outcome.expect("a completed write must retain its successful outcome");
+    assert_eq!(
+        run(&db, "select * from audit_late_cancel")
+            .await
+            .row_count(),
+        1
+    );
+    run(&db, "drop table audit_late_cancel").await;
+    db.close().await;
+}
+
+#[tokio::test]
+async fn read_cancellation_keeps_the_connection_usable() {
+    let db = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    let cancel = CancellationToken::new();
+    let stopped = cancel.clone();
+    let timer = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stopped.cancel();
+    };
+    let (outcome, ()) = tokio::join!(db.execute("select pg_sleep(2)", NO_CAP, cancel), timer);
+    assert!(matches!(outcome, Err(Error::Cancelled)));
+    run(&db, "select 1").await;
+    db.close().await;
+}
+
+#[tokio::test]
 async fn relationships_preserve_catalog_endpoints() {
     relationship_fixture(
         &connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await,

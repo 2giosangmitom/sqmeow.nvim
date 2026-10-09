@@ -7,6 +7,84 @@ use std::sync::{Arc, Mutex};
 use tokio_postgres::{Column as PgColumn, Row as PgRow};
 type Oid = u32;
 mod codec;
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use std::{
+        future::{Future, poll_fn},
+        task::Poll,
+        time::Duration,
+    };
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn late_cancel_keeps_a_commit_confirmed_by_another_session() {
+        let Ok(url) = std::env::var("SQMEOW_TEST_POSTGRES_URL") else {
+            eprintln!("skipped: set SQMEOW_TEST_POSTGRES_URL");
+            return;
+        };
+        let adapter = PostgresAdapter::connect(&url, None, false).await.unwrap();
+        let observer = PostgresAdapter::connect(&url, None, false).await.unwrap();
+        adapter
+            .execute(
+                "drop table if exists audit_commit_reply",
+                usize::MAX,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        adapter
+            .execute(
+                "create table audit_commit_reply (id int)",
+                usize::MAX,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        adapter
+            .execute("begin", usize::MAX, CancellationToken::new())
+            .await
+            .unwrap();
+        adapter
+            .execute(
+                "insert into audit_commit_reply values (1)",
+                usize::MAX,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let _guard = adapter.execution.lock().await;
+        let cancel = CancellationToken::new();
+        let work = adapter.run_locked("commit", "commit", None, usize::MAX, &cancel);
+        tokio::pin!(work);
+        poll_fn(|cx| {
+            assert!(work.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let rows = observer
+                    .execute(
+                        "select * from audit_commit_reply",
+                        usize::MAX,
+                        CancellationToken::new(),
+                    )
+                    .await
+                    .unwrap();
+                if rows.row_count() == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("server must commit before the reply is consumed");
+        cancel.cancel();
+        work.await
+            .expect("a confirmed COMMIT cannot become Cancelled");
+    }
+}
 mod native;
 use futures_util::StreamExt;
 use native as pg;
@@ -593,17 +671,26 @@ impl PostgresAdapter {
         let outcome = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
+                if !stream::interruptible(Dialect::Postgres, statement) {
+                    operation.await
+                } else {
                 let cleanup = async {
-                    self.stop_query().await?;
+                    let stopped = self.stop_query().await;
                     // Retain serialization until cancellation EOF and ReadyForQuery.
-                    let _ = operation.await;
-                    self.pool.client().await?.simple_query("").await.map_err(native::driver)?;
-                    Ok::<_, Error>(())
+                    let outcome = operation.await;
+                    if stopped.is_err() || !self.protocol_drained().await {
+                        self.pool.retire().await;
+                    }
+                    outcome
                 };
-                if !matches!(tokio::time::timeout(crate::STOP_TIMEOUT, cleanup).await, Ok(Ok(()))) {
-                    self.pool.retire().await;
+                match tokio::time::timeout(crate::STOP_TIMEOUT, cleanup).await {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        self.pool.retire().await;
+                        Err(Error::driver("cancel cleanup timed out; query/write outcome may be unknown, verify before retrying"))
+                    }
                 }
-                Err(Error::Cancelled)
+                }
             },
             result = &mut operation => result,
         };

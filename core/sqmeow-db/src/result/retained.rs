@@ -184,43 +184,44 @@ mod tests {
         }
     }
 
-    #[test]
-    fn small_large_and_inline_heavy_text_keep_their_original_buffers() {
-        for (rows, long_every) in [(100, 1), (8_000, 1), (20_000, 10)] {
-            let text: Vec<_> = (0..rows)
-                .map(|index| {
-                    if index % long_every == 0 {
-                        "x".repeat(600)
-                    } else {
-                        "short-inline".into()
-                    }
-                })
-                .collect();
-            let values: Vec<_> = text.iter().map(|value| AnyValue::String(value)).collect();
-            let series =
-                Series::from_any_values_and_dtype("text".into(), &values, &DataType::String, true)
-                    .unwrap();
-            let before = series
-                .str()
-                .unwrap()
-                .downcast_iter()
-                .next()
-                .unwrap()
-                .data_buffers()
-                .as_ptr();
-            let compacted = compact_text(series);
-            let after = compacted
-                .str()
-                .unwrap()
-                .downcast_iter()
-                .next()
-                .unwrap()
-                .data_buffers()
-                .as_ptr();
-            assert_eq!(
-                before, after,
-                "skip compaction outside the byte/copy budget"
-            );
-        }
+    #[rstest::rstest]
+    #[case::small(100, 1)]
+    #[case::large(8_000, 1)]
+    #[case::inline_heavy(20_000, 10)]
+    fn text_keeps_original_buffers(#[case] rows: usize, #[case] long_every: usize) {
+        let text: Vec<_> = (0..rows)
+            .map(|index| {
+                if index % long_every == 0 {
+                    "x".repeat(600)
+                } else {
+                    "short-inline".into()
+                }
+            })
+            .collect();
+        let values: Vec<_> = text.iter().map(|value| AnyValue::String(value)).collect();
+        let series =
+            Series::from_any_values_and_dtype("text".into(), &values, &DataType::String, true)
+                .unwrap();
+        let before = series
+            .str()
+            .unwrap()
+            .downcast_iter()
+            .next()
+            .unwrap()
+            .data_buffers()
+            .as_ptr();
+        let compacted = compact_text(series);
+        let after = compacted
+            .str()
+            .unwrap()
+            .downcast_iter()
+            .next()
+            .unwrap()
+            .data_buffers()
+            .as_ptr();
+        assert_eq!(
+            before, after,
+            "skip compaction outside the byte/copy budget"
+        );
     }
 }

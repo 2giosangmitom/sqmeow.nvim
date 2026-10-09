@@ -12,6 +12,87 @@ include!("common/native_bind.rs");
 include!("common/relationships.rs");
 
 #[tokio::test]
+async fn procedure_results_keep_each_schema_and_value() {
+    let db = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
+    run(&db, "drop procedure if exists audit_multi_results").await;
+    run(
+        &db,
+        "create procedure audit_multi_results() begin select 1 as a; select 2 as b, 3 as c; end",
+    )
+    .await;
+    let results = db
+        .execute_results(
+            "call audit_multi_results()",
+            "call audit_multi_results()",
+            NO_CAP,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let tabular: Vec<_> = results
+        .iter()
+        .filter(|result| !result.columns().is_empty())
+        .collect();
+    assert_eq!(tabular.len(), 2);
+    assert_eq!(tabular[0].columns()[0].name, "a");
+    assert_eq!(tabular[1].columns()[0].name, "b");
+    assert_eq!(tabular[1].columns()[1].name, "c");
+    assert_eq!(tabular[1].cell(0, 1).as_deref(), Some(&Cell::Int(3)));
+    run(&db, "drop procedure audit_multi_results").await;
+    db.close().await;
+}
+
+#[tokio::test]
+async fn cancellation_after_insert_preserves_success_and_reuse() {
+    let db = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
+    run(&db, "drop table if exists audit_late_cancel").await;
+    run(&db, "create table audit_late_cancel (id int)").await;
+    run(&db, "drop procedure if exists audit_late_write").await;
+    run(&db, "create procedure audit_late_write() begin insert into audit_late_cancel values (1); do sleep(0.3); end").await;
+    let cancel = CancellationToken::new();
+    let stopped = cancel.clone();
+    let timer = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stopped.cancel();
+    };
+    let (outcome, ()) = tokio::join!(db.execute("call audit_late_write()", NO_CAP, cancel), timer);
+    outcome.expect("a completed write must retain its successful outcome");
+    assert_eq!(
+        run(&db, "select * from audit_late_cancel")
+            .await
+            .row_count(),
+        1
+    );
+    run(&db, "drop procedure audit_late_write").await;
+    run(&db, "drop table audit_late_cancel").await;
+    db.close().await;
+}
+
+#[tokio::test]
+async fn read_cancellation_keeps_the_connection_usable() {
+    let db = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
+    let cancel = CancellationToken::new();
+    let stopped = cancel.clone();
+    let timer = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stopped.cancel();
+    };
+    let (outcome, ()) = tokio::join!(db.execute("select sleep(2), 1", NO_CAP, cancel), timer);
+    match outcome {
+        Err(Error::Cancelled) => {}
+        // MySQL may return SLEEP's documented interrupted value as a successful
+        // result instead of ER_QUERY_INTERRUPTED. Retain that actual response.
+        Ok(result) => {
+            assert_eq!(result.cell(0, 0).as_deref(), Some(&Cell::Int(1)));
+            assert!(result.elapsed() < std::time::Duration::from_secs(1));
+        }
+        Err(error) => panic!("unexpected cancellation outcome: {error}"),
+    }
+    run(&db, "select 1").await;
+    db.close().await;
+}
+
+#[tokio::test]
 async fn relationships_preserve_catalog_endpoints() {
     let backend = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     let schema = backend

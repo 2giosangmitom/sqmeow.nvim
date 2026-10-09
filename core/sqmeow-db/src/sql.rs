@@ -6,6 +6,19 @@ mod sides;
 
 pub use sides::{Side, Sides};
 
+/// Atomic Oracle edits exclude DDL, transaction controls and executable PL/SQL.
+/// Parse the whole statement so a trailing COMMIT cannot hide behind DML.
+pub fn oracle_edit(statement: &str) -> bool {
+    use sqlparser::{ast::Statement as Ast, dialect::OracleDialect, parser::Parser};
+    let Ok(statements) = Parser::parse_sql(&OracleDialect {}, statement) else {
+        return false;
+    };
+    matches!(
+        statements.as_slice(),
+        [Ast::Insert(_) | Ast::Update { .. } | Ast::Delete(_) | Ast::Merge { .. }]
+    )
+}
+
 /// Whether T-SQL is exactly one row-returning query, not a batch or `SELECT INTO`.
 ///
 /// The dialect parser first checks query shape; the write guard then rejects side effects such as
@@ -772,6 +785,19 @@ fn starts_with(chars: &[char], index: usize, needle: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[rstest::rstest]
+    #[case::insert("INSERT INTO t VALUES (1)", true)]
+    #[case::update("UPDATE t SET n=2 WHERE id=1", true)]
+    #[case::delete("DELETE FROM t WHERE id=1", true)]
+    #[case::ddl("CREATE TABLE t (n NUMBER)", false)]
+    #[case::commit("COMMIT", false)]
+    #[case::hidden_commit("INSERT INTO t VALUES (1); COMMIT", false)]
+    #[case::plsql("BEGIN COMMIT; END;", false)]
+    #[case::call("CALL dangerous()", false)]
+    #[case::select_into("SELECT n INTO other FROM t", false)]
+    fn validates_atomic_oracle_edits(#[case] statement: &str, #[case] expected: bool) {
+        assert_eq!(super::oracle_edit(statement), expected);
+    }
     use super::*;
 
     fn sqls(input: &str) -> Vec<String> {
