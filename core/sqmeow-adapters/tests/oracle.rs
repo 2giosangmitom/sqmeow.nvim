@@ -10,6 +10,142 @@ include!("common/sql_safety.rs");
 include!("common/native_bind.rs");
 include!("common/relationships.rs");
 
+#[test]
+fn cancelled_writes_never_start_before_or_after_blocking_queue() {
+    use std::{
+        future::{Future, poll_fn},
+        task::Poll,
+    };
+    let url = server!("SQMEOW_TEST_ORACLE_URL");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let db = connect(&url).await;
+        run(&db, "drop table if exists audit_cancel_regression").await;
+        run(&db, "create table audit_cancel_regression (id number)").await;
+        for mode in 0..3 {
+            for queued in [false, true] {
+                let (release, wait) = std::sync::mpsc::channel();
+                let (started, ready) = tokio::sync::oneshot::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    started.send(()).unwrap();
+                    wait.recv().unwrap();
+                });
+                ready.await.unwrap();
+                let cancel = CancellationToken::new();
+                let mut work = Box::pin(async {
+                    match mode {
+                        0 => db
+                            .execute(
+                                "insert into audit_cancel_regression values (1)",
+                                NO_CAP,
+                                cancel.clone(),
+                            )
+                            .await
+                            .map(|_| ()),
+                        1 => db
+                            .execute_bound(
+                                "insert into audit_cancel_regression values (:1)",
+                                &[Value::Int(1)],
+                                NO_CAP,
+                                cancel.clone(),
+                            )
+                            .await
+                            .map(|_| ()),
+                        _ => db
+                            .apply(
+                                &["insert into audit_cancel_regression values (1)".into()],
+                                cancel.clone(),
+                            )
+                            .await
+                            .map(|_| ()),
+                    }
+                });
+                if queued {
+                    poll_fn(|cx| {
+                        assert!(work.as_mut().poll(cx).is_pending());
+                        Poll::Ready(())
+                    })
+                    .await;
+                }
+                cancel.cancel();
+                release.send(()).unwrap();
+                assert!(matches!(work.await, Err(Error::Cancelled)));
+                blocker.await.unwrap();
+                assert_eq!(
+                    run(&db, "select id from audit_cancel_regression")
+                        .await
+                        .row_count(),
+                    0
+                );
+            }
+        }
+        run(&db, "drop table audit_cancel_regression").await;
+        db.close().await;
+    });
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelling_apply_rolls_back_before_commit_and_reuse() {
+    let db = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
+    run(&db, "drop table if exists audit_cancel_apply").await;
+    run(&db, "create table audit_cancel_apply (id number)").await;
+    run(&db, "insert into audit_cancel_apply values (1)").await;
+    let cancel = CancellationToken::new();
+    let stopped = cancel.clone();
+    let statements = [
+        "update audit_cancel_apply set id=2".into(),
+        "begin dbms_session.sleep(0.3); end;".into(),
+    ];
+    let timer = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stopped.cancel();
+    };
+    let (outcome, ()) = tokio::join!(db.apply(&statements, cancel), timer);
+    assert!(matches!(outcome, Err(Error::Cancelled)));
+    assert_eq!(
+        run(&db, "select id from audit_cancel_apply")
+            .await
+            .cell(0, 0)
+            .as_deref(),
+        Some(&Cell::Int(1))
+    );
+    run(&db, "drop table audit_cancel_apply").await;
+    db.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn abandoning_apply_rolls_back_before_the_next_request() {
+    let db = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
+    run(&db, "drop table if exists audit_abandoned_apply").await;
+    run(&db, "create table audit_abandoned_apply (id number)").await;
+    run(&db, "insert into audit_abandoned_apply values (1)").await;
+    let statements = [
+        "update audit_abandoned_apply set id=2".into(),
+        "begin dbms_session.sleep(0.3); end;".into(),
+    ];
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            db.apply(&statements, CancellationToken::new())
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        run(&db, "select id from audit_abandoned_apply")
+            .await
+            .cell(0, 0)
+            .as_deref(),
+        Some(&Cell::Int(1))
+    );
+    run(&db, "drop table audit_abandoned_apply").await;
+    db.close().await;
+}
+
 #[tokio::test]
 async fn relationships_preserve_catalog_endpoints() {
     relationship_fixture(&connect(&server!("SQMEOW_TEST_ORACLE_URL")).await, "SQMEOW").await;

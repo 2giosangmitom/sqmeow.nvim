@@ -8,7 +8,6 @@ use tokio_util::sync::CancellationToken;
 
 const NO_CAP: usize = usize::MAX;
 
-/// The server URL, naming a namespace and no database, or a note explaining why the test did nothing.
 macro_rules! server {
     () => {
         match std::env::var("SQMEOW_TEST_SURREALDB_URL") {
@@ -19,6 +18,120 @@ macro_rules! server {
             }
         }
     };
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn running_transaction_reports_actual_commit_after_cancel() {
+    let db = fresh(&server!(), "cancel_outcome").await;
+    run(&db, "DEFINE TABLE probe SCHEMALESS").await;
+    let cancel = CancellationToken::new();
+    let stopped = cancel.clone();
+    let timer = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stopped.cancel();
+    };
+    let (outcome, ()) = tokio::join!(
+        db.execute(
+            "BEGIN TRANSACTION; CREATE probe:one SET n=1; SLEEP 300ms; COMMIT TRANSACTION;",
+            NO_CAP,
+            cancel
+        ),
+        timer
+    );
+    outcome.expect("a committed transaction must not be reported as cancelled");
+    assert_eq!(run(&db, "SELECT * FROM probe").await.row_count(), 1);
+    db.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelling_apply_reports_the_actual_commit() {
+    let db = fresh(&server!(), "cancel_apply").await;
+    run(&db, "DEFINE TABLE probe SCHEMALESS").await;
+    let cancel = CancellationToken::new();
+    let stopped = cancel.clone();
+    let statements = ["CREATE probe:one SET n = { SLEEP 300ms; RETURN 1; }".into()];
+    let timer = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        stopped.cancel();
+    };
+    let (outcome, ()) = tokio::join!(db.apply(&statements, cancel), timer);
+    outcome.expect("a committed apply must not be reported as cancelled");
+    assert_eq!(run(&db, "SELECT * FROM probe").await.row_count(), 1);
+    db.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn abandoned_transaction_finishes_before_connection_reuse() {
+    let db = fresh(&server!(), "abandoned_transaction").await;
+    run(&db, "DEFINE TABLE probe SCHEMALESS").await;
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            db.execute(
+                "BEGIN TRANSACTION; CREATE probe:one SET n=1; SLEEP 300ms; COMMIT TRANSACTION;",
+                NO_CAP,
+                CancellationToken::new()
+            )
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(run(&db, "SELECT * FROM probe").await.row_count(), 1);
+    db.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn queued_cancel_never_writes_or_interrupts_the_active_query() {
+    use std::{
+        future::{Future, poll_fn},
+        task::Poll,
+    };
+    let db = fresh(&server!(), "cancel_queue").await;
+    run(&db, "DEFINE TABLE probe SCHEMALESS").await;
+    let active = db.execute("SLEEP 300ms; RETURN 1", NO_CAP, CancellationToken::new());
+    tokio::pin!(active);
+    poll_fn(|cx| {
+        assert!(active.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    for mode in 0..3 {
+        let cancel = CancellationToken::new();
+        let mut queued = Box::pin(async {
+            match mode {
+                0 => db
+                    .execute("CREATE probe SET n=1", NO_CAP, cancel.clone())
+                    .await
+                    .map(|_| ()),
+                1 => db
+                    .execute_bound(
+                        "CREATE probe SET n=$sqmeow_p1",
+                        &[Value::Int(1)],
+                        NO_CAP,
+                        cancel.clone(),
+                    )
+                    .await
+                    .map(|_| ()),
+                _ => db
+                    .apply(&["CREATE probe SET n=1".into()], cancel.clone())
+                    .await
+                    .map(|_| ()),
+            }
+        });
+        poll_fn(|cx| {
+            assert!(queued.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        cancel.cancel();
+        assert!(matches!(
+            queued.await,
+            Err(sqmeow_db::error::Error::Cancelled)
+        ));
+    }
+    active.await.unwrap();
+    assert_eq!(run(&db, "SELECT * FROM probe").await.row_count(), 0);
+    db.close().await;
 }
 
 // The tests share one namespace and run in parallel, so each works in a database of its own.
