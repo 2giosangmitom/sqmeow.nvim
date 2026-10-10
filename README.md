@@ -6,6 +6,8 @@ A lightweight database client that lives inside Neovim. Browse databases, run qu
 
 If you spend most of your time in the terminal and don't want to switch to a GUI just to inspect a few rows, sqmeow.nvim is for you.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/2giosangmitom/sqmeow.nvim)
+
 ## Preview
 
 <details open>
