@@ -918,6 +918,8 @@ local function preview(in_editor)
     vim.api.nvim_buf_set_lines(target_buf, 0, -1, false, vim.split(text, '\n'))
     vim.bo[target_buf].modified = false
     vim.b[target_buf].sqmeow_preview_statement = text
+    local rel_schema = node.path and #node.path > 1 and node.path[1] or nil
+    vim.b[target_buf].sqmeow_relation = { name = rel_name, schema = rel_schema }
 
     local state = require('sqmeow.core.state')
     local conn = state.connections[node.conn_id]

@@ -8,7 +8,7 @@ function Source.new()
 end
 
 function Source:get_trigger_characters()
-  return { '.', '"', '`', '[' }
+  return { '.', '"', '`', '[', ' ', ',', '(' }
 end
 
 function Source:enabled()
