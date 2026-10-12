@@ -43,7 +43,7 @@ end
 T['detail lines normalizes CRLF and preserves long un-truncated values'] = function()
   local long_text = string.rep('x', 200)
   local columns = {
-    { name = 'crlf', declared_type = 'text', value = "line1\r\nline2" },
+    { name = 'crlf', declared_type = 'text', value = 'line1\r\nline2' },
     { name = 'long', declared_type = 'text', value = long_text },
   }
   local lines = detail.lines(columns, 80)
