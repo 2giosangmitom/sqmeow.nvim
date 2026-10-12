@@ -360,7 +360,8 @@ T['drawer preview']['opens recorded query in editor without executing on preview
     executed = true
   end)
 
-  state.connections[1] = { id = 1, name = 'mydb', dialect = 'postgres' }
+  state.connections[1] =
+    { id = 1, name = 'mydb', dialect = 'postgres', url = 'postgres://mydb', state = 'connected' }
   local sample_entry =
     { call_id = 99, statement = 'select * from users where id = 1', connection = 'mydb' }
   helpers.stub(drawer, 'current_node', function()
