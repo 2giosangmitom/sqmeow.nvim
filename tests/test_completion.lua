@@ -329,4 +329,29 @@ T['providers']['normalize cursors and expose pending metadata'] = function(provi
   assert(ok, err)
 end
 
+T['blink trigger characters'] = function()
+  local blink = require('sqmeow.completion.blink').new()
+  eq(blink:get_trigger_characters(), { '.', '"', '`', '[', ' ', ',', '(' })
+end
+
+T['buffer-bound relation provides column completion without FROM clause'] = function()
+  fixture('main')
+  columns('main', 'users')
+  columns('main', 'orders')
+
+  vim.b[buf].sqmeow_relation = 'users'
+  eq(column_labels(items('SELECT ')), { 'users_id', 'owner' })
+
+  vim.b[buf].sqmeow_relation = { name = 'orders', schema = 'main' }
+  eq(column_labels(items('SELECT ')), { 'orders_id', 'owner' })
+end
+
+T['preview buffer name provides column completion without FROM clause'] = function()
+  fixture('main')
+  columns('main', 'users')
+
+  vim.api.nvim_buf_set_name(buf, '[Preview: users]')
+  eq(column_labels(items('SELECT ')), { 'users_id', 'owner' })
+end
+
 return T
