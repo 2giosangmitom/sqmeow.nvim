@@ -9,11 +9,11 @@ local popup = nil
 -- Cap type-name width to leave room for values.
 local TYPE_WIDTH = 16
 
---- Lay a row out as lines, each value on one line and cut to fit.
+--- Lay a row out as lines, showing full values without truncating or flattening newlines.
 ---@param columns table[] As the engine sends them, each with `key` from the result's columns.
----@param width integer The width the lines have to fit in.
+---@param _width integer The width the lines have to fit in.
 ---@return NuiLine[]
-function M.lines(columns, width)
+function M.lines(columns, _width)
   local Line = require('nui.line')
   local truncate = require('sqmeow.core.utils').truncate
   local config = require('sqmeow.config').get()
@@ -31,8 +31,8 @@ function M.lines(columns, width)
     type_width = math.max(type_width, vim.api.nvim_strwidth(types[index]))
   end
 
-  local value_width = math.max(width - name_width - type_width - 4, 1)
   local lines = {}
+  local indent = (' '):rep(name_width + type_width + 4)
   for index, column in ipairs(columns) do
     local line = Line()
     local name_pad = (' '):rep(name_width - vim.api.nvim_strwidth(column.name) + 2)
@@ -42,12 +42,20 @@ function M.lines(columns, width)
 
     if column.is_null then
       line:append(config.ui.result.null_text, 'SqmeowNull')
+      table.insert(lines, line)
     else
-      -- The engine can send numbers and booleans here.
-      local value = tostring(column.value):gsub('[\r\n]', ' ')
-      line:append(truncate(value, value_width, ellipsis))
+      local value = tostring(column.value):gsub('\r\n', '\n'):gsub('\r', '\n')
+      local val_lines = vim.split(value, '\n', { plain = true })
+      line:append(val_lines[1] or '')
+      table.insert(lines, line)
+
+      for l = 2, #val_lines do
+        local continuation = Line()
+        continuation:append(indent)
+        continuation:append(val_lines[l])
+        table.insert(lines, continuation)
+      end
     end
-    lines[index] = line
   end
 
   return lines
@@ -81,7 +89,7 @@ function M.open(row)
     title = ' Row details ',
     lines = lines,
     width = width,
-    height = math.max(math.min(#columns, math.floor(vim.o.lines * 0.8)), 1),
+    height = math.max(math.min(#lines, math.floor(vim.o.lines * 0.8)), 1),
     filetype = 'sqmeow-row',
     on_close = M.close,
   })
