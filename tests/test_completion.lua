@@ -334,6 +334,11 @@ T['blink trigger characters'] = function()
   eq(blink:get_trigger_characters(), { '.', '"', '`', '[', ' ', ',', '(' })
 end
 
+T['cmp trigger characters'] = function()
+  local cmp = require('sqmeow.completion.cmp').new()
+  eq(cmp:get_trigger_characters(), { '.', '"', '`', '[', ' ', ',', '(' })
+end
+
 T['buffer-bound relation provides column completion without FROM clause'] = function()
   fixture('main')
   columns('main', 'users')
