@@ -32,7 +32,7 @@ If you spend most of your time in the terminal and don't want to switch to a GUI
 - **Multiple databases:** Work with SQL, NoSQL, and analytical databases in one place.
 - **Interactive results:** Browse, filter, sort, and edit data directly in Neovim.
 - **Query history:** Revisit previous results without running queries again.
-- **Fast result processing:** Filter and sort retained rows locally using Polars.
+- **Local result processing:** Filter and sort retained rows using Polars.
 - **Project-local connections:** Keep connections and scratchpads alongside your project.
 - **Completion:** Database-aware suggestions with blink.cmp or nvim-cmp.
 - **Rust engine:** Database operations run in a separate Rust process.
@@ -241,7 +241,7 @@ Queries run against the currently selected connection.
 
 ## Completion
 
-sqmeow.nvim integrates with [blink.cmp](https://github.com/Saghen/blink.cmp) and [nvim-cmp](https://github.com/hrsh7th/nvim-cmp) to provide database-aware completion.
+Use [blink.cmp](https://github.com/Saghen/blink.cmp) or [nvim-cmp](https://github.com/hrsh7th/nvim-cmp) for database-aware completion.
 
 For query-aware column and alias suggestions, install the SQL Tree-sitter parser (for example, with `:TSInstall sql` via nvim-treesitter).
 
