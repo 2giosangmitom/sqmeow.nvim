@@ -32,8 +32,9 @@ local function qualifier(prefix)
   end
 end
 
-local function buffer_refs(bufnr)
-  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+local function buffer_refs(bufnr, qualifier_schema)
+  -- An explicitly typed schema takes precedence over the buffer's relation.
+  if qualifier_schema or not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return {}
   end
   local bound = vim.b[bufnr].sqmeow_relation
@@ -62,11 +63,11 @@ function M.read(bufnr, line, col, row)
   end)
   -- The SQL parser is optional: metadata and explicit table qualifiers still work.
   if not ok or not parser then
-    return buffer_refs(bufnr), name, schema
+    return buffer_refs(bufnr, schema), name, schema
   end
   local trees = parser:parse()
   if not trees[1] then
-    return buffer_refs(bufnr), name, schema
+    return buffer_refs(bufnr, schema), name, schema
   end
   local root = trees[1]:root()
   local offset = row and (vim.api.nvim_buf_get_offset(bufnr, row - 1) + col) or col
@@ -100,7 +101,7 @@ function M.read(bufnr, line, col, row)
     end
   end
   if #refs == 0 then
-    refs = buffer_refs(bufnr)
+    refs = buffer_refs(bufnr, schema)
   end
   return refs, name, schema
 end
