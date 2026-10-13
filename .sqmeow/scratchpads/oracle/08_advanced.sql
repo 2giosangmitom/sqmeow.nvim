@@ -141,8 +141,8 @@ SELECT status, COUNT(*) AS n FROM sqmeow_orders
 GROUP BY GROUPING SETS ((status), ()) ORDER BY status;
 
 -- Scratch table lifecycle: insert/update/upsert/delete on a copy, fixtures untouched.
--- Oracle has no DROP ... IF EXISTS: quiet drops keep the first run green,
--- the trailing drops keep reruns green.
+-- Oracle has no DROP ... IF EXISTS. The initial drops ignore missing objects;
+-- the trailing drops remove them so the file can run again.
 BEGIN
   EXECUTE IMMEDIATE 'DROP TABLE sqmeow_tmp_adv';
 EXCEPTION

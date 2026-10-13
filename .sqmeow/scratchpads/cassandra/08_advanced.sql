@@ -1,7 +1,7 @@
 -- Advanced CQL checks: run after 02_create. Tolerant of 04_update/05_delete.
 -- CQL has no joins, subqueries, window functions, GROUP BY analytics, stored
--- procedures, functions (usually disabled server-side), variables or loops:
--- this file covers everything the fixtures can exercise instead.
+-- procedures, functions (usually disabled server-side), variables or loops.
+-- These checks cover lookups, scans, aggregates, indexes, writes and batches.
 -- Run statement-by-statement with <CR>.
 
 -- Point lookups and IN (the primary CQL access path).

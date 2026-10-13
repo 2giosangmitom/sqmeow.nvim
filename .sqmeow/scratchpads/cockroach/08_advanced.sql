@@ -2,7 +2,7 @@
 -- Tolerant of 04_update/05_delete results. Read-only against fixtures except
 -- self-cleaning sqmeow_tmp_adv_* objects. Run statement-by-statement with <CR>.
 -- CockroachDB differences from PostgreSQL: no DO blocks and no stored
--- procedures, so variables use SET/SHOW and loops use the recursive CTE below.
+-- procedures. These checks use SET/SHOW for variables and generate_series for rows.
 
 -- Aggregation: GROUP BY + HAVING + FILTER.
 SELECT status, COUNT(*) AS orders, SUM(total_cents) AS revenue_cents,
@@ -69,7 +69,7 @@ SELECT * FROM (SELECT status, COUNT(*) AS n FROM sqmeow_orders GROUP BY status) 
 WHERE n >= 4 ORDER BY n DESC;
 SELECT id, total_cents FROM sqmeow_orders WHERE total_cents = ANY (SELECT total_cents FROM sqmeow_payments WHERE method = 'cash');
 
--- CTE + recursive CTE (counter doubles as a loop equivalent).
+-- CTE and row generation.
 WITH city_revenue AS (
   SELECT c.city, SUM(o.total_cents) AS revenue_cents
   FROM sqmeow_customers c JOIN sqmeow_orders o ON o.customer_id = c.id
