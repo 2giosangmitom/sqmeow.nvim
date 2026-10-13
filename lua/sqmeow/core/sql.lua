@@ -90,4 +90,117 @@ function M.read_key(group, key, limit)
   return commands[group]
 end
 
+--- Returns an ALTER TABLE template for modifying a table's schema.
+---@param dialect string|nil
+---@param parts string[]
+---@param columns table[]|nil Optional column nodes from schema cache
+---@return string
+function M.alter_table(dialect, parts, columns)
+  local qualified = M.qualify(dialect, parts)
+  local lines = {}
+
+  if columns and #columns > 0 then
+    table.insert(lines, '-- Current columns:')
+    for _, col in ipairs(columns) do
+      local details = {}
+      if col.type_name and col.type_name ~= '' then
+        table.insert(details, col.type_name)
+      end
+      if col.primary_key then
+        table.insert(details, 'primary key')
+      elseif col.nullable == false then
+        table.insert(details, 'not null')
+      end
+      local detail_str = #details > 0 and (' (' .. table.concat(details, ', ') .. ')') or ''
+      table.insert(lines, ('--   %s%s'):format(col.name, detail_str))
+    end
+    table.insert(lines, '')
+  end
+
+  if dialect == 'surrealdb' then
+    local tbl_name = parts[#parts]
+    table.insert(
+      lines,
+      ('-- DEFINE FIELD new_column ON TABLE %s TYPE string;'):format(M.quote(dialect, tbl_name))
+    )
+    table.insert(
+      lines,
+      ('-- REMOVE FIELD old_column ON TABLE %s;'):format(M.quote(dialect, tbl_name))
+    )
+    table.insert(lines, '')
+    table.insert(
+      lines,
+      ('DEFINE FIELD new_column ON TABLE %s TYPE string;'):format(M.quote(dialect, tbl_name))
+    )
+    return table.concat(lines, '\n')
+  end
+
+  if dialect == 'mysql' or dialect == 'mariadb' then
+    table.insert(lines, '-- Operations:')
+    table.insert(lines, '--   ADD COLUMN new_column varchar(255),')
+    table.insert(lines, '--   DROP COLUMN old_column,')
+    table.insert(lines, '--   MODIFY COLUMN column_name new_type,')
+    table.insert(lines, '--   CHANGE COLUMN old_name new_name new_type;')
+    table.insert(lines, '')
+    table.insert(lines, ('ALTER TABLE %s'):format(qualified))
+    table.insert(lines, '  ADD COLUMN new_column varchar(255);')
+    return table.concat(lines, '\n')
+  end
+
+  if dialect == 'mssql' then
+    table.insert(lines, '-- Operations:')
+    table.insert(lines, '--   ADD new_column nvarchar(255);')
+    table.insert(lines, '--   ALTER COLUMN column_name new_type;')
+    table.insert(lines, '--   DROP COLUMN old_column;')
+    table.insert(lines, '')
+    table.insert(lines, ('ALTER TABLE %s'):format(qualified))
+    table.insert(lines, '  ADD new_column nvarchar(255);')
+    return table.concat(lines, '\n')
+  end
+
+  if dialect == 'sqlite' then
+    table.insert(lines, '-- Operations:')
+    table.insert(lines, '--   ADD COLUMN new_column text;')
+    table.insert(lines, '--   RENAME COLUMN old_name TO new_name;')
+    table.insert(lines, '--   DROP COLUMN old_column;')
+    table.insert(lines, '')
+    table.insert(lines, ('ALTER TABLE %s'):format(qualified))
+    table.insert(lines, '  ADD COLUMN new_column text;')
+    return table.concat(lines, '\n')
+  end
+
+  if dialect == 'oracle' then
+    table.insert(lines, '-- Operations:')
+    table.insert(lines, '--   ADD new_column varchar2(255);')
+    table.insert(lines, '--   MODIFY column_name new_type;')
+    table.insert(lines, '--   DROP COLUMN old_column;')
+    table.insert(lines, '')
+    table.insert(lines, ('ALTER TABLE %s'):format(qualified))
+    table.insert(lines, '  ADD new_column varchar2(255);')
+    return table.concat(lines, '\n')
+  end
+
+  if dialect == 'clickhouse' then
+    table.insert(lines, '-- Operations:')
+    table.insert(lines, '--   ADD COLUMN new_column String,')
+    table.insert(lines, '--   DROP COLUMN old_column,')
+    table.insert(lines, '--   MODIFY COLUMN column_name new_type;')
+    table.insert(lines, '')
+    table.insert(lines, ('ALTER TABLE %s'):format(qualified))
+    table.insert(lines, '  ADD COLUMN new_column String;')
+    return table.concat(lines, '\n')
+  end
+
+  -- PostgreSQL, CockroachDB, DuckDB, standard SQL
+  table.insert(lines, '-- Operations:')
+  table.insert(lines, '--   ADD COLUMN new_column text,')
+  table.insert(lines, '--   DROP COLUMN old_column,')
+  table.insert(lines, '--   ALTER COLUMN column_name TYPE new_type,')
+  table.insert(lines, '--   RENAME COLUMN old_name TO new_name;')
+  table.insert(lines, '')
+  table.insert(lines, ('ALTER TABLE %s'):format(qualified))
+  table.insert(lines, '  ADD COLUMN new_column text;')
+  return table.concat(lines, '\n')
+end
+
 return M

@@ -851,7 +851,7 @@ drawer
  u         Run queries against this connection
  A         Add a connection
  a         Create a scratchpad
- e         Edit the connection under the cursor
+ e         Edit the connection or table schema under the cursor
  d         Delete the connection or scratchpad, or empty the query log
  ?         Show these mappings
  q         Close the drawer

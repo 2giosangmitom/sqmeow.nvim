@@ -76,4 +76,42 @@ T['select_from']['reads the first rows of an oracle table with fetch first'] = f
   eq(sql.select_from('oracle', { 'SQMEOW', 'PEOPLE' }), 'select * from "SQMEOW"."PEOPLE"')
 end
 
+T['alter_table'] = MiniTest.new_set()
+
+T['alter_table']['generates postgres ALTER TABLE template with operations'] = function()
+  local res = sql.alter_table('postgres', { 'public', 'users' })
+  assert(res:find('ALTER TABLE "public"."users"'))
+  assert(res:find('ADD COLUMN new_column text;'))
+  assert(res:find('--   DROP COLUMN old_column,'))
+end
+
+T['alter_table']['includes current columns when provided'] = function()
+  local cols = {
+    { name = 'id', type_name = 'integer', primary_key = true },
+    { name = 'email', type_name = 'text', nullable = false },
+  }
+  local res = sql.alter_table('postgres', { 'public', 'users' }, cols)
+  assert(res:find('-- Current columns:'))
+  assert(res:find('--   id %(integer, primary key%)'))
+  assert(res:find('--   email %(text, not null%)'))
+  assert(res:find('ALTER TABLE "public"."users"'))
+end
+
+T['alter_table']['uses dialect-specific syntax'] = function()
+  local my = sql.alter_table('mysql', { 'shop', 'items' })
+  assert(my:find('ALTER TABLE `shop`.`items`'))
+  assert(my:find('ADD COLUMN new_column varchar%(255%);'))
+
+  local ms = sql.alter_table('mssql', { 'dbo', 'users' })
+  assert(ms:find('ALTER TABLE %[dbo%].%[users%]'))
+  assert(ms:find('ADD new_column nvarchar%(255%);'))
+
+  local sl = sql.alter_table('sqlite', { 'main', 'users' })
+  assert(sl:find('ALTER TABLE "main"."users"'))
+  assert(sl:find('ADD COLUMN new_column text;'))
+
+  local sur = sql.alter_table('surrealdb', { 'main', 'person' })
+  assert(sur:find('DEFINE FIELD new_column ON TABLE `person` TYPE string;'))
+end
+
 return T

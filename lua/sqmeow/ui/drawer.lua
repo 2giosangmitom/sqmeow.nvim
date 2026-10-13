@@ -1140,26 +1140,95 @@ function M.actions.new_scratchpad()
   require('sqmeow.api.view').scratchpad(nil, prefix, node and node.store)
 end
 
---- Edit the connection under the cursor.
+--- Open an editor buffer populated with an ALTER TABLE template for the node.
+---@param node table
+local function edit_table(node)
+  local dialect = dialect_of(node.conn_id)
+  local ft = dialect_filetype(dialect)
+  local parts = sql_parts(node.path)
+  local cols = M.cached_nodes(node.conn_id, node.path)
+  local text = require('sqmeow.core.sql').alter_table(dialect, parts, cols)
+
+  local rel_name = node.name or (node.path and node.path[#node.path]) or 'table'
+  local target_buf = vim.api.nvim_create_buf(true, true)
+  local base_name = ('[Alter: %s]'):format(rel_name)
+  local ok = pcall(vim.api.nvim_buf_set_name, target_buf, base_name)
+  if not ok then
+    local count = 1
+    while true do
+      local try_name = ('[Alter: %s (%d)]'):format(rel_name, count)
+      if pcall(vim.api.nvim_buf_set_name, target_buf, try_name) then
+        break
+      end
+      count = count + 1
+    end
+  end
+
+  vim.bo[target_buf].buftype = 'nofile'
+  vim.bo[target_buf].bufhidden = 'hide'
+  vim.bo[target_buf].swapfile = false
+  vim.bo[target_buf].filetype = ft
+  vim.api.nvim_buf_set_lines(target_buf, 0, -1, false, vim.split(text, '\n', { plain = true }))
+  vim.bo[target_buf].modified = false
+
+  local state = require('sqmeow.core.state')
+  local conn = state.connections[node.conn_id]
+  local conn_name = conn and conn.name
+
+  local editor = require('sqmeow.ui.editor')
+  editor.attach(target_buf, conn_name)
+
+  local ed_win = nil
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_buf(w) == target_buf then
+      ed_win = w
+      break
+    end
+  end
+  if not ed_win then
+    ed_win = require('sqmeow.ui.layout').editing_window()
+    vim.api.nvim_win_set_buf(ed_win, target_buf)
+  end
+  vim.api.nvim_set_current_win(ed_win)
+
+  local lines = vim.split(text, '\n', { plain = true })
+  local target_line = 1
+  for idx, l in ipairs(lines) do
+    if l:match('^ALTER TABLE') or l:match('^DEFINE FIELD') then
+      target_line = idx
+      break
+    end
+  end
+  vim.api.nvim_win_set_cursor(ed_win, { target_line, 0 })
+end
+
+--- Edit the connection or table schema under the cursor.
 function M.actions.edit()
   local node = M.current_node()
-  if not node or node.kind ~= 'connection' then
+  if not node then
     return
   end
 
-  local spec = require('sqmeow.sources').find(node.name)
-  if not spec then
-    return utils.notify(
-      ('`%s` is open but not saved, so there is nothing to edit'):format(node.name),
-      vim.log.levels.WARN
-    )
+  if node.kind == 'connection' then
+    local spec = require('sqmeow.sources').find(node.name)
+    if not spec then
+      return utils.notify(
+        ('`%s` is open but not saved, so there is nothing to edit'):format(node.name),
+        vim.log.levels.WARN
+      )
+    end
+
+    if not require('sqmeow.ui.connection').edit(spec) then
+      utils.notify(
+        ('`%s` holds a url the form cannot take apart'):format(node.name),
+        vim.log.levels.WARN
+      )
+    end
+    return
   end
 
-  if not require('sqmeow.ui.connection').edit(spec) then
-    utils.notify(
-      ('`%s` holds a url the form cannot take apart'):format(node.name),
-      vim.log.levels.WARN
-    )
+  if node.kind == 'table' then
+    return edit_table(node)
   end
 end
 
