@@ -37,8 +37,12 @@ local M = {}
 M.defaults = {
   drawer = {
     { action = 'toggle', lhs = { '<CR>', 'o' }, desc = 'Expand or collapse the node' },
-    { action = 'preview', lhs = 'p', desc = 'Show the first page of this relation' },
-    { action = 'preview_editor', lhs = 'P', desc = 'Preview this relation in an editor' },
+    { action = 'preview', lhs = 'p', desc = 'Show relation preview or reopen a recorded query' },
+    {
+      action = 'preview_editor',
+      lhs = 'P',
+      desc = 'Preview relation or recorded query in an editor',
+    },
     { action = 'structure', lhs = 'K', desc = 'Show the structure of this table or key' },
     { action = 'relationships', lhs = 'gR', desc = 'Browse table relationships' },
     { action = 'filter_keys', lhs = 'f', desc = 'Show only the Redis keys matching a pattern' },

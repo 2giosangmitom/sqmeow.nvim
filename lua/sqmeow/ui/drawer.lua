@@ -1009,12 +1009,12 @@ local function preview(in_editor)
   )
 end
 
---- Preview the relation directly in the result window.
+--- Preview the relation directly in the result window, or reopen a recorded query.
 function M.actions.preview()
   preview(false)
 end
 
---- Open the preview query in an editor and show its result.
+--- Open the relation preview query or recorded query in an editor.
 function M.actions.preview_editor()
   preview(true)
 end
