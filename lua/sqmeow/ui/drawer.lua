@@ -838,10 +838,68 @@ function M.actions.filter_keys()
   end)
 end
 
---- Run a `SELECT` over the relation under the cursor.
+--- Run a `SELECT` over the relation under the cursor, or reopen/open a recorded query.
 local function preview(in_editor)
   local node = M.current_node()
-  if not node or not is_relation(node.kind) then
+  if not node then
+    return
+  end
+
+  if node.kind == 'query' and node.entry then
+    if not in_editor then
+      return require('sqmeow.ui.log').reopen(node.entry)
+    end
+
+    local entry = node.entry
+    local conn_name = entry.connection
+    local state = require('sqmeow.core.state')
+    local conn = conn_name and state.connection_by_name(conn_name)
+    local dialect = (conn and conn.dialect) or entry.dialect or 'sql'
+    local ft = dialect_filetype(dialect)
+    local text = entry.statement or ''
+
+    local target_buf = vim.api.nvim_create_buf(true, true)
+    local base_name = ('[Query: %s]'):format(conn_name or 'history')
+    local ok = pcall(vim.api.nvim_buf_set_name, target_buf, base_name)
+    if not ok then
+      local count = 1
+      while true do
+        local try_name = ('[Query: %s (%d)]'):format(conn_name or 'history', count)
+        if pcall(vim.api.nvim_buf_set_name, target_buf, try_name) then
+          break
+        end
+        count = count + 1
+      end
+    end
+
+    vim.bo[target_buf].buftype = 'nofile'
+    vim.bo[target_buf].bufhidden = 'hide'
+    vim.bo[target_buf].swapfile = false
+    vim.bo[target_buf].filetype = ft
+    vim.api.nvim_buf_set_lines(target_buf, 0, -1, false, vim.split(text, '\n', { plain = true }))
+    vim.bo[target_buf].modified = false
+
+    local editor = require('sqmeow.ui.editor')
+    editor.attach(target_buf, conn_name)
+
+    local ed_win = nil
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_buf(w) == target_buf then
+        ed_win = w
+        break
+      end
+    end
+    if not ed_win then
+      ed_win = require('sqmeow.ui.layout').editing_window()
+      vim.api.nvim_win_set_buf(ed_win, target_buf)
+    end
+    vim.api.nvim_set_current_win(ed_win)
+    local first_line = vim.split(text, '\n', { plain = true })[1] or ''
+    vim.api.nvim_win_set_cursor(ed_win, { 1, #first_line })
+    return
+  end
+
+  if not is_relation(node.kind) then
     return
   end
 
@@ -951,12 +1009,12 @@ local function preview(in_editor)
   )
 end
 
---- Preview the relation directly in the result window.
+--- Preview the relation directly in the result window, or reopen a recorded query.
 function M.actions.preview()
   preview(false)
 end
 
---- Open the preview query in an editor and show its result.
+--- Open the relation preview query or recorded query in an editor.
 function M.actions.preview_editor()
   preview(true)
 end

@@ -333,4 +333,53 @@ T['results']['go with the log when it is cleared'] = function()
   eq(vim.uv.fs_stat(paths.results()), nil)
 end
 
+T['drawer preview'] = MiniTest.new_set()
+
+T['drawer preview']['reopens retained results on preview (p)'] = function()
+  local drawer = require('sqmeow.ui.drawer')
+  local log = require('sqmeow.ui.log')
+  local reopened = nil
+  helpers.stub(log, 'reopen', function(entry)
+    reopened = entry
+  end)
+
+  local sample_entry = { call_id = 42, statement = 'select 1', connection = 'main' }
+  helpers.stub(drawer, 'current_node', function()
+    return { kind = 'query', entry = sample_entry }
+  end)
+
+  drawer.actions.preview()
+  eq(reopened, sample_entry)
+end
+
+T['drawer preview']['opens recorded query in editor without executing on preview_editor (P)'] = function()
+  local drawer = require('sqmeow.ui.drawer')
+  local query_api = require('sqmeow.api.query')
+  local executed = false
+  helpers.stub(query_api, 'execute', function()
+    executed = true
+  end)
+
+  state.connections[1] =
+    { id = 1, name = 'mydb', dialect = 'postgres', url = 'postgres://mydb', state = 'connected' }
+  local sample_entry =
+    { call_id = 99, statement = 'select * from users where id = 1', connection = 'mydb' }
+  helpers.stub(drawer, 'current_node', function()
+    return { kind = 'query', entry = sample_entry }
+  end)
+
+  drawer.actions.preview_editor()
+
+  local cur_buf = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(cur_buf, 0, -1, false)
+  eq(table.concat(lines, '\n'), 'select * from users where id = 1')
+  eq(vim.bo[cur_buf].filetype, 'sql')
+  eq(vim.bo[cur_buf].buftype, 'nofile')
+  eq(vim.b[cur_buf].sqmeow_connection, 'mydb')
+  eq(executed, false)
+
+  -- Clean up
+  vim.api.nvim_buf_delete(cur_buf, { force = true })
+end
+
 return T
