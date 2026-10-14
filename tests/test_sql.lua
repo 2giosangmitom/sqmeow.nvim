@@ -1,6 +1,7 @@
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 local sql = require('sqmeow.core.sql')
+local helpers = require('tests.helpers')
 
 local T = MiniTest.new_set()
 
@@ -78,40 +79,155 @@ end
 
 T['alter_table'] = MiniTest.new_set()
 
-T['alter_table']['generates postgres ALTER TABLE template with operations'] = function()
-  local res = sql.alter_table('postgres', { 'public', 'users' })
-  assert(res:find('ALTER TABLE "public"."users"'))
-  assert(res:find('ADD COLUMN new_column text;'))
-  assert(res:find('--   DROP COLUMN old_column,'))
-end
-
-T['alter_table']['includes current columns when provided'] = function()
+T['alter_table']['uses separate editable statements, not column comments'] = function()
   local cols = {
     { name = 'id', type_name = 'integer', primary_key = true },
     { name = 'email', type_name = 'text', nullable = false },
   }
-  local res = sql.alter_table('postgres', { 'public', 'users' }, cols)
-  assert(res:find('-- Current columns:'))
-  assert(res:find('--   id %(integer, primary key%)'))
-  assert(res:find('--   email %(text, not null%)'))
-  assert(res:find('ALTER TABLE "public"."users"'))
+  local res = assert(sql.alter_table('postgres', { 'public', 'users' }, cols))
+  eq(
+    res:sub((assert(res:find('ALTER TABLE', 1, true)))),
+    [[ALTER TABLE "public"."users"
+  ALTER COLUMN "id" TYPE integer;
+
+ALTER TABLE "public"."users"
+  ALTER COLUMN "email" TYPE text;]]
+  )
+  helpers.absent(res, '-- Current columns:')
 end
 
-T['alter_table']['uses dialect-specific syntax'] = function()
-  local my = sql.alter_table('mysql', { 'shop', 'items' })
-  assert(my:find('ALTER TABLE `shop`.`items`'))
-  assert(my:find('ADD COLUMN new_column varchar%(255%);'))
+local alterations = {
+  postgres = 'ALTER COLUMN "email" TYPE varchar(255)',
+  cockroachdb = 'ALTER COLUMN "email" TYPE varchar(255)',
+  duckdb = 'ALTER COLUMN "email" TYPE varchar(255)',
+  mysql = 'MODIFY COLUMN `email` varchar(255) NOT NULL',
+  mariadb = 'MODIFY COLUMN `email` varchar(255) NOT NULL',
+  mssql = 'ALTER COLUMN [email] varchar(255) NOT NULL',
+  oracle = 'MODIFY ("email" varchar(255))',
+  clickhouse = 'MODIFY COLUMN "email" varchar(255)',
+}
+for dialect, alteration in pairs(alterations) do
+  T['alter_table']['uses ' .. dialect .. ' syntax'] = function()
+    local res = sql.alter_table(dialect, { 'shop', 'users' }, {
+      { name = 'email', type_name = 'varchar(255)', nullable = false },
+    })
+    helpers.contains(
+      res,
+      'ALTER TABLE ' .. sql.qualify(dialect, { 'shop', 'users' }) .. '\n  ' .. alteration .. ';'
+    )
+  end
+end
 
-  local ms = sql.alter_table('mssql', { 'dbo', 'users' })
-  assert(ms:find('ALTER TABLE %[dbo%].%[users%]'))
-  assert(ms:find('ADD new_column nvarchar%(255%);'))
+T['alter_table']['preserves mysql nullability and defaults'] = function()
+  local res = sql.alter_table('mariadb', { 'shop', 'users' }, {
+    { name = 'email', type_name = 'varchar(255)', nullable = false, default = "'unknown'" },
+    { name = 'age', type_name = 'int', nullable = true },
+  })
+  helpers.contains(res, "MODIFY COLUMN `email` varchar(255) NOT NULL DEFAULT 'unknown';")
+  helpers.contains(res, 'MODIFY COLUMN `age` int NULL;')
+  helpers.contains(res, 'ALTER TABLE `shop`.`users`')
+end
 
-  local sl = sql.alter_table('sqlite', { 'main', 'users' })
-  assert(sl:find('ALTER TABLE "main"."users"'))
-  assert(sl:find('ADD COLUMN new_column text;'))
+T['alter_table']['uses rename placeholders for sqlite'] = function()
+  local res = sql.alter_table('sqlite', { 'main', 'users' }, {
+    { name = 'email', type_name = 'text' },
+  })
+  helpers.contains(res, 'ALTER TABLE "main"."users" RENAME COLUMN "email" TO "email_renamed";')
+  helpers.absent(res, 'ALTER COLUMN')
+end
 
-  local sur = sql.alter_table('surrealdb', { 'main', 'person' })
-  assert(sur:find('DEFINE FIELD new_column ON TABLE `person` TYPE string;'))
+T['alter_table']['overwrites surrealdb fields, excluding implicit id'] = function()
+  local res = sql.alter_table('surrealdb', { 'main', 'person' }, {
+    { name = 'id', type_name = 'record', primary_key = true },
+    { name = 'email', type_name = 'option<string>' },
+  })
+  helpers.contains(res, 'DEFINE FIELD OVERWRITE `email` ON TABLE `person` TYPE option<string>;')
+  helpers.absent(res, 'OVERWRITE `id`')
+end
+
+T['alter_table']['quotes multiline column names as identifiers, never comments'] = function()
+  local name = 'notes"\nDROP TABLE users;\n--'
+  local res = sql.alter_table('postgres', { 'public', 'users' }, {
+    { name = name, type_name = 'text' },
+  })
+  helpers.contains(res, 'ALTER COLUMN ' .. sql.quote('postgres', name) .. ' TYPE text;')
+  helpers.absent(res, '--   notes')
+  eq(sql.quote('mariadb', 'we`ird'), '`we``ird`')
+end
+
+T['alter_table']['uses a placeholder for multiline type metadata'] = function()
+  local res = sql.alter_table('postgres', { 'public', 'users' }, {
+    { name = 'email', type_name = 'text\nDROP TABLE users;\n--' },
+  })
+  helpers.contains(res, 'ALTER COLUMN "email" TYPE new_type;')
+  helpers.absent(res, 'DROP TABLE')
+end
+
+T['alter_table']['leaves explicit placeholders for missing types or columns'] = function()
+  helpers.contains(
+    sql.alter_table('postgres', { 'public', 'users' }, {}),
+    'ALTER COLUMN "column_name" TYPE new_type;'
+  )
+  helpers.contains(
+    sql.alter_table('postgres', { 'public', 'users' }, { { name = 'email' } }),
+    'ALTER COLUMN "email" TYPE new_type;'
+  )
+end
+
+T['alter_table']['rejects unsupported dialects'] = function()
+  for _, dialect in ipairs({ 'mongodb', 'redis', 'cassandra', 'unknown' }) do
+    eq(sql.alter_table(dialect, { 'shop', 'users' }), nil)
+  end
+  eq(sql.alter_table(nil, { 'users' }), nil)
+end
+
+T['alter_table']['executes separate duckdb alterations'] = function()
+  if vim.fn.executable('duckdb') == 0 then
+    MiniTest.skip('DuckDB CLI is not available')
+  end
+  local template = assert(sql.alter_table('duckdb', { 'main', 'users' }, {
+    { name = 'id', type_name = 'bigint' },
+    { name = 'email', type_name = 'varchar' },
+  }))
+  local output = vim.fn.system({
+    'duckdb',
+    '-no-init',
+    '-bail',
+    '-csv',
+    '-noheader',
+    ':memory:',
+    '-c',
+    "CREATE TABLE users (id integer, email varchar); INSERT INTO users VALUES (1, 'kept');\n"
+      .. template
+      .. '\nSELECT id, email FROM users;',
+  })
+  eq(vim.v.shell_error, 0)
+  eq(vim.trim(output), '1,kept')
+end
+
+T['alter_table']['keeps multiline sqlite identifiers from executing as SQL'] = function()
+  if vim.fn.executable('sqlite3') == 0 then
+    MiniTest.skip('SQLite CLI is not available')
+  end
+  local name = 'notes"\nDROP TABLE users;\n--'
+  local template = assert(sql.alter_table('sqlite', { 'main', 'users' }, {
+    { name = name, type_name = 'text' },
+  }))
+  local quoted = sql.quote('sqlite', name)
+  local output = vim.fn.system({
+    'sqlite3',
+    '-bail',
+    ':memory:',
+    'CREATE TABLE users ('
+      .. quoted
+      .. " text); INSERT INTO users VALUES ('kept');\n"
+      .. template
+      .. '\nSELECT '
+      .. sql.quote('sqlite', name .. '_renamed')
+      .. ' FROM users;',
+  })
+  eq(vim.v.shell_error, 0)
+  eq(vim.trim(output), 'kept')
 end
 
 return T

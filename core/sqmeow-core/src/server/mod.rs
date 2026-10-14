@@ -30,6 +30,7 @@ pub mod params;
 pub mod payload;
 pub mod project;
 pub mod relationships;
+mod routines;
 pub mod schema;
 pub mod session;
 pub mod summary;
@@ -168,6 +169,7 @@ impl Handler for Core {
             "apply" => core.apply(&args),
             "introspect" => core.introspect(&args),
             "structure" => core.structure(&args),
+            "routine_source" => core.routine_source(&args),
             "relationships" => core.relationships(&args),
             "export" => core.export(&args),
             _ => {

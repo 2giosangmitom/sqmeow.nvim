@@ -23,6 +23,36 @@ macro_rules! server {
     };
 }
 
+#[tokio::test]
+async fn routine_source_preserves_function_and_procedure_bodies() {
+    use sqmeow_db::node::RoutineKind;
+    let db = Backend::connect(&server!()).await.unwrap();
+    run(&db, "CREATE OR ALTER FUNCTION dbo.sqmeow_source_func(@v int) RETURNS int AS BEGIN RETURN @v + 17; END").await;
+    run(
+        &db,
+        "CREATE OR ALTER PROCEDURE dbo.sqmeow_source_proc AS SELECT 'procedure body';",
+    )
+    .await;
+    let function = db
+        .routine_source("dbo", "sqmeow_source_func", RoutineKind::Function)
+        .await
+        .unwrap();
+    assert!(function[0].contains("RETURN @v + 17"));
+    let procedure = db
+        .routine_source("dbo", "sqmeow_source_proc", RoutineKind::Procedure)
+        .await
+        .unwrap();
+    assert!(procedure[0].contains("procedure body"));
+    assert!(
+        db.routine_source("dbo", "sqmeow_source_proc", RoutineKind::Function)
+            .await
+            .is_err()
+    );
+    run(&db, "DROP FUNCTION dbo.sqmeow_source_func").await;
+    run(&db, "DROP PROCEDURE dbo.sqmeow_source_proc").await;
+    db.close().await;
+}
+
 async fn run(db: &Backend, sql: &str) -> ResultSet {
     db.execute(sql, usize::MAX, CancellationToken::new())
         .await

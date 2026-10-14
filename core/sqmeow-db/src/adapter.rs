@@ -222,6 +222,20 @@ pub trait Adapter: Send + Sync {
     /// Lists routines in a schema.
     async fn routines(&self, schema: &str) -> Result<Vec<RoutineNode>>;
 
+    /// Full definitions of a named function or procedure, including every overload.
+    /// Names are unquoted catalog identities. An empty list denotes missing source;
+    /// never substitute a fabricated definition. Unsupported retrieval reports an error.
+    async fn routine_source(
+        &self,
+        _schema: &str,
+        _name: &str,
+        _kind: crate::node::RoutineKind,
+    ) -> Result<Vec<String>> {
+        Err(crate::error::Error::driver(
+            "routine definitions are not supported by this adapter",
+        ))
+    }
+
     /// Lists columns of a relation.
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>>;
 

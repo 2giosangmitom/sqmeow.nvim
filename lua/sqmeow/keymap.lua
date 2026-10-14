@@ -57,7 +57,7 @@ M.defaults = {
     {
       action = 'edit',
       lhs = 'e',
-      desc = 'Edit the connection or table schema under the cursor',
+      desc = 'Edit the connection, table schema or routine under the cursor',
     },
     {
       action = 'delete',

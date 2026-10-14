@@ -10,6 +10,45 @@ include!("common/sql_safety.rs");
 include!("common/native_bind.rs");
 include!("common/relationships.rs");
 
+#[tokio::test]
+async fn routine_source_preserves_ordered_body_lines() {
+    use sqmeow_db::node::RoutineKind;
+    let db = connect(&server!("SQMEOW_TEST_ORACLE_URL")).await;
+    let schema = db
+        .schemas()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.is_default)
+        .unwrap()
+        .name;
+    run(&db, "CREATE OR REPLACE FUNCTION SQMEOW_SOURCE_FUNC(v NUMBER) RETURN NUMBER AS\nBEGIN\nRETURN v + 17;\nEND;").await;
+    run(
+        &db,
+        "CREATE OR REPLACE PROCEDURE SQMEOW_SOURCE_PROC AS\nBEGIN\nNULL;\nEND;",
+    )
+    .await;
+    let function = db
+        .routine_source(&schema, "SQMEOW_SOURCE_FUNC", RoutineKind::Function)
+        .await
+        .unwrap();
+    assert!(function[0].starts_with("CREATE OR REPLACE FUNCTION"));
+    assert!(function[0].contains("RETURN v + 17;\nEND;"));
+    let procedure = db
+        .routine_source(&schema, "SQMEOW_SOURCE_PROC", RoutineKind::Procedure)
+        .await
+        .unwrap();
+    assert!(procedure[0].contains("NULL;\nEND;"));
+    assert!(
+        db.routine_source(&schema, "SQMEOW_SOURCE_PROC", RoutineKind::Function)
+            .await
+            .is_err()
+    );
+    run(&db, "DROP FUNCTION SQMEOW_SOURCE_FUNC").await;
+    run(&db, "DROP PROCEDURE SQMEOW_SOURCE_PROC").await;
+    db.close().await;
+}
+
 #[test]
 fn cancelled_writes_never_start_before_or_after_blocking_queue() {
     use std::{

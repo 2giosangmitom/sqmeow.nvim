@@ -281,6 +281,21 @@ impl Adapter for ClickHouseAdapter {
             .collect())
     }
 
+    async fn routine_source(
+        &self,
+        _schema: &str,
+        name: &str,
+        kind: sqmeow_db::node::RoutineKind,
+    ) -> Result<Vec<String>> {
+        if kind != sqmeow_db::node::RoutineKind::Function {
+            return Err(Error::driver("ClickHouse only defines functions"));
+        }
+        Ok(self.rows(
+            "select create_query from system.functions where name = ? and origin = 'SQLUserDefined'",
+            &[name],
+        ).await?.into_iter().map(|row| row[0].clone()).collect())
+    }
+
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         Ok(self
             .rows(

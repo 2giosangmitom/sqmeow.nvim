@@ -191,6 +191,18 @@ function M.scratchpad(name, default, store)
 end
 
 --- Show the schema drawer.
+--- On a supported table, `e` opens an unexecuted in-memory scratch buffer bound
+--- to that connection. Column names and current types prefill separate ALTER
+--- statements; missing structure is fetched first. Edit the placeholders before
+--- running them. SQLite uses rename placeholders because it cannot alter types.
+--- MySQL/MariaDB MODIFY and SurrealDB OVERWRITE replace definitions: review
+--- attributes not represented by the column metadata before execution.
+--- On functions and procedures, `e` fetches the complete stored definition into
+--- a bound scratch buffer without executing it. Overloads are shown together.
+--- Source retrieval supports PostgreSQL, MySQL/MariaDB, SQL Server, Oracle,
+--- ClickHouse SQL functions and SurrealDB functions. Missing, encrypted or
+--- unsupported definitions report an error. Source keeps the database's DDL;
+--- review CREATE/ALTER syntax and schema qualification before running edits.
 ---@return integer win
 function M.open_drawer()
   require('sqmeow.rpc.events').ensure()

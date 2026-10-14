@@ -216,6 +216,8 @@ end
 --- Starts the engine lazily and catches transport/RPC errors. A successful reply
 --- may acknowledge queued work; wait for the method's completion event
 --- before using results. Database and UI state are managed by callers/events.
+--- Metadata methods such as `routine_source` acknowledge acceptance here;
+--- their definitions or errors arrive separately through completion events.
 ---@param method string
 ---@param args table|nil Keyword arguments for the method.
 ---@return any|nil result

@@ -365,6 +365,27 @@ impl Adapter for SurrealAdapter {
             .collect())
     }
 
+    async fn routine_source(
+        &self,
+        _schema: &str,
+        name: &str,
+        kind: sqmeow_db::node::RoutineKind,
+    ) -> Result<Vec<String>> {
+        if kind != sqmeow_db::node::RoutineKind::Function {
+            return Err(Error::driver("SurrealDB only defines functions"));
+        }
+        let info = self.one("INFO FOR DB").await?;
+        let name = name.strip_prefix("fn::").unwrap_or(name);
+        let source = match &info {
+            Value::Object(info) => match info.get("functions") {
+                Some(Value::Object(functions)) => functions.get(name).map(text_of),
+                _ => None,
+            },
+            _ => None,
+        };
+        Ok(source.into_iter().collect())
+    }
+
     /// `id`, then the defined fields, or for a table with none the fields of a sample of its records.
     async fn columns(&self, _schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         let info = self.table_info(relation).await?;

@@ -7,6 +7,31 @@ include!("common/harness.rs");
 include!("common/native_bind.rs");
 
 #[tokio::test]
+async fn routine_source_reads_sql_function_definition() {
+    use sqmeow_db::node::RoutineKind;
+    let db = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
+    run(
+        &db,
+        "CREATE OR REPLACE FUNCTION sqmeow_source_func AS (v) -> v + 17",
+    )
+    .await;
+    let source = db
+        .routine_source("default", "sqmeow_source_func", RoutineKind::Function)
+        .await
+        .unwrap();
+    assert_eq!(source.len(), 1);
+    assert!(source[0].contains("CREATE FUNCTION"));
+    assert!(source[0].contains("v + 17"));
+    assert!(
+        db.routine_source("default", "sqmeow_source_func", RoutineKind::Procedure)
+            .await
+            .is_err()
+    );
+    run(&db, "DROP FUNCTION sqmeow_source_func").await;
+    db.close().await;
+}
+
+#[tokio::test]
 async fn bound_text_repeats_and_typed_null_stays_null() {
     let backend = connect(&server!("SQMEOW_TEST_CLICKHOUSE_URL")).await;
     let text = "x'; SELECT 99; -- \\ 雪\n";

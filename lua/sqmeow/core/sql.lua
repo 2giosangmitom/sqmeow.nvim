@@ -3,14 +3,14 @@
 local M = {}
 
 --- Quotes one identifier for a dialect.
----@param dialect string|nil `'mysql'` uses backticks, others use double quotes.
+---@param dialect string|nil MySQL and MariaDB use backticks, others use double quotes.
 ---@param name string
 ---@return string
 function M.quote(dialect, name)
   if dialect == 'mssql' then
     return '[' .. name:gsub(']', ']]') .. ']'
   end
-  if dialect == 'mysql' then
+  if dialect == 'mysql' or dialect == 'mariadb' then
     return '`' .. name:gsub('`', '``') .. '`'
   end
   if dialect == 'surrealdb' then
@@ -90,116 +90,95 @@ function M.read_key(group, key, limit)
   return commands[group]
 end
 
---- Returns an ALTER TABLE template for modifying a table's schema.
+--- Returns separate, editable statements using the table's current column types.
 ---@param dialect string|nil
 ---@param parts string[]
----@param columns table[]|nil Optional column nodes from schema cache
----@return string
+---@param columns table[]|nil Column nodes from schema cache
+---@return string|nil template Nil for unsupported dialects.
 function M.alter_table(dialect, parts, columns)
+  local operations = {
+    postgres = 'ALTER COLUMN %s TYPE %s',
+    cockroachdb = 'ALTER COLUMN %s TYPE %s',
+    duckdb = 'ALTER COLUMN %s TYPE %s',
+    mysql = 'MODIFY COLUMN %s %s',
+    mariadb = 'MODIFY COLUMN %s %s',
+    mssql = 'ALTER COLUMN %s %s',
+    oracle = 'MODIFY (%s %s)',
+    clickhouse = 'MODIFY COLUMN %s %s',
+  }
+  local operation = operations[dialect]
+  if not operation and dialect ~= 'sqlite' and dialect ~= 'surrealdb' then
+    return nil
+  end
+
   local qualified = M.qualify(dialect, parts)
-  local lines = {}
-
-  if columns and #columns > 0 then
-    table.insert(lines, '-- Current columns:')
-    for _, col in ipairs(columns) do
-      local details = {}
-      if col.type_name and col.type_name ~= '' then
-        table.insert(details, col.type_name)
-      end
-      if col.primary_key then
-        table.insert(details, 'primary key')
-      elseif col.nullable == false then
-        table.insert(details, 'not null')
-      end
-      local detail_str = #details > 0 and (' (' .. table.concat(details, ', ') .. ')') or ''
-      table.insert(lines, ('--   %s%s'):format(col.name, detail_str))
-    end
-    table.insert(lines, '')
-  end
-
-  if dialect == 'surrealdb' then
-    local tbl_name = parts[#parts]
-    table.insert(
-      lines,
-      ('-- DEFINE FIELD new_column ON TABLE %s TYPE string;'):format(M.quote(dialect, tbl_name))
-    )
-    table.insert(
-      lines,
-      ('-- REMOVE FIELD old_column ON TABLE %s;'):format(M.quote(dialect, tbl_name))
-    )
-    table.insert(lines, '')
-    table.insert(
-      lines,
-      ('DEFINE FIELD new_column ON TABLE %s TYPE string;'):format(M.quote(dialect, tbl_name))
-    )
-    return table.concat(lines, '\n')
-  end
-
-  if dialect == 'mysql' or dialect == 'mariadb' then
-    table.insert(lines, '-- Operations:')
-    table.insert(lines, '--   ADD COLUMN new_column varchar(255),')
-    table.insert(lines, '--   DROP COLUMN old_column,')
-    table.insert(lines, '--   MODIFY COLUMN column_name new_type,')
-    table.insert(lines, '--   CHANGE COLUMN old_name new_name new_type;')
-    table.insert(lines, '')
-    table.insert(lines, ('ALTER TABLE %s'):format(qualified))
-    table.insert(lines, '  ADD COLUMN new_column varchar(255);')
-    return table.concat(lines, '\n')
-  end
-
-  if dialect == 'mssql' then
-    table.insert(lines, '-- Operations:')
-    table.insert(lines, '--   ADD new_column nvarchar(255);')
-    table.insert(lines, '--   ALTER COLUMN column_name new_type;')
-    table.insert(lines, '--   DROP COLUMN old_column;')
-    table.insert(lines, '')
-    table.insert(lines, ('ALTER TABLE %s'):format(qualified))
-    table.insert(lines, '  ADD new_column nvarchar(255);')
-    return table.concat(lines, '\n')
-  end
-
+  local lines = { '-- Edit these placeholders before running; nothing has been executed.', '' }
   if dialect == 'sqlite' then
-    table.insert(lines, '-- Operations:')
-    table.insert(lines, '--   ADD COLUMN new_column text;')
-    table.insert(lines, '--   RENAME COLUMN old_name TO new_name;')
-    table.insert(lines, '--   DROP COLUMN old_column;')
-    table.insert(lines, '')
-    table.insert(lines, ('ALTER TABLE %s'):format(qualified))
-    table.insert(lines, '  ADD COLUMN new_column text;')
-    return table.concat(lines, '\n')
+    table.insert(
+      lines,
+      2,
+      '-- SQLite cannot alter column types directly; rename placeholders follow.'
+    )
+  elseif dialect == 'mysql' or dialect == 'mariadb' then
+    table.insert(
+      lines,
+      2,
+      '-- MODIFY replaces the definition: review defaults, generated values and AUTO_INCREMENT.'
+    )
+  elseif dialect == 'surrealdb' then
+    table.insert(
+      lines,
+      2,
+      '-- OVERWRITE replaces field definitions: review VALUE, ASSERT and PERMISSIONS clauses.'
+    )
   end
 
-  if dialect == 'oracle' then
-    table.insert(lines, '-- Operations:')
-    table.insert(lines, '--   ADD new_column varchar2(255);')
-    table.insert(lines, '--   MODIFY column_name new_type;')
-    table.insert(lines, '--   DROP COLUMN old_column;')
-    table.insert(lines, '')
-    table.insert(lines, ('ALTER TABLE %s'):format(qualified))
-    table.insert(lines, '  ADD new_column varchar2(255);')
-    return table.concat(lines, '\n')
+  local editable = {}
+  for _, col in ipairs(columns or {}) do
+    -- SurrealDB's record id is implicit, not an editable field definition.
+    if not (dialect == 'surrealdb' and col.name == 'id' and col.primary_key) then
+      table.insert(editable, col)
+    end
+  end
+  if #editable == 0 then
+    editable = { { name = 'column_name', type_name = 'new_type' } }
   end
 
-  if dialect == 'clickhouse' then
-    table.insert(lines, '-- Operations:')
-    table.insert(lines, '--   ADD COLUMN new_column String,')
-    table.insert(lines, '--   DROP COLUMN old_column,')
-    table.insert(lines, '--   MODIFY COLUMN column_name new_type;')
+  for _, col in ipairs(editable) do
+    local name = M.quote(dialect, col.name)
+    local type_name = col.type_name and col.type_name ~= '' and col.type_name or 'new_type'
+    -- Unusual type metadata needs a manual definition, not executable extra lines.
+    if type_name:find('[\r\n]') then
+      type_name = 'new_type'
+    end
+    local statement
+    if dialect == 'sqlite' then
+      statement = ('ALTER TABLE %s RENAME COLUMN %s TO %s;'):format(
+        qualified,
+        name,
+        M.quote(dialect, col.name .. '_renamed')
+      )
+    elseif dialect == 'surrealdb' then
+      statement = ('DEFINE FIELD OVERWRITE %s ON TABLE %s TYPE %s;'):format(
+        name,
+        qualified,
+        type_name
+      )
+    else
+      local definition = type_name
+      if dialect == 'mysql' or dialect == 'mariadb' or dialect == 'mssql' then
+        definition = definition
+          .. ((col.nullable == false or col.primary_key) and ' NOT NULL' or ' NULL')
+      end
+      if (dialect == 'mysql' or dialect == 'mariadb') and col.default then
+        definition = definition .. ' DEFAULT ' .. col.default
+      end
+      statement = ('ALTER TABLE %s\n  %s;'):format(qualified, operation:format(name, definition))
+    end
+    table.insert(lines, statement)
     table.insert(lines, '')
-    table.insert(lines, ('ALTER TABLE %s'):format(qualified))
-    table.insert(lines, '  ADD COLUMN new_column String;')
-    return table.concat(lines, '\n')
   end
-
-  -- PostgreSQL, CockroachDB, DuckDB, standard SQL
-  table.insert(lines, '-- Operations:')
-  table.insert(lines, '--   ADD COLUMN new_column text,')
-  table.insert(lines, '--   DROP COLUMN old_column,')
-  table.insert(lines, '--   ALTER COLUMN column_name TYPE new_type,')
-  table.insert(lines, '--   RENAME COLUMN old_name TO new_name;')
-  table.insert(lines, '')
-  table.insert(lines, ('ALTER TABLE %s'):format(qualified))
-  table.insert(lines, '  ADD COLUMN new_column text;')
+  table.remove(lines)
   return table.concat(lines, '\n')
 end
 
