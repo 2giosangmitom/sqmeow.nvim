@@ -12,6 +12,8 @@ local M = {}
 ---@field width integer
 ---@field height integer
 ---@field filetype string|nil Buffer filetype.
+---@field wrap boolean|nil Enable line wrapping, default false.
+---@field tabstop integer|nil Buffer tab width, default Neovim's setting.
 ---@field on_close fun() Close callback for mappings and BufLeave.
 ---@field bottom string|nil Bottom border text.
 ---@field zindex integer|nil Nui zindex, default 50.
@@ -49,8 +51,14 @@ function M.open(spec)
       bufhidden = 'wipe',
       swapfile = false,
       filetype = spec.filetype,
+      tabstop = spec.tabstop,
     },
-    win_options = { cursorline = true, wrap = false, number = false, relativenumber = false },
+    win_options = {
+      cursorline = true,
+      wrap = spec.wrap == true,
+      number = false,
+      relativenumber = false,
+    },
   })
   popup:mount()
   if spec.close_maps ~= false then

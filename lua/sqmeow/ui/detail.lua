@@ -27,16 +27,20 @@ function M.lines(columns, _width)
     local declared = column.declared_type or column.type_name or ''
     types[index] = truncate(declared, TYPE_WIDTH - #key, ellipsis) .. key
 
-    name_width = math.max(name_width, vim.api.nvim_strwidth(column.name))
-    type_width = math.max(type_width, vim.api.nvim_strwidth(types[index]))
+    name_width = math.max(name_width, vim.fn.strdisplaywidth(column.name))
+  end
+  for _, declared in ipairs(types) do
+    type_width = math.max(type_width, vim.fn.strdisplaywidth(declared, name_width + 2))
   end
 
   local lines = {}
   local indent = (' '):rep(name_width + type_width + 4)
   for index, column in ipairs(columns) do
     local line = Line()
-    local name_pad = (' '):rep(name_width - vim.api.nvim_strwidth(column.name) + 2)
-    local type_pad = (' '):rep(type_width - vim.api.nvim_strwidth(types[index]) + 2)
+    local name_pad = (' '):rep(name_width - vim.fn.strdisplaywidth(column.name) + 2)
+    local type_pad = (' '):rep(
+      type_width - vim.fn.strdisplaywidth(types[index], name_width + 2) + 2
+    )
     line:append(column.name .. name_pad, 'SqmeowDetailName')
     line:append(types[index] .. type_pad, 'SqmeowDetailType')
 
@@ -44,7 +48,8 @@ function M.lines(columns, _width)
       line:append(config.ui.result.null_text, 'SqmeowNull')
       table.insert(lines, line)
     else
-      local value = tostring(column.value):gsub('\r\n', '\n'):gsub('\r', '\n')
+      -- Nui cannot measure strings containing NUL; show its conventional visible notation.
+      local value = tostring(column.value):gsub('\r\n', '\n'):gsub('%z', '^@')
       local val_lines = vim.split(value, '\n', { plain = true })
       line:append(val_lines[1] or '')
       table.insert(lines, line)
@@ -91,6 +96,8 @@ function M.open(row)
     width = width,
     height = math.max(math.min(#lines, math.floor(vim.o.lines * 0.8)), 1),
     filetype = 'sqmeow-row',
+    wrap = true,
+    tabstop = vim.bo.tabstop,
     on_close = M.close,
   })
   if not opened then
