@@ -203,6 +203,8 @@ end
 --- ClickHouse SQL functions and SurrealDB functions. Missing, encrypted or
 --- unsupported definitions report an error. Source keeps the database's DDL;
 --- review CREATE/ALTER syntax and schema qualification before running edits.
+--- `K` on a function or procedure shows its full definition (signature and body)
+--- in a read-only popup instead, using the same supported source retrieval.
 ---@return integer win
 function M.open_drawer()
   require('sqmeow.rpc.events').ensure()

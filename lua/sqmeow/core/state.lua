@@ -101,6 +101,9 @@ end
 --- Forget a connection, and pick another as current if it was the current one.
 ---@param id integer
 function M.remove_connection(id)
+  if package.loaded['sqmeow.ui.structure'] then
+    package.loaded['sqmeow.ui.structure'].invalidate(id)
+  end
   if package.loaded['sqmeow.ui.relationships'] then
     package.loaded['sqmeow.ui.relationships'].invalidate(id)
   end

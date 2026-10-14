@@ -409,6 +409,16 @@ T['fetches a real postgres definition through the engine'] = function()
     helpers.contains(content(), routine.body)
     eq(state.call.call_id, call_id)
     vim.api.nvim_buf_delete(0, { force = true })
+    drawer.actions.structure()
+    helpers.wait_for('K should inspect the routine definition in a read-only popup', function()
+      return vim.api.nvim_win_get_config(0).relative ~= ''
+        and vim.bo.modifiable == false
+        and content():find(routine.body, 1, true) ~= nil
+    end)
+    eq(vim.b.sqmeow_editor, nil)
+    eq(vim.bo.filetype, 'sql')
+    eq(state.call.call_id, call_id)
+    require('sqmeow.ui.structure').close()
   end
 end
 

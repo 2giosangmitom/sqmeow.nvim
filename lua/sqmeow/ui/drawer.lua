@@ -16,7 +16,6 @@ local cache = {}
 -- Table editors waiting for column introspection, cancelled with their cached level.
 local pending_table_edits = {}
 local pending_routine_edits = {}
-local routine_request_id = 0
 --- The glob each Redis connection lists its keys by, by connection id.
 local patterns = {}
 
@@ -1019,10 +1018,21 @@ function M.actions.preview_editor()
   preview(true)
 end
 
---- Show the structure of the relation or key under the cursor.
+--- Show a relation's structure or a routine's definition under the cursor.
 function M.actions.structure()
   local node = M.current_node()
-  if not node or not is_relation(node.kind) then
+  if not node then
+    return
+  end
+  if node.kind == 'function' or node.kind == 'procedure' then
+    return require('sqmeow.ui.structure').open_routine(
+      node.conn_id,
+      node.path[1],
+      node.name,
+      node.kind
+    )
+  end
+  if not is_relation(node.kind) then
     return
   end
   require('sqmeow.ui.structure').open(node.conn_id, node.path[1], node.path[#node.path])
@@ -1268,10 +1278,10 @@ function M.actions.edit()
 
   if node.kind == 'function' or node.kind == 'procedure' then
     require('sqmeow.rpc.events').ensure()
-    routine_request_id = routine_request_id + 1
-    local request_id = routine_request_id
+    local rpc = require('sqmeow.rpc.client')
+    local request_id = rpc.next_request_id()
     pending_routine_edits[request_id] = vim.deepcopy(node)
-    local _, err = require('sqmeow.rpc.client').request('routine_source', {
+    local _, err = rpc.request('routine_source', {
       conn_id = node.conn_id,
       schema = node.path[1],
       name = node.name,

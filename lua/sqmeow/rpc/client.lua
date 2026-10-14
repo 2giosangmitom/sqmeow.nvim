@@ -22,6 +22,7 @@ local requesting = 0
 local pending_events = {}
 local dispatching = false
 local scheduled = false
+local request_sequence = 0
 
 -- Jobs we asked to stop.
 local expected_exit = {}
@@ -210,6 +211,14 @@ end
 function M.restart()
   M.stop()
   return M.start()
+end
+
+--- Allocate a shared identity for asynchronous requests with multiple UI consumers.
+--- Never reset it with the engine: queued replies must not match a new request.
+---@return integer
+function M.next_request_id()
+  request_sequence = request_sequence + 1
+  return request_sequence
 end
 
 --- Calls an engine method and waits for its answer.
