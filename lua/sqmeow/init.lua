@@ -439,6 +439,9 @@
 ---
 --- Every run is remembered in a query log. `:Sqmeow log` lists past runs and
 --- reopens any result without executing its query again.
+--- In the drawer, past runs appear under the `history` section. Press `p` (or
+--- `<CR>`) on a recorded query to reopen its retained results, or `P` to open
+--- the statement in an editor without executing it.
 --- `query.history_size` caps how many runs the engine keeps in memory.
 --- With `persist_history = true`, results are also archived to disk, so they
 --- survive eviction and even a restart. `query.history_limit` caps how many

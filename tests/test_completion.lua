@@ -329,4 +329,64 @@ T['providers']['normalize cursors and expose pending metadata'] = function(provi
   assert(ok, err)
 end
 
+T['blink trigger characters'] = function()
+  local blink = require('sqmeow.completion.blink').new()
+  eq(blink:get_trigger_characters(), { '.', '"', '`', '[', ' ', ',', '(' })
+end
+
+T['cmp trigger characters'] = function()
+  local cmp = require('sqmeow.completion.cmp').new()
+  eq(cmp:get_trigger_characters(), { '.', '"', '`', '[', ' ', ',', '(' })
+end
+
+T['buffer-bound relation provides column completion without FROM clause'] = function()
+  fixture('main')
+  columns('main', 'users')
+  columns('main', 'orders')
+
+  vim.b[buf].sqmeow_relation = 'users'
+  eq(column_labels(items('SELECT ')), { 'users_id', 'owner' })
+
+  vim.b[buf].sqmeow_relation = { name = 'orders', schema = 'main' }
+  eq(column_labels(items('SELECT ')), { 'orders_id', 'owner' })
+end
+
+T['explicit schema overrides buffer-bound relation'] = MiniTest.new_set({
+  parametrize = { { true }, { false } },
+})
+T['explicit schema overrides buffer-bound relation']['returns the explicitly qualified columns'] = function(
+  parser_available
+)
+  fixture('public')
+  cache({ 'public', 'tables', 'users' }, { { name = 'public_id', kind = 'column' } })
+  cache({}, { { name = 'public', kind = 'schema' }, { name = 'archive', kind = 'schema' } })
+  cache({ 'archive' }, { { key = 'tables', kind = 'tables' } })
+  cache({ 'archive', 'tables' }, { { name = 'users', kind = 'table' } })
+  cache({ 'archive', 'tables', 'users' }, { { name = 'archive_id', kind = 'column' } })
+
+  vim.api.nvim_buf_set_name(buf, '[Preview: users]')
+  vim.b[buf].sqmeow_relation = { name = 'users', schema = 'public' }
+  local sql = 'SELECT archive.users.'
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { sql })
+  if not parser_available then
+    helpers.stub(vim.treesitter, 'get_parser', function()
+      return nil
+    end)
+    helpers.stub(vim.treesitter, 'get_string_parser', function()
+      return nil
+    end)
+  end
+
+  eq(column_labels(items('SELECT ', 7, 1)), { 'public_id' })
+  eq(column_labels(items(sql, #sql, 1)), { 'archive_id' })
+end
+
+T['preview buffer name provides column completion without FROM clause'] = function()
+  fixture('main')
+  columns('main', 'users')
+
+  vim.api.nvim_buf_set_name(buf, '[Preview: users]')
+  eq(column_labels(items('SELECT ')), { 'users_id', 'owner' })
+end
+
 return T

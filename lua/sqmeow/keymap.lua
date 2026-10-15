@@ -13,6 +13,12 @@
 --- Unset keeps defaults. `?` shows the window's resolved mappings;
 --- `:checkhealth sqmeow` flags unknown action names. Below are defaults;
 --- <leader> is your `mapleader`.
+---
+--- In results, `K` opens read-only row details with full values, preserved
+--- newlines, and line wrapping. CRLF is normalized to LF; bare carriage returns
+--- are preserved, and embedded NUL bytes are shown as `^@` (yanking copies that
+--- notation). Continuation lines are indented under the value column. Use normal
+--- navigation, `/` to search, and `y` to yank; `q` or `<Esc>` closes the popup.
 ---@tag sqmeow-keymaps
 ---@toc_entry Keymaps
 
@@ -37,8 +43,12 @@ local M = {}
 M.defaults = {
   drawer = {
     { action = 'toggle', lhs = { '<CR>', 'o' }, desc = 'Expand or collapse the node' },
-    { action = 'preview', lhs = 'p', desc = 'Show the first page of this relation' },
-    { action = 'preview_editor', lhs = 'P', desc = 'Preview this relation in an editor' },
+    { action = 'preview', lhs = 'p', desc = 'Show relation preview or reopen a recorded query' },
+    {
+      action = 'preview_editor',
+      lhs = 'P',
+      desc = 'Preview relation or recorded query in an editor',
+    },
     { action = 'structure', lhs = 'K', desc = 'Show the structure of this table or key' },
     { action = 'relationships', lhs = 'gR', desc = 'Browse table relationships' },
     { action = 'filter_keys', lhs = 'f', desc = 'Show only the Redis keys matching a pattern' },
