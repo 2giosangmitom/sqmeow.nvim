@@ -64,7 +64,11 @@ M.defaults = {
       lhs = 'a',
       desc = 'Create a scratchpad',
     },
-    { action = 'edit', lhs = 'e', desc = 'Edit the connection under the cursor' },
+    {
+      action = 'edit',
+      lhs = 'e',
+      desc = 'Edit the connection, table schema or routine under the cursor',
+    },
     {
       action = 'delete',
       lhs = 'd',

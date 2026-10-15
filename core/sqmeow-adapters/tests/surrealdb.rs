@@ -21,6 +21,34 @@ macro_rules! server {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn routine_source_reads_function_body() {
+    use sqmeow_db::node::RoutineKind;
+    let db = fresh(&server!(), "routine_source").await;
+    run(
+        &db,
+        "DEFINE FUNCTION fn::sqmeow_source_func($v: int) { RETURN $v + 17; }",
+    )
+    .await;
+    let source = db
+        .routine_source(
+            "routine_source",
+            "fn::sqmeow_source_func",
+            RoutineKind::Function,
+        )
+        .await
+        .unwrap();
+    assert_eq!(source.len(), 1);
+    assert!(source[0].contains("DEFINE FUNCTION fn::sqmeow_source_func"));
+    assert!(source[0].contains("$v + 17"));
+    assert!(
+        db.routine_source("routine_source", "fn::missing", RoutineKind::Function)
+            .await
+            .is_err()
+    );
+    db.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn running_transaction_reports_actual_commit_after_cancel() {
     let db = fresh(&server!(), "cancel_outcome").await;
     run(&db, "DEFINE TABLE probe SCHEMALESS").await;

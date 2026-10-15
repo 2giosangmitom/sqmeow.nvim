@@ -732,6 +732,41 @@ impl Adapter for MsSqlAdapter {
             .iter().map(|r| crate::routine_node(text(r, 0), &text(r, 1))).collect())
     }
 
+    async fn routine_source(
+        &self,
+        schema: &str,
+        name: &str,
+        kind: sqmeow_db::node::RoutineKind,
+    ) -> Result<Vec<String>> {
+        let kind = match kind {
+            sqmeow_db::node::RoutineKind::Function => "function",
+            sqmeow_db::node::RoutineKind::Procedure => "procedure",
+            _ => {
+                return Err(Error::driver(
+                    "only functions and procedures have editable source",
+                ));
+            }
+        };
+        let rows = self
+            .metadata(
+                "SELECT m.definition FROM sys.objects o
+             JOIN sys.schemas s ON s.schema_id=o.schema_id
+             LEFT JOIN sys.sql_modules m ON m.object_id=o.object_id
+             WHERE s.name=@P1 AND o.name=@P2 AND
+             ((@P3='procedure' AND o.type IN ('P','PC')) OR
+              (@P3='function' AND o.type IN ('FN','IF','TF','FS','FT')))",
+                &[&schema, &name, &kind],
+            )
+            .await?;
+        rows.iter()
+            .map(|row| {
+                row.get::<&str, _>(0).map(str::to_owned).ok_or_else(|| {
+                    Error::driver("routine source is encrypted, native or not visible")
+                })
+            })
+            .collect()
+    }
+
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         Ok(self.metadata(
             "SELECT c.name, TYPE_NAME(c.user_type_id), c.is_nullable,

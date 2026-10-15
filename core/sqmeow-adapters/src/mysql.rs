@@ -657,6 +657,37 @@ impl Adapter for MySqlAdapter {
             .collect())
     }
 
+    async fn routine_source(
+        &self,
+        schema: &str,
+        name: &str,
+        kind: sqmeow_db::node::RoutineKind,
+    ) -> Result<Vec<String>> {
+        let (keyword, column) = match kind {
+            sqmeow_db::node::RoutineKind::Function => ("FUNCTION", "Create Function"),
+            sqmeow_db::node::RoutineKind::Procedure => ("PROCEDURE", "Create Procedure"),
+            _ => {
+                return Err(Error::driver(
+                    "only functions and procedures have editable source",
+                ));
+            }
+        };
+        let statement = format!(
+            "SHOW CREATE {keyword} {}.{}",
+            self.quote_ident(schema),
+            self.quote_ident(name)
+        );
+        let row = query(&statement)
+            .fetch_optional(&self.meta)
+            .await
+            .map_err(Error::driver)?
+            .ok_or_else(|| Error::driver("routine source was not found"))?;
+        let source: Option<String> = row.try_get(column).map_err(Error::driver)?;
+        source
+            .map(|source| vec![source])
+            .ok_or_else(|| Error::driver("routine source is not visible to this connection"))
+    }
+
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         // `column_type` keeps the declared width and signedness, which `data_type` drops.
         let rows = query(

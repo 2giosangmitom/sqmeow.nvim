@@ -12,6 +12,51 @@ include!("common/native_bind.rs");
 include!("common/relationships.rs");
 
 #[tokio::test]
+async fn routine_source_preserves_function_and_procedure_bodies() {
+    use sqmeow_db::node::RoutineKind;
+    let db = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
+    let schema = db
+        .schemas()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.is_default)
+        .unwrap()
+        .name;
+    run(&db, "drop function if exists sqmeow_source_func").await;
+    run(&db, "drop procedure if exists sqmeow_source_proc").await;
+    run(
+        &db,
+        "create function sqmeow_source_func(v int) returns int deterministic return v + 17",
+    )
+    .await;
+    run(
+        &db,
+        "create procedure sqmeow_source_proc() begin select 'procedure body'; end",
+    )
+    .await;
+    let function = db
+        .routine_source(&schema, "sqmeow_source_func", RoutineKind::Function)
+        .await
+        .unwrap();
+    assert!(function[0].contains("FUNCTION"));
+    assert!(function[0].contains("v + 17"));
+    let procedure = db
+        .routine_source(&schema, "sqmeow_source_proc", RoutineKind::Procedure)
+        .await
+        .unwrap();
+    assert!(procedure[0].contains("procedure body"));
+    assert!(
+        db.routine_source(&schema, "sqmeow_source_func`'--", RoutineKind::Function)
+            .await
+            .is_err()
+    );
+    run(&db, "drop function sqmeow_source_func").await;
+    run(&db, "drop procedure sqmeow_source_proc").await;
+    db.close().await;
+}
+
+#[tokio::test]
 async fn procedure_results_keep_each_schema_and_value() {
     let db = connect(&server!("SQMEOW_TEST_MYSQL_URL")).await;
     run(&db, "drop procedure if exists audit_multi_results").await;

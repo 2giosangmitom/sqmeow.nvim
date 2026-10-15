@@ -1099,6 +1099,36 @@ impl Adapter for PostgresAdapter {
             .collect())
     }
 
+    async fn routine_source(
+        &self,
+        schema: &str,
+        name: &str,
+        kind: sqmeow_db::node::RoutineKind,
+    ) -> Result<Vec<String>> {
+        let prokind = match kind {
+            sqmeow_db::node::RoutineKind::Function => "f",
+            sqmeow_db::node::RoutineKind::Procedure => "p",
+            _ => {
+                return Err(Error::driver(
+                    "only functions and procedures have editable source",
+                ));
+            }
+        };
+        pg::query_scalar::<String>(
+            "select pg_catalog.pg_get_functiondef(p.oid)
+             from pg_catalog.pg_proc p
+             join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+             where n.nspname = $1 and p.proname = $2 and p.prokind::text = $3
+             order by p.oid",
+        )
+        .bind(schema)
+        .bind(name)
+        .bind(prokind)
+        .fetch_all(&self.meta)
+        .await
+        .map_err(Error::driver)
+    }
+
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         // `format_type` renders the type the way the schema declares it.
         let rows = pg::query(

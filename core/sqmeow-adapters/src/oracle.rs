@@ -939,6 +939,36 @@ impl Adapter for OracleAdapter {
         .await
     }
 
+    async fn routine_source(
+        &self,
+        schema: &str,
+        name: &str,
+        kind: sqmeow_db::node::RoutineKind,
+    ) -> Result<Vec<String>> {
+        let kind = match kind {
+            sqmeow_db::node::RoutineKind::Function => "FUNCTION",
+            sqmeow_db::node::RoutineKind::Procedure => "PROCEDURE",
+            _ => {
+                return Err(Error::driver(
+                    "only functions and procedures have editable source",
+                ));
+            }
+        };
+        let binds = [schema.to_owned(), name.to_owned(), kind.to_owned()];
+        self.run_meta(move |meta| {
+            let lines: Vec<String> = Self::query_bound(
+                meta,
+                "select text from all_source where owner = :1 and name = :2 and type = :3 order by line",
+                &binds,
+                |row| row.get::<String>(0).map_err(Error::driver),
+            )?;
+            if lines.is_empty() {
+                return Ok(Vec::new());
+            }
+            Ok(vec![format!("CREATE OR REPLACE {}", lines.concat())])
+        }).await
+    }
+
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         let (schema, relation) = (schema.to_owned(), relation.to_owned());
         self.run_meta(move |meta| {

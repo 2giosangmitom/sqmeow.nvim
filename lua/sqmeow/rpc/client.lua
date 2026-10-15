@@ -22,6 +22,7 @@ local requesting = 0
 local pending_events = {}
 local dispatching = false
 local scheduled = false
+local request_sequence = 0
 
 -- Jobs we asked to stop.
 local expected_exit = {}
@@ -212,10 +213,20 @@ function M.restart()
   return M.start()
 end
 
+--- Allocate a shared identity for asynchronous requests with multiple UI consumers.
+--- Never reset it with the engine: queued replies must not match a new request.
+---@return integer
+function M.next_request_id()
+  request_sequence = request_sequence + 1
+  return request_sequence
+end
+
 --- Calls an engine method and waits for its answer.
 --- Starts the engine lazily and catches transport/RPC errors. A successful reply
 --- may acknowledge queued work; wait for the method's completion event
 --- before using results. Database and UI state are managed by callers/events.
+--- Metadata methods such as `routine_source` acknowledge acceptance here;
+--- their definitions or errors arrive separately through completion events.
 ---@param method string
 ---@param args table|nil Keyword arguments for the method.
 ---@return any|nil result

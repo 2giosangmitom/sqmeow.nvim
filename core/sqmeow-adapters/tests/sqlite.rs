@@ -14,6 +14,17 @@ include!("common/sql_safety.rs");
 include!("common/native_bind.rs");
 
 #[tokio::test]
+async fn routine_source_reports_unsupported_instead_of_empty_definition() {
+    let db = database().await;
+    let error = db
+        .routine_source("main", "abs", sqmeow_db::node::RoutineKind::Function)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("not supported"));
+    db.close().await;
+}
+
+#[tokio::test]
 async fn relationships_preserve_catalog_endpoints() {
     let backend = database().await;
     run(&backend, "create table \"parent.\"\"table\" (\"second.key\" integer, \"first key\" integer, primary key (\"first key\", \"second.key\"))").await;

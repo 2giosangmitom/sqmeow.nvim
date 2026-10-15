@@ -13,6 +13,9 @@ local expanded = {}
 -- does not hide what was just created, but stays as the user left it afterwards.
 local seen_pads = {}
 local cache = {}
+-- Table editors waiting for column introspection, cancelled with their cached level.
+local pending_table_edits = {}
+local pending_routine_edits = {}
 --- The glob each Redis connection lists its keys by, by connection id.
 local patterns = {}
 
@@ -108,6 +111,10 @@ function M.load(conn_id, path, async)
     )
     if err then
       cache[key] = { error = err }
+      if pending_table_edits[key] then
+        pending_table_edits[key] = nil
+        utils.notify(err, vim.log.levels.ERROR)
+      end
       M.render()
     end
   end
@@ -121,11 +128,21 @@ end
 --- Take one level of the tree from the engine.
 ---@param payload table
 function M.on_nodes(payload)
-  cache[node_key(payload.conn_id, payload.path or {})] = {
+  local key = node_key(payload.conn_id, payload.path or {})
+  cache[key] = {
     nodes = payload.nodes or {},
     error = payload.error,
   }
   M.render()
+  local edit = pending_table_edits[key]
+  pending_table_edits[key] = nil
+  if edit then
+    if payload.error then
+      utils.notify(payload.error, vim.log.levels.ERROR)
+    else
+      edit(payload.nodes or {})
+    end
+  end
 end
 
 --- Forget what is cached below a node.
@@ -133,6 +150,16 @@ end
 ---@param path string[]
 function M.invalidate(conn_id, path)
   local prefix = node_key(conn_id, path)
+  for request_id, node in pairs(pending_routine_edits) do
+    if under(node_key(node.conn_id, node.path), prefix) then
+      pending_routine_edits[request_id] = nil
+    end
+  end
+  for key in pairs(pending_table_edits) do
+    if under(key, prefix) then
+      pending_table_edits[key] = nil
+    end
+  end
   for cached in pairs(cache) do
     if under(cached, prefix) then
       cache[cached] = nil
@@ -838,6 +865,74 @@ function M.actions.filter_keys()
   end)
 end
 
+--- Create a uniquely named in-memory editor buffer.
+local function new_editor_buffer(label, name)
+  local target = vim.api.nvim_create_buf(true, true)
+  local suffix = ''
+  local count = 0
+  while not pcall(vim.api.nvim_buf_set_name, target, ('[%s: %s%s]'):format(label, name, suffix)) do
+    count = count + 1
+    suffix = (' (%d)'):format(count)
+  end
+  return target
+end
+
+--- Populate, bind and display an editor without executing its contents.
+local function show_editor(target, node, text)
+  vim.bo[target].buftype = 'nofile'
+  vim.bo[target].bufhidden = 'hide'
+  vim.bo[target].swapfile = false
+  vim.bo[target].filetype = dialect_filetype(dialect_of(node.conn_id))
+  vim.api.nvim_buf_set_lines(target, 0, -1, false, vim.split(text, '\n', { plain = true }))
+  vim.bo[target].modified = false
+
+  local connection = require('sqmeow.core.state').connections[node.conn_id]
+  local editor = require('sqmeow.ui.editor')
+  editor.attach(target, connection and connection.name)
+  local editing_win
+  for _, candidate in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_buf(candidate) == target then
+      editing_win = candidate
+      break
+    end
+  end
+  if not editing_win then
+    editing_win = require('sqmeow.ui.layout').editing_window()
+    vim.api.nvim_win_set_buf(editing_win, target)
+  end
+  vim.api.nvim_set_current_win(editing_win)
+  editor.update_winbar()
+  return editing_win
+end
+
+--- Show a fetched definition only while its originating request remains valid.
+---@param payload table
+function M.on_routine(payload)
+  local node = pending_routine_edits[payload.request_id]
+  if
+    not node
+    or payload.conn_id ~= node.conn_id
+    or payload.schema ~= node.path[1]
+    or payload.name ~= node.name
+    or payload.kind ~= node.kind
+  then
+    return
+  end
+  pending_routine_edits[payload.request_id] = nil
+  if not require('sqmeow.core.state').connections[node.conn_id] then
+    return
+  end
+  if payload.error then
+    return utils.notify(payload.error, vim.log.levels.ERROR)
+  end
+  if type(payload.source) ~= 'string' or vim.trim(payload.source) == '' then
+    return utils.notify('the routine has no visible source definition', vim.log.levels.ERROR)
+  end
+  local target = new_editor_buffer('Routine', node.path[1] .. '.' .. node.name)
+  local editing_win = show_editor(target, node, payload.source)
+  vim.api.nvim_win_set_cursor(editing_win, { 1, 0 })
+end
+
 --- Run a `SELECT` over the relation under the cursor, or reopen/open a recorded query.
 local function preview(in_editor)
   local node = M.current_node()
@@ -918,8 +1013,7 @@ local function preview(in_editor)
   local source_buf = nil
 
   if in_editor then
-    local dialect = dialect_of(node.conn_id)
-    local ft = dialect_filetype(dialect)
+    local ft = dialect_filetype(dialect_of(node.conn_id))
     local text = (ft == 'sql' or ft == 'surql') and (statement .. ';') or statement
 
     local rel_name = node.name or (node.path and node.path[#node.path]) or 'preview'
@@ -951,53 +1045,16 @@ local function preview(in_editor)
     if existing and not is_modified(existing) then
       target_buf = existing
     else
-      target_buf = vim.api.nvim_create_buf(true, true)
-      local base_name = ('[Preview: %s]'):format(rel_name)
-      local ok = pcall(vim.api.nvim_buf_set_name, target_buf, base_name)
-      if not ok then
-        local count = 1
-        while true do
-          local try_name = ('[Preview: %s (%d)]'):format(rel_name, count)
-          if pcall(vim.api.nvim_buf_set_name, target_buf, try_name) then
-            break
-          end
-          count = count + 1
-        end
-      end
+      target_buf = new_editor_buffer('Preview', rel_name)
       preview_bufs[key] = target_buf
     end
 
     preview_buf = target_buf
 
-    vim.bo[target_buf].buftype = 'nofile'
-    vim.bo[target_buf].bufhidden = 'hide'
-    vim.bo[target_buf].swapfile = false
-    vim.bo[target_buf].filetype = ft
-    vim.api.nvim_buf_set_lines(target_buf, 0, -1, false, vim.split(text, '\n'))
-    vim.bo[target_buf].modified = false
+    local ed_win = show_editor(target_buf, node, text)
     vim.b[target_buf].sqmeow_preview_statement = text
     local rel_schema = node.path and #node.path > 1 and node.path[1] or nil
     vim.b[target_buf].sqmeow_relation = { name = rel_name, schema = rel_schema }
-
-    local state = require('sqmeow.core.state')
-    local conn = state.connections[node.conn_id]
-    local conn_name = conn and conn.name
-
-    local editor = require('sqmeow.ui.editor')
-    editor.attach(target_buf, conn_name)
-
-    local ed_win = nil
-    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-      if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_buf(w) == target_buf then
-        ed_win = w
-        break
-      end
-    end
-    if not ed_win then
-      ed_win = require('sqmeow.ui.layout').editing_window()
-      vim.api.nvim_win_set_buf(ed_win, target_buf)
-    end
-    vim.api.nvim_set_current_win(ed_win)
     local first_line = vim.split(text, '\n')[1] or ''
     vim.api.nvim_win_set_cursor(ed_win, { 1, #first_line })
     source_buf = target_buf
@@ -1021,10 +1078,21 @@ function M.actions.preview_editor()
   preview(true)
 end
 
---- Show the structure of the relation or key under the cursor.
+--- Show a relation's structure or a routine's definition under the cursor.
 function M.actions.structure()
   local node = M.current_node()
-  if not node or not is_relation(node.kind) then
+  if not node then
+    return
+  end
+  if node.kind == 'function' or node.kind == 'procedure' then
+    return require('sqmeow.ui.structure').open_routine(
+      node.conn_id,
+      node.path[1],
+      node.name,
+      node.kind
+    )
+  end
+  if not is_relation(node.kind) then
     return
   end
   require('sqmeow.ui.structure').open(node.conn_id, node.path[1], node.path[#node.path])
@@ -1200,26 +1268,90 @@ function M.actions.new_scratchpad()
   require('sqmeow.api.view').scratchpad(nil, prefix, node and node.store)
 end
 
---- Edit the connection under the cursor.
+--- Open an unexecuted editor using the table's current column definitions.
+---@param node table
+---@param columns table[]
+local function edit_table(node, columns)
+  local dialect = dialect_of(node.conn_id)
+  local text = require('sqmeow.core.sql').alter_table(dialect, sql_parts(node.path), columns)
+  if not text then
+    return
+  end
+  local rel_name = node.name or (node.path and node.path[#node.path]) or 'table'
+  local target_buf = new_editor_buffer('Alter', rel_name)
+  local ed_win = show_editor(target_buf, node, text)
+  local lines = vim.split(text, '\n', { plain = true })
+  local target_line = 1
+  for idx, l in ipairs(lines) do
+    if l:match('^ALTER TABLE') or l:match('^DEFINE FIELD') then
+      target_line = idx
+      break
+    end
+  end
+  vim.api.nvim_win_set_cursor(ed_win, { target_line, 0 })
+end
+
+--- Edit the connection, table schema or routine definition under the cursor.
 function M.actions.edit()
   local node = M.current_node()
-  if not node or node.kind ~= 'connection' then
+  if not node then
     return
   end
 
-  local spec = require('sqmeow.sources').find(node.name)
-  if not spec then
-    return utils.notify(
-      ('`%s` is open but not saved, so there is nothing to edit'):format(node.name),
-      vim.log.levels.WARN
-    )
+  if node.kind == 'connection' then
+    local spec = require('sqmeow.sources').find(node.name)
+    if not spec then
+      return utils.notify(
+        ('`%s` is open but not saved, so there is nothing to edit'):format(node.name),
+        vim.log.levels.WARN
+      )
+    end
+
+    if not require('sqmeow.ui.connection').edit(spec) then
+      utils.notify(
+        ('`%s` holds a url the form cannot take apart'):format(node.name),
+        vim.log.levels.WARN
+      )
+    end
+    return
   end
 
-  if not require('sqmeow.ui.connection').edit(spec) then
-    utils.notify(
-      ('`%s` holds a url the form cannot take apart'):format(node.name),
-      vim.log.levels.WARN
-    )
+  if node.kind == 'table' then
+    local sql = require('sqmeow.core.sql')
+    if not sql.alter_table(dialect_of(node.conn_id), sql_parts(node.path)) then
+      return utils.notify(
+        'table schema editing is not supported for this dialect',
+        vim.log.levels.WARN
+      )
+    end
+    local columns = M.cached_nodes(node.conn_id, node.path)
+    if columns then
+      return edit_table(node, columns)
+    end
+    local selected = vim.deepcopy(node)
+    pending_table_edits[node_key(node.conn_id, node.path)] = function(loaded)
+      edit_table(selected, loaded)
+    end
+    M.load(node.conn_id, node.path)
+    return
+  end
+
+  if node.kind == 'function' or node.kind == 'procedure' then
+    require('sqmeow.rpc.events').ensure()
+    local rpc = require('sqmeow.rpc.client')
+    local request_id = rpc.next_request_id()
+    pending_routine_edits[request_id] = vim.deepcopy(node)
+    local _, err = rpc.request('routine_source', {
+      conn_id = node.conn_id,
+      schema = node.path[1],
+      name = node.name,
+      kind = node.kind,
+      request_id = request_id,
+    })
+    if err then
+      pending_routine_edits[request_id] = nil
+      utils.notify(err, vim.log.levels.ERROR)
+    end
   end
 end
 
@@ -1432,6 +1564,12 @@ function M.cached_nodes(conn_id, path)
   return entry.nodes
 end
 
+--- Discard editor requests whose engine session no longer exists.
+function M.cancel_edits()
+  pending_table_edits = {}
+  pending_routine_edits = {}
+end
+
 --- Forget everything. Used when the engine restarts, since its session went with it.
 function M.reset()
   -- The scratchpad section is kept open if it was.
@@ -1440,6 +1578,7 @@ function M.reset()
   expanded = { [SCRATCHPADS] = pads }
   seen_pads = {}
   cache = {}
+  M.cancel_edits()
   tree = nil
   preview_buf = nil
   preview_bufs = {}

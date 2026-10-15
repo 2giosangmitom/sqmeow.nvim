@@ -330,6 +330,23 @@ impl Backend {
         dispatch!(self, adapter => adapter.routines(schema).await)
     }
 
+    /// Read complete definitions, keeping overloaded routines together.
+    pub async fn routine_source(
+        &self,
+        schema: &str,
+        name: &str,
+        kind: RoutineKind,
+    ) -> Result<Vec<String>> {
+        let definitions =
+            dispatch!(self, adapter => adapter.routine_source(schema, name, kind).await)?;
+        if definitions.is_empty() || definitions.iter().any(|source| source.trim().is_empty()) {
+            return Err(Error::driver(
+                "routine source is missing or not visible to this connection",
+            ));
+        }
+        Ok(definitions)
+    }
+
     /// The columns of one relation.
     pub async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
         dispatch!(self, adapter => adapter.columns(schema, relation).await)

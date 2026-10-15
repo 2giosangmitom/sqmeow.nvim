@@ -11,6 +11,49 @@ include!("common/native_bind.rs");
 include!("common/relationships.rs");
 
 #[tokio::test]
+async fn routine_source_preserves_bodies_overloads_and_kind() {
+    use sqmeow_db::node::RoutineKind;
+    let db = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
+    run(&db, "create or replace function public.sqmeow_source(v integer) returns integer language sql as $$ select v + 17 $$").await;
+    run(&db, "create or replace function public.sqmeow_source(v text) returns text language sql as $$ select v || 'body' $$").await;
+    run(&db, "create or replace procedure public.sqmeow_source_proc() language plpgsql as $$ begin raise notice 'procedure body'; end $$").await;
+    let source = db
+        .routine_source("public", "sqmeow_source", RoutineKind::Function)
+        .await
+        .unwrap();
+    assert_eq!(source.len(), 2);
+    assert!(
+        source
+            .iter()
+            .all(|sql| sql.starts_with("CREATE OR REPLACE FUNCTION"))
+    );
+    assert!(source.iter().any(|sql| sql.contains("v + 17")));
+    assert!(source.iter().any(|sql| sql.contains("'body'")));
+    let procedure = db
+        .routine_source("public", "sqmeow_source_proc", RoutineKind::Procedure)
+        .await
+        .unwrap();
+    assert!(procedure[0].contains("procedure body"));
+    assert!(
+        db.routine_source("public", "sqmeow_source_proc", RoutineKind::Function)
+            .await
+            .is_err()
+    );
+    assert!(
+        db.routine_source("public", "sqmeow_source' OR true --", RoutineKind::Function)
+            .await
+            .is_err()
+    );
+    run(
+        &db,
+        "drop function public.sqmeow_source(integer), public.sqmeow_source(text)",
+    )
+    .await;
+    run(&db, "drop procedure public.sqmeow_source_proc()").await;
+    db.close().await;
+}
+
+#[tokio::test]
 async fn cancellation_after_insert_preserves_success_and_reuse() {
     let db = connect(&server!("SQMEOW_TEST_POSTGRES_URL")).await;
     run(&db, "drop table if exists audit_late_cancel").await;
