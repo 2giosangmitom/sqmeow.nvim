@@ -10,8 +10,13 @@ local M = {}
 ---@param listed boolean|nil Passed to `nvim_create_buf`, default false.
 ---@return integer bufnr
 function M.scratch(name, filetype, listed)
-  local handle = vim.api.nvim_create_buf(listed == true, true)
-  vim.api.nvim_buf_set_name(handle, name)
+  local handle = vim.fn.bufnr(name)
+  if handle == -1 then
+    handle = vim.api.nvim_create_buf(listed == true, true)
+    vim.api.nvim_buf_set_name(handle, name)
+  elseif listed == true then
+    vim.bo[handle].buflisted = true
+  end
 
   vim.bo[handle].buftype = 'nofile'
   vim.bo[handle].bufhidden = 'hide'
