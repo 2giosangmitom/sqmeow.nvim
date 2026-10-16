@@ -86,7 +86,7 @@ M.attributes = {
 }
 
 --- Define the groups, leaving any the user has already defined alone.
-function M.setup()
+local function define()
   for group, target in pairs(M.links) do
     -- `default = true` is what makes a user's own definition win, whether it was set before or
     -- after this ran.
@@ -95,6 +95,16 @@ function M.setup()
   for group, attributes in pairs(M.attributes) do
     vim.api.nvim_set_hl(0, group, vim.tbl_extend('force', attributes, { default = true }))
   end
+end
+
+--- Initialize colors independently of the optional plugin setup call.
+function M.setup()
+  define()
+  vim.api.nvim_create_autocmd('ColorScheme', {
+    group = vim.api.nvim_create_augroup('sqmeow.highlights', { clear = true }),
+    desc = 'Redefine sqmeow highlight groups',
+    callback = define,
+  })
 end
 
 return M

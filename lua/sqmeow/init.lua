@@ -556,15 +556,6 @@ function M.setup(opts)
 
   require('sqmeow.ui.highlights').setup()
 
-  -- A colourscheme change wipes every group, including ours.
-  vim.api.nvim_create_autocmd('ColorScheme', {
-    group = vim.api.nvim_create_augroup('sqmeow.highlights', { clear = true }),
-    desc = 'Redefine sqmeow highlight groups',
-    callback = function()
-      require('sqmeow.ui.highlights').setup()
-    end,
-  })
-
   local session = vim.api.nvim_create_augroup('sqmeow.session', { clear = true })
   if require('sqmeow.config').get().ui.persist_session then
     vim.api.nvim_create_autocmd('VimLeavePre', {
