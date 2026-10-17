@@ -1,5 +1,30 @@
 # Changelog
 
+## [3.1.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.0.0...v3.1.0) (2026-10-17)
+
+
+### Features
+
+* **completion:** support trigger characters and buffer relation completion ([316891d](https://github.com/2giosangmitom/sqmeow.nvim/commit/316891d16c071124fa450b0d1bb68442e24f39c3))
+* **completion:** support trigger characters in nvim-cmp source with tests ([bd2f359](https://github.com/2giosangmitom/sqmeow.nvim/commit/bd2f3591646efba46b5f0e0751af6275e7e93cbf))
+* **drawer:** keymap to edit function/procedure/table ([#84](https://github.com/2giosangmitom/sqmeow.nvim/issues/84)) ([c6592fc](https://github.com/2giosangmitom/sqmeow.nvim/commit/c6592fc35610e6f55541544d4a822c937a7ce718))
+* **drawer:** preview recorded queries in result grid or editor ([#80](https://github.com/2giosangmitom/sqmeow.nvim/issues/80)) ([b657e5f](https://github.com/2giosangmitom/sqmeow.nvim/commit/b657e5fea33b267756c2ad30c3f03505f8b10728))
+* **result:** display full multiline values in row details ([#82](https://github.com/2giosangmitom/sqmeow.nvim/issues/82)) ([e12c15d](https://github.com/2giosangmitom/sqmeow.nvim/commit/e12c15dfa3abc14e735bd4c9bd6c0fddf067a3af))
+
+
+### Fixes
+
+* **completion:** honor explicit schema qualifiers ([3913082](https://github.com/2giosangmitom/sqmeow.nvim/commit/3913082d665e6e93c774c4ac1911d28a5896f1cf))
+* **ui:** initialize colors without setup ([290ed13](https://github.com/2giosangmitom/sqmeow.nvim/commit/290ed133b8a6910b5c90c27a653f4abce213b671))
+* **ui:** reuse named scratch buffers ([14a864f](https://github.com/2giosangmitom/sqmeow.nvim/commit/14a864f3113ebebfd86c9f5c5c1c7f8b1ccdfcfc)), closes [#88](https://github.com/2giosangmitom/sqmeow.nvim/issues/88)
+
+
+### Documentation
+
+* add `AGENTS.md` ([fa8fd55](https://github.com/2giosangmitom/sqmeow.nvim/commit/fa8fd5549d5ca78be9e3a02fe254ec86c31137ea))
+* improve `AGENTS.md` ([7849902](https://github.com/2giosangmitom/sqmeow.nvim/commit/78499022f627d54dd972800ad779974cf4ad4e2b))
+* improve readme and contributing guide ([edb8fe4](https://github.com/2giosangmitom/sqmeow.nvim/commit/edb8fe4ebcd2558876dc613c781fba85791c7185))
+
 ## [3.0.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v2.5.0...v3.0.0) (2026-10-09)
 
 
