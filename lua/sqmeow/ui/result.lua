@@ -54,7 +54,9 @@ local function close_sticky()
   sticky_win = nil
 end
 
---- Update or create the sticky header float when scrolling down past the first 2 rows.
+--- Update or create the sticky header float once the column-name row scrolls out of view.
+--- The separator line does not take part in that decision and does not occupy the float: it just
+--- scrolls away like any other row.
 local function update_sticky()
   local config = require('sqmeow.config').get()
   if not (config.ui and config.ui.result and config.ui.result.sticky_header) then
@@ -67,16 +69,18 @@ local function update_sticky()
     return
   end
 
-  local rows = HEADER_LINES
   local w0 = vim.api.nvim_win_call(win, function()
     return vim.fn.line('w0')
   end)
 
-  -- While the header is still on screen it is ordinary content; pin it only once it scrolls away.
-  if w0 <= rows then
+  -- Pin exactly the column-name row (buffer line 1). While it is still on screen it is ordinary
+  -- content; as soon as it scrolls away the float takes its place.
+  if w0 <= 1 then
     close_sticky()
     return
   end
+
+  local rows = 1
 
   local win_w = vim.api.nvim_win_get_width(win)
   local view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
