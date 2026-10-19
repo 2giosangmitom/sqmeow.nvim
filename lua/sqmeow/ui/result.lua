@@ -45,12 +45,70 @@ local tbl = nil
 --- Whether the last draw rendered a table grid with column headers.
 local has_grid = false
 
+--- Whether `id` is one of the header floats this module puts over the grid.
+---@param id integer
+---@return boolean
+local function is_sticky(id)
+  if not vim.api.nvim_win_is_valid(id) then
+    return false
+  end
+  -- A header that is up already is known by name, even if the grid buffer has changed since.
+  if vim.w[id].sqmeow_sticky then
+    return true
+  end
+  -- One left behind by a failed `nvim_open_win`, which never got that far: recognise it by the
+  -- shape of its config instead.
+  if not buf or vim.api.nvim_win_get_buf(id) ~= buf then
+    return false
+  end
+  local cfg = vim.api.nvim_win_get_config(id)
+  return cfg.relative == 'win'
+    and cfg.row == 0
+    and cfg.col == 0
+    and cfg.zindex == 45
+    and cfg.focusable == false
+end
+
 --- Close the sticky header window. It shares the grid's buffer, so only the window goes away.
+--- Anything else shaped like a header is swept as well: `nvim_open_win` keeps the window it just
+--- created when setting up `style = 'minimal'` fails (E36), so a failed attempt would otherwise
+--- leave a float behind on every scroll.
 local function close_sticky()
   if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
     pcall(vim.api.nvim_win_close, sticky_win, true)
   end
   sticky_win = nil
+  for _, id in ipairs(vim.api.nvim_list_wins()) do
+    if is_sticky(id) then
+      pcall(vim.api.nvim_win_close, id, true)
+    end
+  end
+end
+
+--- Open the header float over `grid`, or nil when Neovim refuses to place it.
+---@param grid integer
+---@param width integer
+---@param height integer
+---@return integer|nil
+local function open_sticky(grid, width, height)
+  local ok, id = pcall(vim.api.nvim_open_win, buf, false, {
+    relative = 'win',
+    win = grid,
+    row = 0,
+    col = 0,
+    width = width,
+    height = height,
+    focusable = false,
+    style = 'minimal',
+    -- 'none' so it does not inherit 'winborder': the header reads as part of the grid.
+    border = 'none',
+    noautocmd = true,
+    zindex = 45,
+  })
+  if ok and type(id) == 'number' and vim.api.nvim_win_is_valid(id) then
+    return id
+  end
+  return nil
 end
 
 --- Update or create the sticky header float once the column-name row scrolls out of view.
@@ -86,38 +144,35 @@ local function update_sticky()
   -- number/sign/fold columns would start that many cells to the left of its own data.
 
   if not sticky_win or not vim.api.nvim_win_is_valid(sticky_win) then
-    sticky_win = vim.api.nvim_open_win(buf, false, {
-      relative = 'win',
-      win = win,
-      row = 0,
-      col = 0,
-      width = win_w,
-      height = 1,
-      focusable = false,
-      style = 'minimal',
-      -- 'none' so it does not inherit 'winborder': the header reads as part of the grid.
-      border = 'none',
-      noautocmd = true,
-      zindex = 45,
-    })
-    if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
-      local wo = vim.wo[sticky_win]
-      -- Match the grid's colours instead of NormalFloat's own shade.
-      wo.winhighlight = 'NormalFloat:Normal'
-      wo.winbar = ''
-      wo.scrolloff = 0
-      wo.sidescrolloff = 0
-      -- The grid's cursor and its own decoration do not belong on the pinned header.
-      wo.cursorline = false
-      wo.cursorcolumn = false
-      wo.colorcolumn = ''
-      wo.spell = false
+    -- A one-row float that still carries a 'winbar' makes Neovim fail with E36 (`set_winbar_win`
+    -- has no room for the bar), and it does so after the window is already created, so the error
+    -- is not just noise: it also leaks a window. Neovim normally drops the inherited bar for a
+    -- one-row float, but not in every window state, so never ask for a single row: open with a
+    -- row of slack, clear the bar, and let the set_config below bring it back to one row.
+    local id = open_sticky(win, win_w, 2)
+    if not id then
+      close_sticky()
+      return
     end
-  else
-    vim.api.nvim_win_set_config(sticky_win, { win = win, width = win_w, height = 1 })
+    sticky_win = id
+    vim.w[sticky_win].sqmeow_sticky = 1
+    local wo = vim.wo[sticky_win]
+    -- Match the grid's colours instead of NormalFloat's own shade.
+    wo.winhighlight = 'NormalFloat:Normal'
+    -- Clearing the bar is also what frees the header's single row.
+    wo.winbar = ''
+    wo.scrolloff = 0
+    wo.sidescrolloff = 0
+    -- The grid's cursor and its own decoration do not belong on the pinned header.
+    wo.cursorline = false
+    wo.cursorcolumn = false
+    wo.colorcolumn = ''
+    wo.spell = false
   end
 
   if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
+    -- After the bar is gone, so a header opened with a row of slack drops back to one row.
+    vim.api.nvim_win_set_config(sticky_win, { win = win, width = win_w, height = 1 })
     -- Copy the options that decide where the text area starts and how it is drawn, so the header
     -- sits exactly on the grid's columns whatever gutter the grid has.
     local src = vim.wo[win]
