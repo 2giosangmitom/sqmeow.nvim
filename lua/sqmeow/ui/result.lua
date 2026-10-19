@@ -9,8 +9,7 @@ local buf = nil
 local win = nil
 --- The float the grid is in, when it is not in its split.
 local popup = nil
---- The sticky header float and buffer when scrolling down.
-local sticky_buf = nil
+--- The sticky header window when scrolling down. It shows the grid's own buffer.
 local sticky_win = nil
 
 --- The rows on screen, their offset in the view, and their result indices.
@@ -47,15 +46,12 @@ local tbl = nil
 local has_grid = false
 
 --- Close and wipe the sticky header window and buffer.
+--- Close the sticky header window. It shares the grid's buffer, so only the window goes away.
 local function close_sticky()
   if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
     pcall(vim.api.nvim_win_close, sticky_win, true)
   end
   sticky_win = nil
-  if sticky_buf and vim.api.nvim_buf_is_valid(sticky_buf) then
-    pcall(vim.api.nvim_buf_delete, sticky_buf, { force = true })
-  end
-  sticky_buf = nil
 end
 
 --- Update or create the sticky header float when scrolling down past the first 2 rows.
@@ -71,93 +67,79 @@ local function update_sticky()
     return
   end
 
-  local line_count = vim.api.nvim_buf_line_count(buf)
-  if line_count < 3 then
-    if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
-      pcall(vim.api.nvim_win_close, sticky_win, true)
-      sticky_win = nil
-    end
-    return
-  end
-
+  local rows = HEADER_LINES
   local w0 = vim.api.nvim_win_call(win, function()
     return vim.fn.line('w0')
   end)
 
-  if w0 > 2 then
-    if not sticky_buf or not vim.api.nvim_buf_is_valid(sticky_buf) then
-      sticky_buf = vim.api.nvim_create_buf(false, true)
-      vim.bo[sticky_buf].buftype = 'nofile'
-      vim.bo[sticky_buf].bufhidden = 'hide'
-      vim.bo[sticky_buf].swapfile = false
-    end
+  -- While the header is still on screen it is ordinary content; pin it only once it scrolls away.
+  if w0 <= rows then
+    close_sticky()
+    return
+  end
 
-    local header_lines = vim.api.nvim_buf_get_lines(buf, 0, 2, false)
-    if #header_lines == 2 then
-      vim.bo[sticky_buf].modifiable = true
-      vim.api.nvim_buf_set_lines(sticky_buf, 0, -1, false, header_lines)
-      vim.bo[sticky_buf].modifiable = false
+  local win_w = vim.api.nvim_win_get_width(win)
+  local view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
+  -- The header keeps the grid's own rendering: same buffer, same highlights, same alignment.
+  -- The gutter is part of that alignment, so it is copied too: a header without the grid's
+  -- number/sign/fold columns would start that many cells to the left of its own data.
 
-      -- Transfer extmarks / highlights from original header rows
-      local hns = vim.api.nvim_create_namespace('sqmeow_sticky')
-      vim.api.nvim_buf_clear_namespace(sticky_buf, hns, 0, -1)
-      local marks = vim.api.nvim_buf_get_extmarks(
-        buf,
-        NAMESPACE,
-        { 0, 0 },
-        { 1, -1 },
-        { details = true }
-      )
-      for _, m in ipairs(marks) do
-        local row, col, details = m[2], m[3], m[4]
-        if details and details.hl_group then
-          pcall(vim.api.nvim_buf_set_extmark, sticky_buf, hns, row, col, {
-            end_col = details.end_col,
-            hl_group = details.hl_group,
-            priority = details.priority,
-          })
-        end
-      end
-
-      local win_w = vim.api.nvim_win_get_width(win)
-      local view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
-
-      if not sticky_win or not vim.api.nvim_win_is_valid(sticky_win) then
-        sticky_win = vim.api.nvim_open_win(sticky_buf, false, {
-          relative = 'win',
-          win = win,
-          row = 0,
-          col = 0,
-          width = win_w,
-          height = 2,
-          focusable = false,
-          style = 'minimal',
-          zindex = 45,
-        })
-        if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
-          vim.wo[sticky_win].wrap = false
-          vim.wo[sticky_win].spell = false
-        end
-      else
-        vim.api.nvim_win_set_config(sticky_win, {
-          win = win,
-          width = win_w,
-          height = 2,
-        })
-      end
-
-      -- Synchronize horizontal scrolling 1:1 with parent window
-      if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
-        vim.api.nvim_win_call(sticky_win, function()
-          vim.fn.winrestview({ leftcol = view.leftcol, topline = 1 })
-        end)
-      end
+  if not sticky_win or not vim.api.nvim_win_is_valid(sticky_win) then
+    sticky_win = vim.api.nvim_open_win(buf, false, {
+      relative = 'win',
+      win = win,
+      row = 0,
+      col = 0,
+      width = win_w,
+      height = rows,
+      focusable = false,
+      style = 'minimal',
+      -- 'none' so it does not inherit 'winborder': the header reads as part of the grid.
+      border = 'none',
+      noautocmd = true,
+      zindex = 45,
+    })
+    if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
+      local wo = vim.wo[sticky_win]
+      -- Match the grid's colours instead of NormalFloat's own shade.
+      wo.winhighlight = 'NormalFloat:Normal'
+      wo.winbar = ''
+      wo.scrolloff = 0
+      wo.sidescrolloff = 0
+      -- The grid's cursor and its own decoration do not belong on the pinned header.
+      wo.cursorline = false
+      wo.cursorcolumn = false
+      wo.colorcolumn = ''
+      wo.spell = false
     end
   else
-    if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
-      pcall(vim.api.nvim_win_close, sticky_win, true)
-      sticky_win = nil
-    end
+    vim.api.nvim_win_set_config(sticky_win, { win = win, width = win_w, height = rows })
+  end
+
+  if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
+    -- Copy the options that decide where the text area starts and how it is drawn, so the header
+    -- sits exactly on the grid's columns whatever gutter the grid has.
+    local src = vim.wo[win]
+    local wo = vim.wo[sticky_win]
+    wo.wrap = src.wrap
+    wo.breakindent = src.breakindent
+    wo.list = src.list
+    wo.listchars = src.listchars
+    wo.conceallevel = src.conceallevel
+    wo.number = src.number
+    wo.relativenumber = src.relativenumber
+    wo.numberwidth = src.numberwidth
+    wo.signcolumn = src.signcolumn
+    wo.foldcolumn = src.foldcolumn
+    wo.statuscolumn = src.statuscolumn
+    -- A closed fold over the header would hide it and shift topline off the first rows.
+    wo.foldenable = false
+
+    -- Always show the first rows, scrolled horizontally like the grid it covers.
+    pcall(vim.api.nvim_win_set_cursor, sticky_win, { 1, 0 })
+    vim.api.nvim_win_call(sticky_win, function()
+      vim.fn.winrestview({ topline = 1, leftcol = view.leftcol, skipcol = 0 })
+    end)
   end
 end
 
