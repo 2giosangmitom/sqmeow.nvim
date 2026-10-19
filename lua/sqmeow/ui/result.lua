@@ -45,7 +45,6 @@ local tbl = nil
 --- Whether the last draw rendered a table grid with column headers.
 local has_grid = false
 
---- Close and wipe the sticky header window and buffer.
 --- Close the sticky header window. It shares the grid's buffer, so only the window goes away.
 local function close_sticky()
   if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
@@ -80,8 +79,6 @@ local function update_sticky()
     return
   end
 
-  local rows = 1
-
   local win_w = vim.api.nvim_win_get_width(win)
   local view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
   -- The header keeps the grid's own rendering: same buffer, same highlights, same alignment.
@@ -95,7 +92,7 @@ local function update_sticky()
       row = 0,
       col = 0,
       width = win_w,
-      height = rows,
+      height = 1,
       focusable = false,
       style = 'minimal',
       -- 'none' so it does not inherit 'winborder': the header reads as part of the grid.
@@ -117,7 +114,7 @@ local function update_sticky()
       wo.spell = false
     end
   else
-    vim.api.nvim_win_set_config(sticky_win, { win = win, width = win_w, height = rows })
+    vim.api.nvim_win_set_config(sticky_win, { win = win, width = win_w, height = 1 })
   end
 
   if sticky_win and vim.api.nvim_win_is_valid(sticky_win) then
@@ -139,7 +136,7 @@ local function update_sticky()
     -- A closed fold over the header would hide it and shift topline off the first rows.
     wo.foldenable = false
 
-    -- Always show the first rows, scrolled horizontally like the grid it covers.
+    -- Always show the column-name row, scrolled horizontally like the grid it covers.
     pcall(vim.api.nvim_win_set_cursor, sticky_win, { 1, 0 })
     vim.api.nvim_win_call(sticky_win, function()
       vim.fn.winrestview({ topline = 1, leftcol = view.leftcol, skipcol = 0 })
