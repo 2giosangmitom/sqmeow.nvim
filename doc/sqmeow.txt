@@ -643,7 +643,7 @@ Default configuration. Pass only changed fields to setup. Icons control display 
         column_icons = true,
         -- What SQL `NULL` shows as. Empty string draws as nothing.
         null_text = 'NULL',
-        -- Pin column header when scrolling down past the first visible lines.
+        -- Pin the column-name row once it scrolls out of view.
         sticky_header = true,
         -- Display active column name and type in the winbar.
         winbar_column_info = true,
