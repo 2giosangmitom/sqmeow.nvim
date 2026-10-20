@@ -63,6 +63,41 @@ function M.restore()
   end
 end
 
+--- Whether this Neovim has the window option `winfixbuf` (one from 0.11 or later).
+---@return boolean
+local function fixbuf_supported()
+  return vim.fn.exists('&winfixbuf') == 1
+end
+
+--- Pair a plugin window with the buffer it shows, so a jump or `:edit` cannot replace the
+--- plugin's content in place. Neovim then refuses the switch (E1513) instead of silently
+--- dropping what the window was showing; callers that do want to change the buffer lift the
+--- option through `M.set_buffer`.
+---@param win integer
+---@param fixed boolean|nil defaults to true
+function M.fixbuf(win, fixed)
+  if not fixbuf_supported() or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+  vim.wo[win].winfixbuf = fixed ~= false
+end
+
+--- Show `buf` in `win`, lifting `winfixbuf` for the switch and putting it back afterwards.
+---@param win integer
+---@param buf integer
+---@param opts? { release?: boolean } `release` leaves the window unlocked, for one that is
+--- being turned back into an ordinary editing window.
+function M.set_buffer(win, buf, opts)
+  local locked = fixbuf_supported() and vim.wo[win].winfixbuf
+  if locked then
+    vim.wo[win].winfixbuf = false
+  end
+  vim.api.nvim_win_set_buf(win, buf)
+  if locked and not (opts and opts.release) then
+    vim.wo[win].winfixbuf = true
+  end
+end
+
 --- Whether a window is somewhere an ordinary file could be opened.
 ---@param win integer
 ---@return boolean
@@ -128,7 +163,9 @@ function M.close_window(win)
   if #others > 0 then
     return vim.api.nvim_win_close(win, true)
   end
-  vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))
+  -- An ordinary buffer instead of a plugin one, so the window is released as well: it is the
+  -- user's now, and a `:edit` there has to work.
+  M.set_buffer(win, vim.api.nvim_create_buf(true, false), { release = true })
 end
 
 --- Forget the recorded layout without applying it.

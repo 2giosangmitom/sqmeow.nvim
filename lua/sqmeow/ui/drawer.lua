@@ -1521,7 +1521,8 @@ function M.open()
   local split = config.position == 'right' and 'botright' or 'topleft'
   vim.cmd(('%s vertical %dsplit'):format(split, config.width))
   win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(win, M.buffer())
+  local layout = require('sqmeow.ui.layout')
+  layout.set_buffer(win, M.buffer())
 
   vim.wo[win].number = false
   vim.wo[win].relativenumber = false
@@ -1530,6 +1531,8 @@ function M.open()
   vim.wo[win].cursorline = true
   -- Another split must not squash the tree into unreadable width.
   vim.wo[win].winfixwidth = true
+  -- The tree is state, not a buffer: a jump must not be able to replace it in place.
+  layout.fixbuf(win, true)
 
   M.render()
   vim.api.nvim_set_current_win(previous)

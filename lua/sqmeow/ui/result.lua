@@ -1356,6 +1356,8 @@ function M.open_float()
   })
   popup:mount()
   win = popup.winid
+  -- The float shows the same grid, so a jump must not replace it in place either.
+  layout.fixbuf(win, true)
   if cursor then
     pcall(vim.api.nvim_win_set_cursor, win, cursor)
   end
@@ -1876,7 +1878,8 @@ function M.open()
 
   vim.cmd(('botright %dsplit'):format(config.ui.result.height))
   win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(win, M.buffer())
+  local layout = require('sqmeow.ui.layout')
+  layout.set_buffer(win, M.buffer())
 
   vim.wo[win].number = false
   vim.wo[win].relativenumber = false
@@ -1885,6 +1888,8 @@ function M.open()
   vim.wo[win].cursorline = true
   -- Other splits must not squash the grid, which would silently hide columns.
   vim.wo[win].winfixheight = true
+  -- The grid is state, not a buffer: a jump must not be able to replace it in place.
+  layout.fixbuf(win, true)
 
   -- Opening a result should not steal the cursor from the query being written.
   if vim.api.nvim_win_is_valid(previous) then
