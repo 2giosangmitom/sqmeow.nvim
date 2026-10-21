@@ -1283,6 +1283,9 @@ Usage ~
                                                         *sqmeow.api.view.open()*
                             `sqmeow.api.view.open`()
 Open the result window.
+On Neovim 0.11+, drawer and result windows use 'winfixbuf': `:edit` and jumps
+that would replace their buffer fail with E1513. Switch to an editing window
+first. Neovim 0.10 keeps the previous, unlocked behavior.
 
 ------------------------------------------------------------------------------
                                                        *sqmeow.api.view.close()*

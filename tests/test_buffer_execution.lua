@@ -9,6 +9,10 @@ local T = MiniTest.new_set({
     pre_once = function()
       require('sqmeow').setup({ query = { persist_history = false } })
     end,
+    post_case = function()
+      -- Deleting the query buffer can focus the locked result grid.
+      require('sqmeow.ui.result').close()
+    end,
     post_once = function()
       rpc.stop()
       state.reset()

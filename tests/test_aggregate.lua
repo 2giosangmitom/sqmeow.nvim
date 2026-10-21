@@ -51,6 +51,8 @@ local T = MiniTest.new_set({
     end,
     post_case = function()
       require('sqmeow.ui.filter').close()
+      -- The filter can leave focus in the locked grid; do not leak it into the next case.
+      result.close()
       rpc.stop()
       state.reset()
     end,

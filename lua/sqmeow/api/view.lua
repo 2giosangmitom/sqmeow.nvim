@@ -91,6 +91,9 @@ function M.relationships(conn_id, schema, relation)
 end
 
 --- Open the result window.
+--- On Neovim 0.11+, drawer and result windows use 'winfixbuf': `:edit` and jumps
+--- that would replace their buffer fail with E1513. Switch to an editing window
+--- first. Neovim 0.10 keeps the previous, unlocked behavior.
 function M.open()
   require('sqmeow.ui.result').open()
 end

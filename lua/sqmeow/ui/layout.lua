@@ -63,6 +63,45 @@ function M.restore()
   end
 end
 
+--- Whether 'winfixbuf' is available.
+---@return boolean
+local function fixbuf_supported()
+  return vim.fn.exists('&winfixbuf') == 1
+end
+
+--- Prevent buffer replacement in a plugin window.
+--- No-op when 'winfixbuf' is unavailable.
+---@param win integer
+---@param fixed boolean|nil defaults to true
+function M.fixbuf(win, fixed)
+  if not fixbuf_supported() or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+  vim.wo[win].winfixbuf = fixed ~= false
+end
+
+--- Set the window buffer while preserving its 'winfixbuf' state.
+---@param win integer
+---@param buf integer
+---@param opts? { release?: boolean } Leave unlocked after a successful swap.
+function M.set_buffer(win, buf, opts)
+  -- Resolve the current window before buffer autocommands can move focus.
+  if win == 0 then
+    win = vim.api.nvim_get_current_win()
+  end
+  local locked = fixbuf_supported() and vim.wo[win].winfixbuf
+  if locked then
+    vim.wo[win].winfixbuf = false
+  end
+  local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+  if locked and vim.api.nvim_win_is_valid(win) and (not ok or not (opts and opts.release)) then
+    vim.wo[win].winfixbuf = true
+  end
+  if not ok then
+    error(err, 0)
+  end
+end
+
 --- Whether a window is somewhere an ordinary file could be opened.
 ---@param win integer
 ---@return boolean
@@ -128,7 +167,8 @@ function M.close_window(win)
   if #others > 0 then
     return vim.api.nvim_win_close(win, true)
   end
-  vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))
+  -- Release the last window for ordinary editing.
+  M.set_buffer(win, vim.api.nvim_create_buf(true, false), { release = true })
 end
 
 --- Forget the recorded layout without applying it.
