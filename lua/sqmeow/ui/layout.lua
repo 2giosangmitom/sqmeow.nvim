@@ -88,13 +88,20 @@ end
 ---@param opts? { release?: boolean } `release` leaves the window unlocked, for one that is
 --- being turned back into an ordinary editing window.
 function M.set_buffer(win, buf, opts)
+  -- Resolve the current window before buffer autocommands can move focus.
+  if win == 0 then
+    win = vim.api.nvim_get_current_win()
+  end
   local locked = fixbuf_supported() and vim.wo[win].winfixbuf
   if locked then
     vim.wo[win].winfixbuf = false
   end
-  vim.api.nvim_win_set_buf(win, buf)
-  if locked and not (opts and opts.release) then
+  local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+  if locked and vim.api.nvim_win_is_valid(win) and (not ok or not (opts and opts.release)) then
     vim.wo[win].winfixbuf = true
+  end
+  if not ok then
+    error(err, 0)
   end
 end
 
