@@ -1531,7 +1531,6 @@ function M.open()
   vim.wo[win].cursorline = true
   -- Another split must not squash the tree into unreadable width.
   vim.wo[win].winfixwidth = true
-  -- The tree is state, not a buffer: a jump must not be able to replace it in place.
   layout.fixbuf(win, true)
 
   M.render()

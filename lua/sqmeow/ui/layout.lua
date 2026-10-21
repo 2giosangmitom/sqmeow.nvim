@@ -63,16 +63,14 @@ function M.restore()
   end
 end
 
---- Whether this Neovim has the window option `winfixbuf` (one from 0.11 or later).
+--- Whether 'winfixbuf' is available.
 ---@return boolean
 local function fixbuf_supported()
   return vim.fn.exists('&winfixbuf') == 1
 end
 
---- Pair a plugin window with the buffer it shows, so a jump or `:edit` cannot replace the
---- plugin's content in place. Neovim then refuses the switch (E1513) instead of silently
---- dropping what the window was showing; callers that do want to change the buffer lift the
---- option through `M.set_buffer`.
+--- Prevent buffer replacement in a plugin window.
+--- No-op when 'winfixbuf' is unavailable.
 ---@param win integer
 ---@param fixed boolean|nil defaults to true
 function M.fixbuf(win, fixed)
@@ -82,11 +80,10 @@ function M.fixbuf(win, fixed)
   vim.wo[win].winfixbuf = fixed ~= false
 end
 
---- Show `buf` in `win`, lifting `winfixbuf` for the switch and putting it back afterwards.
+--- Set the window buffer while preserving its 'winfixbuf' state.
 ---@param win integer
 ---@param buf integer
----@param opts? { release?: boolean } `release` leaves the window unlocked, for one that is
---- being turned back into an ordinary editing window.
+---@param opts? { release?: boolean } Leave unlocked after a successful swap.
 function M.set_buffer(win, buf, opts)
   -- Resolve the current window before buffer autocommands can move focus.
   if win == 0 then
@@ -170,8 +167,7 @@ function M.close_window(win)
   if #others > 0 then
     return vim.api.nvim_win_close(win, true)
   end
-  -- An ordinary buffer instead of a plugin one, so the window is released as well: it is the
-  -- user's now, and a `:edit` there has to work.
+  -- Release the last window for ordinary editing.
   M.set_buffer(win, vim.api.nvim_create_buf(true, false), { release = true })
 end
 
