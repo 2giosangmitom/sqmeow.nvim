@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.1.1](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.1.0...v3.1.1) (2026-10-23)
+
+
+### Fixes
+
+* **ui:** keep the sticky grid header aligned with the grid ([#94](https://github.com/2giosangmitom/sqmeow.nvim/issues/94)) ([67c8544](https://github.com/2giosangmitom/sqmeow.nvim/commit/67c854433f311b84d0abc57f419f8111c102dafa))
+* **ui:** prevent replacing drawer and result buffers ([#97](https://github.com/2giosangmitom/sqmeow.nvim/issues/97)) ([7a6d1fd](https://github.com/2giosangmitom/sqmeow.nvim/commit/7a6d1fd8b8f940e69182f5614b91a841667a42ec))
+* **ui:** stop the sticky grid header from leaking windows when Neovim refuses it ([#96](https://github.com/2giosangmitom/sqmeow.nvim/issues/96)) ([3d8cf20](https://github.com/2giosangmitom/sqmeow.nvim/commit/3d8cf20b88124e4359bbe8b5be1310d232887cc9))
+
 ## [3.1.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.0.0...v3.1.0) (2026-10-17)
 
 
