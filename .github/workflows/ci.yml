@@ -16,7 +16,12 @@ env:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    # `ubuntu-latest` migrated to Ubuntu 26.04 during October 2026. Pin the image so CI does not
+    # change underneath us mid-rollout; the database images are only tested there when this pin
+    # moves. See the MongoDB note in compose.yaml.
+    runs-on: ubuntu-24.04
+    # Docs, lint and a cold Rust build fit comfortably; the default is six hours.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
@@ -33,8 +38,25 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
-      # Also installs the plugins lua-language-server checks against.
-      - run: nix develop --command just docs-check
-      - run: nix develop --command just lint
-      - run: nix develop --command just db-up
+      # The databases only need to be ready before `just test`, so start them while the checks run.
+      # `just db-up` prints the container state and logs itself if a service fails to become
+      # healthy.
+      - name: Checks
+        run: |
+          set -euo pipefail
+          nix develop --command just db-up > "$RUNNER_TEMP/db-up.log" 2>&1 &
+          db_up=$!
+          nix develop --command just docs-check
+          nix develop --command just lint
+          if ! wait "$db_up"; then
+            cat "$RUNNER_TEMP/db-up.log"
+            exit 1
+          fi
+
       - run: nix develop --command just test
+
+      - name: Database logs
+        if: failure()
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color --tail=200 || true

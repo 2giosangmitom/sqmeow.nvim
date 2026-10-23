@@ -87,7 +87,16 @@ test-rust:
 
 # Start the database servers used by the integration tests.
 db-up:
-    docker compose up -d --wait
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # `--wait` reports a failed start as a bare "container ... exited (1)". Dump the containers and
+    # their logs so the reason is in the CI output instead of requiring a rerun with more tracing,
+    # and bound the wait so a wedged healthcheck cannot hold the job open.
+    if ! docker compose up -d --wait --wait-timeout 600; then
+        docker compose ps --all
+        docker compose logs --no-color --tail=200
+        exit 1
+    fi
 
 # Stop them and throw away their data.
 db-down:

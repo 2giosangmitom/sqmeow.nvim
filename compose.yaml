@@ -109,8 +109,12 @@ services:
     ports:
       - "56380:6379"
 
+  # `mongo:8` now resolves to 8.3.x, which refuses to start on Linux 6.19+ ("MongoDB cannot start:
+  # Linux kernel versions 6.19 and newer has a known incompatibility"). The Ubuntu 26.04 cloud
+  # images ship such a kernel, so stay on the 8.2 line until 9.0.4+ (which dropped the guard) or a
+  # later 8.x patch is safe to use. See SERVER-121912 and SERVER-136272.
   mongodb:
-    image: mongo:8
+    image: mongo:8.2
     ports:
       - "57017:27017"
     healthcheck:
