@@ -1584,6 +1584,79 @@ function M.actions.relationships()
   show_table('relationships')
 end
 
+--- Follow an outgoing (`gd`) or incoming (`gr`) foreign key for the cell under the cursor.
+---@param direction 'outgoing'|'incoming'
+local function follow_relationship(direction)
+  local call = require('sqmeow.core.state').call
+  if not call then
+    return
+  end
+  local cell = M.current_cell()
+  if not (cell and cell.row ~= nil) then
+    return utils.notify(
+      'place the cursor on a result row to follow a relationship',
+      vim.log.levels.WARN
+    )
+  end
+  if cell.value == nil or cell.value == vim.NIL then
+    return utils.notify(('`%s` is NULL'):format(cell.name), vim.log.levels.WARN)
+  end
+
+  local schema, relation
+  local tables = call.source and call.source.tables
+  local table_cols = nil
+  if tables and #tables > 0 then
+    local chosen = tables[1]
+    for _, candidate in ipairs(tables) do
+      if vim.tbl_contains(candidate.columns, cell.column) then
+        chosen = candidate
+        break
+      end
+    end
+    schema, relation = chosen.schema or '', chosen.name
+    table_cols = chosen.columns
+  else
+    schema, relation = M.read_from(call)
+  end
+
+  if not (relation and call.conn_id) then
+    return utils.notify('this result names no table to follow', vim.log.levels.WARN)
+  end
+
+  local found = cursor_column(call)
+  local position = found and (found.line - HEADER_LINES) or nil
+  local raw_row = (position and page.rows[position]) or {}
+  local row_values = {}
+  for index, column in ipairs(call.columns or {}) do
+    if not table_cols or vim.tbl_contains(table_cols, index - 1) then
+      row_values[column.name] = {
+        value = raw_row[index],
+        numeric = column.numeric == true,
+      }
+    end
+  end
+
+  local col_meta = call.columns and call.columns[cell.column + 1]
+  require('sqmeow.ui.relationships').follow({
+    conn_id = call.conn_id,
+    schema = schema or '',
+    relation = relation,
+    direction = direction,
+    column = cell.name,
+    value = cell.value,
+    numeric = col_meta and col_meta.numeric == true,
+    row_values = row_values,
+  })
+end
+
+function M.actions.goto_definition()
+  follow_relationship('outgoing')
+end
+
+function M.actions.goto_references()
+  follow_relationship('incoming')
+end
+
 --- Show another statement's result from the same run.
 ---@param step integer
 local function switch(step)

@@ -867,6 +867,8 @@ drawer
 
 result
  gR            Browse this column's table relationships
+ gd            Query the parent row referenced by this foreign key cell
+ gr            Query child rows referencing this cell
  L             Next page
  H             Previous page
  [H            First page

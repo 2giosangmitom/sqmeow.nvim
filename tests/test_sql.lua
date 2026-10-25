@@ -230,4 +230,27 @@ T['alter_table']['keeps multiline sqlite identifiers from executing as SQL'] = f
   eq(vim.trim(output), 'kept')
 end
 
+T['select_where'] = MiniTest.new_set()
+
+T['select_where']['quotes identifiers, literals, and dialect row limits'] = function()
+  eq(
+    sql.select_where('postgres', { 'public', 'users' }, {
+      { column = 'id', value = 42, numeric = true },
+    }, 100),
+    'select * from "public"."users" where "id" = 42 limit 100'
+  )
+  eq(
+    sql.select_where('mssql', { 'dbo', 'orders' }, {
+      { column = 'note', value = "O'Reilly", numeric = false },
+    }, 50),
+    "select top (50) * from [dbo].[orders] where [note] = N'O''Reilly'"
+  )
+  eq(
+    sql.select_where('oracle', { 'HR', 'EMPLOYEES' }, {
+      { column = 'DEPT_ID', value = 10, numeric = true },
+    }, 25),
+    'select * from "HR"."EMPLOYEES" where "DEPT_ID" = 10 fetch first 25 rows only'
+  )
+end
+
 return T

@@ -84,6 +84,16 @@ M.defaults = {
       lhs = 'gR',
       desc = "Browse this column's table relationships",
     },
+    {
+      action = 'goto_definition',
+      lhs = 'gd',
+      desc = 'Query the parent row referenced by this foreign key cell',
+    },
+    {
+      action = 'goto_references',
+      lhs = 'gr',
+      desc = 'Query child rows referencing this cell',
+    },
     { action = 'next_page', lhs = 'L', desc = 'Next page' },
     { action = 'prev_page', lhs = 'H', desc = 'Previous page' },
     { action = 'first_page', lhs = '[H', desc = 'First page' },

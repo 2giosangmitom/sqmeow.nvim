@@ -253,4 +253,58 @@ T['result column provenance selects the other joined table'] = function()
   eq(requests[#requests].schema, 'other')
 end
 
+T['gd and gr query referenced parent and referencing child rows'] = function()
+  local executed = {}
+  local query = require('sqmeow.api.query')
+  local original_execute = query.execute
+  local original_select = vim.ui.select
+  MiniTest.finally(function()
+    query.execute = original_execute
+    vim.ui.select = original_select
+  end)
+  query.execute = function(sql_text, opts)
+    table.insert(executed, { sql = sql_text, opts = opts })
+  end
+
+  state.connections[1].dialect = 'postgres'
+  browser.follow({
+    conn_id = 1,
+    schema = 'public',
+    relation = 'orders',
+    direction = 'outgoing',
+    column = 'user_id',
+    value = 42,
+    numeric = true,
+  })
+  browser.on_done(answer({
+    key('orders_user_fk', 'orders', 'users', { 'user_id' }, { 'id' }),
+  }))
+  eq(#executed, 1)
+  eq(executed[1].sql, 'select * from "public"."users" where "id" = 42 limit 100')
+  eq(executed[1].opts.conn_id, 1)
+
+  -- Incoming references with multiple child tables prompt via vim.ui.select.
+  local selected_prompt
+  vim.ui.select = function(items, opts, on_choice)
+    selected_prompt = opts.prompt
+    on_choice(items[2])
+  end
+  browser.follow({
+    conn_id = 1,
+    schema = 'public',
+    relation = 'users',
+    direction = 'incoming',
+    column = 'id',
+    value = 42,
+    numeric = true,
+  })
+  browser.on_done(answer({
+    key('orders_user_fk', 'orders', 'users', { 'user_id' }, { 'id' }),
+    key('invoices_user_fk', 'invoices', 'users', { 'customer_id' }, { 'id' }),
+  }))
+  eq(selected_prompt, 'Referenced by:')
+  eq(#executed, 2)
+  eq(executed[2].sql, 'select * from "public"."invoices" where "customer_id" = 42 limit 100')
+end
+
 return T

@@ -65,6 +65,64 @@ function M.select_from(dialect, parts, limit)
   return limit and ('%s limit %d'):format(sql, limit) or sql
 end
 
+--- Formats a scalar value as a SQL literal for a dialect.
+---@param dialect string|nil
+---@param value any
+---@param numeric boolean|nil
+---@return string
+function M.literal(dialect, value, numeric)
+  if value == nil or value == vim.NIL then
+    return 'NULL'
+  end
+  if type(value) == 'boolean' then
+    if dialect == 'sqlite' or dialect == 'mssql' then
+      return value and '1' or '0'
+    end
+    return value and 'TRUE' or 'FALSE'
+  end
+  local text = tostring(value)
+  if type(value) == 'number' or (numeric and text:match('^%-?%d+%.?%d*$')) then
+    return text
+  end
+  if dialect == 'mysql' or dialect == 'mariadb' then
+    text = text:gsub('\\', '\\\\')
+  end
+  text = text:gsub("'", "''")
+  if dialect == 'mssql' then
+    return ("N'%s'"):format(text)
+  end
+  return ("'%s'"):format(text)
+end
+
+--- Returns a `SELECT` over a relation filtered by column equality predicates.
+---@param dialect string|nil
+---@param parts string[]
+---@param conditions { column: string, value: any, numeric?: boolean }[]
+---@param limit integer|nil Nil reads every row.
+---@return string
+function M.select_where(dialect, parts, conditions, limit)
+  local clauses = {}
+  for _, item in ipairs(conditions) do
+    local col = M.quote(dialect, item.column)
+    if item.value == nil or item.value == vim.NIL then
+      table.insert(clauses, ('%s is null'):format(col))
+    else
+      table.insert(clauses, ('%s = %s'):format(col, M.literal(dialect, item.value, item.numeric)))
+    end
+  end
+  local where = #clauses > 0 and (' where ' .. table.concat(clauses, ' and ')) or ''
+  local qualified = M.qualify(dialect, parts)
+  if dialect == 'mssql' then
+    local top = limit and ('top (%d) '):format(limit) or ''
+    return ('select %s* from %s%s'):format(top, qualified, where)
+  end
+  local sql = ('select * from %s%s'):format(qualified, where)
+  if dialect == 'oracle' then
+    return limit and ('%s fetch first %d rows only'):format(sql, limit) or sql
+  end
+  return limit and ('%s limit %d'):format(sql, limit) or sql
+end
+
 --- Returns the command that reads a Redis key for a drawer group.
 ---@param group string A drawer group key (e.g. `'hashes'`).
 ---@param key string

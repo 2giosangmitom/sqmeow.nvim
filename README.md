@@ -149,7 +149,8 @@ Press `?` in the drawer or results window to see available keymaps.
 | Key         | Action                                                |
 | ----------- | ----------------------------------------------------- |
 | `p` / `P`   | Preview a table / also open its query                 |
-| `gR`        | Follow foreign keys from a table or result column     |
+| `gd` / `gr` | Query referenced parent row / referencing child rows  |
+| `gR`        | Browse declared foreign keys for a table or column    |
 | `L` / `H`   | Next / previous page                                  |
 | `K`         | Show row details                                      |
 | `gf` / `go` | Open the filter / sort bar                            |

@@ -181,6 +181,141 @@ function M.open(conn_id, schema, relation)
   end
 end
 
+local function same_ident(a, b)
+  return a == b or (type(a) == 'string' and type(b) == 'string' and a:lower() == b:lower())
+end
+
+local function list_contains(list, name)
+  for _, item in ipairs(list or {}) do
+    if same_ident(item, name) then
+      return true
+    end
+  end
+  return false
+end
+
+local function execute_drilldown(conn_id, dialect, choice)
+  local page_size = require('sqmeow.config').get().ui.result.page_size
+  local limit = page_size > 0 and page_size or nil
+  local sql =
+    require('sqmeow.core.sql').select_where(dialect, choice.parts, choice.conditions, limit)
+  require('sqmeow.api.query').execute(sql, { conn_id = conn_id })
+end
+
+local function handle_drilldown(payload, drilldown, connection)
+  if payload.error then
+    return notify(payload.error, vim.log.levels.ERROR)
+  end
+  local resolved_schema = payload.resolved_schema or payload.schema
+  local resolved_relation = payload.resolved_relation or payload.relation
+  local outgoing = drilldown.direction == 'outgoing'
+  local matches = {}
+
+  for _, key in ipairs(payload.relationships or {}) do
+    local schema = outgoing and key.source_schema or key.target_schema
+    local relation = outgoing and key.source_relation or key.target_relation
+    local cols = outgoing and key.columns or key.referenced
+    if
+      schema == resolved_schema
+      and relation == resolved_relation
+      and list_contains(cols, drilldown.column)
+    then
+      local other_schema = outgoing and key.target_schema or key.source_schema
+      local other_relation = outgoing and key.target_relation or key.source_relation
+      local parts = other_schema ~= '' and { other_schema, other_relation } or { other_relation }
+      local conditions = {}
+      for index, col_name in ipairs(cols) do
+        local target_col = outgoing and key.referenced[index] or key.columns[index]
+        local entry = drilldown.row_values and drilldown.row_values[col_name]
+        if target_col then
+          if same_ident(col_name, drilldown.column) then
+            table.insert(conditions, {
+              column = target_col,
+              value = drilldown.value,
+              numeric = drilldown.numeric,
+            })
+          elseif entry and entry.value ~= nil then
+            table.insert(conditions, {
+              column = target_col,
+              value = entry.value,
+              numeric = entry.numeric,
+            })
+          end
+        end
+      end
+
+      if #conditions > 0 then
+        local name = key.name ~= '' and key.name or '(unnamed)'
+        local label = ('%s (%s: %s.%s → %s.%s)'):format(
+          qualified(other_schema, other_relation),
+          name,
+          qualified(key.source_schema, key.source_relation),
+          table.concat(key.columns, ', '),
+          qualified(key.target_schema, key.target_relation),
+          table.concat(key.referenced, ', ')
+        )
+        table.insert(matches, {
+          label = label,
+          parts = parts,
+          conditions = conditions,
+        })
+      end
+    end
+  end
+
+  if #matches == 0 then
+    local table_label = qualified(resolved_schema, resolved_relation)
+    if outgoing then
+      return notify(
+        ('`%s` has no outgoing foreign key on %s'):format(drilldown.column, table_label),
+        vim.log.levels.WARN
+      )
+    end
+    return notify(
+      ('no foreign keys reference `%s` on %s'):format(drilldown.column, table_label),
+      vim.log.levels.WARN
+    )
+  end
+
+  if #matches == 1 then
+    return execute_drilldown(payload.conn_id, connection.dialect, matches[1])
+  end
+
+  vim.ui.select(matches, {
+    prompt = outgoing and 'Follow foreign key:' or 'Referenced by:',
+    format_item = function(item)
+      return item.label
+    end,
+  }, function(choice)
+    if choice then
+      execute_drilldown(payload.conn_id, connection.dialect, choice)
+    end
+  end)
+end
+
+--- Follow an outgoing (`gd`) or incoming (`gr`) foreign key from a result cell.
+---@param spec { conn_id: integer, schema: string, relation: string, direction: 'outgoing'|'incoming', column: string, value: any, numeric?: boolean, row_values?: table<string, { value: any, numeric?: boolean }> }
+function M.follow(spec)
+  M.close()
+  local connection = require('sqmeow.core.state').connections[spec.conn_id]
+  if not connection or connection.state ~= 'connected' then
+    return notify('relationship navigation needs an open connection', vim.log.levels.WARN)
+  end
+  require('sqmeow.rpc.events').ensure()
+  sequence = sequence + 1
+  local request = {
+    conn_id = spec.conn_id,
+    schema = spec.schema,
+    relation = spec.relation,
+    request_id = sequence,
+  }
+  wanted = vim.tbl_extend('force', request, { drilldown = spec })
+  local _, err = require('sqmeow.rpc.client').request('relationships', request)
+  if err and wanted then
+    M.on_done(vim.tbl_extend('force', request, { error = err }))
+  end
+end
+
 --- Drop stale answers, even for a repeated request for the same table.
 ---@param payload table
 function M.on_done(payload)
@@ -192,11 +327,15 @@ function M.on_done(payload)
       return
     end
   end
+  local drilldown = wanted.drilldown
   local connection = require('sqmeow.core.state').connections[payload.conn_id]
   if not connection or connection.state ~= 'connected' then
     return M.close()
   end
   wanted = nil
+  if drilldown then
+    return handle_drilldown(payload, drilldown, connection)
+  end
   if payload.error then
     return show({ 'Relationships unavailable', '  ' .. payload.error })
   end
