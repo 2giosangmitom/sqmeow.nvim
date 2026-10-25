@@ -283,6 +283,87 @@ cmp.setup({
 
 See `:h sqmeow-completion` for more details.
 
+## Statusline
+
+`sqmeow.statusline` provides ready-to-use components and structured telemetry for statuslines such as [lualine.nvim](https://github.com/nvim-lualine/lualine.nvim).
+
+If you display connection and query telemetry in your global statusline, you can disable winbars completely (`ui = { winbar = false }`) or control them per window (`ui = { winbar = { editor = false, result = true, show_connection = false } }`).
+
+<details>
+<summary>lualine.nvim</summary>
+
+![Lualine statusline](assets/lualine.png)
+
+```lua
+require("sqmeow").setup({
+  ui = {
+    -- Hide winbars when showing connection and result telemetry in lualine:
+    winbar = false,
+    -- Or configure editor and result winbars independently:
+    -- winbar = { editor = false, result = true, show_connection = false },
+  },
+})
+
+require("lualine").setup({
+  sections = {
+    lualine_x = {
+      -- Active column name and SQL type when focused inside the result grid (e.g. `󰠵 user_id (int4)`)
+      {
+        function()
+          return require("sqmeow.statusline").column()
+        end,
+        cond = function()
+          return require("sqmeow.statusline").column() ~= ""
+        end,
+      },
+    },
+    lualine_y = {
+      -- Active connection and query telemetry (e.g. `󰆼 dev · 142 rows · 12ms`)
+      {
+        function()
+          return require("sqmeow.statusline").component()
+        end,
+        cond = function()
+          return require("sqmeow.statusline").active()
+        end,
+      },
+    },
+  },
+})
+```
+
+</details>
+
+<details>
+<summary>Custom statusline component</summary>
+
+Use `require("sqmeow.statusline").status()` to read the raw table of connection and query state:
+
+```lua
+local info = require("sqmeow.statusline").status()
+-- info = {
+--   connection = "dev",
+--   dialect = "postgres",
+--   read_only = false,
+--   role = "query",          -- "query" | "result" | "preview" | "alter" | "routine" | "drawer"
+--   state = "done",          -- "executing" | "done" | "error" | "cancelled"
+--   rows = 142,
+--   view_rows = nil,         -- set when filtered
+--   affected = nil,          -- set for UPDATE / DELETE / INSERT
+--   elapsed_ms = 12,
+--   elapsed = "12ms",
+--   page = 1,
+--   total_pages = 2,
+--   filtered = false,
+--   staged_changes = 0,
+--   column = { index = 1, total = 6, name = "id", type_name = "int4", class = "number" },
+-- }
+```
+
+</details>
+
+See `:h sqmeow-statusline` for more details.
+
 ## Configuration
 
 You can customize behavior with `setup()`.

@@ -26,6 +26,7 @@ Contents ~
   Troubleshooting ................................... |sqmeow-troubleshooting|
   Configuration .............................................. |sqmeow-config|
   Keymaps ................................................... |sqmeow-keymaps|
+  Statusline ............................................. |sqmeow-statusline|
   Relationships ....................................... |sqmeow-relationships|
 
 ------------------------------------------------------------------------------
@@ -650,6 +651,7 @@ Default configuration. Pass only changed fields to setup. Icons control display 
       },
       -- The border of every dialog.
       border = 'default',
+      -- Boolean, or `{ editor = true, result = true, show_connection = true }`.
       winbar = true,
       -- Reopen saved connections and expanded drawer nodes on next drawer open.
       persist_session = false,
@@ -789,6 +791,15 @@ Return ~
 Returns the active configuration.
 Return ~
 `(table)` config
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.config.winbar()*
+                         `sqmeow.config.winbar`({part})
+Returns whether a winbar surface (`'editor'`, `'result'`, or `'show_connection'`) is enabled.
+Parameters ~
+{part} '`(editor)`'|'result'|'show_connection'
+Return ~
+`(boolean)`
 
 ------------------------------------------------------------------------------
                                                         *sqmeow.config.border()*
@@ -977,6 +988,69 @@ Return ~
                                                  *sqmeow.keymap.register_plug()*
                         `sqmeow.keymap.register_plug`()
 Define the `<Plug>` mappings.
+
+
+==============================================================================
+------------------------------------------------------------------------------
+                                                             *sqmeow-statusline*
+Statusline helpers and Lualine components.
+
+Exposes structured state (`status()`) and ready-to-use component functions
+(`component()` and `column()`) for `lualine.nvim`, `heirline.nvim`,
+`mini.statusline`, or custom `'statusline'` definitions.
+
+Example `lualine.nvim` setup with `ui = { winbar = false }`: >lua
+  require('lualine').setup({
+    sections = {
+      lualine_x = {
+        {
+          function() return require('sqmeow.statusline').column() end,
+          cond = function() return require('sqmeow.statusline').column() ~= '' end,
+        },
+      },
+      lualine_y = {
+        {
+          function() return require('sqmeow.statusline').component() end,
+          cond = function() return require('sqmeow.statusline').active() end,
+        },
+      },
+    },
+  })
+<
+
+------------------------------------------------------------------------------
+                                                    *sqmeow.statusline.active()*
+                      `sqmeow.statusline.active`({bufnr})
+Whether `bufnr` (default current buffer) is a database editor, preview, drawer, or result buffer.
+Parameters ~
+{bufnr} `(integer|nil)` Buffer handle; defaults to the current buffer.
+Return ~
+`(boolean)`
+
+------------------------------------------------------------------------------
+                                                    *sqmeow.statusline.status()*
+                      `sqmeow.statusline.status`({bufnr})
+Structured statusline state for `bufnr`, or nil outside database buffers.
+Parameters ~
+{bufnr} `(integer|nil)` Buffer handle; defaults to the current buffer.
+Return ~
+`(table|nil)` status
+
+------------------------------------------------------------------------------
+                                                    *sqmeow.statusline.column()*
+                          `sqmeow.statusline.column`()
+Formatted active column and SQL type when focused in the result grid, or `''`.
+Return ~
+`(string)`
+
+------------------------------------------------------------------------------
+                                                 *sqmeow.statusline.component()*
+                     `sqmeow.statusline.component`({bufnr})
+Formatted connection and query telemetry string for statuslines, or `''`.
+Parameters ~
+{bufnr} `(integer|nil)` Buffer handle; defaults to the current buffer.
+Return ~
+`(string)`
 
 
 ==============================================================================

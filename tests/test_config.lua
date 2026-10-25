@@ -25,4 +25,20 @@ T['validation accepts query options and rejects unknown or mistyped options'] = 
   eq(#config.validate({ nope = 1, query = { max_rows = 'lots' } }), 2)
 end
 
+T['winbar accepts boolean or granular table and validates keys'] = function()
+  config.apply({ ui = { winbar = false } })
+  eq(config.winbar('editor'), false)
+  eq(config.winbar('result'), false)
+  eq(config.winbar('show_connection'), false)
+
+  config.apply({ ui = { winbar = { editor = false, show_connection = false } } })
+  eq(config.winbar('editor'), false)
+  eq(config.winbar('result'), true)
+  eq(config.winbar('show_connection'), false)
+
+  eq(config.validate({ ui = { winbar = { editor = false, result = true } } }), {})
+  eq(#config.validate({ ui = { winbar = 'no' } }), 1)
+  eq(#config.validate({ ui = { winbar = { unknown = true } } }), 1)
+end
+
 return T

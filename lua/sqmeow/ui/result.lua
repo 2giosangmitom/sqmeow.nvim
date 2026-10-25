@@ -1235,6 +1235,29 @@ local function cursor_column(call)
   }
 end
 
+--- Which result column the cursor is in, with its schema metadata.
+---@param summary? sqmeow.CallSummary
+---@return { index: integer, total: integer, name: string, type_name: string, class: string, key: string|nil }|nil
+function M.current_column(summary)
+  local call = summary or require('sqmeow.core.state').call
+  local found = cursor_column(call)
+  if not found or not (call and call.columns) then
+    return nil
+  end
+  local col = call.columns[found.column + 1]
+  if not col then
+    return nil
+  end
+  return {
+    index = found.column + 1,
+    total = #call.columns,
+    name = col.name or '',
+    type_name = col.type_name or '',
+    class = col.class or 'unknown',
+    key = col.key,
+  }
+end
+
 --- Where the cursor is in the result, as a row and a column of the data.
 ---@return { row: integer|nil, insert: integer|nil, column: integer, name: string, value: any }|nil # Nil when the cursor is on the header rather than on a row.
 function M.current_cell()
@@ -1936,7 +1959,14 @@ end
 --- Update the line above the grid.
 ---@param summary sqmeow.CallSummary|nil
 function M.update_winbar(summary)
-  if not utils.shows(win, buf) or not require('sqmeow.config').get().ui.winbar then
+  if not utils.shows(win, buf) then
+    return
+  end
+  local cfg_mod = require('sqmeow.config')
+  if not cfg_mod.winbar('result') then
+    if vim.wo[win].winbar ~= '' then
+      vim.wo[win].winbar = ''
+    end
     return
   end
 
@@ -1953,7 +1983,7 @@ function M.update_winbar(summary)
 
   -- Dynamic active column information
   local col_info = ''
-  local config = require('sqmeow.config').get()
+  local config = cfg_mod.get()
   if config.ui.result.winbar_column_info then
     local cell = cursor_column(summary)
     if cell and cell.name and cell.name ~= '' then
@@ -1978,11 +2008,15 @@ function M.update_winbar(summary)
     end
   end
 
-  vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s%s'):format(
-    label,
-    M.describe(summary, true),
-    col_info
-  )
+  if cfg_mod.winbar('show_connection') then
+    vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s%s'):format(
+      label,
+      M.describe(summary, true),
+      col_info
+    )
+  else
+    vim.wo[win].winbar = (' %s%s'):format(M.describe(summary, true), col_info)
+  end
 end
 
 return M
