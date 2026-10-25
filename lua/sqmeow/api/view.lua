@@ -16,6 +16,193 @@ local function resume()
   end
 end
 
+local db_filetypes = {
+  sql = true,
+  mysql = true,
+  plsql = true,
+  surql = true,
+  cql = true,
+  redis = true,
+  ['sqmeow-result'] = true,
+  ['sqmeow-drawer'] = true,
+}
+
+---@param bufnr integer|nil
+---@return integer
+local function resolve_buf(bufnr)
+  if bufnr and bufnr ~= 0 and vim.api.nvim_buf_is_valid(bufnr) then
+    return bufnr
+  end
+  return vim.api.nvim_get_current_buf()
+end
+
+---@param buf integer
+---@return 'result'|'drawer'|'preview'|'alter'|'routine'|'query'|nil
+local function detect_role(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return nil
+  end
+  local ft = vim.bo[buf].filetype
+  local name = vim.api.nvim_buf_get_name(buf)
+  if ft == 'sqmeow-result' or name:find('sqmeow://result', 1, true) then
+    return 'result'
+  end
+  if ft == 'sqmeow-drawer' or name:find('sqmeow://drawer', 1, true) then
+    return 'drawer'
+  end
+  if name:match('%[Preview: ') then
+    return 'preview'
+  end
+  if name:match('%[Alter: ') then
+    return 'alter'
+  end
+  if name:match('%[Routine: ') then
+    return 'routine'
+  end
+  if
+    db_filetypes[ft]
+    or vim.b[buf].sqmeow_editor
+    or vim.b[buf].sqmeow_connection
+    or name:find('sqmeow://', 1, true)
+  then
+    return 'query'
+  end
+  return nil
+end
+
+---@param spec table|nil
+---@param call table|nil
+---@return boolean
+local function is_filtered(spec, call)
+  if call and call.aggregated then
+    return true
+  end
+  if not spec then
+    return false
+  end
+  return (spec.where or '') ~= ''
+    or (spec.order_by or '') ~= ''
+    or (spec.group_by or '') ~= ''
+    or (spec.aggregates or '') ~= ''
+    or (spec.having or '') ~= ''
+    or (spec.filters and #spec.filters > 0)
+    or (spec.sort and #spec.sort > 0)
+    or (spec.hidden and not vim.tbl_isempty(spec.hidden))
+    or false
+end
+
+--- Current connection, buffer role, and query telemetry for `bufnr`.
+--- Returns nil outside database buffers. `state` and the row counts describe
+--- the call whose connection matches the buffer, except in the result grid.
+--- `staged_changes` counts staged edits across all open results. A column is
+--- present only in the result grid.
+---@param bufnr integer|nil Buffer handle; defaults to the current buffer.
+---@return sqmeow.Status|nil status
+---@usage >lua
+---   local info = require('sqmeow.api.view').status()
+---   if info then
+---     print(('%s · %s'):format(info.connection or info.role, info.state or 'idle'))
+---   end
+--- <
+function M.status(bufnr)
+  local buf = resolve_buf(bufnr)
+  local role = detect_role(buf)
+  if not role then
+    return nil
+  end
+
+  local state = require('sqmeow.core.state')
+  local result = require('sqmeow.ui.result')
+  local edit = require('sqmeow.ui.edit')
+  local call = state.call
+
+  local conn = nil
+  if role == 'result' and call then
+    if call.conn_id and state.connections[call.conn_id] then
+      conn = state.connections[call.conn_id]
+    elseif call.connection and call.connection ~= '' then
+      conn = state.connection_by_name(call.connection)
+        or { name = call.connection, dialect = call.dialect }
+    end
+  end
+  if not conn then
+    conn = require('sqmeow.api.connection').target(buf)
+  end
+  if not conn and vim.b[buf].sqmeow_connection then
+    local pinned = vim.b[buf].sqmeow_connection
+    conn = state.connection_by_name(pinned) or { name = pinned }
+  end
+  if not conn then
+    conn = state.current_connection()
+  end
+
+  local info = {
+    connection = conn and conn.name or nil,
+    dialect = conn and conn.dialect or nil,
+    database = conn and (conn.current_database or conn.database) or nil,
+    read_only = (conn and conn.read_only == true) or false,
+    role = role,
+    staged_changes = edit.count(),
+    filtered = false,
+  }
+
+  if role == 'result' then
+    info.column = result.current_column(call)
+  end
+
+  if call then
+    local call_conn = call.conn_id and state.connections[call.conn_id]
+    local call_name = (call_conn and call_conn.name) or call.connection
+    local matches_conn = role == 'result'
+      or not info.connection
+      or not call_name
+      or call_name == info.connection
+
+    if matches_conn then
+      info.state = call.state
+      info.rows = call.rows
+      info.view_rows = call.view_rows
+      info.affected = call.affected
+      info.truncated = call.truncated == true
+      info.elapsed_ms = call.elapsed_ms
+      if call.state == 'error' then
+        info.error = call.error
+      end
+      if call.elapsed_ms ~= nil then
+        info.elapsed = result.format_duration(call.elapsed_ms)
+      end
+      if call.columns and #call.columns > 0 then
+        local page, total = result.pages(call)
+        info.page = page
+        info.total_pages = total
+      end
+      info.filtered = is_filtered(result.spec(), call)
+    end
+  end
+
+  return info
+end
+
+--- Formatted active column and SQL type when the current buffer is the result
+--- grid (e.g. `󰠵 user_id (int4)`), or `''` elsewhere.
+---@return string
+function M.column()
+  local buf = vim.api.nvim_get_current_buf()
+  if detect_role(buf) ~= 'result' then
+    return ''
+  end
+  local col = require('sqmeow.ui.result').current_column()
+  if not (col and col.name and col.name ~= '') then
+    return ''
+  end
+  local icon = require('sqmeow.core.icons').get('column')
+  local prefix = (icon and icon ~= '') and (icon .. ' ') or '󰠵 '
+  if col.type_name and col.type_name ~= '' then
+    return ('%s%s (%s)'):format(prefix, col.name, col.type_name:lower())
+  end
+  return prefix .. col.name
+end
+
 --- Show the result in a float, or put it back in its split.
 function M.toggle_float()
   require('sqmeow.ui.result').toggle_float()

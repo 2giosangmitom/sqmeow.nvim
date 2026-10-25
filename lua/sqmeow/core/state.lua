@@ -16,6 +16,27 @@ local M = {}
 ---@field ssh string|nil The `user@host` an SSH tunnel to the database goes through.
 ---@field env_file string|nil Project-local dotenv path used for this connection.
 
+--- One buffer's connection, role, and query telemetry, as `sqmeow.api.view.status()` reports it.
+---@class sqmeow.Status
+---@field role 'query'|'result'|'drawer'|'preview'|'alter'|'routine'
+---@field connection string|nil
+---@field dialect string|nil
+---@field database string|nil
+---@field read_only boolean
+---@field staged_changes integer Edits staged across all open results.
+---@field filtered boolean
+---@field state 'executing'|'done'|'error'|'cancelled'|nil
+---@field rows integer|nil
+---@field view_rows integer|nil
+---@field affected integer|nil
+---@field truncated boolean|nil
+---@field elapsed_ms integer|nil
+---@field elapsed string|nil
+---@field page integer|nil
+---@field total_pages integer|nil
+---@field error string|nil
+---@field column { index: integer, total: integer, name: string, type_name: string, class: string, key: string|nil }|nil
+
 ---@class sqmeow.CallSummary
 ---@field call_id integer|nil Absent for an entry from the log that has no rows to read.
 ---@field conn_id integer|nil Absent when the database it ran on is not open.

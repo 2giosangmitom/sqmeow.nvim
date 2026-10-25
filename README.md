@@ -285,7 +285,9 @@ See `:h sqmeow-completion` for more details.
 
 ## Statusline
 
-`sqmeow.statusline` provides ready-to-use components and structured telemetry for statuslines such as [lualine.nvim](https://github.com/nvim-lualine/lualine.nvim).
+Sqmeow exposes the current buffer's state as a plain table, so you can render connection and query telemetry in any statusline: [lualine.nvim](https://github.com/nvim-lualine/lualine.nvim), heirline, `mini.statusline`, or a custom `'statusline'`.
+
+`require("sqmeow.api.view").status()` returns `nil` outside database buffers, and `require("sqmeow.api.view").column()` returns the active result column and SQL type, or `""`.
 
 If you display connection and query telemetry in your global statusline, you can disable winbars completely (`ui = { winbar = false }`) or control them per window (`ui = { winbar = { editor = false, result = true, show_connection = false } }`).
 
@@ -304,27 +306,68 @@ require("sqmeow").setup({
   },
 })
 
+local view = require("sqmeow.api.view")
+
+local function query()
+  local info = view.status()
+  if not info then
+    return ""
+  end
+
+  local parts = { info.connection or info.role }
+  if info.read_only then
+    parts[#parts + 1] = "󰌾"
+  end
+
+  if info.state == "executing" then
+    parts[#parts + 1] = "running…"
+  elseif info.state == "error" then
+    parts[#parts + 1] = info.error and ("error: " .. info.error) or "error"
+  elseif info.state == "cancelled" then
+    parts[#parts + 1] = "cancelled"
+  elseif info.state == "done" then
+    if info.view_rows then
+      parts[#parts + 1] = ("%d/%d rows"):format(info.view_rows, info.rows or 0)
+    elseif info.rows then
+      parts[#parts + 1] = ("%d rows"):format(info.rows)
+    elseif info.affected then
+      parts[#parts + 1] = ("%d affected"):format(info.affected)
+    end
+    if info.elapsed then
+      parts[#parts + 1] = info.elapsed
+    end
+    if info.total_pages and info.total_pages > 1 then
+      parts[#parts + 1] = ("p%d/%d"):format(info.page or 1, info.total_pages)
+    end
+    if info.filtered then
+      parts[#parts + 1] = "filtered"
+    end
+  end
+
+  if info.staged_changes > 0 then
+    parts[#parts + 1] = "●"
+  end
+
+  return table.concat(parts, " · ")
+end
+
 require("lualine").setup({
   sections = {
     lualine_x = {
       -- Active column name and SQL type when focused inside the result grid (e.g. `󰠵 user_id (int4)`)
       {
-        function()
-          return require("sqmeow.statusline").column()
-        end,
+        view.column,
         cond = function()
-          return require("sqmeow.statusline").column() ~= ""
+          return view.column() ~= ""
         end,
       },
     },
     lualine_y = {
-      -- Active connection and query telemetry (e.g. `󰆼 dev · 142 rows · 12ms`)
+      -- Active connection and query telemetry (e.g. `dev · 142 rows · 12ms`)
       {
-        function()
-          return require("sqmeow.statusline").component()
-        end,
+        query,
         cond = function()
-          return require("sqmeow.statusline").active()
+          return view.status() ~= nil
         end,
       },
     },
@@ -335,34 +378,37 @@ require("lualine").setup({
 </details>
 
 <details>
-<summary>Custom statusline component</summary>
-
-Use `require("sqmeow.statusline").status()` to read the raw table of connection and query state:
+<summary>What <code>status()</code> returns</summary>
 
 ```lua
-local info = require("sqmeow.statusline").status()
+local info = require("sqmeow.api.view").status()
 -- info = {
 --   connection = "dev",
 --   dialect = "postgres",
+--   database = nil,
 --   read_only = false,
---   role = "query",          -- "query" | "result" | "preview" | "alter" | "routine" | "drawer"
+--   role = "query",          -- "query" | "result" | "drawer" | "preview" | "alter" | "routine"
 --   state = "done",          -- "executing" | "done" | "error" | "cancelled"
 --   rows = 142,
 --   view_rows = nil,         -- set when filtered
 --   affected = nil,          -- set for UPDATE / DELETE / INSERT
+--   truncated = false,
 --   elapsed_ms = 12,
 --   elapsed = "12ms",
 --   page = 1,
 --   total_pages = 2,
 --   filtered = false,
 --   staged_changes = 0,
+--   error = nil,             -- set when state is "error"
 --   column = { index = 1, total = 6, name = "id", type_name = "int4", class = "number" },
 -- }
 ```
 
+`status()` returns `nil` outside database buffers. `staged_changes` counts edits across all open results, `column` is set only in the result grid, and `state`/row counts describe the call whose connection matches the buffer.
+
 </details>
 
-See `:h sqmeow-statusline` for more details.
+See `:h sqmeow.api.view.status()` and `:h sqmeow.api.view.column()` for more details.
 
 ## Configuration
 
