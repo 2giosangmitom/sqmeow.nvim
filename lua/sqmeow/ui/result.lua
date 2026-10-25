@@ -1956,6 +1956,9 @@ function M.is_open()
   return utils.shows(win, buf)
 end
 
+local owned_winbar = nil
+local owned_winbar_window = nil
+
 --- Update the line above the grid.
 ---@param summary sqmeow.CallSummary|nil
 function M.update_winbar(summary)
@@ -1964,9 +1967,11 @@ function M.update_winbar(summary)
   end
   local cfg_mod = require('sqmeow.config')
   if not cfg_mod.winbar('result') then
-    if vim.wo[win].winbar ~= '' then
+    if owned_winbar_window == win and vim.wo[win].winbar == owned_winbar then
       vim.wo[win].winbar = ''
     end
+    owned_winbar = nil
+    owned_winbar_window = nil
     return
   end
 
@@ -2008,15 +2013,19 @@ function M.update_winbar(summary)
     end
   end
 
+  local next_winbar
   if cfg_mod.winbar('show_connection') then
-    vim.wo[win].winbar = ('%%#SqmeowWinbar# %s  %%*%s%s'):format(
+    next_winbar = ('%%#SqmeowWinbar# %s  %%*%s%s'):format(
       label,
       M.describe(summary, true),
       col_info
     )
   else
-    vim.wo[win].winbar = (' %s%s'):format(M.describe(summary, true), col_info)
+    next_winbar = (' %s%s'):format(M.describe(summary, true), col_info)
   end
+  vim.wo[win].winbar = next_winbar
+  owned_winbar = next_winbar
+  owned_winbar_window = win
 end
 
 return M

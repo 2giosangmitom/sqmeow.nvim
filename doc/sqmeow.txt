@@ -797,7 +797,7 @@ Return ~
                          `sqmeow.config.winbar`({part})
 Returns whether a winbar surface (`'editor'`, `'result'`, or `'show_connection'`) is enabled.
 Parameters ~
-{part} '`(editor)`'|'result'|'show_connection'
+{part} `(string)` One of `'editor'`, `'result'`, or `'show_connection'`.
 Return ~
 `(boolean)`
 

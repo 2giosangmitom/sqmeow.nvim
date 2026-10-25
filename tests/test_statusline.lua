@@ -62,7 +62,9 @@ T['statusline reports connection and query telemetry for SQL editor buffers'] = 
     state = 'done',
     rows = 142,
     elapsed_ms = 12,
-    columns = { { name = 'id', type_name = 'int4', class = 'number' } },
+    columns = {
+      { name = 'id', type_name = 'int4', class = 'number', nulls = false, numeric = true },
+    },
   }
   eq(statusline.component(buf), '󰆼 analytics 󰌾 · 142 rows · 12ms · p1/2')
 
@@ -92,8 +94,8 @@ T['statusline reports column under cursor and filter/edit badges in result grid'
     view_rows = 4,
     elapsed_ms = 5,
     columns = {
-      { name = 'user_id', type_name = 'INTEGER', class = 'number' },
-      { name = 'email', type_name = 'TEXT', class = 'text' },
+      { name = 'user_id', type_name = 'INTEGER', class = 'number', nulls = false, numeric = true },
+      { name = 'email', type_name = 'TEXT', class = 'text', nulls = true, numeric = false },
     },
   }
   result.spec().where = 'user_id > 2'
@@ -140,11 +142,29 @@ T['granular winbar toggles editor, result, and connection label independently'] 
     state = 'done',
     rows = 3,
     elapsed_ms = 4,
-    columns = { { name = 'id', type_name = 'int4', class = 'number' } },
+    columns = {
+      { name = 'id', type_name = 'int4', class = 'number', nulls = false, numeric = true },
+    },
   }
   result.update_winbar(state.call)
   eq(vim.wo[rwin].winbar:find('SqmeowWinbar', 1, true), nil)
   eq(vim.wo[rwin].winbar:find('3 rows', 1, true) ~= nil, true)
+
+  -- Disabling result winbar clears sqmeow's winbar, but preserves externally owned winbars.
+  config.apply({
+    ui = {
+      winbar = {
+        editor = true,
+        result = false,
+        show_connection = false,
+      },
+    },
+  })
+  result.update_winbar(state.call)
+  eq(vim.wo[rwin].winbar, '')
+  vim.wo[rwin].winbar = 'external-winbar'
+  result.update_winbar(state.call)
+  eq(vim.wo[rwin].winbar, 'external-winbar')
 end
 
 return T

@@ -239,7 +239,7 @@ function M.get()
 end
 
 --- Returns whether a winbar surface (`'editor'`, `'result'`, or `'show_connection'`) is enabled.
----@param part 'editor'|'result'|'show_connection'
+---@param part string One of `'editor'`, `'result'`, or `'show_connection'`.
 ---@return boolean
 function M.winbar(part)
   local winbar = M.get().ui.winbar

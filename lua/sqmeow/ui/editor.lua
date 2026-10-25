@@ -474,7 +474,8 @@ end
 
 --- Say which database the buffer under the cursor will run against.
 function M.update_winbar()
-  local show = require('sqmeow.config').winbar('editor')
+  local cfg = require('sqmeow.config')
+  local show = cfg.winbar('editor') and cfg.winbar('show_connection')
 
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     local buf = vim.api.nvim_win_get_buf(win)
