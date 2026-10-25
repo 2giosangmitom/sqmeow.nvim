@@ -1585,8 +1585,8 @@ function M.actions.relationships()
 end
 
 --- Follow an outgoing (`gd`) or incoming (`gr`) foreign key for a specific cell and row.
----@param direction 'outgoing'|'incoming'
----@param cell { column: integer, name: string, value: any, row?: integer }|nil
+---@param direction string Either `'outgoing'` or `'incoming'`.
+---@param cell { column: integer, name: string, value: any }|nil
 ---@param raw_row table|nil 1-indexed array of cell values for the row.
 function M.follow_cell(direction, cell, raw_row)
   local call = require('sqmeow.core.state').call

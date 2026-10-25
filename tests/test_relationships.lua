@@ -400,8 +400,22 @@ T['gd and gr work from the K row-details popup and warn on NULL cells'] = functi
     conn_id = 1,
     state = 'done',
     columns = {
-      { name = 'user_id', type_name = 'int', numeric = true, key = 'foreign_key' },
-      { name = 'parent_id', type_name = 'int', numeric = true, key = 'foreign_key' },
+      {
+        name = 'user_id',
+        type_name = 'int',
+        class = 'number',
+        nulls = false,
+        numeric = true,
+        key = 'foreign_key',
+      },
+      {
+        name = 'parent_id',
+        type_name = 'int',
+        class = 'number',
+        nulls = true,
+        numeric = true,
+        key = 'foreign_key',
+      },
     },
     source = {
       kind = 'table',
