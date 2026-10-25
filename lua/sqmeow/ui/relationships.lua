@@ -257,15 +257,13 @@ local function handle_drilldown(payload, drilldown, connection)
       for index, col_name in ipairs(cols) do
         local target_col = outgoing and key.referenced[index] or key.columns[index]
         local entry = row_entry(drilldown.row_values, col_name)
-        if not target_col then
-          complete = false
-        elseif same_ident(col_name, drilldown.column) then
+        if target_col and same_ident(col_name, drilldown.column) then
           table.insert(conditions, {
             column = target_col,
             value = drilldown.value,
             numeric = drilldown.numeric,
           })
-        elseif entry and entry.value ~= nil and entry.value ~= vim.NIL then
+        elseif target_col and entry and entry.value ~= nil and entry.value ~= vim.NIL then
           table.insert(conditions, {
             column = target_col,
             value = entry.value,
