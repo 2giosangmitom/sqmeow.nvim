@@ -44,6 +44,7 @@ M.defaults = {
     },
     -- The border of every dialog.
     border = 'default',
+    -- Boolean, or `{ editor = true, result = true, show_connection = true }`.
     winbar = true,
     -- Reopen saved connections and expanded drawer nodes on next drawer open.
     persist_session = false,
@@ -163,6 +164,12 @@ local freeform = {
   ['icons.type_names'] = true,
 }
 
+local winbar_defaults = {
+  editor = true,
+  result = true,
+  show_connection = true,
+}
+
 local function join(path, key)
   return path == '' and key or (path .. '.' .. key)
 end
@@ -182,6 +189,12 @@ local function validate(user, defaults, path, errors)
     elseif freeform[where] then
       if type(value) ~= 'table' then
         table.insert(errors, ('`%s` must be a table, got %s'):format(where, type(value)))
+      end
+    elseif where == 'ui.winbar' then
+      if type(value) == 'table' and not vim.islist(value) then
+        validate(value, winbar_defaults, where, errors)
+      elseif type(value) ~= 'boolean' then
+        table.insert(errors, ('`%s` must be a boolean or table, got %s'):format(where, type(value)))
       end
     elseif type(default) == 'table' and not vim.islist(default) then
       validate(value, default, where, errors)
@@ -212,6 +225,10 @@ function M.apply(opts)
   opts = opts or {}
   local errors = M.validate(opts)
   M.current = vim.tbl_deep_extend('force', vim.deepcopy(M.defaults), opts)
+  if type(M.current.ui.winbar) == 'table' then
+    M.current.ui.winbar =
+      vim.tbl_extend('force', vim.deepcopy(winbar_defaults), M.current.ui.winbar)
+  end
   return M.current, errors
 end
 
@@ -219,6 +236,23 @@ end
 ---@return table config
 function M.get()
   return M.current
+end
+
+--- Returns whether a winbar surface (`'editor'`, `'result'`, or `'show_connection'`) is enabled.
+---@param part string One of `'editor'`, `'result'`, or `'show_connection'`.
+---@return boolean
+function M.winbar(part)
+  local winbar = M.get().ui.winbar
+  if type(winbar) == 'boolean' then
+    return winbar
+  end
+  if type(winbar) == 'table' then
+    if winbar[part] == nil then
+      return true
+    end
+    return winbar[part] == true
+  end
+  return true
 end
 
 --- Returns the border style dialogs are drawn with.

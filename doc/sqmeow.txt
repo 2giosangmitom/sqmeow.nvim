@@ -650,6 +650,7 @@ Default configuration. Pass only changed fields to setup. Icons control display 
       },
       -- The border of every dialog.
       border = 'default',
+      -- Boolean, or `{ editor = true, result = true, show_connection = true }`.
       winbar = true,
       -- Reopen saved connections and expanded drawer nodes on next drawer open.
       persist_session = false,
@@ -789,6 +790,15 @@ Return ~
 Returns the active configuration.
 Return ~
 `(table)` config
+
+------------------------------------------------------------------------------
+                                                        *sqmeow.config.winbar()*
+                         `sqmeow.config.winbar`({part})
+Returns whether a winbar surface (`'editor'`, `'result'`, or `'show_connection'`) is enabled.
+Parameters ~
+{part} `(string)` One of `'editor'`, `'result'`, or `'show_connection'`.
+Return ~
+`(boolean)`
 
 ------------------------------------------------------------------------------
                                                         *sqmeow.config.border()*
@@ -1209,6 +1219,33 @@ Show the last page of the current result.
 
 
 ==============================================================================
+------------------------------------------------------------------------------
+                                                      *sqmeow.api.view.status()*
+                       `sqmeow.api.view.status`({bufnr})
+Current connection, buffer role, and query telemetry for `bufnr`.
+Returns nil outside database buffers. `state` and the row counts describe
+the call whose connection matches the buffer, except in the result grid.
+`staged_changes` counts staged edits across all open results. A column is
+present only in the result grid.
+Parameters ~
+{bufnr} `(integer|nil)` Buffer handle; defaults to the current buffer.
+Return ~
+`(sqmeow.Status|nil)` status
+Usage ~
+>lua
+  local info = require('sqmeow.api.view').status()
+  if info then
+    print(('%s · %s'):format(info.connection or info.role, info.state or 'idle'))
+  end
+<
+------------------------------------------------------------------------------
+                                                      *sqmeow.api.view.column()*
+                           `sqmeow.api.view.column`()
+Formatted active column and SQL type when the current buffer is the result
+grid (e.g. `󰠵 user_id (int4)`), or `''` elsewhere.
+Return ~
+`(string)`
+
 ------------------------------------------------------------------------------
                                                 *sqmeow.api.view.toggle_float()*
                         `sqmeow.api.view.toggle_float`()

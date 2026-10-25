@@ -474,18 +474,21 @@ end
 
 --- Say which database the buffer under the cursor will run against.
 function M.update_winbar()
-  if not require('sqmeow.config').get().ui.winbar then
-    return
-  end
+  local cfg = require('sqmeow.config')
+  local show = cfg.winbar('editor') and cfg.winbar('show_connection')
 
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     local buf = vim.api.nvim_win_get_buf(win)
     -- Scratchpads, and any other buffer someone has tied to a connection with `:Sqmeow bind`.
     if M.is_scratchpad(buf) or vim.b[buf].sqmeow_connection then
-      local connection, reason = require('sqmeow.api.connection').target(buf)
-      local label = connection and require('sqmeow.core.state').label(connection) or reason
+      if show then
+        local connection, reason = require('sqmeow.api.connection').target(buf)
+        local label = connection and require('sqmeow.core.state').label(connection) or reason
 
-      vim.wo[win].winbar = ('%%#SqmeowWinbar# %s %%*'):format(label)
+        vim.wo[win].winbar = ('%%#SqmeowWinbar# %s %%*'):format(label)
+      elseif vim.wo[win].winbar:find('^%%#SqmeowWinbar#') then
+        vim.wo[win].winbar = ''
+      end
     end
   end
 end
