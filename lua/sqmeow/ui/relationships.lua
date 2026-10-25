@@ -181,10 +181,18 @@ function M.open(conn_id, schema, relation)
   end
 end
 
+--- Compare two SQL identifiers case-insensitively.
+---@param a string|nil
+---@param b string|nil
+---@return boolean
 local function same_ident(a, b)
   return a == b or (type(a) == 'string' and type(b) == 'string' and a:lower() == b:lower())
 end
 
+--- Check whether a list of identifier names contains `name` (case-insensitive).
+---@param list string[]|nil
+---@param name string
+---@return boolean
 local function list_contains(list, name)
   for _, item in ipairs(list or {}) do
     if same_ident(item, name) then
@@ -194,14 +202,34 @@ local function list_contains(list, name)
   return false
 end
 
+--- Look up a column entry in `row_values` case-insensitively.
+---@param row_values table<string, { value: any, numeric?: boolean }>|nil
+---@param name string
+---@return { value: any, numeric?: boolean }|nil
+local function row_entry(row_values, name)
+  for key_name, value in pairs(row_values or {}) do
+    if same_ident(key_name, name) then
+      return value
+    end
+  end
+end
+
+--- Run a `SELECT ... WHERE` query for a chosen foreign-key relationship.
+---@param conn_id integer
+---@param dialect string|nil
+---@param choice { label: string, parts: string[], conditions: { column: string, value: any, numeric?: boolean }[] }
 local function execute_drilldown(conn_id, dialect, choice)
-  local page_size = require('sqmeow.config').get().ui.result.page_size
-  local limit = page_size > 0 and page_size or nil
+  local max_rows = require('sqmeow.config').get().query.max_rows
+  local limit = max_rows > 0 and max_rows or nil
   local sql =
     require('sqmeow.core.sql').select_where(dialect, choice.parts, choice.conditions, limit)
   require('sqmeow.api.query').execute(sql, { conn_id = conn_id })
 end
 
+--- Match a `relationships` RPC response against a pending cell drilldown and execute or prompt.
+---@param payload table
+---@param drilldown table
+---@param connection { dialect?: string }
 local function handle_drilldown(payload, drilldown, connection)
   if payload.error then
     return notify(payload.error, vim.log.levels.ERROR)
@@ -210,6 +238,7 @@ local function handle_drilldown(payload, drilldown, connection)
   local resolved_relation = payload.resolved_relation or payload.relation
   local outgoing = drilldown.direction == 'outgoing'
   local matches = {}
+  local incomplete = false
 
   for _, key in ipairs(payload.relationships or {}) do
     local schema = outgoing and key.source_schema or key.target_schema
@@ -224,27 +253,30 @@ local function handle_drilldown(payload, drilldown, connection)
       local other_relation = outgoing and key.target_relation or key.source_relation
       local parts = other_schema ~= '' and { other_schema, other_relation } or { other_relation }
       local conditions = {}
+      local complete = true
       for index, col_name in ipairs(cols) do
         local target_col = outgoing and key.referenced[index] or key.columns[index]
-        local entry = drilldown.row_values and drilldown.row_values[col_name]
-        if target_col then
-          if same_ident(col_name, drilldown.column) then
-            table.insert(conditions, {
-              column = target_col,
-              value = drilldown.value,
-              numeric = drilldown.numeric,
-            })
-          elseif entry and entry.value ~= nil then
-            table.insert(conditions, {
-              column = target_col,
-              value = entry.value,
-              numeric = entry.numeric,
-            })
-          end
+        local entry = row_entry(drilldown.row_values, col_name)
+        if not target_col then
+          complete = false
+        elseif same_ident(col_name, drilldown.column) then
+          table.insert(conditions, {
+            column = target_col,
+            value = drilldown.value,
+            numeric = drilldown.numeric,
+          })
+        elseif entry and entry.value ~= nil and entry.value ~= vim.NIL then
+          table.insert(conditions, {
+            column = target_col,
+            value = entry.value,
+            numeric = entry.numeric,
+          })
+        else
+          complete = false
         end
       end
 
-      if #conditions > 0 then
+      if #conditions > 0 and complete then
         local name = key.name ~= '' and key.name or '(unnamed)'
         local label = ('%s (%s: %s.%s → %s.%s)'):format(
           qualified(other_schema, other_relation),
@@ -259,11 +291,21 @@ local function handle_drilldown(payload, drilldown, connection)
           parts = parts,
           conditions = conditions,
         })
+      elseif not complete then
+        incomplete = true
       end
     end
   end
 
   if #matches == 0 then
+    if incomplete then
+      return notify(
+        ('composite foreign key on `%s` requires all key columns in the result'):format(
+          drilldown.column
+        ),
+        vim.log.levels.WARN
+      )
+    end
     local table_label = qualified(resolved_schema, resolved_relation)
     if outgoing then
       return notify(

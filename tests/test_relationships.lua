@@ -280,7 +280,7 @@ T['gd and gr query referenced parent and referencing child rows'] = function()
     key('orders_user_fk', 'orders', 'users', { 'user_id' }, { 'id' }),
   }))
   eq(#executed, 1)
-  eq(executed[1].sql, 'select * from "public"."users" where "id" = 42 limit 100')
+  eq(executed[1].sql, 'select * from "public"."users" where "id" = 42 limit 100000')
   eq(executed[1].opts.conn_id, 1)
 
   -- Incoming references with multiple child tables prompt via vim.ui.select.
@@ -304,7 +304,141 @@ T['gd and gr query referenced parent and referencing child rows'] = function()
   }))
   eq(selected_prompt, 'Referenced by:')
   eq(#executed, 2)
-  eq(executed[2].sql, 'select * from "public"."invoices" where "customer_id" = 42 limit 100')
+  eq(executed[2].sql, 'select * from "public"."invoices" where "customer_id" = 42 limit 100000')
+end
+
+T['composite foreign keys match case-insensitively and warn when incomplete'] = function()
+  local executed = {}
+  local notified = {}
+  local query = require('sqmeow.api.query')
+  local original_execute = query.execute
+  local original_notify = vim.notify
+  MiniTest.finally(function()
+    query.execute = original_execute
+    vim.notify = original_notify
+  end)
+  query.execute = function(sql_text, opts)
+    table.insert(executed, { sql = sql_text, opts = opts })
+  end
+  vim.notify = function(msg, level)
+    table.insert(notified, { msg = msg, level = level })
+  end
+
+  state.connections[1].dialect = 'postgres'
+  browser.follow({
+    conn_id = 1,
+    schema = 'public',
+    relation = 'order_items',
+    direction = 'outgoing',
+    column = 'order_id',
+    value = 10,
+    numeric = true,
+    row_values = {
+      TENANT_ID = { value = 7, numeric = true },
+    },
+  })
+  browser.on_done(answer({
+    key(
+      'items_order_fk',
+      'order_items',
+      'orders',
+      { 'tenant_id', 'order_id' },
+      { 'tenant_id', 'id' }
+    ),
+  }))
+  eq(#executed, 1)
+  eq(
+    executed[1].sql,
+    'select * from "public"."orders" where "tenant_id" = 7 and "id" = 10 limit 100000'
+  )
+
+  -- Missing sibling key column warns instead of running a partial WHERE clause.
+  browser.follow({
+    conn_id = 1,
+    schema = 'public',
+    relation = 'order_items',
+    direction = 'outgoing',
+    column = 'order_id',
+    value = 10,
+    numeric = true,
+    row_values = {},
+  })
+  browser.on_done(answer({
+    key(
+      'items_order_fk',
+      'order_items',
+      'orders',
+      { 'tenant_id', 'order_id' },
+      { 'tenant_id', 'id' }
+    ),
+  }))
+  eq(#executed, 1)
+  eq(
+    notified[#notified].msg,
+    'sqmeow: composite foreign key on `order_id` requires all key columns in the result'
+  )
+end
+
+T['gd and gr work from the K row-details popup and warn on NULL cells'] = function()
+  local detail = require('sqmeow.ui.detail')
+  local result = require('sqmeow.ui.result')
+  local notified = {}
+  local original_call = state.call
+  local original_notify = vim.notify
+  popup.open = original_popup
+  MiniTest.finally(function()
+    detail.close()
+    state.call = original_call
+    vim.notify = original_notify
+  end)
+  vim.notify = function(msg, level)
+    table.insert(notified, { msg = msg, level = level })
+  end
+
+  state.call = {
+    call_id = 11,
+    conn_id = 1,
+    state = 'done',
+    columns = {
+      { name = 'user_id', type_name = 'int', numeric = true, key = 'foreign_key' },
+      { name = 'parent_id', type_name = 'int', numeric = true, key = 'foreign_key' },
+    },
+    source = {
+      kind = 'table',
+      name = 'orders',
+      tables = {
+        { schema = 'public', name = 'orders', columns = { 0, 1 } },
+      },
+    },
+  }
+  rpc.request = function(method, params)
+    if method == 'row' then
+      return {
+        { name = 'user_id', declared_type = 'int', value = 99 },
+        { name = 'parent_id', declared_type = 'int', is_null = true },
+      }
+    end
+    table.insert(requests, params)
+    return true
+  end
+
+  detail.open(0)
+  -- Line 2 is `parent_id` (NULL): should warn and not send a relationships request.
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  detail.actions.goto_definition()
+  eq(#requests, 0)
+  eq(notified[#notified].msg, 'sqmeow: `parent_id` is NULL')
+
+  -- Line 1 is `user_id = 99`: should close detail popup and request relationships.
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  detail.actions.goto_definition()
+  eq(#requests, 1)
+  eq(requests[1].relation, 'orders')
+  eq(requests[1].schema, 'public')
+
+  -- Direct follow_cell on NULL also warns.
+  result.follow_cell('outgoing', { column = 1, name = 'parent_id', value = vim.NIL }, {})
+  eq(notified[#notified].msg, 'sqmeow: `parent_id` is NULL')
 end
 
 return T

@@ -1584,15 +1584,16 @@ function M.actions.relationships()
   show_table('relationships')
 end
 
---- Follow an outgoing (`gd`) or incoming (`gr`) foreign key for the cell under the cursor.
+--- Follow an outgoing (`gd`) or incoming (`gr`) foreign key for a specific cell and row.
 ---@param direction 'outgoing'|'incoming'
-local function follow_relationship(direction)
+---@param cell { column: integer, name: string, value: any, row?: integer }|nil
+---@param raw_row table|nil 1-indexed array of cell values for the row.
+function M.follow_cell(direction, cell, raw_row)
   local call = require('sqmeow.core.state').call
   if not call then
     return
   end
-  local cell = M.current_cell()
-  if not (cell and cell.row ~= nil) then
+  if not (cell and cell.column ~= nil) then
     return utils.notify(
       'place the cursor on a result row to follow a relationship',
       vim.log.levels.WARN
@@ -1623,19 +1624,18 @@ local function follow_relationship(direction)
     return utils.notify('this result names no table to follow', vim.log.levels.WARN)
   end
 
-  local found = cursor_column(call)
-  local position = found and (found.line - HEADER_LINES) or nil
-  local raw_row = (position and page.rows[position]) or {}
+  local row_data = raw_row or {}
   local row_values = {}
   for index, column in ipairs(call.columns or {}) do
     if not table_cols or vim.tbl_contains(table_cols, index - 1) then
       row_values[column.name] = {
-        value = raw_row[index],
+        value = row_data[index],
         numeric = column.numeric == true,
       }
     end
   end
 
+  require('sqmeow.ui.detail').close()
   local col_meta = call.columns and call.columns[cell.column + 1]
   require('sqmeow.ui.relationships').follow({
     conn_id = call.conn_id,
@@ -1649,10 +1649,32 @@ local function follow_relationship(direction)
   })
 end
 
+--- Follow an outgoing (`gd`) or incoming (`gr`) foreign key for the cell under the cursor.
+---@param direction 'outgoing'|'incoming'
+local function follow_relationship(direction)
+  local call = require('sqmeow.core.state').call
+  if not call then
+    return
+  end
+  local cell = M.current_cell()
+  if not (cell and cell.row ~= nil) then
+    return utils.notify(
+      'place the cursor on a result row to follow a relationship',
+      vim.log.levels.WARN
+    )
+  end
+  local found = cursor_column(call)
+  local position = found and (found.line - HEADER_LINES) or nil
+  local raw_row = (position and page.rows[position]) or {}
+  M.follow_cell(direction, cell, raw_row)
+end
+
+--- Follow an outgoing foreign key (`gd`) from the cell under the cursor to its parent row.
 function M.actions.goto_definition()
   follow_relationship('outgoing')
 end
 
+--- Follow incoming foreign keys (`gr`) from the cell under the cursor to referencing child rows.
 function M.actions.goto_references()
   follow_relationship('incoming')
 end

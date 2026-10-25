@@ -18,7 +18,8 @@
 --- newlines, and line wrapping. CRLF is normalized to LF; bare carriage returns
 --- are preserved, and embedded NUL bytes are shown as `^@` (yanking copies that
 --- notation). Continuation lines are indented under the value column. Use normal
---- navigation, `/` to search, and `y` to yank; `q` or `<Esc>` closes the popup.
+--- navigation, `/` to search, `y` to yank, `gd`/`gr` to follow foreign-key
+--- relationships, and `q` or `<Esc>` to close the popup.
 ---@tag sqmeow-keymaps
 ---@toc_entry Keymaps
 

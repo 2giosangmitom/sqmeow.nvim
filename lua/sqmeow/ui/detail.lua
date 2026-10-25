@@ -5,6 +5,8 @@ local M = {}
 local utils = require('sqmeow.core.utils')
 
 local popup = nil
+local current_columns = nil
+local line_columns = nil
 
 -- Cap type-name width to leave room for values.
 local TYPE_WIDTH = 16
@@ -12,7 +14,8 @@ local TYPE_WIDTH = 16
 --- Lay a row out as lines, showing full values without truncating or flattening newlines.
 ---@param columns table[] As the engine sends them, each with `key` from the result's columns.
 ---@param _width integer The width the lines have to fit in.
----@return NuiLine[]
+---@return NuiLine[] lines
+---@return integer[] line_to_column 1-based column index for each rendered line.
 function M.lines(columns, _width)
   local Line = require('nui.line')
   local truncate = require('sqmeow.core.utils').truncate
@@ -34,6 +37,7 @@ function M.lines(columns, _width)
   end
 
   local lines = {}
+  local line_to_column = {}
   local indent = (' '):rep(name_width + type_width + 4)
   for index, column in ipairs(columns) do
     local line = Line()
@@ -47,23 +51,65 @@ function M.lines(columns, _width)
     if column.is_null then
       line:append(config.ui.result.null_text, 'SqmeowNull')
       table.insert(lines, line)
+      table.insert(line_to_column, index)
     else
       -- Nui cannot measure strings containing NUL; show its conventional visible notation.
       local value = tostring(column.value):gsub('\r\n', '\n'):gsub('%z', '^@')
       local val_lines = vim.split(value, '\n', { plain = true })
       line:append(val_lines[1] or '')
       table.insert(lines, line)
+      table.insert(line_to_column, index)
 
       for l = 2, #val_lines do
         local continuation = Line()
         continuation:append(indent)
         continuation:append(val_lines[l])
         table.insert(lines, continuation)
+        table.insert(line_to_column, index)
       end
     end
   end
 
-  return lines
+  return lines, line_to_column
+end
+
+--- Follow an outgoing (`gd`) or incoming (`gr`) foreign key from the field under the cursor.
+---@param direction 'outgoing'|'incoming'
+local function follow(direction)
+  if not (popup and current_columns and line_columns) then
+    return
+  end
+  local winid = popup.winid and vim.api.nvim_win_is_valid(popup.winid) and popup.winid or 0
+  local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
+  local col_index = line_columns[cursor_line]
+  local col = col_index and current_columns[col_index]
+  if not col then
+    return
+  end
+
+  local raw_row = {}
+  for idx, entry in ipairs(current_columns) do
+    raw_row[idx] = entry.is_null and vim.NIL or entry.value
+  end
+
+  require('sqmeow.ui.result').follow_cell(direction, {
+    column = col_index - 1,
+    name = col.name,
+    value = col.is_null and vim.NIL or col.value,
+  }, raw_row)
+end
+
+--- Actions bound in the row-details popup.
+M.actions = {}
+
+--- Follow an outgoing foreign key (`gd`) from the field under the cursor to its parent row.
+function M.actions.goto_definition()
+  follow('outgoing')
+end
+
+--- Follow incoming foreign keys (`gr`) from the field under the cursor to referencing child rows.
+function M.actions.goto_references()
+  follow('incoming')
 end
 
 --- Show one row of the current result.
@@ -89,7 +135,7 @@ function M.open(row)
 
   M.close()
   local width = math.floor(vim.o.columns * 0.8)
-  local lines = M.lines(columns, width)
+  local lines, mapped_columns = M.lines(columns, width)
   local opened, open_err = require('sqmeow.ui.popup').open({
     title = ' Row details ',
     lines = lines,
@@ -104,6 +150,9 @@ function M.open(row)
     return utils.notify(open_err or 'could not open the popup', vim.log.levels.ERROR)
   end
   popup = opened
+  current_columns = columns
+  line_columns = mapped_columns
+  require('sqmeow.keymap').apply('result', opened.bufnr, M.actions)
 end
 
 --- Close the popup.
@@ -111,6 +160,8 @@ function M.close()
   -- Clear popup before unmounting: BufLeave can call close() again.
   local closing = popup
   popup = nil
+  current_columns = nil
+  line_columns = nil
   if closing then
     closing:unmount()
   end
