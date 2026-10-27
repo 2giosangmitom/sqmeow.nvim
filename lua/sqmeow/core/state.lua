@@ -48,7 +48,7 @@ local M = {}
 ---@field kind string What the relation is, as the engine names it.
 ---@field name string
 ---@field insertable boolean|nil Present when rows can be added, which a join does not allow.
----@field tables { schema: string|nil, name: string, columns: integer[] }[]|nil The tables of a SQL result, each with its zero-based columns.
+---@field tables { schema: string|nil, name: string, columns: { index: integer, name: string }[] }[]|nil The tables of a SQL result, each with its bound result columns and their table names.
 
 ---@class sqmeow.ResultColumn
 ---@field name string

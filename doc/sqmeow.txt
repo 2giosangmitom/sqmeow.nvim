@@ -801,7 +801,8 @@ Return ~
 ==============================================================================
 ------------------------------------------------------------------------------
                                                                 *sqmeow-keymaps*
-Buffer-local mappings for drawer, result, filter bar, and editor.
+Buffer-local mappings for the drawer, results, row details, relationship browsing, the
+filter bar, and the editor.
 
 Set by window and action. String sets one key, list sets aliases, `false`
 disables: >lua
@@ -906,6 +907,12 @@ result
  ?             Show these mappings
  q             Close the result window
 
+detail
+ gd         Query the parent row referenced by this foreign key field
+ gr         Query child rows referencing this field
+ ?          Show these mappings
+ q, <Esc>   Close row details
+
 relationships
  <CR>       Browse the other table’s foreign keys
  K          Show the other table’s structure
@@ -939,7 +946,7 @@ Type ~
                        `sqmeow.keymap.resolve`({surface})
 The mappings for one surface, after the user's overrides.
 Parameters ~
-{surface} `(string)` `drawer`, `result`, `filter`, or `editor`.
+{surface} `(string)` A key in `M.defaults`, such as `result` or `detail`.
 Return ~
 `(sqmeow.ResolvedKeymap[])` # In presentation order.
 

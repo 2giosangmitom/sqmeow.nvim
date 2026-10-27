@@ -232,25 +232,20 @@ end
 
 T['select_where'] = MiniTest.new_set()
 
-T['select_where']['quotes identifiers, literals, and dialect row limits'] = function()
+T['select_where']['qualifies the relation and joins engine-built predicates'] = function()
   eq(
-    sql.select_where('postgres', { 'public', 'users' }, {
-      { column = 'id', value = 42, numeric = true },
-    }, 100),
-    'select * from "public"."users" where "id" = 42 limit 100'
+    sql.select_where('postgres', { 'public', 'users' }, { '"id" = 42' }),
+    'select * from "public"."users" where "id" = 42'
   )
   eq(
-    sql.select_where('mssql', { 'dbo', 'orders' }, {
-      { column = 'note', value = "O'Reilly", numeric = false },
-    }, 50),
-    "select top (50) * from [dbo].[orders] where [note] = N'O''Reilly'"
+    sql.select_where('mssql', { 'dbo', 'orders' }, { '[id] = 42', '[tenant_id] = 7' }),
+    'select * from [dbo].[orders] where [id] = 42 and [tenant_id] = 7'
   )
   eq(
-    sql.select_where('oracle', { 'HR', 'EMPLOYEES' }, {
-      { column = 'DEPT_ID', value = 10, numeric = true },
-    }, 25),
-    'select * from "HR"."EMPLOYEES" where "DEPT_ID" = 10 fetch first 25 rows only'
+    sql.select_where('oracle', { 'HR', 'EMPLOYEES' }, { '"DEPT_ID" = 10' }),
+    'select * from "HR"."EMPLOYEES" where "DEPT_ID" = 10'
   )
+  eq(sql.select_where('sqlite', { 'users' }, {}), 'select * from "users"')
 end
 
 return T

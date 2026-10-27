@@ -117,6 +117,46 @@ pub(super) fn sort(value: Option<&Value>) -> Vec<Sort> {
         .collect()
 }
 
+/// One result column and the table column a key predicate compares it with.
+pub(super) struct KeyColumn {
+    /// Zero-based result column holding the key value.
+    pub index: usize,
+    /// The table column to compare in the target relation.
+    pub column: String,
+    /// The field's name in the result, for messages about its value.
+    pub source: String,
+}
+
+/// The result columns and table column names that locate a row's foreign-key endpoints.
+pub(super) fn key_columns(value: Option<&Value>) -> Result<Vec<KeyColumn>, String> {
+    let Some(Value::Array(items)) = value else {
+        return Err("`columns` must be a list of key columns".to_owned());
+    };
+    if items.is_empty() {
+        return Err("`columns` must name at least one key column".to_owned());
+    }
+    items
+        .iter()
+        .map(|item| {
+            let index = field(item, "index")
+                .and_then(Value::as_u64)
+                .and_then(|index| usize::try_from(index).ok())
+                .ok_or("a key column needs a zero-based `index`")?;
+            let column = field(item, "column")
+                .and_then(Value::as_str)
+                .ok_or("a key column needs a `column` name")?;
+            let source = field(item, "source")
+                .and_then(Value::as_str)
+                .ok_or("a key column needs a `source` name")?;
+            Ok(KeyColumn {
+                index,
+                column: column.to_owned(),
+                source: source.to_owned(),
+            })
+        })
+        .collect()
+}
+
 /// The staged changes a `plan` call carries.
 pub(super) fn changes(value: Option<&Value>) -> Result<Changes, String> {
     let Some(value) = value else {
@@ -185,5 +225,39 @@ mod query_tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn key_columns_need_an_index_a_column_and_a_source() {
+        let value = Value::Array(vec![Value::Map(vec![
+            (Value::from("index"), Value::from(0u64)),
+            (Value::from("column"), Value::from("id")),
+            (Value::from("source"), Value::from("user_id")),
+        ])]);
+        let parsed = key_columns(Some(&value)).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].index, 0);
+        assert_eq!(parsed[0].column, "id");
+        assert_eq!(parsed[0].source, "user_id");
+
+        for malformed in [
+            None,
+            Some(Value::Array(vec![])),
+            Some(Value::Array(vec![Value::from("id")])),
+            Some(Value::Array(vec![Value::Map(vec![(
+                Value::from("column"),
+                Value::from("id"),
+            )])])),
+            Some(Value::Array(vec![Value::Map(vec![(
+                Value::from("index"),
+                Value::from(0u64),
+            )])])),
+            Some(Value::Array(vec![Value::Map(vec![
+                (Value::from("index"), Value::from(0u64)),
+                (Value::from("column"), Value::from("id")),
+            ])])),
+        ] {
+            assert!(key_columns(malformed.as_ref()).is_err());
+        }
     }
 }

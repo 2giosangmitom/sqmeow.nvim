@@ -8,6 +8,19 @@ local entries = {}
 local sequence = 0
 local notify = require('sqmeow.core.utils').notify
 
+--- A result cell whose foreign key the user wants to follow.
+---@class sqmeow.FollowSpec
+---@field conn_id integer
+---@field schema string
+---@field relation string
+---@field direction 'outgoing'|'incoming'
+---@field column string The table column under the cursor, not the result header.
+---@field dialect string|nil
+---@field call_id integer
+---@field row integer Zero-based retained row.
+---@field columns { index: integer, name: string }[] Result columns bound to the table.
+---@field staged table<integer, boolean>|nil Result columns with staged changes.
+
 local function qualified(schema, relation)
   return schema == '' and relation or (schema .. '.' .. relation)
 end
@@ -202,43 +215,52 @@ local function list_contains(list, name)
   return false
 end
 
---- Look up a column entry in `row_values` case-insensitively.
----@param row_values table<string, { value: any, numeric?: boolean }>|nil
+--- The zero-based result column showing `name` on the table, matched case-insensitively.
+---@param columns { index: integer, name: string }[]|nil
 ---@param name string
----@return { value: any, numeric?: boolean }|nil
-local function row_entry(row_values, name)
-  for key_name, value in pairs(row_values or {}) do
-    if same_ident(key_name, name) then
-      return value
+---@return integer|nil
+local function column_index(columns, name)
+  for _, entry in ipairs(columns or {}) do
+    if same_ident(entry.name, name) then
+      return entry.index
     end
   end
 end
 
---- Run a `SELECT ... WHERE` query for a chosen foreign-key relationship.
----@param conn_id integer
----@param dialect string|nil
----@param choice { label: string, parts: string[], conditions: { column: string, value: any, numeric?: boolean }[] }
-local function execute_drilldown(conn_id, dialect, choice)
-  local max_rows = require('sqmeow.config').get().query.max_rows
-  local limit = max_rows > 0 and max_rows or nil
-  local sql =
-    require('sqmeow.core.sql').select_where(dialect, choice.parts, choice.conditions, limit)
-  require('sqmeow.api.query').execute(sql, { conn_id = conn_id })
+--- Run the drilldown for a chosen foreign key.
+---@param drilldown sqmeow.FollowSpec
+---@param choice { parts: string[], columns: { index: integer, column: string, source: string }[] }
+local function execute_drilldown(drilldown, choice)
+  -- The engine reads the retained cells, so types, exact digits, aliases, and dialect
+  -- quoting stay right even when the grid shows escaped text.
+  local conditions, err = require('sqmeow.rpc.client').request('key_conditions', {
+    call_id = drilldown.call_id,
+    row = drilldown.row,
+    columns = choice.columns,
+  })
+  if not conditions then
+    return notify(err or 'the row could not be matched', vim.log.levels.WARN)
+  end
+  local sql = require('sqmeow.core.sql').select_where(drilldown.dialect, choice.parts, conditions)
+  require('sqmeow.api.query').execute(sql, { conn_id = drilldown.conn_id })
 end
 
 --- Match a `relationships` RPC response against a pending cell drilldown and execute or prompt.
 ---@param payload table
----@param drilldown table
----@param connection { dialect?: string }
-local function handle_drilldown(payload, drilldown, connection)
+---@param drilldown sqmeow.FollowSpec
+local function handle_drilldown(payload, drilldown)
   if payload.error then
-    return notify(payload.error, vim.log.levels.ERROR)
+    return notify(
+      ('the relationships could not be read: %s'):format(payload.error),
+      vim.log.levels.ERROR
+    )
   end
   local resolved_schema = payload.resolved_schema or payload.schema
   local resolved_relation = payload.resolved_relation or payload.relation
   local outgoing = drilldown.direction == 'outgoing'
   local matches = {}
   local incomplete = false
+  local blocked = nil
 
   for _, key in ipairs(payload.relationships or {}) do
     local schema = outgoing and key.source_schema or key.target_schema
@@ -252,29 +274,24 @@ local function handle_drilldown(payload, drilldown, connection)
       local other_schema = outgoing and key.target_schema or key.source_schema
       local other_relation = outgoing and key.target_relation or key.source_relation
       local parts = other_schema ~= '' and { other_schema, other_relation } or { other_relation }
-      local conditions = {}
+      local columns = {}
       local complete = true
+      local staged = nil
       for index, col_name in ipairs(cols) do
         local target_col = outgoing and key.referenced[index] or key.columns[index]
-        local entry = row_entry(drilldown.row_values, col_name)
-        if target_col and same_ident(col_name, drilldown.column) then
-          table.insert(conditions, {
-            column = target_col,
-            value = drilldown.value,
-            numeric = drilldown.numeric,
-          })
-        elseif target_col and entry and entry.value ~= nil and entry.value ~= vim.NIL then
-          table.insert(conditions, {
-            column = target_col,
-            value = entry.value,
-            numeric = entry.numeric,
-          })
-        else
+        local at = column_index(drilldown.columns, col_name)
+        if not target_col or at == nil then
           complete = false
+        elseif drilldown.staged and drilldown.staged[at] then
+          staged = staged or col_name
+        else
+          table.insert(columns, { index = at, column = target_col, source = col_name })
         end
       end
 
-      if #conditions > 0 and complete then
+      if staged then
+        blocked = blocked or staged
+      elseif complete and #columns > 0 then
         local name = key.name ~= '' and key.name or '(unnamed)'
         local label = ('%s (%s: %s.%s → %s.%s)'):format(
           qualified(other_schema, other_relation),
@@ -287,20 +304,24 @@ local function handle_drilldown(payload, drilldown, connection)
         table.insert(matches, {
           label = label,
           parts = parts,
-          conditions = conditions,
+          columns = columns,
         })
-      elseif not complete then
+      else
         incomplete = true
       end
     end
   end
 
   if #matches == 0 then
+    if blocked then
+      return notify(
+        ('apply the staged change to `%s` before following its foreign key'):format(blocked),
+        vim.log.levels.WARN
+      )
+    end
     if incomplete then
       return notify(
-        ('composite foreign key on `%s` requires all key columns in the result'):format(
-          drilldown.column
-        ),
+        ('`%s` needs every column of its foreign key in this result'):format(drilldown.column),
         vim.log.levels.WARN
       )
     end
@@ -318,7 +339,7 @@ local function handle_drilldown(payload, drilldown, connection)
   end
 
   if #matches == 1 then
-    return execute_drilldown(payload.conn_id, connection.dialect, matches[1])
+    return execute_drilldown(drilldown, matches[1])
   end
 
   vim.ui.select(matches, {
@@ -328,13 +349,13 @@ local function handle_drilldown(payload, drilldown, connection)
     end,
   }, function(choice)
     if choice then
-      execute_drilldown(payload.conn_id, connection.dialect, choice)
+      execute_drilldown(drilldown, choice)
     end
   end)
 end
 
 --- Follow an outgoing (`gd`) or incoming (`gr`) foreign key from a result cell.
----@param spec { conn_id: integer, schema: string, relation: string, direction: 'outgoing'|'incoming', column: string, value: any, numeric?: boolean, row_values?: table<string, { value: any, numeric?: boolean }> }
+---@param spec sqmeow.FollowSpec
 function M.follow(spec)
   M.close()
   local connection = require('sqmeow.core.state').connections[spec.conn_id]
@@ -374,7 +395,7 @@ function M.on_done(payload)
   end
   wanted = nil
   if drilldown then
-    return handle_drilldown(payload, drilldown, connection)
+    return handle_drilldown(payload, drilldown)
   end
   if payload.error then
     return show({ 'Relationships unavailable', '  ' .. payload.error })

@@ -6,7 +6,7 @@ local browser = require('sqmeow.ui.relationships')
 local state = require('sqmeow.core.state')
 local rpc = require('sqmeow.rpc.client')
 local popup = require('sqmeow.ui.popup')
-local requests, shown, active
+local requests, shown, active, condition_requests
 local original_request, original_popup, original_ensure
 
 local T = MiniTest.new_set({
@@ -15,6 +15,7 @@ local T = MiniTest.new_set({
       state.reset()
       state.add_connection({ id = 1, state = 'connected', name = 'test', url = 'sqlite::memory:' })
       requests, shown = {}, {}
+      condition_requests = {}
       original_request, original_popup = rpc.request, popup.open
       original_ensure = require('sqmeow.rpc.events').ensure
       require('sqmeow.rpc.events').ensure = function() end
@@ -76,6 +77,19 @@ local function answer(keys, extra, request)
   return vim.tbl_extend('force', request or requests[#requests], {
     relationships = keys or {},
   }, extra or {})
+end
+
+--- Answer `key_conditions` while keeping the relationships mock in place.
+---@param reply string[]|fun(args: table): string[]
+local function mock_conditions(reply)
+  local relationships = rpc.request
+  rpc.request = function(method, args)
+    if method == 'key_conditions' then
+      table.insert(condition_requests, vim.deepcopy(args))
+      return type(reply) == 'function' and reply(args) or reply
+    end
+    return relationships(method, args)
+  end
 end
 
 T['unqualified request uses resolved schema without changing reply identity'] = function()
@@ -195,7 +209,7 @@ T['result uses provenance and the existing structure fallback without row predic
     source = {
       kind = 'table',
       name = 'users',
-      tables = { { schema = 'public', name = 'users', columns = { 0 } } },
+      tables = { { schema = 'public', name = 'users', columns = { { index = 0, name = 'id' } } } },
     },
   }
   result.actions.relationships()
@@ -238,8 +252,8 @@ T['result column provenance selects the other joined table'] = function()
       kind = 'table',
       name = 'users',
       tables = {
-        { schema = 'public', name = 'users', columns = { 0 } },
-        { schema = 'other', name = 'teams', columns = { 1 } },
+        { schema = 'public', name = 'users', columns = { { index = 0, name = 'user_id' } } },
+        { schema = 'other', name = 'teams', columns = { { index = 1, name = 'team_id' } } },
       },
     },
   }
@@ -265,23 +279,31 @@ T['gd and gr query referenced parent and referencing child rows'] = function()
   query.execute = function(sql_text, opts)
     table.insert(executed, { sql = sql_text, opts = opts })
   end
+  mock_conditions(function(args)
+    local column = args.columns[1].column
+    return { ('"%s" = 42'):format(column) }
+  end)
 
-  state.connections[1].dialect = 'postgres'
   browser.follow({
     conn_id = 1,
     schema = 'public',
     relation = 'orders',
     direction = 'outgoing',
     column = 'user_id',
-    value = 42,
-    numeric = true,
+    dialect = 'postgres',
+    call_id = 5,
+    row = 2,
+    columns = { { index = 0, name = 'user_id' } },
   })
   browser.on_done(answer({
     key('orders_user_fk', 'orders', 'users', { 'user_id' }, { 'id' }),
   }))
   eq(#executed, 1)
-  eq(executed[1].sql, 'select * from "public"."users" where "id" = 42 limit 100000')
+  eq(executed[1].sql, 'select * from "public"."users" where "id" = 42')
   eq(executed[1].opts.conn_id, 1)
+  eq(condition_requests[1].call_id, 5)
+  eq(condition_requests[1].row, 2)
+  eq(condition_requests[1].columns, { { index = 0, column = 'id', source = 'user_id' } })
 
   -- Incoming references with multiple child tables prompt via vim.ui.select.
   local selected_prompt
@@ -295,8 +317,10 @@ T['gd and gr query referenced parent and referencing child rows'] = function()
     relation = 'users',
     direction = 'incoming',
     column = 'id',
-    value = 42,
-    numeric = true,
+    dialect = 'postgres',
+    call_id = 5,
+    row = 2,
+    columns = { { index = 0, name = 'id' } },
   })
   browser.on_done(answer({
     key('orders_user_fk', 'orders', 'users', { 'user_id' }, { 'id' }),
@@ -304,10 +328,11 @@ T['gd and gr query referenced parent and referencing child rows'] = function()
   }))
   eq(selected_prompt, 'Referenced by:')
   eq(#executed, 2)
-  eq(executed[2].sql, 'select * from "public"."invoices" where "customer_id" = 42 limit 100000')
+  eq(executed[2].sql, 'select * from "public"."invoices" where "customer_id" = 42')
+  eq(condition_requests[2].columns, { { index = 0, column = 'customer_id', source = 'id' } })
 end
 
-T['composite foreign keys match case-insensitively and warn when incomplete'] = function()
+T['composite foreign keys match case-insensitively and warn when incomplete or staged'] = function()
   local executed = {}
   local notified = {}
   local query = require('sqmeow.api.query')
@@ -323,18 +348,27 @@ T['composite foreign keys match case-insensitively and warn when incomplete'] = 
   vim.notify = function(msg, level)
     table.insert(notified, { msg = msg, level = level })
   end
+  mock_conditions(function(args)
+    local conditions = {}
+    for _, item in ipairs(args.columns) do
+      local value = item.column == 'tenant_id' and 7 or 10
+      table.insert(conditions, ('"%s" = %d'):format(item.column, value))
+    end
+    return conditions
+  end)
 
-  state.connections[1].dialect = 'postgres'
   browser.follow({
     conn_id = 1,
     schema = 'public',
     relation = 'order_items',
     direction = 'outgoing',
     column = 'order_id',
-    value = 10,
-    numeric = true,
-    row_values = {
-      TENANT_ID = { value = 7, numeric = true },
+    dialect = 'postgres',
+    call_id = 7,
+    row = 3,
+    columns = {
+      { index = 0, name = 'TENANT_ID' },
+      { index = 1, name = 'order_id' },
     },
   })
   browser.on_done(answer({
@@ -347,10 +381,11 @@ T['composite foreign keys match case-insensitively and warn when incomplete'] = 
     ),
   }))
   eq(#executed, 1)
-  eq(
-    executed[1].sql,
-    'select * from "public"."orders" where "tenant_id" = 7 and "id" = 10 limit 100000'
-  )
+  eq(executed[1].sql, 'select * from "public"."orders" where "tenant_id" = 7 and "id" = 10')
+  eq(condition_requests[1].columns, {
+    { index = 0, column = 'tenant_id', source = 'tenant_id' },
+    { index = 1, column = 'id', source = 'order_id' },
+  })
 
   -- Missing sibling key column warns instead of running a partial WHERE clause.
   browser.follow({
@@ -359,9 +394,10 @@ T['composite foreign keys match case-insensitively and warn when incomplete'] = 
     relation = 'order_items',
     direction = 'outgoing',
     column = 'order_id',
-    value = 10,
-    numeric = true,
-    row_values = {},
+    dialect = 'postgres',
+    call_id = 7,
+    row = 3,
+    columns = { { index = 1, name = 'order_id' } },
   })
   browser.on_done(answer({
     key(
@@ -375,7 +411,38 @@ T['composite foreign keys match case-insensitively and warn when incomplete'] = 
   eq(#executed, 1)
   eq(
     notified[#notified].msg,
-    'sqmeow: composite foreign key on `order_id` requires all key columns in the result'
+    'sqmeow: `order_id` needs every column of its foreign key in this result'
+  )
+
+  -- A staged sibling value is not in the database yet, so following it would be a lie.
+  browser.follow({
+    conn_id = 1,
+    schema = 'public',
+    relation = 'order_items',
+    direction = 'outgoing',
+    column = 'order_id',
+    dialect = 'postgres',
+    call_id = 7,
+    row = 3,
+    columns = {
+      { index = 0, name = 'tenant_id' },
+      { index = 1, name = 'order_id' },
+    },
+    staged = { [0] = true },
+  })
+  browser.on_done(answer({
+    key(
+      'items_order_fk',
+      'order_items',
+      'orders',
+      { 'tenant_id', 'order_id' },
+      { 'tenant_id', 'id' }
+    ),
+  }))
+  eq(#executed, 1)
+  eq(
+    notified[#notified].msg,
+    'sqmeow: apply the staged change to `tenant_id` before following its foreign key'
   )
 end
 
@@ -383,16 +450,22 @@ T['gd and gr work from the K row-details popup and warn on NULL cells'] = functi
   local detail = require('sqmeow.ui.detail')
   local result = require('sqmeow.ui.result')
   local notified = {}
+  local captured
   local original_call = state.call
   local original_notify = vim.notify
+  local original_follow = browser.follow
   popup.open = original_popup
   MiniTest.finally(function()
     detail.close()
     state.call = original_call
     vim.notify = original_notify
+    browser.follow = original_follow
   end)
   vim.notify = function(msg, level)
     table.insert(notified, { msg = msg, level = level })
+  end
+  browser.follow = function(spec)
+    captured = spec
   end
 
   state.call = {
@@ -421,7 +494,14 @@ T['gd and gr work from the K row-details popup and warn on NULL cells'] = functi
       kind = 'table',
       name = 'orders',
       tables = {
-        { schema = 'public', name = 'orders', columns = { 0, 1 } },
+        {
+          schema = 'public',
+          name = 'orders',
+          columns = {
+            { index = 0, name = 'user_id' },
+            { index = 1, name = 'parent_id' },
+          },
+        },
       },
     },
   }
@@ -437,22 +517,99 @@ T['gd and gr work from the K row-details popup and warn on NULL cells'] = functi
   end
 
   detail.open(0)
-  -- Line 2 is `parent_id` (NULL): should warn and not send a relationships request.
+  -- Line 2 is `parent_id` (NULL): should warn and not follow a relationship.
   vim.api.nvim_win_set_cursor(0, { 2, 0 })
   detail.actions.goto_definition()
-  eq(#requests, 0)
+  eq(captured, nil)
   eq(notified[#notified].msg, 'sqmeow: `parent_id` is NULL')
 
-  -- Line 1 is `user_id = 99`: should close detail popup and request relationships.
+  -- Line 1 is `user_id = 99`: should close detail popup and follow the relationship.
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   detail.actions.goto_definition()
-  eq(#requests, 1)
-  eq(requests[1].relation, 'orders')
-  eq(requests[1].schema, 'public')
+  eq(captured.relation, 'orders')
+  eq(captured.schema, 'public')
+  eq(captured.column, 'user_id')
+  eq(captured.call_id, 11)
+  eq(captured.row, 0)
+  eq(captured.columns, {
+    { index = 0, name = 'user_id' },
+    { index = 1, name = 'parent_id' },
+  })
 
   -- Direct follow_cell on NULL also warns.
-  result.follow_cell('outgoing', { column = 1, name = 'parent_id', value = vim.NIL }, {})
+  result.follow_cell('outgoing', { column = 1, name = 'parent_id', is_null = true }, { row = 0 })
   eq(notified[#notified].msg, 'sqmeow: `parent_id` is NULL')
+end
+
+T['follow_cell maps aliased columns and refuses staged edits and aggregate views'] = function()
+  local result = require('sqmeow.ui.result')
+  local edit = require('sqmeow.ui.edit')
+  local notified = {}
+  local captured
+  local original_follow = browser.follow
+  local original_notify = vim.notify
+  MiniTest.finally(function()
+    browser.follow = original_follow
+    vim.notify = original_notify
+    edit.reset()
+  end)
+  browser.follow = function(spec)
+    captured = spec
+  end
+  vim.notify = function(msg, level)
+    table.insert(notified, { msg = msg, level = level })
+  end
+
+  state.call = {
+    call_id = 9,
+    conn_id = 1,
+    state = 'done',
+    columns = {
+      {
+        name = 'uid',
+        type_name = 'int',
+        class = 'number',
+        nulls = false,
+        numeric = true,
+      },
+    },
+    source = {
+      kind = 'table',
+      name = 'orders',
+      tables = {
+        {
+          schema = 'public',
+          name = 'orders',
+          columns = { { index = 0, name = 'user_id' } },
+        },
+      },
+    },
+  }
+  state.connections[1].dialect = 'postgres'
+
+  result.follow_cell('outgoing', { column = 0, name = 'uid', is_null = false }, { row = 4 })
+  eq(captured.column, 'user_id')
+  eq(captured.row, 4)
+  eq(captured.call_id, 9)
+  eq(captured.dialect, 'postgres')
+  eq(captured.columns, { { index = 0, name = 'user_id' } })
+  eq(captured.staged, nil)
+
+  edit.set({ row = 4 }, 0, '7')
+  captured = nil
+  result.follow_cell('outgoing', { column = 0, name = 'uid', is_null = false }, { row = 4 })
+  eq(captured, nil)
+  eq(
+    notified[#notified].msg,
+    'sqmeow: apply the staged change to `user_id` before following its foreign key'
+  )
+
+  edit.reset()
+  state.call.aggregated = true
+  captured = nil
+  result.follow_cell('outgoing', { column = 0, name = 'uid', is_null = false }, { row = 4 })
+  eq(captured, nil)
+  eq(notified[#notified].msg, 'sqmeow: foreign keys cannot be followed from an aggregated result')
 end
 
 return T

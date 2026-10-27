@@ -7,6 +7,8 @@ local utils = require('sqmeow.core.utils')
 local popup = nil
 local current_columns = nil
 local line_columns = nil
+local current_row = nil
+local current_call_id = nil
 
 -- Cap type-name width to leave room for values.
 local TYPE_WIDTH = 16
@@ -79,6 +81,10 @@ local function follow(direction)
   if not (popup and current_columns and line_columns) then
     return
   end
+  local call = require('sqmeow.core.state').call
+  if not (call and call.call_id == current_call_id) then
+    return utils.notify('that row belongs to a result that is no longer shown', vim.log.levels.WARN)
+  end
   local winid = popup.winid and vim.api.nvim_win_is_valid(popup.winid) and popup.winid or 0
   local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
   local col_index = line_columns[cursor_line]
@@ -87,16 +93,12 @@ local function follow(direction)
     return
   end
 
-  local raw_row = {}
-  for idx, entry in ipairs(current_columns) do
-    raw_row[idx] = entry.is_null and vim.NIL or entry.value
-  end
-
+  -- The popup shows the retained row, so following it must ignore staged edits.
   require('sqmeow.ui.result').follow_cell(direction, {
     column = col_index - 1,
     name = col.name,
-    value = col.is_null and vim.NIL or col.value,
-  }, raw_row)
+    is_null = col.is_null,
+  }, { row = current_row, retained = true })
 end
 
 --- Actions bound in the row-details popup.
@@ -110,6 +112,16 @@ end
 --- Follow incoming foreign keys (`gr`) from the field under the cursor to referencing child rows.
 function M.actions.goto_references()
   follow('incoming')
+end
+
+--- Close the row-details popup.
+function M.actions.close()
+  M.close()
+end
+
+--- Show the mappings available in the row-details popup.
+function M.actions.help()
+  require('sqmeow.ui.help').open('detail')
 end
 
 --- Show one row of the current result.
@@ -144,6 +156,7 @@ function M.open(row)
     filetype = 'sqmeow-row',
     wrap = true,
     tabstop = vim.bo.tabstop,
+    close_maps = false,
     on_close = M.close,
   })
   if not opened then
@@ -152,7 +165,9 @@ function M.open(row)
   popup = opened
   current_columns = columns
   line_columns = mapped_columns
-  require('sqmeow.keymap').apply('result', opened.bufnr, M.actions)
+  current_row = row
+  current_call_id = call.call_id
+  require('sqmeow.keymap').apply('detail', opened.bufnr, M.actions)
 end
 
 --- Close the popup.
@@ -162,6 +177,8 @@ function M.close()
   popup = nil
   current_columns = nil
   line_columns = nil
+  current_row = nil
+  current_call_id = nil
   if closing then
     closing:unmount()
   end

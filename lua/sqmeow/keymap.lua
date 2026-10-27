@@ -1,4 +1,5 @@
---- Buffer-local mappings for drawer, result, filter bar, and editor.
+--- Buffer-local mappings for the drawer, results, row details, relationship browsing, the
+--- filter bar, and the editor.
 ---
 --- Set by window and action. String sets one key, list sets aliases, `false`
 --- disables: >lua
@@ -169,6 +170,22 @@ M.defaults = {
     { action = 'close', lhs = { 'q', '<Esc>' }, desc = 'Close relationship browsing' },
   },
 
+  -- The row-details popup.
+  detail = {
+    {
+      action = 'goto_definition',
+      lhs = 'gd',
+      desc = 'Query the parent row referenced by this foreign key field',
+    },
+    {
+      action = 'goto_references',
+      lhs = 'gr',
+      desc = 'Query child rows referencing this field',
+    },
+    { action = 'help', lhs = '?', desc = 'Show these mappings' },
+    { action = 'close', lhs = { 'q', '<Esc>' }, desc = 'Close row details' },
+  },
+
   -- The WHERE and ORDER BY bar above the result.
   filter = {
     { action = 'apply', lhs = '<CR>', desc = 'Apply the filter and sort expressions' },
@@ -250,7 +267,7 @@ local function as_list(value)
 end
 
 --- The mappings for one surface, after the user's overrides.
----@param surface string `drawer`, `result`, `filter`, or `editor`.
+---@param surface string A key in `M.defaults`, such as `result` or `detail`.
 ---@return sqmeow.ResolvedKeymap[] # In presentation order.
 function M.resolve(surface)
   local overrides = (require('sqmeow.config').get().keymaps or {})[surface] or {}
@@ -346,7 +363,7 @@ end
 function M.summary()
   local lines = {}
 
-  for _, surface in ipairs({ 'drawer', 'result', 'relationships', 'filter', 'editor' }) do
+  for _, surface in ipairs({ 'drawer', 'result', 'detail', 'relationships', 'filter', 'editor' }) do
     table.insert(lines, surface)
     vim.list_extend(lines, require('sqmeow.ui.help').lines(surface))
     table.insert(lines, '')

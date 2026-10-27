@@ -153,7 +153,12 @@ pub(super) fn summarize(call: &Call, connected: bool) -> Vec<(&'static str, Valu
                                 table
                                     .columns
                                     .iter()
-                                    .map(|(index, _)| Value::from(*index as u64))
+                                    .map(|(index, name)| {
+                                        map(vec![
+                                            ("index", Value::from(*index as u64)),
+                                            ("name", Value::from(name.as_str())),
+                                        ])
+                                    })
                                     .collect(),
                             ),
                         ),
