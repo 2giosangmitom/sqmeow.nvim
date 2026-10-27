@@ -330,22 +330,72 @@ function M.download(opts, callback)
       end
       progress('unpacking ' .. M.binary)
 
-      M.unpack(archive, directory, function(unpacked, unpack_err)
+      -- Unpack beside the download rather than into the bin directory, so a running
+      -- engine is never opened for writing while the archive is extracted.
+      local staging = vim.fn.tempname()
+      vim.fn.mkdir(staging, 'p')
+      M.unpack(archive, staging, function(unpacked, unpack_err)
         vim.fn.delete(archive)
         if not unpacked then
+          vim.fn.delete(staging, 'rf')
           return callback(nil, unpack_err)
         end
 
-        local path = M.managed_path()
-        if not vim.uv.fs_stat(path) then
+        local extracted = vim.fs.joinpath(staging, M.binary)
+        if not vim.uv.fs_stat(extracted) then
+          vim.fn.delete(staging, 'rf')
           return callback(nil, ('the archive did not contain %s'):format(M.binary))
         end
-        vim.uv.fs_chmod(path, 493) -- 0755
+
+        local path = M.managed_path()
+        local installed, install_err = M.install_binary(extracted, path)
+        vim.fn.delete(staging, 'rf')
+        if not installed then
+          return callback(
+            nil,
+            ('could not install the download: %s'):format(install_err or 'unknown error')
+          )
+        end
 
         callback(path)
       end)
     end)
   end)
+end
+
+--- Copy an engine over the installed one without writing through a running executable.
+---
+--- `fs_copyfile` straight onto a running engine fails with `ETXTBSY` on Linux. Copying
+--- beside it and renaming over the destination swaps the directory entry atomically; a
+--- process already running the old binary keeps its inode until the next restart.
+---@param source string
+---@param destination string
+---@return boolean|nil ok
+---@return string|nil err
+function M.install_binary(source, destination)
+  local directory = vim.fs.dirname(destination)
+  vim.fn.mkdir(directory, 'p')
+  local temporary = ('%s.new.%d'):format(destination, vim.uv.os_getpid())
+  vim.fn.delete(temporary)
+
+  local copied, copy_err = vim.uv.fs_copyfile(source, temporary)
+  if not copied then
+    vim.fn.delete(temporary)
+    return nil, copy_err
+  end
+
+  local chmod_ok, chmod_err = vim.uv.fs_chmod(temporary, 493) -- 0755
+  if not chmod_ok then
+    vim.fn.delete(temporary)
+    return nil, chmod_err
+  end
+
+  local renamed, rename_err = vim.uv.fs_rename(temporary, destination)
+  if not renamed then
+    vim.fn.delete(temporary)
+    return nil, rename_err
+  end
+  return true
 end
 
 --- Build the engine from the checkout with cargo.
@@ -374,13 +424,13 @@ function M.build(callback)
     end
 
     local destination = M.managed_path()
-    vim.fn.mkdir(vim.fs.dirname(destination), 'p')
-
-    local copied, copy_err = vim.uv.fs_copyfile(built, destination)
-    if not copied then
-      return callback(nil, ('could not install the build: %s'):format(copy_err or 'unknown error'))
+    local installed, install_err = M.install_binary(built, destination)
+    if not installed then
+      return callback(
+        nil,
+        ('could not install the build: %s'):format(install_err or 'unknown error')
+      )
     end
-    vim.uv.fs_chmod(destination, 493) -- 0755
 
     callback(destination)
   end)
