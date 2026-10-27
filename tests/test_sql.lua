@@ -230,4 +230,22 @@ T['alter_table']['keeps multiline sqlite identifiers from executing as SQL'] = f
   eq(vim.trim(output), 'kept')
 end
 
+T['select_where'] = MiniTest.new_set()
+
+T['select_where']['qualifies the relation and joins engine-built predicates'] = function()
+  eq(
+    sql.select_where('postgres', { 'public', 'users' }, { '"id" = 42' }),
+    'select * from "public"."users" where "id" = 42'
+  )
+  eq(
+    sql.select_where('mssql', { 'dbo', 'orders' }, { '[id] = 42', '[tenant_id] = 7' }),
+    'select * from [dbo].[orders] where [id] = 42 and [tenant_id] = 7'
+  )
+  eq(
+    sql.select_where('oracle', { 'HR', 'EMPLOYEES' }, { '"DEPT_ID" = 10' }),
+    'select * from "HR"."EMPLOYEES" where "DEPT_ID" = 10'
+  )
+  eq(sql.select_where('sqlite', { 'users' }, {}), 'select * from "users"')
+end
+
 return T

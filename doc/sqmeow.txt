@@ -811,7 +811,8 @@ Return ~
 ==============================================================================
 ------------------------------------------------------------------------------
                                                                 *sqmeow-keymaps*
-Buffer-local mappings for drawer, result, filter bar, and editor.
+Buffer-local mappings for the drawer, results, row details, relationship browsing, the
+filter bar, and the editor.
 
 Set by window and action. String sets one key, list sets aliases, `false`
 disables: >lua
@@ -831,7 +832,8 @@ In results, `K` opens read-only row details with full values, preserved
 newlines, and line wrapping. CRLF is normalized to LF; bare carriage returns
 are preserved, and embedded NUL bytes are shown as `^@` (yanking copies that
 notation). Continuation lines are indented under the value column. Use normal
-navigation, `/` to search, and `y` to yank; `q` or `<Esc>` closes the popup.
+navigation, `/` to search, `y` to yank, `gd`/`gr` to follow foreign-key
+relationships, and `q` or `<Esc>` to close the popup.
 
 ------------------------------------------------------------------------------
 Class ~
@@ -877,6 +879,8 @@ drawer
 
 result
  gR            Browse this column's table relationships
+ gd            Query the parent row referenced by this foreign key cell
+ gr            Query child rows referencing this cell
  L             Next page
  H             Previous page
  [H            First page
@@ -913,6 +917,12 @@ result
  ?             Show these mappings
  q             Close the result window
 
+detail
+ gd         Query the parent row referenced by this foreign key field
+ gr         Query child rows referencing this field
+ ?          Show these mappings
+ q, <Esc>   Close row details
+
 relationships
  <CR>       Browse the other table’s foreign keys
  K          Show the other table’s structure
@@ -946,7 +956,7 @@ Type ~
                        `sqmeow.keymap.resolve`({surface})
 The mappings for one surface, after the user's overrides.
 Parameters ~
-{surface} `(string)` `drawer`, `result`, `filter`, or `editor`.
+{surface} `(string)` A key in `M.defaults`, such as `result` or `detail`.
 Return ~
 `(sqmeow.ResolvedKeymap[])` # In presentation order.
 

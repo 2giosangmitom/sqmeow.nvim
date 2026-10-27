@@ -1,4 +1,5 @@
---- Buffer-local mappings for drawer, result, filter bar, and editor.
+--- Buffer-local mappings for the drawer, results, row details, relationship browsing, the
+--- filter bar, and the editor.
 ---
 --- Set by window and action. String sets one key, list sets aliases, `false`
 --- disables: >lua
@@ -18,7 +19,8 @@
 --- newlines, and line wrapping. CRLF is normalized to LF; bare carriage returns
 --- are preserved, and embedded NUL bytes are shown as `^@` (yanking copies that
 --- notation). Continuation lines are indented under the value column. Use normal
---- navigation, `/` to search, and `y` to yank; `q` or `<Esc>` closes the popup.
+--- navigation, `/` to search, `y` to yank, `gd`/`gr` to follow foreign-key
+--- relationships, and `q` or `<Esc>` to close the popup.
 ---@tag sqmeow-keymaps
 ---@toc_entry Keymaps
 
@@ -83,6 +85,16 @@ M.defaults = {
       action = 'relationships',
       lhs = 'gR',
       desc = "Browse this column's table relationships",
+    },
+    {
+      action = 'goto_definition',
+      lhs = 'gd',
+      desc = 'Query the parent row referenced by this foreign key cell',
+    },
+    {
+      action = 'goto_references',
+      lhs = 'gr',
+      desc = 'Query child rows referencing this cell',
     },
     { action = 'next_page', lhs = 'L', desc = 'Next page' },
     { action = 'prev_page', lhs = 'H', desc = 'Previous page' },
@@ -156,6 +168,22 @@ M.defaults = {
     { action = 'structure', lhs = 'K', desc = 'Show the other table’s structure' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = { 'q', '<Esc>' }, desc = 'Close relationship browsing' },
+  },
+
+  -- The row-details popup.
+  detail = {
+    {
+      action = 'goto_definition',
+      lhs = 'gd',
+      desc = 'Query the parent row referenced by this foreign key field',
+    },
+    {
+      action = 'goto_references',
+      lhs = 'gr',
+      desc = 'Query child rows referencing this field',
+    },
+    { action = 'help', lhs = '?', desc = 'Show these mappings' },
+    { action = 'close', lhs = { 'q', '<Esc>' }, desc = 'Close row details' },
   },
 
   -- The WHERE and ORDER BY bar above the result.
@@ -239,7 +267,7 @@ local function as_list(value)
 end
 
 --- The mappings for one surface, after the user's overrides.
----@param surface string `drawer`, `result`, `filter`, or `editor`.
+---@param surface string A key in `M.defaults`, such as `result` or `detail`.
 ---@return sqmeow.ResolvedKeymap[] # In presentation order.
 function M.resolve(surface)
   local overrides = (require('sqmeow.config').get().keymaps or {})[surface] or {}
@@ -335,7 +363,7 @@ end
 function M.summary()
   local lines = {}
 
-  for _, surface in ipairs({ 'drawer', 'result', 'relationships', 'filter', 'editor' }) do
+  for _, surface in ipairs({ 'drawer', 'result', 'detail', 'relationships', 'filter', 'editor' }) do
     table.insert(lines, surface)
     vim.list_extend(lines, require('sqmeow.ui.help').lines(surface))
     table.insert(lines, '')

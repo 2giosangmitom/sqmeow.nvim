@@ -1572,30 +1572,70 @@ function M.read_from(call)
   return #parts > 1 and parts[#parts - 1] or '', parts[#parts]
 end
 
+--- The result columns bound to one table of a SQL result.
+---@param entry { schema: string|nil, name: string, columns: { index: integer, name: string }[]|nil }
+---@return { schema: string, relation: string, columns: { index: integer, name: string }[] }
+local function table_source(entry)
+  return {
+    schema = entry.schema or '',
+    relation = entry.name,
+    columns = entry.columns or {},
+  }
+end
+
+--- The table a result column comes from, or nil when it is computed.
+---
+--- Provenance names the table column behind each displayed column, so aliases and
+--- duplicate headers still resolve. Without provenance, the query's own `FROM` table is
+--- used and header names stand in for table column names.
+---@param call sqmeow.CallSummary
+---@param column integer|nil Zero-based result column; nil asks for the first table.
+---@return { schema: string, relation: string, columns: { index: integer, name: string }[] }|nil
+local function relation_for(call, column)
+  local tables = call.source and call.source.tables
+  if tables and #tables > 0 then
+    if column == nil then
+      return table_source(tables[1])
+    end
+    for _, candidate in ipairs(tables) do
+      for _, entry in ipairs(candidate.columns or {}) do
+        if entry.index == column then
+          return table_source(candidate)
+        end
+      end
+    end
+    return nil
+  end
+
+  local schema, relation = M.read_from(call)
+  if not relation then
+    return nil
+  end
+  local columns = {}
+  for index, meta in ipairs(call.columns or {}) do
+    table.insert(columns, { index = index - 1, name = meta.name })
+  end
+  return { schema = schema or '', relation = relation, columns = columns }
+end
+
 --- Show the structure of the table the column under the cursor comes from.
 local function show_table(surface)
   local call = require('sqmeow.core.state').call
   if not call then
     return
   end
-  local tables = call.source and call.source.tables
-  -- A result that cannot be traced back to a table shows the one its query reads from.
-  if not (tables and #tables > 0) then
-    local schema, relation = M.read_from(call)
-    if not (relation and call.conn_id) then
-      return utils.notify('this result names no table to show', vim.log.levels.WARN)
+  local here = cursor_column(call)
+  local source = relation_for(call, here and here.column)
+  if not source then
+    if here then
+      return utils.notify(
+        ('`%s` does not come from a table'):format(here.name),
+        vim.log.levels.WARN
+      )
     end
-    return require('sqmeow.ui.' .. surface).open(call.conn_id, schema or '', relation)
+    return utils.notify('this result names no table to show', vim.log.levels.WARN)
   end
-  local here = cursor_column()
-  local chosen = tables[1]
-  for _, candidate in ipairs(tables) do
-    if here and vim.tbl_contains(candidate.columns, here.column) then
-      chosen = candidate
-      break
-    end
-  end
-  require('sqmeow.ui.' .. surface).open(call.conn_id, chosen.schema or '', chosen.name)
+  require('sqmeow.ui.' .. surface).open(call.conn_id, source.schema, source.relation)
 end
 
 function M.actions.structure()
@@ -1605,6 +1645,114 @@ end
 --- Use the same column provenance and query fallback as the structure action.
 function M.actions.relationships()
   show_table('relationships')
+end
+
+--- Follow an outgoing (`gd`) or incoming (`gr`) foreign key for a specific cell and row.
+---
+--- The engine builds the key predicates from the retained row, so the cell only needs to
+--- say which column it is. Staged edits are refused because the database does not have
+--- them yet.
+---@param direction 'outgoing'|'incoming'
+---@param cell { column: integer, name: string, is_null?: boolean }|nil
+---@param opts { row: integer|nil, retained?: boolean }|nil The retained row, and whether staged edits can be ignored.
+function M.follow_cell(direction, cell, opts)
+  local call = require('sqmeow.core.state').call
+  if not call then
+    return
+  end
+  if not (cell and cell.column ~= nil) or not (opts and opts.row ~= nil) then
+    return utils.notify(
+      'place the cursor on a result row to follow a relationship',
+      vim.log.levels.WARN
+    )
+  end
+  if call.aggregated then
+    return utils.notify(
+      'foreign keys cannot be followed from an aggregated result',
+      vim.log.levels.WARN
+    )
+  end
+
+  local source = relation_for(call, cell.column)
+  local bound
+  for _, entry in ipairs(source and source.columns or {}) do
+    if entry.index == cell.column then
+      bound = entry
+      break
+    end
+  end
+  if not (source and bound) then
+    return utils.notify(('`%s` does not come from a table'):format(cell.name), vim.log.levels.WARN)
+  end
+
+  local staged = {}
+  if not opts.retained then
+    local edit = require('sqmeow.ui.edit')
+    for _, entry in ipairs(source.columns) do
+      local _, has = edit.staged(opts.row, entry.index)
+      if has then
+        staged[entry.index] = true
+      end
+    end
+  end
+  if staged[cell.column] then
+    return utils.notify(
+      ('apply the staged change to `%s` before following its foreign key'):format(bound.name),
+      vim.log.levels.WARN
+    )
+  end
+  if cell.is_null then
+    return utils.notify(('`%s` is NULL'):format(bound.name), vim.log.levels.WARN)
+  end
+
+  if not (call.conn_id and call.call_id) then
+    return utils.notify('this result names no table to follow', vim.log.levels.WARN)
+  end
+
+  require('sqmeow.ui.detail').close()
+  require('sqmeow.ui.relationships').follow({
+    conn_id = call.conn_id,
+    schema = source.schema,
+    relation = source.relation,
+    direction = direction,
+    column = bound.name,
+    dialect = M.dialect(call),
+    call_id = call.call_id,
+    row = opts.row,
+    columns = source.columns,
+    staged = next(staged) and staged or nil,
+  })
+end
+
+--- Follow an outgoing (`gd`) or incoming (`gr`) foreign key for the cell under the cursor.
+---@param direction 'outgoing'|'incoming'
+local function follow_relationship(direction)
+  local call = require('sqmeow.core.state').call
+  if not call then
+    return
+  end
+  local cell = M.current_cell()
+  if not (cell and cell.row ~= nil) then
+    return utils.notify(
+      'place the cursor on a result row to follow a relationship',
+      vim.log.levels.WARN
+    )
+  end
+  M.follow_cell(direction, {
+    column = cell.column,
+    name = cell.name,
+    is_null = cell.value == nil or cell.value == vim.NIL,
+  }, { row = cell.row })
+end
+
+--- Follow an outgoing foreign key (`gd`) from the cell under the cursor to its parent row.
+function M.actions.goto_definition()
+  follow_relationship('outgoing')
+end
+
+--- Follow incoming foreign keys (`gr`) from the cell under the cursor to referencing child rows.
+function M.actions.goto_references()
+  follow_relationship('incoming')
 end
 
 --- Show another statement's result from the same run.

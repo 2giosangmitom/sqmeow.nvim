@@ -125,6 +125,7 @@ impl Core {
             "result_capabilities" => self.result_capabilities(args),
             "result_view_route" => self.result_view_route(args),
             "condition" => self.condition(args),
+            "key_conditions" => self.key_conditions(args),
             "inspect" => self.inspect(args),
             "query_parameters" => self.query_parameters(args),
             "plan" => self.plan(args),

@@ -67,6 +67,31 @@ impl Drop for Deadline {
     }
 }
 
+/// Build the equality predicates that match a retained row's key columns.
+///
+/// Columns are zero-based result indices paired with their names in the table, so an
+/// aliased result column still queries the real column. The cell itself is the source
+/// of the literal, preserving its type, exact digits, and any control characters.
+fn conditions_for(
+    result: &ResultSet,
+    row: usize,
+    columns: &[params::KeyColumn],
+    dialect: Dialect,
+) -> Result<Vec<String>, String> {
+    columns
+        .iter()
+        .map(|key| {
+            let cell = result
+                .cell(row, key.index)
+                .ok_or_else(|| format!("row {row} does not have a column {}", key.index + 1))?;
+            if cell.is_null() {
+                return Err(format!("`{}` is NULL", key.source));
+            }
+            edit::condition(dialect, &key.column, &cell).map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
 impl Core {
     /// Only an explicit refresh executes a query. Views never depend on a live dialect.
     fn query_view(&self, call_id: CallId, refresh: bool) -> Result<bool, String> {
@@ -666,6 +691,31 @@ impl Core {
             .map(Value::from)
     }
 
+    /// The `WHERE` predicates matching one retained row's key columns.
+    ///
+    /// The engine reads the retained cell and speaks the connection's dialect, so callers
+    /// never rebuild literals from displayed text. A key column that is `NULL` cannot
+    /// identify an endpoint and is reported instead of matching every other row.
+    pub(super) fn key_conditions(&self, args: &Args) -> Result<Value, String> {
+        let call_id = args.call_id()?;
+        let row = args.opt_usize("row").unwrap_or(0);
+        let columns = params::key_columns(args.get("columns"))?;
+        let gone = || format!("result {call_id} is no longer held");
+
+        let conn_id = self
+            .session
+            .with_call(call_id, |call| call.conn_id)
+            .ok_or_else(gone)?;
+        let dialect = self.connection(conn_id)?.backend.dialect();
+        let conditions = self
+            .session
+            .with_call(call_id, |call| {
+                conditions_for(&call.result, row, &columns, dialect)
+            })
+            .ok_or_else(gone)??;
+        Ok(strings(conditions))
+    }
+
     /// Hand the editor a slice of a result's rows.
     pub(super) fn rows(&self, args: &Args) -> Result<Value, String> {
         let call_id = args.call_id()?;
@@ -870,4 +920,80 @@ fn elapsed(started: Instant) -> Vec<(&'static str, Value)> {
         "elapsed_ms",
         Value::from(started.elapsed().as_millis() as u64),
     )]
+}
+
+#[cfg(test)]
+mod tests {
+    use sqmeow_db::adapter::Dialect;
+    use sqmeow_db::result::{Column, ResultSet};
+    use sqmeow_db::value::Cell;
+
+    use super::conditions_for;
+    use crate::server::params::KeyColumn;
+
+    fn key(index: usize, column: &str, source: &str) -> KeyColumn {
+        KeyColumn {
+            index,
+            column: column.to_owned(),
+            source: source.to_owned(),
+        }
+    }
+
+    fn row() -> ResultSet {
+        let mut result = ResultSet::new(
+            "select",
+            vec![
+                Column::new("id", "BIGINT"),
+                Column::new("note", "TEXT"),
+                Column::new("active", "BOOLEAN"),
+                Column::new("gone", "TEXT"),
+            ],
+        );
+        result.push_row(vec![
+            Cell::Int(7),
+            Cell::Text("o'k\n".into()),
+            Cell::Bool(true),
+            Cell::Null,
+        ]);
+        result
+    }
+
+    #[test]
+    fn key_conditions_use_the_retained_cell_and_the_dialect() {
+        let result = row();
+        let columns = vec![
+            key(0, "id", "user_id"),
+            key(1, "note", "note"),
+            key(2, "active", "active"),
+        ];
+        assert_eq!(
+            conditions_for(&result, 0, &columns, Dialect::Postgres).unwrap(),
+            vec![
+                "\"id\" = 7".to_owned(),
+                "\"note\" = 'o''k\n'".to_owned(),
+                "\"active\" = TRUE".to_owned(),
+            ]
+        );
+        assert_eq!(
+            conditions_for(&result, 0, &columns, Dialect::MsSql).unwrap(),
+            vec![
+                "[id] = 7".to_owned(),
+                "[note] = N'o''k\n'".to_owned(),
+                "[active] = 1".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn key_conditions_reject_null_and_missing_cells() {
+        let result = row();
+        let null = vec![key(3, "gone", "parent_id")];
+        assert_eq!(
+            conditions_for(&result, 0, &null, Dialect::Postgres).unwrap_err(),
+            "`parent_id` is NULL"
+        );
+        let missing = vec![key(9, "nope", "nope")];
+        assert!(conditions_for(&result, 0, &missing, Dialect::Postgres).is_err());
+        assert!(conditions_for(&result, 9, &null, Dialect::Postgres).is_err());
+    }
 }

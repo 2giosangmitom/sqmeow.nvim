@@ -65,6 +65,24 @@ function M.select_from(dialect, parts, limit)
   return limit and ('%s limit %d'):format(sql, limit) or sql
 end
 
+--- Returns a `SELECT` over a relation filtered by already-built predicates.
+---
+--- The engine builds each predicate from the retained cell in its own dialect, so this only
+--- qualifies the relation and joins the predicates. No row limit is added: the engine's
+--- `query.max_rows` cap still applies, and its truncation marker then says whether the
+--- drilldown was cut short.
+---@param dialect string|nil
+---@param parts string[]
+---@param conditions string[] SQL predicates, already quoted and typed for the dialect.
+---@return string
+function M.select_where(dialect, parts, conditions)
+  local sql = ('select * from %s'):format(M.qualify(dialect, parts))
+  if #conditions == 0 then
+    return sql
+  end
+  return ('%s where %s'):format(sql, table.concat(conditions, ' and '))
+end
+
 --- Returns the command that reads a Redis key for a drawer group.
 ---@param group string A drawer group key (e.g. `'hashes'`).
 ---@param key string
