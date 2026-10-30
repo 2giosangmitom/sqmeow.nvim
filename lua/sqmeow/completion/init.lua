@@ -44,9 +44,18 @@ local function relations(conn_id)
   return result, incomplete, schemas
 end
 
---- Warm the root cache; deeper metadata is loaded when completion is requested.
+--- Warm the schema and relation cache; leaf columns are loaded when completion is requested.
 function M.ensure(conn_id)
-  nodes(conn_id, {})
+  relations(conn_id)
+end
+
+local function quote_with_opener(opener, name)
+  if opener == '[' then
+    return '[' .. name:gsub(']', ']]') .. ']'
+  elseif opener == '`' then
+    return '`' .. name:gsub('`', '``') .. '`'
+  end
+  return '"' .. name:gsub('"', '""') .. '"'
 end
 
 --- col is a zero-based byte offset; row is an optional one-based buffer row.
@@ -57,13 +66,56 @@ function M.items(bufnr, line, col, row)
   if not conn then
     return {}, false
   end
+  local prefix = line and line:sub(1, col) or ''
+  local q_start, q_char = prefix:match('()(["`\x5b])[%w_$]*$')
+  if
+    q_start
+    and q_start > 1
+    and not prefix:sub(q_start - 1, q_start - 1):match('^[%s%.,%(%=<>!%+%-/%*;]$')
+  then
+    q_start, q_char = nil, nil
+  end
+  local sql_util = require('sqmeow.core.sql')
+  local is_nosql = conn.dialect == 'redis' or conn.dialect == 'mongodb'
+  local function format_item(item)
+    if is_nosql or item.kind == 'key' then
+      return item
+    end
+    local needs_quote = not item.label:match('^[a-z_][a-z0-9_$]*$')
+    if item.kind == 'schema' and not conn.dialect and item.label:match('^%d+$') then
+      needs_quote = false
+    end
+    local should_quote = q_start ~= nil
+      or needs_quote
+      or (conn.dialect ~= nil and (item.kind == 'table' or item.kind == 'view'))
+    if not should_quote then
+      return item
+    end
+    local quoted = conn.dialect and sql_util.quote(conn.dialect, item.label)
+      or quote_with_opener(q_char, item.label)
+    if q_start then
+      item.filterText = quoted
+      item.textEdit = {
+        newText = quoted,
+        range = {
+          start = { line = (row or 1) - 1, character = q_start - 1 },
+          ['end'] = { line = (row or 1) - 1, character = col },
+        },
+      }
+    else
+      item.insertText = quoted
+      item.filterText = item.label
+    end
+    return item
+  end
+
   local refs, qualifier, qualifier_schema =
     require('sqmeow.completion.context').read(bufnr, line, col, row)
   local available, incomplete, schemas = relations(conn.id)
   local items = {}
   for _, schema in ipairs(schemas or {}) do
     if schema.kind == 'schema' and not qualifier then
-      table.insert(items, { label = schema.name, kind = 'schema', detail = 'schema' })
+      table.insert(items, format_item({ label = schema.name, kind = 'schema', detail = 'schema' }))
     end
   end
   local function same(a, b)
@@ -72,7 +124,10 @@ function M.items(bufnr, line, col, row)
   for _, relation in ipairs(available) do
     local rel, schema = relation.node, relation.schema
     if not qualifier or same(qualifier, schema) then
-      table.insert(items, { label = rel.name, kind = rel.kind, detail = rel.kind, schema = schema })
+      table.insert(
+        items,
+        format_item({ label = rel.name, kind = rel.kind, detail = rel.kind, schema = schema })
+      )
     end
     local selected = same(qualifier, rel.name)
       and (not qualifier_schema or same(qualifier_schema, schema))
@@ -100,15 +155,18 @@ function M.items(bufnr, line, col, row)
           if column.references then
             table.insert(doc, 'Foreign Key: ' .. column.references)
           end
-          table.insert(items, {
-            label = column.name,
-            kind = 'column',
-            detail = column.type_name,
-            schema = schema,
-            relation = rel.name,
-            primary_key = column.primary_key,
-            documentation = #doc > 0 and table.concat(doc, ', ') or nil,
-          })
+          table.insert(
+            items,
+            format_item({
+              label = column.name,
+              kind = 'column',
+              detail = column.type_name,
+              schema = schema,
+              relation = rel.name,
+              primary_key = column.primary_key,
+              documentation = #doc > 0 and table.concat(doc, ', ') or nil,
+            })
+          )
         end
       end
     end

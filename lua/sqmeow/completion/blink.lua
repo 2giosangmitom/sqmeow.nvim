@@ -42,6 +42,9 @@ function Source:get_completions(context, callback)
   local result = vim.tbl_map(function(item)
     return {
       label = item.label,
+      insertText = item.insertText,
+      filterText = item.filterText,
+      textEdit = item.textEdit,
       kind = kind_map[item.kind] or blink_kinds.Property,
       detail = item.detail,
       documentation = item.documentation and {

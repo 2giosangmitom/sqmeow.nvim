@@ -296,7 +296,8 @@ T['providers']['normalize cursors and expose pending metadata'] = function(provi
     or { CompletionItemKind = kinds }
   local ok, err = pcall(function()
     fixture('main')
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'SELECT * FROM users u', 'WHERE u.owner' })
+    connection = { id = 1, dialect = 'postgres' }
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'SELECT * FROM users u', 'WHERE u."owner' })
     local source = require('sqmeow.completion.' .. provider).new()
     local response
     local function run()
@@ -305,10 +306,13 @@ T['providers']['normalize cursors and expose pending metadata'] = function(provi
       end
       if provider == 'cmp' then
         source:complete({
-          context = { bufnr = buf, cursor_line = 'WHERE u.owner', cursor = { row = 2, col = 9 } },
+          context = { bufnr = buf, cursor_line = 'WHERE u."owner', cursor = { row = 2, col = 10 } },
         }, callback)
       else
-        source:get_completions({ bufnr = buf, line = 'WHERE u.owner', cursor = { 2, 8 } }, callback)
+        source:get_completions(
+          { bufnr = buf, line = 'WHERE u."owner', cursor = { 2, 9 } },
+          callback
+        )
       end
     end
     run()
@@ -318,6 +322,14 @@ T['providers']['normalize cursors and expose pending metadata'] = function(provi
     eq(#response.items, 2)
     eq(response.items[1].kind, kinds.Field)
     eq(response.items[1].documentation, { kind = 'markdown', value = 'Primary Key' })
+    eq(response.items[2].filterText, '"owner"')
+    eq(response.items[2].textEdit, {
+      newText = '"owner"',
+      range = {
+        start = { line = 1, character = 8 },
+        ['end'] = { line = 1, character = 9 },
+      },
+    })
     if provider == 'cmp' then
       eq(response.isIncomplete, false)
     else
@@ -387,6 +399,106 @@ T['preview buffer name provides column completion without FROM clause'] = functi
 
   vim.api.nvim_buf_set_name(buf, '[Preview: users]')
   eq(column_labels(items('SELECT ')), { 'users_id', 'owner' })
+end
+
+T['ensure warms schema groups and relation lists progressively'] = function()
+  local events = require('sqmeow.rpc.events')
+  completion.ensure(1)
+  flush()
+  eq(#calls, 1)
+  eq(calls[1].path, {})
+
+  events.on_nodes({
+    conn_id = 1,
+    path = {},
+    nodes = { { name = 'public', kind = 'schema' }, { name = 'Roles', kind = 'roles' } },
+  })
+  flush()
+  eq(#calls, 2)
+  eq(calls[2].path, { 'public' })
+
+  events.on_nodes({
+    conn_id = 1,
+    path = { 'public' },
+    nodes = {
+      { name = 'Tables', key = 'tables', kind = 'tables' },
+      { name = 'Views', key = 'views', kind = 'views' },
+    },
+  })
+  flush()
+  eq(#calls, 4)
+  eq(calls[3].path, { 'public', 'tables' })
+  eq(calls[4].path, { 'public', 'views' })
+end
+
+T['dialect-quoted identifiers for relations and mixed-case columns'] = MiniTest.new_set({
+  parametrize = {
+    { 'postgres', '"users"', '"OrderId"', 'SELECT * FROM "us', 'WHERE u."Or' },
+    { 'mysql', '`users`', '`OrderId`', 'SELECT * FROM `us', 'WHERE u.`Or' },
+    { 'mssql', '[users]', '[OrderId]', 'SELECT * FROM [us', 'WHERE u.[Or' },
+  },
+})
+T['dialect-quoted identifiers for relations and mixed-case columns']['quotes and deduplicates opener'] = function(
+  dialect,
+  quoted_table,
+  quoted_col,
+  table_prefix,
+  col_prefix
+)
+  connection = { id = 1, dialect = dialect }
+  fixture('public')
+  cache({ 'public', 'tables', 'users' }, {
+    { name = 'users_id', kind = 'column', type_name = 'integer', primary_key = true },
+    { name = 'OrderId', kind = 'column', type_name = 'integer' },
+  })
+
+  -- Unquoted cursor position: relations and mixed-case columns carry dialect-quoted insertText
+  local from_items = items('SELECT * FROM ')
+  local users_item
+  for _, item in ipairs(from_items) do
+    if item.kind == 'table' and item.label == 'users' then
+      users_item = item
+    end
+  end
+  eq(users_item.insertText, quoted_table)
+  eq(users_item.filterText, 'users')
+  eq(users_item.textEdit, nil)
+
+  local col_items = items('SELECT * FROM users u WHERE u.')
+  eq(col_items[1].label, 'users_id')
+  eq(col_items[1].insertText, nil)
+  eq(col_items[2].label, 'OrderId')
+  eq(col_items[2].insertText, quoted_col)
+  eq(col_items[2].filterText, 'OrderId')
+
+  -- Quoted cursor position: textEdit replaces the already-typed opening quote
+  local quoted_from = items(table_prefix)
+  local quoted_users
+  for _, item in ipairs(quoted_from) do
+    if item.kind == 'table' and item.label == 'users' then
+      quoted_users = item
+    end
+  end
+  eq(quoted_users.filterText, quoted_table)
+  eq(quoted_users.textEdit, {
+    newText = quoted_table,
+    range = {
+      start = { line = 0, character = 14 },
+      ['end'] = { line = 0, character = #table_prefix },
+    },
+  })
+
+  local sql_with_quote = 'SELECT * FROM users u ' .. col_prefix
+  local quoted_cols = items(sql_with_quote)
+  eq(#quoted_cols, 2)
+  eq(quoted_cols[2].filterText, quoted_col)
+  eq(quoted_cols[2].textEdit, {
+    newText = quoted_col,
+    range = {
+      start = { line = 0, character = 30 },
+      ['end'] = { line = 0, character = #sql_with_quote },
+    },
+  })
 end
 
 return T

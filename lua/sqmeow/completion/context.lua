@@ -25,7 +25,7 @@ local identifier = [=[\%("[^"]*"\|`[^`]*`\|\[[^]]*\]\|[[:alnum:]_$]\+\)]=]
 local function qualifier(prefix)
   local match = vim.fn.matchlist(
     prefix,
-    [[\%(\(]] .. identifier .. [[\)\.\)\?\(]] .. identifier .. [[\)\.[[:alnum:]_$]*$]]
+    [[\%(\(]] .. identifier .. [[\)\.\)\?\(]] .. identifier .. [=[\)\.["`\[]\?[[:alnum:]_$]*$]=]
   )
   if #match > 0 then
     return unquote(match[3]), match[2] ~= '' and unquote(match[2]) or nil
