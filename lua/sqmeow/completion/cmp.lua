@@ -2,14 +2,26 @@
 
 local source = {}
 
+--- Create a new nvim-cmp source instance.
+---@return table
 function source.new()
   return setmetatable({}, { __index = source })
 end
 
+--- Declare UTF-8 position encoding so nvim-cmp uses byte offsets matching `completion.items`.
+---@return string
+function source:get_position_encoding_kind()
+  return 'utf-8'
+end
+
+--- Characters that trigger completion automatically.
+---@return string[]
 function source:get_trigger_characters()
   return { '.', '"', '`', '[', ' ', ',', '(' }
 end
 
+--- Whether an active database connection is available for the current buffer.
+---@return boolean
 function source:is_available()
   local ok = pcall(require, 'sqmeow.api.connection')
   if not ok then
@@ -19,6 +31,9 @@ function source:is_available()
   return conn ~= nil
 end
 
+--- Provide completion items to nvim-cmp.
+---@param params table
+---@param callback fun(res: table|nil)
 function source:complete(params, callback)
   local ok, completion = pcall(require, 'sqmeow.completion')
   if not ok then
@@ -42,6 +57,9 @@ function source:complete(params, callback)
   local result = vim.tbl_map(function(item)
     return {
       label = item.label,
+      insertText = item.insertText,
+      filterText = item.filterText,
+      textEdit = item.textEdit,
       kind = kind_map[item.kind] or cmp_kinds.Property,
       detail = item.detail,
       documentation = item.documentation and {
@@ -54,6 +72,8 @@ function source:complete(params, callback)
   callback({ items = result, isIncomplete = incomplete })
 end
 
+--- Return the debug name of the completion source.
+---@return string
 function source:get_debug_name()
   return 'sqmeow'
 end

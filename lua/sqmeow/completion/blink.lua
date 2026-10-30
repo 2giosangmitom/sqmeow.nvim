@@ -3,14 +3,20 @@
 ---@class sqmeow.BlinkSource
 local Source = {}
 
+--- Create a new blink.cmp source instance.
+---@return sqmeow.BlinkSource
 function Source.new()
   return setmetatable({}, { __index = Source })
 end
 
+--- Characters that trigger completion automatically.
+---@return string[]
 function Source:get_trigger_characters()
   return { '.', '"', '`', '[', ' ', ',', '(' }
 end
 
+--- Whether an active database connection is available for the current buffer.
+---@return boolean
 function Source:enabled()
   local ok = pcall(require, 'sqmeow.api.connection')
   if not ok then
@@ -20,6 +26,9 @@ function Source:enabled()
   return conn ~= nil
 end
 
+--- Provide completion items to blink.cmp.
+---@param context table
+---@param callback fun(res: table)
 function Source:get_completions(context, callback)
   local ok, completion = pcall(require, 'sqmeow.completion')
   if not ok then
@@ -42,6 +51,9 @@ function Source:get_completions(context, callback)
   local result = vim.tbl_map(function(item)
     return {
       label = item.label,
+      insertText = item.insertText,
+      filterText = item.filterText,
+      textEdit = item.textEdit,
       kind = kind_map[item.kind] or blink_kinds.Property,
       detail = item.detail,
       documentation = item.documentation and {

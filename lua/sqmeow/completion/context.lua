@@ -18,6 +18,9 @@ local references = [[
   ";" @boundary
 ]]
 
+--- Strip outer SQL identifier quotes and unescape doubled delimiters.
+---@param text string
+---@return string
 local function unquote(text)
   local first, last = text:sub(1, 1), text:sub(-1)
   if (first == '"' or first == '`') and last == first then
@@ -30,17 +33,28 @@ end
 
 -- A trailing dot is often an ERROR node while typing; only this unfinished suffix
 -- needs a pattern. Statements, relations, aliases, strings and comments use the tree.
-local identifier = [=[\%("[^"]*"\|`[^`]*`\|\[[^]]*\]\|[[:alnum:]_$]\+\)]=]
+local identifier =
+  [=[\%("\%([^"]\|""\)*"\|`\%([^`]\|``\)*`\|\[\%([^]]\|]]\)*\]\|[[:alnum:]_$]\+\)]=]
+local tail = [=[\%("\%([^"]\|""\)*\|`\%([^`]\|``\)*\|\[\%([^]]\|]]\)*\|[[:alnum:]_$]*\)]=]
+
+--- Parse an optional `schema.relation.` or `relation.` qualifier before the cursor.
+---@param prefix string
+---@return string|nil name
+---@return string|nil schema
 local function qualifier(prefix)
   local match = vim.fn.matchlist(
     prefix,
-    [[\%(\(]] .. identifier .. [[\)\.\)\?\(]] .. identifier .. [[\)\.[[:alnum:]_$]*$]]
+    [[\%(\(]] .. identifier .. [[\)\.\)\?\(]] .. identifier .. [[\)\.]] .. tail .. [[$]]
   )
   if #match > 0 then
     return unquote(match[3]), match[2] ~= '' and unquote(match[2]) or nil
   end
 end
 
+--- Fallback relation references bound to the buffer or `[Preview: ...]` buffer name.
+---@param bufnr integer|nil
+---@param qualifier_schema string|nil
+---@return table[]
 local function buffer_refs(bufnr, qualifier_schema)
   -- An explicitly typed schema takes precedence over the buffer's relation.
   if qualifier_schema or not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
