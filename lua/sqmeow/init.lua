@@ -475,13 +475,10 @@
 --- identifiers all work, and you never need to open a table in the drawer
 --- first.
 ---
---- Table aliases need the `sql` Tree-sitter parser
---- (derekstride/tree-sitter-sql). Install it with `:TSInstall sql` through
---- nvim-treesitter, or check `:Sqmeow health`. With it, `SELECT t.` or
---- `WHERE t.` resolves an alias declared by `FROM users t` or
---- `FROM users AS t`, even when the FROM clause is on a later line. Without
---- it, plain metadata and `table.` column completion still work, but an alias
---- is not recognized.
+--- Query-aware completion needs the `sql` Tree-sitter parser
+--- (derekstride/tree-sitter-sql); install it with `:TSInstall sql` through
+--- nvim-treesitter. Without the parser, plain metadata and `table.` column
+--- completion keep working.
 ---
 --- To use with `blink.cmp`: >lua
 ---   require('blink.cmp').setup({
@@ -528,11 +525,9 @@
 --- Result cannot be edited:
 ---   The result must carry the table's full primary or unique key plus direct
 ---   table columns. Computed expressions and read-only connections never edit.
---- Completion lacks aliases or query context:
----   Install the SQL parser with `:TSInstall sql`, then run `:Sqmeow health`
----   to confirm it is found. Table aliases need the parser; `table.`
----   completion does not. The parser does not report `DELETE` aliases, so
----   `DELETE FROM users u WHERE u.` gets no columns. See |sqmeow-completion|.
+--- Completion lacks query context:
+---   Install the SQL parser and open the target connection first; see
+---   |sqmeow-completion|.
 --- Need more diagnostics:
 ---   Set `core.log_level = 'debug'`, restart the engine, reproduce the
 ---   problem, then run `:Sqmeow messages`. Note that restarting drops all live

@@ -45,7 +45,7 @@ If you spend most of your time in the terminal and don't want to switch to a GUI
 
 ## Installation
 
-Requires Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim).
+Requires Neovim 0.10+ and [nui.nvim](https://github.com/MunifTanjim/nui.nvim). [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) is optional and enables query-aware autocomplete.
 
 Calling `setup()` is optional unless you want to customize the defaults.
 
@@ -244,7 +244,7 @@ Queries run against the currently selected connection.
 
 Use [blink.cmp](https://github.com/Saghen/blink.cmp) or [nvim-cmp](https://github.com/hrsh7th/nvim-cmp) for database-aware completion.
 
-Table-alias completion requires the SQL Tree-sitter parser: install it with `:TSInstall sql` via nvim-treesitter. Without it, table-qualified (`users.`) columns still complete, but aliases are not recognized. Run `:Sqmeow health` to check.
+For query-aware suggestions, install the SQL Tree-sitter parser with `:TSInstall sql` via nvim-treesitter.
 
 <details>
 <summary>blink.cmp</summary>
