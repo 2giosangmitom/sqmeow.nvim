@@ -84,9 +84,10 @@ local function hint_parser(
   qualifier_schema,
   available,
   schemas,
-  parsed
+  parsed,
+  incomplete
 )
-  if hinted or parsed or not qualifier or qualifier_schema then
+  if hinted or parsed or incomplete or not qualifier or qualifier_schema then
     return
   end
   if conn.dialect == 'redis' or conn.dialect == 'mongodb' then
@@ -129,7 +130,18 @@ function M.items(bufnr, line, col, row)
   local refs, qualifier, qualifier_schema, parsed =
     require('sqmeow.completion.context').read(bufnr, line, col, row)
   local available, incomplete, schemas = relations(conn.id)
-  hint_parser(conn, bufnr, line, row, qualifier, qualifier_schema, available, schemas, parsed)
+  hint_parser(
+    conn,
+    bufnr,
+    line,
+    row,
+    qualifier,
+    qualifier_schema,
+    available,
+    schemas,
+    parsed,
+    incomplete
+  )
 
   local items = {}
   for _, schema in ipairs(schemas or {}) do

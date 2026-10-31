@@ -236,6 +236,44 @@ T['missing parser hints once when an alias cannot resolve'] = function()
   eq(#notes, 1)
 end
 
+T['missing parser defers the hint until relation metadata is loaded'] = function()
+  local notes = {}
+  helpers.stub(vim, 'notify', function(message)
+    table.insert(notes, message)
+  end)
+  no_parser()
+  local table_sql = 'SELECT * FROM users WHERE users.'
+  local alias_sql = 'SELECT * FROM users u WHERE u.'
+  local function still_loading()
+    local _, table_incomplete = items(table_sql)
+    local _, alias_incomplete = items(alias_sql)
+    eq(table_incomplete, true)
+    eq(alias_incomplete, true)
+    eq(#notes, 0)
+  end
+
+  still_loading()
+  cache({}, { { name = 'main', kind = 'schema' } })
+  still_loading()
+  cache({ 'main' }, {
+    { key = 'tables', kind = 'tables' },
+    { key = 'views', kind = 'views' },
+  })
+  cache({ 'main', 'views' }, { { name = 'summary', kind = 'view' } })
+  still_loading()
+  cache({ 'main', 'tables' }, { { name = 'users', kind = 'table' } })
+
+  local _, incomplete = items(table_sql)
+  eq(incomplete, true) -- Columns are still loading, but the table is known.
+  eq(#notes, 0)
+  items(alias_sql)
+  eq(#notes, 1)
+  columns('main', 'users')
+  eq(column_labels(items(table_sql)), { 'users_id', 'owner' })
+  items(alias_sql)
+  eq(#notes, 1)
+end
+
 T['missing parser stays quiet for schemas, tables, and non SQL connections'] = function()
   fixture('main')
   columns('main', 'users')
