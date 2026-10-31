@@ -489,12 +489,14 @@ Auto-completion ~
 `blink.cmp` or `nvim-cmp` can complete schema, table, view, and column
 names from the active connection as you type. Columns load on demand for
 the relations in the current statement, including multiline SELECT, WHERE,
-JOIN, GROUP BY, and ORDER BY. Table aliases and double-quoted, backtick,
-and bracket-quoted identifiers all work, and you never need to open a
-table in the drawer first. Smarter query-aware and alias completion needs
-the `sql` Tree-sitter parser (derekstride/tree-sitter-sql); install it with
-`:TSInstall sql` through nvim-treesitter. Without the parser, plain
-metadata and `table.` column completion keep working.
+JOIN, GROUP BY, and ORDER BY. Double-quoted, backtick, and bracket-quoted
+identifiers all work, and you never need to open a table in the drawer
+first.
+
+Query-aware completion needs the `sql` Tree-sitter parser
+(derekstride/tree-sitter-sql); install it with `:TSInstall sql` through
+nvim-treesitter. Without the parser, plain metadata and `table.` column
+completion keep working.
 
 To use with `blink.cmp`: >lua
   require('blink.cmp').setup({
@@ -541,7 +543,7 @@ Query went to the wrong database:
 Result cannot be edited:
   The result must carry the table's full primary or unique key plus direct
   table columns. Computed expressions and read-only connections never edit.
-Completion lacks aliases or query context:
+Completion lacks query context:
   Install the SQL parser and open the target connection first; see
   |sqmeow-completion|.
 Need more diagnostics:
