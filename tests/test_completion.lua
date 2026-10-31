@@ -63,6 +63,7 @@ local T = MiniTest.new_set({
   hooks = {
     pre_case = function()
       drawer.reset()
+      completion.reset_hint()
       calls = {}
       connection = { id = 1 }
       target = helpers.swap(require('sqmeow.api.connection'), 'target', function()
@@ -197,6 +198,118 @@ T['missing SQL parser keeps metadata and explicit table completion usable'] = fu
   eq(column_labels(items('SELECT * FROM users WHERE ', 26, 1)), {})
   eq(#items('SELECT ', 7, 1), 4)
   eq(column_labels(items('users.', 6, 1)), { 'users_id', 'owner' })
+end
+
+T['parser availability reflects the sql parser'] = function()
+  eq(require('sqmeow.completion.context').available(), true)
+  helpers.stub(vim.treesitter, 'get_string_parser', function()
+    return nil
+  end)
+  eq(require('sqmeow.completion.context').available(), false)
+end
+
+local function no_parser()
+  helpers.stub(vim.treesitter, 'get_parser', function()
+    return nil
+  end)
+  helpers.stub(vim.treesitter, 'get_string_parser', function()
+    return nil
+  end)
+end
+
+T['missing parser hints once when an alias cannot resolve'] = function()
+  fixture('main')
+  columns('main', 'users')
+  local notes = {}
+  helpers.stub(vim, 'notify', function(message, level)
+    table.insert(notes, { message = message, level = level })
+  end)
+  no_parser()
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'SELECT * FROM users u', 'WHERE u.' })
+
+  eq(column_labels(items('WHERE u.', 8, 2)), {})
+  eq(#notes, 1)
+  eq(notes[1].level, vim.log.levels.WARN)
+  helpers.contains(notes[1].message, ':TSInstall sql')
+
+  items('WHERE u.', 8, 2)
+  eq(#notes, 1)
+end
+
+T['missing parser stays quiet for schemas, tables, and non SQL connections'] = function()
+  fixture('main')
+  columns('main', 'users')
+  local notes = {}
+  helpers.stub(vim, 'notify', function(message)
+    table.insert(notes, message)
+  end)
+  no_parser()
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'SELECT * FROM users', 'WHERE ' })
+
+  eq(column_labels(items('users.', 6, 2)), { 'users_id', 'owner' })
+  eq(column_labels(items('main.', 5, 2)), {})
+  eq(#notes, 0)
+
+  connection = { id = 1, dialect = 'redis' }
+  eq(column_labels(items('SELECT * FROM users u WHERE u.', 30, 1)), {})
+  eq(#notes, 0)
+end
+
+T['installed parser never hints'] = function()
+  fixture('main')
+  columns('main', 'users')
+  local notes = {}
+  helpers.stub(vim, 'notify', function(message)
+    table.insert(notes, message)
+  end)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'SELECT * FROM users u', 'WHERE u.' })
+
+  eq(column_labels(items('WHERE u.', 8, 2)), { 'users_id', 'owner' })
+  eq(#notes, 0)
+end
+
+T['an alias wins over a relation of the same name'] = function()
+  fixture('main')
+  columns('main', 'users')
+  columns('main', 'orders')
+  local sql = 'SELECT * FROM users u JOIN orders users ON 1 = 1 WHERE users.'
+  eq(column_labels(items(sql)), { 'orders_id', 'owner' })
+end
+
+T['alias in the SELECT list sees FROM on a later line'] = MiniTest.new_set({
+  parametrize = {
+    { 'SELECT t.', 'FROM "users" as t' },
+    { 'SELECT t.', 'FROM users AS t' },
+    { 'SELECT t.', 'FROM "main"."users" as t' },
+    { 'SELECT t. FROM users t', '' },
+  },
+})
+T['alias in the SELECT list sees FROM on a later line']['completes the aliased columns'] = function(
+  first,
+  second
+)
+  fixture('main')
+  columns('main', 'users')
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { first, second })
+  eq(column_labels(items(first, 9, 1)), { 'users_id', 'owner' })
+end
+
+T['several open qualifier dots still resolve the alias'] = function()
+  fixture('main')
+  columns('main', 'users')
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'SELECT t.', 'FROM users as t', 'WHERE t.' })
+  eq(column_labels(items('SELECT t.', 9, 1)), { 'users_id', 'owner' })
+  eq(column_labels(items('WHERE t.', 8, 3)), { 'users_id', 'owner' })
+end
+
+T['reparsing open qualifier dots keeps statement boundaries'] = function()
+  fixture('main')
+  columns('main', 'users')
+  columns('main', 'orders')
+  local second = 'FROM users t; SELECT o.'
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'SELECT t.', second, 'FROM orders o' })
+  eq(column_labels(items('SELECT t.', 9, 1)), { 'users_id', 'owner' })
+  eq(column_labels(items(second, #second, 2)), { 'orders_id', 'owner' })
 end
 
 T['joins and comma lists offer both tables but qualifiers narrow them'] = function()

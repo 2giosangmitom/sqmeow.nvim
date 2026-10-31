@@ -166,6 +166,24 @@ local function check_dependencies()
   end
 end
 
+--- Check the optional SQL parser that table aliases need.
+local function check_completion()
+  vim.health.start('completion')
+
+  if require('sqmeow.completion.context').available() then
+    vim.health.ok('the sql Tree-sitter parser is installed; alias and query-aware completion work')
+    return
+  end
+
+  vim.health.warn(
+    'the sql Tree-sitter parser is missing, so table aliases and FROM/JOIN columns are not completed',
+    {
+      'Install it with `:TSInstall sql` through nvim-treesitter',
+      'See |sqmeow-completion|',
+    }
+  )
+end
+
 --- Which dialect a URL scheme belongs to, or nil if none does.
 ---@param scheme string
 ---@return string|nil
@@ -180,6 +198,7 @@ function M.check()
   check_engine()
   check_sources()
   check_dependencies()
+  check_completion()
   check_open()
 end
 

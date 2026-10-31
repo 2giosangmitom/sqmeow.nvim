@@ -244,7 +244,7 @@ Queries run against the currently selected connection.
 
 Use [blink.cmp](https://github.com/Saghen/blink.cmp) or [nvim-cmp](https://github.com/hrsh7th/nvim-cmp) for database-aware completion.
 
-For query-aware column and alias suggestions, install the SQL Tree-sitter parser (for example, with `:TSInstall sql` via nvim-treesitter).
+Table-alias completion requires the SQL Tree-sitter parser: install it with `:TSInstall sql` via nvim-treesitter. Without it, table-qualified (`users.`) columns still complete, but aliases are not recognized. Run `:Sqmeow health` to check.
 
 <details>
 <summary>blink.cmp</summary>

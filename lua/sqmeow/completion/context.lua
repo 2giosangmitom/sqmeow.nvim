@@ -1,6 +1,15 @@
 -- SQL context from Neovim's Tree-sitter API (derekstride/tree-sitter-sql).
 local M = {}
 
+--- Whether Neovim can parse SQL, which table aliases need.
+---@return boolean
+function M.available()
+  local ok, parser = pcall(function()
+    return vim.treesitter.get_string_parser('select 1', 'sql')
+  end)
+  return ok and parser ~= nil
+end
+
 local references = [[
   (relation (object_reference) @reference)
   (from (object_reference) @reference)
@@ -53,24 +62,17 @@ local function buffer_refs(bufnr, qualifier_schema)
   return {}
 end
 
---- col is a zero-based byte offset; row is an optional one-based buffer row.
-function M.read(bufnr, line, col, row)
-  local name, schema = qualifier(line:sub(1, col))
-  local source = row and bufnr or line
-  local ok, parser = pcall(function()
-    return row and vim.treesitter.get_parser(bufnr, 'sql')
-      or vim.treesitter.get_string_parser(line, 'sql')
-  end)
-  -- The SQL parser is optional: metadata and explicit table qualifiers still work.
-  if not ok or not parser then
-    return buffer_refs(bufnr, schema), name, schema
-  end
+--- Relations the tree names in the statement around `offset`.
+---@param parser any A `vim.treesitter.LanguageTree` from `get_parser` or `get_string_parser`.
+---@param source integer|string Buffer handle or the parsed text.
+---@param offset integer Zero-based byte offset of the cursor in `source`.
+---@return table[]|nil refs Nil when the parser produced no tree.
+local function collect(parser, source, offset)
   local trees = parser:parse()
   if not trees[1] then
-    return buffer_refs(bufnr, schema), name, schema
+    return nil
   end
   local root = trees[1]:root()
-  local offset = row and (vim.api.nvim_buf_get_offset(bufnr, row - 1) + col) or col
   local query = vim.treesitter.query.parse('sql', references)
   local lower, upper, objects = 0, math.huge, {}
   for id, node in query:iter_captures(root, source) do
@@ -100,10 +102,59 @@ function M.read(bufnr, line, col, row)
       })
     end
   end
-  if #refs == 0 then
-    refs = buffer_refs(bufnr, schema)
+  return refs
+end
+
+--- The whole text of a buffer, matching `nvim_buf_get_offset` positions.
+local function buffer_text(bufnr)
+  return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), '\n')
+end
+
+--- col is a zero-based byte offset; row is an optional one-based buffer row.
+---@return table[] refs Relations the statement names, with their aliases.
+---@return string|nil name Qualifier before the cursor.
+---@return string|nil schema Schema qualifier before the cursor.
+---@return boolean parsed Whether a Tree-sitter tree answered the request.
+function M.read(bufnr, line, col, row)
+  local name, schema = qualifier(line:sub(1, col))
+  local offset = row and (vim.api.nvim_buf_get_offset(bufnr, row - 1) + col) or col
+  local ok, parser = pcall(function()
+    return row and vim.treesitter.get_parser(bufnr, 'sql')
+      or vim.treesitter.get_string_parser(line, 'sql')
+  end)
+  local parsed = false
+  if ok and parser then
+    local refs = collect(parser, row and bufnr or line, offset)
+    parsed = refs ~= nil
+    if refs and #refs > 0 then
+      return refs, name, schema, true
+    end
   end
-  return refs, name, schema
+
+  -- An open qualifier dot makes the grammar swallow the FROM that follows, as in
+  -- `SELECT t.` on one line and `FROM users t` on the next. Reparse a copy with
+  -- every such dot completed; one byte replaces another, so offsets still line up.
+  if name and line:sub(col, col) == '.' then
+    local text = line
+    if row and bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+      text = buffer_text(bufnr)
+    end
+    local fixed = text:gsub('%.(%s)', '_%1'):gsub('%.$', '_')
+    if fixed ~= text then
+      local retry_ok, retry = pcall(function()
+        return vim.treesitter.get_string_parser(fixed, 'sql')
+      end)
+      if retry_ok and retry then
+        local refs = collect(retry, fixed, offset)
+        if refs and #refs > 0 then
+          return refs, name, schema, true
+        end
+      end
+    end
+  end
+
+  -- The SQL parser is optional: metadata and explicit table qualifiers still work.
+  return buffer_refs(bufnr, schema), name, schema, parsed
 end
 
 return M
