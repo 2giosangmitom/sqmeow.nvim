@@ -601,7 +601,17 @@ local function draw()
 
   if not (call and call.columns and #call.columns > 0) then
     has_grid = false
-    vim.api.nvim_buf_set_lines(handle, 0, -1, false, {})
+    if call and not require('sqmeow.config').winbar('result') then
+      local line = M.describe(call, false)
+      vim.api.nvim_buf_set_lines(handle, 0, -1, false, { line })
+      local hl = call.state == 'executing' and 'Comment' or 'SqmeowSignAdded'
+      vim.api.nvim_buf_set_extmark(handle, NAMESPACE, 0, 0, {
+        end_col = #line,
+        hl_group = hl,
+      })
+    else
+      vim.api.nvim_buf_set_lines(handle, 0, -1, false, {})
+    end
     vim.bo[handle].modifiable = false
     return
   end
@@ -739,6 +749,11 @@ local function draw()
       table.insert(data, values)
     end
     return data
+  end
+
+  -- Clear any non-grid content (errors, plans, or winbar-disabled status lines) before rendering the table.
+  if not has_grid then
+    vim.api.nvim_buf_set_lines(handle, 0, -1, false, {})
   end
 
   -- The table instance is created once and reconfigured per draw.
@@ -1153,7 +1168,9 @@ function M.render(summary)
     carried = nil
   end
 
-  if not (summary and id and summary.state == 'done') then
+  if
+    not (summary and id and summary.state == 'done' and summary.columns and #summary.columns > 0)
+  then
     draw()
     M.update_winbar(summary)
     update_sticky()
@@ -2110,6 +2127,10 @@ local owned_winbar_window = nil
 --- Update the line above the grid.
 ---@param summary sqmeow.CallSummary|nil
 function M.update_winbar(summary)
+  local active = summary or require('sqmeow.core.state').call
+  if active and active.state ~= 'error' and not (active.columns and #active.columns > 0) then
+    draw()
+  end
   if not utils.shows(win, buf) then
     return
   end
