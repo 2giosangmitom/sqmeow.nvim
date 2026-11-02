@@ -1,13 +1,6 @@
 --- Completion metadata shared by all database adapters and completion providers.
 local M = {}
 
---- Retained for backwards compatibility; metadata belongs to the drawer cache.
----@param _conn_id integer|nil
-function M.invalidate(_conn_id) end
-
---- Retained for backwards compatibility; metadata belongs to the drawer cache.
-function M.invalidate_all() end
-
 -- The parser hint is worth one interruption per session, not one per keystroke.
 local hinted = false
 
@@ -16,7 +9,7 @@ function M.reset_hint()
   hinted = false
 end
 
---- Read cached drawer nodes for `path`, scheduling a background load when missing.
+--- Cached drawer nodes for `path`, loading them in the background when missing.
 ---@param conn_id integer
 ---@param path string[]
 ---@return table[]|nil
@@ -29,12 +22,13 @@ local function nodes(conn_id, path)
   return cached
 end
 
---- Collect all cached relations across schemas, queueing loads for missing levels.
+--- Every cached relation, loading missing levels. `warm` skips Redis keys, which can be many.
 ---@param conn_id integer
----@return table[] result
+---@param warm boolean|nil
+---@return table[] relations
 ---@return boolean incomplete
 ---@return table[]|nil schemas
-local function relations(conn_id)
+local function relations(conn_id, warm)
   local result, incomplete = {}, false
   local schemas = nodes(conn_id, {})
   if not schemas then
@@ -46,7 +40,11 @@ local function relations(conn_id)
       local groups = nodes(conn_id, { schema.name })
       incomplete = incomplete or groups == nil
       for _, group in ipairs(groups or {}) do
-        if group.kind == 'tables' or group.kind == 'views' or group.kind == 'keys' then
+        if
+          group.kind == 'tables'
+          or group.kind == 'views'
+          or (group.kind == 'keys' and not warm)
+        then
           local path = { schema.name, group.key }
           local members = nodes(conn_id, path)
           incomplete = incomplete or members == nil
@@ -64,65 +62,17 @@ local function relations(conn_id)
   return result, incomplete, schemas
 end
 
---- Warm the schema and relation cache; leaf columns are loaded when completion is requested.
+--- Warm the schema and relation cache; columns load when completion asks for them.
 ---@param conn_id integer
 function M.ensure(conn_id)
-  relations(conn_id)
+  relations(conn_id, true)
 end
 
---- Quote `name` using the delimiter matched from `opener`.
----@param opener string|nil
----@param name string
----@return string
-local function quote_with_opener(opener, name)
-  if opener == '[' then
-    return '[' .. name:gsub(']', ']]') .. ']'
-  elseif opener == '`' then
-    return '`' .. name:gsub('`', '``') .. '`'
-  end
-  return '"' .. name:gsub('"', '""') .. '"'
-end
-
---- Locate an unclosed SQL identifier quote opener at the end of `prefix`.
----@param prefix string
----@return integer|nil q_start 1-based byte index of the opening delimiter
----@return string|nil q_char The opening delimiter (`"`, `` ` ``, or `[`)
-local function find_open_quote(prefix)
-  local q_start, q_char, close_char = nil, nil, nil
-  local i, len = 1, #prefix
-  while i <= len do
-    local ch = prefix:sub(i, i)
-    if not q_start then
-      if ch == "'" then
-        i = i + 1
-        while i <= len do
-          if prefix:sub(i, i) == "'" then
-            if prefix:sub(i + 1, i + 1) == "'" then
-              i = i + 1
-            else
-              break
-            end
-          end
-          i = i + 1
-        end
-      elseif ch == '"' or ch == '`' or ch == '[' then
-        local prev = i > 1 and prefix:sub(i - 1, i - 1) or ''
-        if i == 1 or prev:match('^[%s%.,%(%=<>!%+%-/%*;]$') then
-          q_start = i
-          q_char = ch
-          close_char = ch == '[' and ']' or ch
-        end
-      end
-    elseif ch == close_char then
-      if prefix:sub(i + 1, i + 1) == close_char then
-        i = i + 1
-      else
-        q_start, q_char, close_char = nil, nil, nil
-      end
-    end
-    i = i + 1
-  end
-  return q_start, q_char
+--- Redis and MongoDB have keys and collections, not SQL identifiers.
+---@param conn table
+---@return boolean
+local function nosql(conn)
+  return conn.dialect == 'redis' or conn.dialect == 'mongodb'
 end
 
 --- Case-insensitive identifier equality.
@@ -162,10 +112,7 @@ local function hint_parser(
   parsed,
   incomplete
 )
-  if hinted or parsed or incomplete or not qualifier or qualifier_schema then
-    return
-  end
-  if conn.dialect == 'redis' or conn.dialect == 'mongodb' then
+  if hinted or parsed or incomplete or not qualifier or qualifier_schema or nosql(conn) then
     return
   end
   -- A schema or a table name is not an alias, and resolves without the parser.
@@ -206,47 +153,38 @@ function M.items(bufnr, line, col, row)
   if not conn then
     return {}, false
   end
-  local refs, qualifier, qualifier_schema, parsed =
-    require('sqmeow.completion.context').read(bufnr, line, col, row)
-  local prefix = line and line:sub(1, col) or ''
-  local q_start, q_char = find_open_quote(prefix)
-  local suffix = line and line:sub(col + 1):match('^[%w_$]*') or ''
-  local end_col = col + #suffix
-  local sql_util = require('sqmeow.core.sql')
-  local is_nosql = conn.dialect == 'redis' or conn.dialect == 'mongodb'
+  local context = require('sqmeow.completion.context')
+  local sql = require('sqmeow.core.sql')
+  local refs, qualifier, qualifier_schema, parsed = context.read(bufnr, line, col, row)
+  local quote_start, open = context.open_quote(line:sub(1, col))
+  -- Replace through the rest of the word and a closer an autopair plugin added.
+  local end_col = col + #line:sub(col + 1):match('^[%w_$]*')
+  if open and line:sub(end_col + 1, end_col + 1) == sql.closer(open) then
+    end_col = end_col + 1
+  end
 
-  --- Format a completion item with dialect-specific identifier quoting when appropriate.
+  --- Add the quoting, or the edit over a typed quote, an identifier needs.
   ---@param item table
   ---@return table
   local function format_item(item)
-    if is_nosql or item.kind == 'key' then
+    if nosql(conn) or item.kind == 'key' then
       return item
     end
-    local needs_quote = not item.label:match('^[a-z_][a-z0-9_$]*$')
-      or (conn.dialect ~= nil and not qualifier and sql_util.is_reserved(conn.dialect, item.label))
-    if item.kind == 'schema' and not conn.dialect and item.label:match('^%d+$') then
-      needs_quote = false
-    end
-    local should_quote = q_start ~= nil
-      or needs_quote
-      or (conn.dialect ~= nil and (item.kind == 'table' or item.kind == 'view'))
-    if not should_quote then
-      return item
-    end
-    local quoted = conn.dialect and sql_util.quote(conn.dialect, item.label)
-      or quote_with_opener(q_char, item.label)
-    if q_start then
+    if open then
+      -- Keep the delimiter the user typed so the typed text still filters.
+      local quoted = open == sql.opener(conn.dialect) and sql.quote(conn.dialect, item.label)
+        or sql.wrap(open, item.label)
+      local lnum = (row or 1) - 1
       item.filterText = quoted
       item.textEdit = {
         newText = quoted,
         range = {
-          start = { line = (row or 1) - 1, character = q_start - 1 },
-          ['end'] = { line = (row or 1) - 1, character = end_col },
+          start = { line = lnum, character = quote_start - 1 },
+          ['end'] = { line = lnum, character = end_col },
         },
       }
-    else
-      item.insertText = quoted
-      item.filterText = item.label
+    elseif sql.needs_quote(conn.dialect, item.label, qualifier ~= nil) then
+      item.insertText = sql.quote(conn.dialect, item.label)
     end
     return item
   end
@@ -274,16 +212,17 @@ function M.items(bufnr, line, col, row)
 
   -- An alias in the statement wins over a relation of the same name. A ref only
   -- counts when its relation is known, so an unfinished `main.` stays a schema.
+  local known_refs = vim.tbl_filter(function(ref)
+    return known(ref, available)
+  end, refs)
   local targets
   if qualifier and not qualifier_schema then
     local aliases, names = {}, {}
-    for _, ref in ipairs(refs) do
-      if known(ref, available) then
-        if same(qualifier, ref.alias) then
-          table.insert(aliases, ref)
-        elseif same(qualifier, ref.name) then
-          table.insert(names, ref)
-        end
+    for _, ref in ipairs(known_refs) do
+      if same(qualifier, ref.alias) then
+        table.insert(aliases, ref)
+      elseif same(qualifier, ref.name) then
+        table.insert(names, ref)
       end
     end
     targets = #aliases > 0 and aliases or names
@@ -292,6 +231,11 @@ function M.items(bufnr, line, col, row)
     end
   end
 
+  --- Whether one of `targets_` names `rel` in `schema`.
+  ---@param targets_ table[]
+  ---@param rel table
+  ---@param schema string
+  ---@return boolean
   local function selected_by(targets_, rel, schema)
     for _, ref in ipairs(targets_) do
       if same(ref.name, rel.name) and (not ref.schema or same(ref.schema, schema)) then
@@ -299,14 +243,6 @@ function M.items(bufnr, line, col, row)
       end
     end
     return false
-  end
-
-  local has_known_ref = false
-  for _, ref in ipairs(refs) do
-    if known(ref, available) then
-      has_known_ref = true
-      break
-    end
   end
 
   for _, relation in ipairs(available) do
@@ -323,8 +259,8 @@ function M.items(bufnr, line, col, row)
       else
         show_columns = same(qualifier, rel.name)
       end
-    elseif has_known_ref then
-      show_columns = selected_by(refs, rel, schema)
+    elseif #known_refs > 0 then
+      show_columns = selected_by(known_refs, rel, schema)
     else
       show_relation = true
     end

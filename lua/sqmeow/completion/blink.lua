@@ -3,19 +3,19 @@
 ---@class sqmeow.BlinkSource
 local Source = {}
 
---- Create a new blink.cmp source instance.
+--- Create a blink.cmp source.
 ---@return sqmeow.BlinkSource
 function Source.new()
   return setmetatable({}, { __index = Source })
 end
 
---- Characters that trigger completion automatically.
+--- Characters that trigger completion.
 ---@return string[]
 function Source:get_trigger_characters()
   return { '.', '"', '`', '[', ' ', ',', '(' }
 end
 
---- Whether an active database connection is available for the current buffer.
+--- Whether the buffer has a connection to complete from.
 ---@return boolean
 function Source:enabled()
   local ok = pcall(require, 'sqmeow.api.connection')

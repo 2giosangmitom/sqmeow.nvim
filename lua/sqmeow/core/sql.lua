@@ -107,15 +107,46 @@ local reserved_words = {
   ['with'] = true,
 }
 
---- Whether an identifier is a SQL reserved word that requires quoting when unqualified.
+-- MySQL and MariaDB reserve more words than PostgreSQL.
+local mysql_reserved = {}
+local mysql_words = [[
+  change condition database databases delete div dual exists explain groups index insert
+  interval key keys kill lines load lock long match mod option partition range rank read
+  release rename repeat replace require row rows schema schemas separator show signal sql
+  update usage use values write xor
+]]
+for word in mysql_words:gmatch('%S+') do
+  mysql_reserved[word] = true
+end
+
+local closers = { ['"'] = '"', ['`'] = '`', ['['] = ']' }
+
+--- The closing delimiter for an identifier opened with `open`.
+---@param open string
+---@return string
+function M.closer(open)
+  return closers[open]
+end
+
+--- The delimiter a dialect opens a quoted identifier with.
 ---@param dialect string|nil
----@param name string|nil
----@return boolean
-function M.is_reserved(dialect, name)
-  if not name or dialect == 'redis' or dialect == 'mongodb' then
-    return false
+---@return string
+function M.opener(dialect)
+  if dialect == 'mssql' then
+    return '['
+  elseif dialect == 'mysql' or dialect == 'mariadb' or dialect == 'surrealdb' then
+    return '`'
   end
-  return reserved_words[name:lower()] == true
+  return '"'
+end
+
+--- Quotes `name` between `open` and its closer, doubling any closer inside.
+---@param open string
+---@param name string
+---@return string
+function M.wrap(open, name)
+  local close = closers[open]
+  return open .. name:gsub(vim.pesc(close), close .. close) .. close
 end
 
 --- Quotes one identifier for a dialect.
@@ -123,16 +154,35 @@ end
 ---@param name string
 ---@return string
 function M.quote(dialect, name)
-  if dialect == 'mssql' then
-    return '[' .. name:gsub(']', ']]') .. ']'
-  end
-  if dialect == 'mysql' or dialect == 'mariadb' then
-    return '`' .. name:gsub('`', '``') .. '`'
-  end
   if dialect == 'surrealdb' then
     return '`' .. name:gsub('[\\`]', '\\%0') .. '`'
   end
-  return '"' .. name:gsub('"', '""') .. '"'
+  return M.wrap(M.opener(dialect), name)
+end
+
+--- Whether `name` must be quoted to be read back unchanged.
+---@param dialect string|nil
+---@param name string
+---@param qualified boolean A reserved word after a dot needs no quotes.
+---@return boolean
+function M.needs_quote(dialect, name, qualified)
+  if not name:match('^[%a_][%w_$]*$') then
+    return true
+  end
+  -- These fold unquoted names; the rest keep or ignore case.
+  if dialect == 'postgres' or dialect == 'scylla' then
+    if name:match('%u') then
+      return true
+    end
+  elseif dialect == 'oracle' and name:match('%l') then
+    return true
+  end
+  if qualified then
+    return false
+  end
+  local word = name:lower()
+  return reserved_words[word] == true
+    or ((dialect == 'mysql' or dialect == 'mariadb') and mysql_reserved[word] == true)
 end
 
 --- Joins name parts into a qualified identifier.

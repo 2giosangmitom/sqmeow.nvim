@@ -23,9 +23,6 @@ function M.on_connection(payload)
   -- Remove closed or failed connections before redrawing the drawer.
   if payload.state == 'error' or payload.state == 'closed' then
     state.remove_connection(payload.id)
-    pcall(function()
-      require('sqmeow.completion').invalidate(payload.id)
-    end)
   end
   state.failures[connection.name] = payload.state == 'error' and payload.error or nil
 

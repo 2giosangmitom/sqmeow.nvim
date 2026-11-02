@@ -406,6 +406,7 @@ T['explicit schemas disambiguate identically named tables'] = function()
 end
 
 T['non SQL metadata uses adapter group keys and skips leaf columns'] = function()
+  connection = { id = 1, dialect = 'redis' }
   cache({}, { { name = '0', kind = 'schema' } })
   cache({ '0' }, { { name = 'Hashes', key = 'hashes', kind = 'keys' } })
   cache({ '0', 'hashes' }, { { name = 'users', kind = 'key', expandable = false } })
@@ -585,9 +586,10 @@ end
 
 T['dialect-quoted identifiers for relations and mixed-case columns'] = MiniTest.new_set({
   parametrize = {
-    { 'postgres', '"users"', '"OrderId"', 'SELECT * FROM "us', 'WHERE u."Or' },
-    { 'mysql', '`users`', '`OrderId`', 'SELECT * FROM `us', 'WHERE u.`Or' },
-    { 'mssql', '[users]', '[OrderId]', 'SELECT * FROM [us', 'WHERE u.[Or' },
+    -- Only PostgreSQL folds `OrderId`, so only it needs the quotes when none were typed.
+    { 'postgres', '"users"', '"OrderId"', 'SELECT * FROM "us', 'WHERE u."Or', '"OrderId"' },
+    { 'mysql', '`users`', '`OrderId`', 'SELECT * FROM `us', 'WHERE u.`Or', nil },
+    { 'mssql', '[users]', '[OrderId]', 'SELECT * FROM [us', 'WHERE u.[Or', nil },
   },
 })
 T['dialect-quoted identifiers for relations and mixed-case columns']['quotes and deduplicates opener'] = function(
@@ -595,7 +597,8 @@ T['dialect-quoted identifiers for relations and mixed-case columns']['quotes and
   quoted_table,
   quoted_col,
   table_prefix,
-  col_prefix
+  col_prefix,
+  bare_col
 )
   connection = { id = 1, dialect = dialect }
   fixture('public')
@@ -604,7 +607,7 @@ T['dialect-quoted identifiers for relations and mixed-case columns']['quotes and
     { name = 'OrderId', kind = 'column', type_name = 'integer' },
   })
 
-  -- Unquoted cursor position: relations and mixed-case columns carry dialect-quoted insertText
+  -- A plain lowercase name is inserted as typed.
   local from_items = items('SELECT * FROM ')
   local users_item
   for _, item in ipairs(from_items) do
@@ -612,16 +615,14 @@ T['dialect-quoted identifiers for relations and mixed-case columns']['quotes and
       users_item = item
     end
   end
-  eq(users_item.insertText, quoted_table)
-  eq(users_item.filterText, 'users')
+  eq(users_item.insertText, nil)
   eq(users_item.textEdit, nil)
 
   local col_items = items('SELECT * FROM users u WHERE u.')
   eq(col_items[1].label, 'users_id')
   eq(col_items[1].insertText, nil)
   eq(col_items[2].label, 'OrderId')
-  eq(col_items[2].insertText, quoted_col)
-  eq(col_items[2].filterText, 'OrderId')
+  eq(col_items[2].insertText, bare_col)
 
   -- Quoted cursor position: textEdit replaces the already-typed opening quote
   local quoted_from = items(table_prefix)
@@ -685,6 +686,63 @@ T['unfinished quoted identifiers with spaces and reserved-word columns'] = funct
       ['end'] = { line = 0, character = #space_sql },
     },
   })
+end
+
+T['quoting follows how the dialect folds case'] = function()
+  fixture('public')
+  cache({ 'public', 'tables', 'users' }, {
+    { name = 'ID', kind = 'column', type_name = 'number' },
+    { name = 'name', kind = 'column', type_name = 'text' },
+    { name = 'key', kind = 'column', type_name = 'text' },
+  })
+  connection = { id = 1, dialect = 'oracle' }
+  local found = items('SELECT * FROM users u WHERE u.')
+  eq(found[1].insertText, nil)
+  eq(found[2].insertText, '"name"')
+
+  connection = { id = 1, dialect = 'mysql' }
+  found = items('SELECT * FROM users WHERE ')
+  local key
+  for _, item in ipairs(found) do
+    if item.label == 'key' then
+      key = item
+    end
+  end
+  eq(key.insertText, '`key`')
+end
+
+T['typed quotes are kept and an autopaired closer is replaced'] = function()
+  connection = { id = 1, dialect = 'mysql' }
+  fixture('public')
+  local function users(sql, col)
+    for _, item in ipairs(items(sql, col)) do
+      if item.label == 'users' then
+        return item
+      end
+    end
+  end
+
+  -- MySQL reads `"` as an identifier quote under ANSI_QUOTES; the typed delimiter must stay.
+  local typed = users('SELECT * FROM "us')
+  eq(typed.filterText, '"users"')
+  eq(typed.textEdit.newText, '"users"')
+
+  local paired = users('SELECT * FROM `us`', 17)
+  eq(paired.textEdit, {
+    newText = '`users`',
+    range = {
+      start = { line = 0, character = 14 },
+      ['end'] = { line = 0, character = 18 },
+    },
+  })
+end
+
+T['ensure skips Redis keys'] = function()
+  cache({}, { { name = '0', kind = 'schema' } })
+  cache({ '0' }, { { name = 'Keys', key = 'keys', kind = 'keys' } })
+  completion.ensure(1)
+  flush()
+  eq(calls, {})
 end
 
 return T
