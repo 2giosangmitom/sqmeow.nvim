@@ -1585,9 +1585,6 @@ function M.reset()
   preview_buf = nil
   preview_bufs = {}
   M.render()
-  pcall(function()
-    require('sqmeow.completion').invalidate_all()
-  end)
 end
 
 --- The buffer holding the relation preview, if open.

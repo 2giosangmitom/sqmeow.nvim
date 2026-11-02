@@ -406,6 +406,7 @@ T['explicit schemas disambiguate identically named tables'] = function()
 end
 
 T['non SQL metadata uses adapter group keys and skips leaf columns'] = function()
+  connection = { id = 1, dialect = 'redis' }
   cache({}, { { name = '0', kind = 'schema' } })
   cache({ '0' }, { { name = 'Hashes', key = 'hashes', kind = 'keys' } })
   cache({ '0', 'hashes' }, { { name = 'users', kind = 'key', expandable = false } })
@@ -447,7 +448,8 @@ T['providers']['normalize cursors and expose pending metadata'] = function(provi
     or { CompletionItemKind = kinds }
   local ok, err = pcall(function()
     fixture('main')
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'SELECT * FROM users u', 'WHERE u.owner' })
+    connection = { id = 1, dialect = 'postgres' }
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'SELECT * FROM users u', 'WHERE u."owner' })
     local source = require('sqmeow.completion.' .. provider).new()
     local response
     local function run()
@@ -456,10 +458,13 @@ T['providers']['normalize cursors and expose pending metadata'] = function(provi
       end
       if provider == 'cmp' then
         source:complete({
-          context = { bufnr = buf, cursor_line = 'WHERE u.owner', cursor = { row = 2, col = 9 } },
+          context = { bufnr = buf, cursor_line = 'WHERE u."owner', cursor = { row = 2, col = 10 } },
         }, callback)
       else
-        source:get_completions({ bufnr = buf, line = 'WHERE u.owner', cursor = { 2, 8 } }, callback)
+        source:get_completions(
+          { bufnr = buf, line = 'WHERE u."owner', cursor = { 2, 9 } },
+          callback
+        )
       end
     end
     run()
@@ -469,7 +474,16 @@ T['providers']['normalize cursors and expose pending metadata'] = function(provi
     eq(#response.items, 2)
     eq(response.items[1].kind, kinds.Field)
     eq(response.items[1].documentation, { kind = 'markdown', value = 'Primary Key' })
+    eq(response.items[2].filterText, '"owner"')
+    eq(response.items[2].textEdit, {
+      newText = '"owner"',
+      range = {
+        start = { line = 1, character = 8 },
+        ['end'] = { line = 1, character = 14 },
+      },
+    })
     if provider == 'cmp' then
+      eq(source:get_position_encoding_kind(), 'utf-8')
       eq(response.isIncomplete, false)
     else
       eq(response.is_incomplete_forward, false)
@@ -538,6 +552,197 @@ T['preview buffer name provides column completion without FROM clause'] = functi
 
   vim.api.nvim_buf_set_name(buf, '[Preview: users]')
   eq(column_labels(items('SELECT ')), { 'users_id', 'owner' })
+end
+
+T['ensure warms schema groups and relation lists progressively'] = function()
+  local events = require('sqmeow.rpc.events')
+  completion.ensure(1)
+  flush()
+  eq(#calls, 1)
+  eq(calls[1].path, {})
+
+  events.on_nodes({
+    conn_id = 1,
+    path = {},
+    nodes = { { name = 'public', kind = 'schema' }, { name = 'Roles', kind = 'roles' } },
+  })
+  flush()
+  eq(#calls, 2)
+  eq(calls[2].path, { 'public' })
+
+  events.on_nodes({
+    conn_id = 1,
+    path = { 'public' },
+    nodes = {
+      { name = 'Tables', key = 'tables', kind = 'tables' },
+      { name = 'Views', key = 'views', kind = 'views' },
+    },
+  })
+  flush()
+  eq(#calls, 4)
+  eq(calls[3].path, { 'public', 'tables' })
+  eq(calls[4].path, { 'public', 'views' })
+end
+
+T['dialect-quoted identifiers for relations and mixed-case columns'] = MiniTest.new_set({
+  parametrize = {
+    -- Only PostgreSQL folds `OrderId`, so only it needs the quotes when none were typed.
+    { 'postgres', '"users"', '"OrderId"', 'SELECT * FROM "us', 'WHERE u."Or', '"OrderId"' },
+    { 'mysql', '`users`', '`OrderId`', 'SELECT * FROM `us', 'WHERE u.`Or', nil },
+    { 'mssql', '[users]', '[OrderId]', 'SELECT * FROM [us', 'WHERE u.[Or', nil },
+  },
+})
+T['dialect-quoted identifiers for relations and mixed-case columns']['quotes and deduplicates opener'] = function(
+  dialect,
+  quoted_table,
+  quoted_col,
+  table_prefix,
+  col_prefix,
+  bare_col
+)
+  connection = { id = 1, dialect = dialect }
+  fixture('public')
+  cache({ 'public', 'tables', 'users' }, {
+    { name = 'users_id', kind = 'column', type_name = 'integer', primary_key = true },
+    { name = 'OrderId', kind = 'column', type_name = 'integer' },
+  })
+
+  -- A plain lowercase name is inserted as typed.
+  local from_items = items('SELECT * FROM ')
+  local users_item
+  for _, item in ipairs(from_items) do
+    if item.kind == 'table' and item.label == 'users' then
+      users_item = item
+    end
+  end
+  eq(users_item.insertText, nil)
+  eq(users_item.textEdit, nil)
+
+  local col_items = items('SELECT * FROM users u WHERE u.')
+  eq(col_items[1].label, 'users_id')
+  eq(col_items[1].insertText, nil)
+  eq(col_items[2].label, 'OrderId')
+  eq(col_items[2].insertText, bare_col)
+
+  -- Quoted cursor position: textEdit replaces the already-typed opening quote
+  local quoted_from = items(table_prefix)
+  local quoted_users
+  for _, item in ipairs(quoted_from) do
+    if item.kind == 'table' and item.label == 'users' then
+      quoted_users = item
+    end
+  end
+  eq(quoted_users.filterText, quoted_table)
+  eq(quoted_users.textEdit, {
+    newText = quoted_table,
+    range = {
+      start = { line = 0, character = 14 },
+      ['end'] = { line = 0, character = #table_prefix },
+    },
+  })
+
+  local sql_with_quote = 'SELECT * FROM users u ' .. col_prefix
+  local quoted_cols = items(sql_with_quote)
+  eq(#quoted_cols, 2)
+  eq(quoted_cols[2].filterText, quoted_col)
+  eq(quoted_cols[2].textEdit, {
+    newText = quoted_col,
+    range = {
+      start = { line = 0, character = 30 },
+      ['end'] = { line = 0, character = #sql_with_quote },
+    },
+  })
+end
+
+T['unfinished quoted identifiers with spaces and reserved-word columns'] = function()
+  connection = { id = 1, dialect = 'postgres' }
+  fixture('public')
+  cache({ 'public', 'tables', 'users' }, {
+    { name = 'order', kind = 'column', type_name = 'integer' },
+    { name = 'Order Name', kind = 'column', type_name = 'text' },
+  })
+
+  -- Unqualified reserved-word column is quoted; qualified column after `u.` stays bare
+  local unqual = items('SELECT * FROM users WHERE ')
+  local order_unqual
+  for _, item in ipairs(unqual) do
+    if item.kind == 'column' and item.label == 'order' then
+      order_unqual = item
+    end
+  end
+  eq(order_unqual.insertText, '"order"')
+  local qual = items('SELECT * FROM users u WHERE u.')
+  eq(qual[1].label, 'order')
+  eq(qual[1].insertText, nil)
+
+  -- Unfinished quoted column with a space preserves qualifier and replaces from opener
+  local space_sql = 'SELECT * FROM users u WHERE u."Order N'
+  local space_cols = items(space_sql)
+  eq(#space_cols, 2)
+  eq(space_cols[2].textEdit, {
+    newText = '"Order Name"',
+    range = {
+      start = { line = 0, character = 30 },
+      ['end'] = { line = 0, character = #space_sql },
+    },
+  })
+end
+
+T['quoting follows how the dialect folds case'] = function()
+  fixture('public')
+  cache({ 'public', 'tables', 'users' }, {
+    { name = 'ID', kind = 'column', type_name = 'number' },
+    { name = 'name', kind = 'column', type_name = 'text' },
+    { name = 'key', kind = 'column', type_name = 'text' },
+  })
+  connection = { id = 1, dialect = 'oracle' }
+  local found = items('SELECT * FROM users u WHERE u.')
+  eq(found[1].insertText, nil)
+  eq(found[2].insertText, '"name"')
+
+  connection = { id = 1, dialect = 'mysql' }
+  found = items('SELECT * FROM users WHERE ')
+  local key
+  for _, item in ipairs(found) do
+    if item.label == 'key' then
+      key = item
+    end
+  end
+  eq(key.insertText, '`key`')
+end
+
+T['typed quotes are kept and an autopaired closer is replaced'] = function()
+  connection = { id = 1, dialect = 'mysql' }
+  fixture('public')
+  local function users(sql, col)
+    for _, item in ipairs(items(sql, col)) do
+      if item.label == 'users' then
+        return item
+      end
+    end
+  end
+
+  -- MySQL reads `"` as an identifier quote under ANSI_QUOTES; the typed delimiter must stay.
+  local typed = users('SELECT * FROM "us')
+  eq(typed.filterText, '"users"')
+  eq(typed.textEdit.newText, '"users"')
+
+  local paired = users('SELECT * FROM `us`', 17)
+  eq(paired.textEdit, {
+    newText = '`users`',
+    range = {
+      start = { line = 0, character = 14 },
+      ['end'] = { line = 0, character = 18 },
+    },
+  })
+end
+
+T['ensure skips Redis keys'] = function()
+  cache({}, { { name = '0', kind = 'schema' } })
+  cache({ '0' }, { { name = 'Keys', key = 'keys', kind = 'keys' } })
+  completion.ensure(1)
+  flush()
+  eq(calls, {})
 end
 
 return T

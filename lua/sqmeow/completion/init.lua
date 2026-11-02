@@ -1,10 +1,6 @@
 --- Completion metadata shared by all database adapters and completion providers.
 local M = {}
 
--- Metadata and in-flight requests belong to the drawer cache.
-function M.invalidate(_conn_id) end
-function M.invalidate_all() end
-
 -- The parser hint is worth one interruption per session, not one per keystroke.
 local hinted = false
 
@@ -13,6 +9,10 @@ function M.reset_hint()
   hinted = false
 end
 
+--- Cached drawer nodes for `path`, loading them in the background when missing.
+---@param conn_id integer
+---@param path string[]
+---@return table[]|nil
 local function nodes(conn_id, path)
   local drawer = require('sqmeow.ui.drawer')
   local cached = drawer.cached_nodes(conn_id, path)
@@ -22,7 +22,13 @@ local function nodes(conn_id, path)
   return cached
 end
 
-local function relations(conn_id)
+--- Every cached relation, loading missing levels. `warm` skips Redis keys, which can be many.
+---@param conn_id integer
+---@param warm boolean|nil
+---@return table[] relations
+---@return boolean incomplete
+---@return table[]|nil schemas
+local function relations(conn_id, warm)
   local result, incomplete = {}, false
   local schemas = nodes(conn_id, {})
   if not schemas then
@@ -34,7 +40,11 @@ local function relations(conn_id)
       local groups = nodes(conn_id, { schema.name })
       incomplete = incomplete or groups == nil
       for _, group in ipairs(groups or {}) do
-        if group.kind == 'tables' or group.kind == 'views' or group.kind == 'keys' then
+        if
+          group.kind == 'tables'
+          or group.kind == 'views'
+          or (group.kind == 'keys' and not warm)
+        then
           local path = { schema.name, group.key }
           local members = nodes(conn_id, path)
           incomplete = incomplete or members == nil
@@ -52,16 +62,31 @@ local function relations(conn_id)
   return result, incomplete, schemas
 end
 
---- Warm the root cache; deeper metadata is loaded when completion is requested.
+--- Warm the schema and relation cache; columns load when completion asks for them.
+---@param conn_id integer
 function M.ensure(conn_id)
-  nodes(conn_id, {})
+  relations(conn_id, true)
 end
 
+--- Redis and MongoDB have keys and collections, not SQL identifiers.
+---@param conn table
+---@return boolean
+local function nosql(conn)
+  return conn.dialect == 'redis' or conn.dialect == 'mongodb'
+end
+
+--- Case-insensitive identifier equality.
+---@param a string|nil
+---@param b string|nil
+---@return boolean
 local function same(a, b)
-  return a and b and a:lower() == b:lower()
+  return a ~= nil and b ~= nil and a:lower() == b:lower()
 end
 
 --- Whether a parsed reference names a relation the cache knows.
+---@param ref table
+---@param available table[]
+---@return boolean
 local function known(ref, available)
   for _, relation in ipairs(available) do
     if
@@ -87,10 +112,7 @@ local function hint_parser(
   parsed,
   incomplete
 )
-  if hinted or parsed or incomplete or not qualifier or qualifier_schema then
-    return
-  end
-  if conn.dialect == 'redis' or conn.dialect == 'mongodb' then
+  if hinted or parsed or incomplete or not qualifier or qualifier_schema or nosql(conn) then
     return
   end
   -- A schema or a table name is not an alias, and resolves without the parser.
@@ -120,6 +142,10 @@ local function hint_parser(
 end
 
 --- col is a zero-based byte offset; row is an optional one-based buffer row.
+---@param bufnr integer
+---@param line string
+---@param col integer
+---@param row integer|nil
 ---@return table[] items
 ---@return boolean incomplete
 function M.items(bufnr, line, col, row)
@@ -127,8 +153,42 @@ function M.items(bufnr, line, col, row)
   if not conn then
     return {}, false
   end
-  local refs, qualifier, qualifier_schema, parsed =
-    require('sqmeow.completion.context').read(bufnr, line, col, row)
+  local context = require('sqmeow.completion.context')
+  local sql = require('sqmeow.core.sql')
+  local refs, qualifier, qualifier_schema, parsed = context.read(bufnr, line, col, row)
+  local quote_start, open = context.open_quote(line:sub(1, col))
+  -- Replace through the rest of the word and a closer an autopair plugin added.
+  local end_col = col + #line:sub(col + 1):match('^[%w_$]*')
+  if open and line:sub(end_col + 1, end_col + 1) == sql.closer(open) then
+    end_col = end_col + 1
+  end
+
+  --- Add the quoting, or the edit over a typed quote, an identifier needs.
+  ---@param item table
+  ---@return table
+  local function format_item(item)
+    if nosql(conn) or item.kind == 'key' then
+      return item
+    end
+    if open then
+      -- Keep the delimiter the user typed so the typed text still filters.
+      local quoted = open == sql.opener(conn.dialect) and sql.quote(conn.dialect, item.label)
+        or sql.wrap(open, item.label)
+      local lnum = (row or 1) - 1
+      item.filterText = quoted
+      item.textEdit = {
+        newText = quoted,
+        range = {
+          start = { line = lnum, character = quote_start - 1 },
+          ['end'] = { line = lnum, character = end_col },
+        },
+      }
+    elseif sql.needs_quote(conn.dialect, item.label, qualifier ~= nil) then
+      item.insertText = sql.quote(conn.dialect, item.label)
+    end
+    return item
+  end
+
   local available, incomplete, schemas = relations(conn.id)
   hint_parser(
     conn,
@@ -146,22 +206,23 @@ function M.items(bufnr, line, col, row)
   local items = {}
   for _, schema in ipairs(schemas or {}) do
     if schema.kind == 'schema' and not qualifier then
-      table.insert(items, { label = schema.name, kind = 'schema', detail = 'schema' })
+      table.insert(items, format_item({ label = schema.name, kind = 'schema', detail = 'schema' }))
     end
   end
 
   -- An alias in the statement wins over a relation of the same name. A ref only
   -- counts when its relation is known, so an unfinished `main.` stays a schema.
+  local known_refs = vim.tbl_filter(function(ref)
+    return known(ref, available)
+  end, refs)
   local targets
   if qualifier and not qualifier_schema then
     local aliases, names = {}, {}
-    for _, ref in ipairs(refs) do
-      if known(ref, available) then
-        if same(qualifier, ref.alias) then
-          table.insert(aliases, ref)
-        elseif same(qualifier, ref.name) then
-          table.insert(names, ref)
-        end
+    for _, ref in ipairs(known_refs) do
+      if same(qualifier, ref.alias) then
+        table.insert(aliases, ref)
+      elseif same(qualifier, ref.name) then
+        table.insert(names, ref)
       end
     end
     targets = #aliases > 0 and aliases or names
@@ -170,6 +231,11 @@ function M.items(bufnr, line, col, row)
     end
   end
 
+  --- Whether one of `targets_` names `rel` in `schema`.
+  ---@param targets_ table[]
+  ---@param rel table
+  ---@param schema string
+  ---@return boolean
   local function selected_by(targets_, rel, schema)
     for _, ref in ipairs(targets_) do
       if same(ref.name, rel.name) and (not ref.schema or same(ref.schema, schema)) then
@@ -193,13 +259,16 @@ function M.items(bufnr, line, col, row)
       else
         show_columns = same(qualifier, rel.name)
       end
-    elseif #refs > 0 then
-      show_columns = selected_by(refs, rel, schema)
+    elseif #known_refs > 0 then
+      show_columns = selected_by(known_refs, rel, schema)
     else
       show_relation = true
     end
     if show_relation then
-      table.insert(items, { label = rel.name, kind = rel.kind, detail = rel.kind, schema = schema })
+      table.insert(
+        items,
+        format_item({ label = rel.name, kind = rel.kind, detail = rel.kind, schema = schema })
+      )
     end
     if show_columns and rel.expandable ~= false then
       local columns = nodes(conn.id, relation.path)
@@ -213,15 +282,18 @@ function M.items(bufnr, line, col, row)
           if column.references then
             table.insert(doc, 'Foreign Key: ' .. column.references)
           end
-          table.insert(items, {
-            label = column.name,
-            kind = 'column',
-            detail = column.type_name,
-            schema = schema,
-            relation = rel.name,
-            primary_key = column.primary_key,
-            documentation = #doc > 0 and table.concat(doc, ', ') or nil,
-          })
+          table.insert(
+            items,
+            format_item({
+              label = column.name,
+              kind = 'column',
+              detail = column.type_name,
+              schema = schema,
+              relation = rel.name,
+              primary_key = column.primary_key,
+              documentation = #doc > 0 and table.concat(doc, ', ') or nil,
+            })
+          )
         end
       end
     end

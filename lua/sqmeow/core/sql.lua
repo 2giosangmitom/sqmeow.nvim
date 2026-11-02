@@ -2,21 +2,187 @@
 
 local M = {}
 
+local reserved_words = {
+  ['all'] = true,
+  ['analyse'] = true,
+  ['analyze'] = true,
+  ['and'] = true,
+  ['any'] = true,
+  ['array'] = true,
+  ['as'] = true,
+  ['asc'] = true,
+  ['asymmetric'] = true,
+  ['authorization'] = true,
+  ['between'] = true,
+  ['binary'] = true,
+  ['both'] = true,
+  ['case'] = true,
+  ['cast'] = true,
+  ['check'] = true,
+  ['collate'] = true,
+  ['collation'] = true,
+  ['column'] = true,
+  ['concurrently'] = true,
+  ['constraint'] = true,
+  ['create'] = true,
+  ['cross'] = true,
+  ['current_catalog'] = true,
+  ['current_date'] = true,
+  ['current_role'] = true,
+  ['current_schema'] = true,
+  ['current_time'] = true,
+  ['current_timestamp'] = true,
+  ['current_user'] = true,
+  ['default'] = true,
+  ['deferrable'] = true,
+  ['desc'] = true,
+  ['distinct'] = true,
+  ['do'] = true,
+  ['else'] = true,
+  ['end'] = true,
+  ['except'] = true,
+  ['false'] = true,
+  ['fetch'] = true,
+  ['for'] = true,
+  ['foreign'] = true,
+  ['freeze'] = true,
+  ['from'] = true,
+  ['full'] = true,
+  ['grant'] = true,
+  ['group'] = true,
+  ['having'] = true,
+  ['ilike'] = true,
+  ['in'] = true,
+  ['initially'] = true,
+  ['inner'] = true,
+  ['intersect'] = true,
+  ['into'] = true,
+  ['is'] = true,
+  ['isnull'] = true,
+  ['join'] = true,
+  ['lateral'] = true,
+  ['leading'] = true,
+  ['left'] = true,
+  ['like'] = true,
+  ['limit'] = true,
+  ['localtime'] = true,
+  ['localtimestamp'] = true,
+  ['natural'] = true,
+  ['not'] = true,
+  ['notnull'] = true,
+  ['null'] = true,
+  ['offset'] = true,
+  ['on'] = true,
+  ['only'] = true,
+  ['or'] = true,
+  ['order'] = true,
+  ['outer'] = true,
+  ['overlaps'] = true,
+  ['placing'] = true,
+  ['primary'] = true,
+  ['references'] = true,
+  ['returning'] = true,
+  ['right'] = true,
+  ['select'] = true,
+  ['session_user'] = true,
+  ['similar'] = true,
+  ['some'] = true,
+  ['symmetric'] = true,
+  ['system_user'] = true,
+  ['table'] = true,
+  ['tablesample'] = true,
+  ['then'] = true,
+  ['to'] = true,
+  ['trailing'] = true,
+  ['true'] = true,
+  ['union'] = true,
+  ['unique'] = true,
+  ['user'] = true,
+  ['using'] = true,
+  ['variadic'] = true,
+  ['verbose'] = true,
+  ['when'] = true,
+  ['where'] = true,
+  ['window'] = true,
+  ['with'] = true,
+}
+
+-- MySQL and MariaDB reserve more words than PostgreSQL.
+local mysql_reserved = {}
+local mysql_words = [[
+  change condition database databases delete div dual exists explain groups index insert
+  interval key keys kill lines load lock long match mod option partition range rank read
+  release rename repeat replace require row rows schema schemas separator show signal sql
+  update usage use values write xor
+]]
+for word in mysql_words:gmatch('%S+') do
+  mysql_reserved[word] = true
+end
+
+local closers = { ['"'] = '"', ['`'] = '`', ['['] = ']' }
+
+--- The closing delimiter for an identifier opened with `open`.
+---@param open string
+---@return string
+function M.closer(open)
+  return closers[open]
+end
+
+--- The delimiter a dialect opens a quoted identifier with.
+---@param dialect string|nil
+---@return string
+function M.opener(dialect)
+  if dialect == 'mssql' then
+    return '['
+  elseif dialect == 'mysql' or dialect == 'mariadb' or dialect == 'surrealdb' then
+    return '`'
+  end
+  return '"'
+end
+
+--- Quotes `name` between `open` and its closer, doubling any closer inside.
+---@param open string
+---@param name string
+---@return string
+function M.wrap(open, name)
+  local close = closers[open]
+  return open .. name:gsub(vim.pesc(close), close .. close) .. close
+end
+
 --- Quotes one identifier for a dialect.
 ---@param dialect string|nil MySQL and MariaDB use backticks, others use double quotes.
 ---@param name string
 ---@return string
 function M.quote(dialect, name)
-  if dialect == 'mssql' then
-    return '[' .. name:gsub(']', ']]') .. ']'
-  end
-  if dialect == 'mysql' or dialect == 'mariadb' then
-    return '`' .. name:gsub('`', '``') .. '`'
-  end
   if dialect == 'surrealdb' then
     return '`' .. name:gsub('[\\`]', '\\%0') .. '`'
   end
-  return '"' .. name:gsub('"', '""') .. '"'
+  return M.wrap(M.opener(dialect), name)
+end
+
+--- Whether `name` must be quoted to be read back unchanged.
+---@param dialect string|nil
+---@param name string
+---@param qualified boolean A reserved word after a dot needs no quotes.
+---@return boolean
+function M.needs_quote(dialect, name, qualified)
+  if not name:match('^[%a_][%w_$]*$') then
+    return true
+  end
+  -- These fold unquoted names; the rest keep or ignore case.
+  if dialect == 'postgres' or dialect == 'scylla' then
+    if name:match('%u') then
+      return true
+    end
+  elseif dialect == 'oracle' and name:match('%l') then
+    return true
+  end
+  if qualified then
+    return false
+  end
+  local word = name:lower()
+  return reserved_words[word] == true
+    or ((dialect == 'mysql' or dialect == 'mariadb') and mysql_reserved[word] == true)
 end
 
 --- Joins name parts into a qualified identifier.

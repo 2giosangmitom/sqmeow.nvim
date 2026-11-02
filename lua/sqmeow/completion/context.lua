@@ -18,6 +18,9 @@ local references = [[
   ";" @boundary
 ]]
 
+--- Strip identifier quotes and unescape doubled delimiters.
+---@param text string
+---@return string
 local function unquote(text)
   local first, last = text:sub(1, 1), text:sub(-1)
   if (first == '"' or first == '`') and last == first then
@@ -30,17 +33,28 @@ end
 
 -- A trailing dot is often an ERROR node while typing; only this unfinished suffix
 -- needs a pattern. Statements, relations, aliases, strings and comments use the tree.
-local identifier = [=[\%("[^"]*"\|`[^`]*`\|\[[^]]*\]\|[[:alnum:]_$]\+\)]=]
+local identifier =
+  [=[\%("\%([^"]\|""\)*"\|`\%([^`]\|``\)*`\|\[\%([^]]\|]]\)*\]\|[[:alnum:]_$]\+\)]=]
+local tail = [=[\%("\%([^"]\|""\)*\|`\%([^`]\|``\)*\|\[\%([^]]\|]]\)*\|[[:alnum:]_$]*\)]=]
+
+--- `schema.relation.` or `relation.` before the cursor, allowing an unfinished quoted tail.
+---@param prefix string
+---@return string|nil name
+---@return string|nil schema
 local function qualifier(prefix)
   local match = vim.fn.matchlist(
     prefix,
-    [[\%(\(]] .. identifier .. [[\)\.\)\?\(]] .. identifier .. [[\)\.[[:alnum:]_$]*$]]
+    [[\%(\(]] .. identifier .. [[\)\.\)\?\(]] .. identifier .. [[\)\.]] .. tail .. [[$]]
   )
   if #match > 0 then
     return unquote(match[3]), match[2] ~= '' and unquote(match[2]) or nil
   end
 end
 
+--- Relations bound to the buffer or named by a `[Preview: ...]` buffer.
+---@param bufnr integer|nil
+---@param qualifier_schema string|nil
+---@return table[]
 local function buffer_refs(bufnr, qualifier_schema)
   -- An explicitly typed schema takes precedence over the buffer's relation.
   if qualifier_schema or not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
@@ -106,11 +120,46 @@ local function collect(parser, source, offset)
 end
 
 --- The whole text of a buffer, matching `nvim_buf_get_offset` positions.
+---@param bufnr integer
+---@return string
 local function buffer_text(bufnr)
   return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), '\n')
 end
 
+--- The identifier quote left open at the end of `prefix`, skipping string literals.
+---@param prefix string
+---@return integer|nil start One-based byte index of the opening delimiter.
+---@return string|nil open
+function M.open_quote(prefix)
+  local start, open, close
+  local i = 1
+  while i <= #prefix do
+    local ch = prefix:sub(i, i)
+    if close then
+      if ch == close then
+        if prefix:sub(i + 1, i + 1) == close then
+          i = i + 1
+        else
+          start, open, close = nil, nil, nil
+        end
+      end
+    elseif ch == "'" then
+      -- `''` inside a literal closes and reopens it, which leaves the scan in the same state.
+      local stop = prefix:find("'", i + 1, true)
+      i = stop or #prefix
+    elseif ch:match('["`%[]') and prefix:sub(i - 1, i - 1):match('^[%s%.,%(=<>!+%-/*;]?$') then
+      start, open, close = i, ch, ch == '[' and ']' or ch
+    end
+    i = i + 1
+  end
+  return start, open
+end
+
 --- col is a zero-based byte offset; row is an optional one-based buffer row.
+---@param bufnr integer
+---@param line string
+---@param col integer
+---@param row integer|nil
 ---@return table[] refs Relations the statement names, with their aliases.
 ---@return string|nil name Qualifier before the cursor.
 ---@return string|nil schema Schema qualifier before the cursor.
