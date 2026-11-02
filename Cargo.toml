@@ -37,7 +37,7 @@ tokio-postgres = { version = "0.7", features = [
   "with-uuid-1",
 ] }
 tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"] }
-rusqlite = { version = "0.40", default-features = false, features = [
+rusqlite = { version = "0.41", default-features = false, features = [
   "column_decltype",
   "column_metadata",
   "hooks",
