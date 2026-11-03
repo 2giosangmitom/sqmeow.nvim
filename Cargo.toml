@@ -23,7 +23,7 @@ tokio-util = "0.7"
 futures-util = { version = "0.3", default-features = false }
 bigdecimal = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
-uuid = "1.28"
+uuid = "1.29"
 mysql_async = { version = "0.37", default-features = false, features = [
   "minimal-rust",
   "rustls-tls",
@@ -37,19 +37,19 @@ tokio-postgres = { version = "0.7", features = [
   "with-uuid-1",
 ] }
 tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"] }
-rusqlite = { version = "0.40", default-features = false, features = [
+rusqlite = { version = "0.41", default-features = false, features = [
   "column_decltype",
   "column_metadata",
   "hooks",
 ] }
-redis = { version = "1.7", default-features = false, features = [
+redis = { version = "1.8", default-features = false, features = [
   "tokio-rustls-comp",
   "tls-rustls-insecure",
   "cluster-async",
   "sentinel",
 ] }
 mongodb = "3.9"
-duckdb = { version = "1.10506", features = ["chrono"] }
+duckdb = { version = "1.20000", features = ["chrono"] }
 scylla = { version = "1.9", features = [
   "chrono-04",
   "bigdecimal-04",
@@ -61,7 +61,7 @@ clickhouse = { version = "0.15", default-features = false, features = [
   "rustls-tls-ring",
   "rustls-tls-native-roots",
 ] }
-oracledb = "26.0.0-beta.4"
+oracledb = "26.0.0-beta.5"
 tiberius = { version = "0.13", default-features = false, features = ["rustls", "tds73", "chrono"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"

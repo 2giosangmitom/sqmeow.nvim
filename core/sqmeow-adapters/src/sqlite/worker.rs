@@ -101,7 +101,7 @@ impl Options {
     }
 
     fn open(&self) -> Result<Connection> {
-        let conn = Connection::open_with_flags(&self.uri, self.flags).map_err(Error::driver)?;
+        let mut conn = Connection::open_with_flags(&self.uri, self.flags).map_err(Error::driver)?;
         // Use prepare/Batch only (never prepare_cached), so DDL cannot leave stale columns.
         conn.execute_batch("pragma foreign_keys = ON")
             .map_err(Error::driver)?;
@@ -111,6 +111,9 @@ impl Options {
         }
         // A thread-local cancellation-aware busy callback retains the normal five-second budget.
         conn.busy_handler(Some(busy)).map_err(Error::driver)?;
+        // Installed once: cancellation is armed/disarmed through the same thread-local token.
+        conn.progress_handler(1000, Some(progress))
+            .map_err(Error::driver)?;
         Ok(conn)
     }
 }
@@ -252,12 +255,7 @@ impl Worker {
                         active.cancellable = true;
                         command.started.store(true, Ordering::Release);
                     }
-                    BUSY.with(|b| *b.borrow_mut() = Some((command.token.clone(), Instant::now())));
-                    let token = command.token;
-                    state
-                        .conn
-                        .progress_handler(1000, Some(move || token.is_cancelled()))
-                        .expect("worker owns its SQLite connection");
+                    BUSY.with(|b| *b.borrow_mut() = Some((command.token, Instant::now())));
                     (command.work)(&mut state);
                     state.disable_cancel();
                     BUSY.with(|b| *b.borrow_mut() = None);
@@ -379,7 +377,16 @@ impl Worker {
 }
 
 thread_local! {
+    /// Armed request token for the worker thread's busy and progress handlers.
     static BUSY: RefCell<Option<(CancellationToken, Instant)>> = const { RefCell::new(None) };
+}
+
+fn progress() -> bool {
+    BUSY.with(|b| {
+        b.borrow()
+            .as_ref()
+            .is_some_and(|(token, _)| token.is_cancelled())
+    })
 }
 
 fn busy(attempt: i32) -> bool {
@@ -432,11 +439,7 @@ fn native(value: &Value) -> NativeValue {
 
 fn fetch(conn: &Connection, sql: &str, values: &[Value]) -> Result<Vec<OwnedRow>> {
     let mut stmt = conn.prepare(sql).map_err(Error::driver)?;
-    let names: Vec<String> = stmt
-        .column_names()
-        .iter()
-        .map(|s| (*s).to_owned())
-        .collect();
+    let names: Vec<String> = stmt.column_names().map(str::to_owned).collect();
     let values: Vec<_> = values.iter().map(native).collect();
     let mut rows = stmt
         .query(rusqlite::params_from_iter(values))
@@ -464,10 +467,6 @@ struct State {
 
 impl State {
     fn enable_cancel(&self) {
-        let token = self.token.clone();
-        self.conn
-            .progress_handler(1000, Some(move || token.is_cancelled()))
-            .expect("worker owns its SQLite connection");
         BUSY.with(|b| *b.borrow_mut() = Some((self.token.clone(), Instant::now())));
         let mut active = self.shared.active.lock().unwrap_or_else(|p| p.into_inner());
         // Shutdown during the commit fence must stop any following statement.
@@ -484,9 +483,6 @@ impl State {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .cancellable = false;
-        self.conn
-            .progress_handler(0, None::<fn() -> bool>)
-            .expect("worker owns its SQLite connection");
         BUSY.with(|b| *b.borrow_mut() = None);
     }
 
@@ -652,7 +648,6 @@ impl State {
         let mut columns = columns(&stmt);
         let origins: Vec<Origin> = stmt
             .columns_with_metadata()
-            .iter()
             .map(|c| {
                 Some((
                     TableName {
@@ -791,7 +786,6 @@ fn normalized(declared: Option<&str>) -> &'static str {
 
 fn columns(stmt: &Statement<'_>) -> Vec<Column> {
     stmt.columns()
-        .iter()
         .map(|c| Column::new(c.name(), normalized(c.decl_type())))
         .collect()
 }
