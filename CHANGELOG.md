@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.2.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.1.0...v3.2.0) (2026-11-03)
+
+
+### Features
+
+* **completion:** support dialect-quoted identifiers and warm relation metadata ([#106](https://github.com/2giosangmitom/sqmeow.nvim/issues/106)) ([ea9f2c2](https://github.com/2giosangmitom/sqmeow.nvim/commit/ea9f2c23c3be130070be7c0d6113f4ceebb2d979))
+* **result:** navigate foreign key records and drill down into referenced rows ([#100](https://github.com/2giosangmitom/sqmeow.nvim/issues/100)) ([b32057e](https://github.com/2giosangmitom/sqmeow.nvim/commit/b32057e15c7a862f0e25778cef2e47d61aef7812))
+* **ui:** granular winbar options and statusline integration ([#101](https://github.com/2giosangmitom/sqmeow.nvim/issues/101)) ([f997b4b](https://github.com/2giosangmitom/sqmeow.nvim/commit/f997b4b7012bd1395db2b588b8a3c47a7d8d02c9))
+
+
+### Fixes
+
+* **completion:** resolve multiline table aliases ([#108](https://github.com/2giosangmitom/sqmeow.nvim/issues/108)) ([9fe3b16](https://github.com/2giosangmitom/sqmeow.nvim/commit/9fe3b16d56da9fc1cd630d07e511013c5375993e))
+* **result:** render summary in result buffer for non-row statements when winbar is disabled ([#105](https://github.com/2giosangmitom/sqmeow.nvim/issues/105)) ([82bbc4a](https://github.com/2giosangmitom/sqmeow.nvim/commit/82bbc4a1c5507a9d56d1939e7427e5b5e02dc37a))
+* **ui:** keep the sticky grid header aligned with the grid ([#94](https://github.com/2giosangmitom/sqmeow.nvim/issues/94)) ([67c8544](https://github.com/2giosangmitom/sqmeow.nvim/commit/67c854433f311b84d0abc57f419f8111c102dafa))
+* **ui:** prevent replacing drawer and result buffers ([#97](https://github.com/2giosangmitom/sqmeow.nvim/issues/97)) ([7a6d1fd](https://github.com/2giosangmitom/sqmeow.nvim/commit/7a6d1fd8b8f940e69182f5614b91a841667a42ec))
+* **ui:** stop the sticky grid header from leaking windows when Neovim refuses it ([#96](https://github.com/2giosangmitom/sqmeow.nvim/issues/96)) ([3d8cf20](https://github.com/2giosangmitom/sqmeow.nvim/commit/3d8cf20b88124e4359bbe8b5be1310d232887cc9))
+
 ## [3.1.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.0.0...v3.1.0) (2026-10-17)
 
 
