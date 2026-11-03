@@ -68,32 +68,6 @@ Calling `setup()` is optional unless you want to customize the defaults.
 </details>
 
 <details>
-<summary>mini.deps</summary>
-
-Add this after setting up `mini.deps`:
-
-```lua
-local install_engine = function()
-  vim.schedule(function()
-    require("sqmeow").install("cargo")
-  end)
-end
-
-MiniDeps.add({
-  source = "2giosangmitom/sqmeow.nvim",
-  depends = { "MunifTanjim/nui.nvim" },
-  hooks = {
-    post_install = install_engine,
-    post_checkout = install_engine,
-  },
-})
-```
-
-This tracks the default branch and builds the engine from source. To use a release instead, set `checkout` to a release tag and call `install()` in the hook.
-
-</details>
-
-<details>
 <summary>vim.pack (Neovim 0.12+)</summary>
 
 Register the handler before `vim.pack.add()`:
