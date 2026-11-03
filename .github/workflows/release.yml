@@ -4,8 +4,18 @@ on:
   workflow_call:
     inputs:
       tag:
-        required: true
+        description: Release tag to build and publish. Leave empty when not publishing.
+        required: false
         type: string
+      ref:
+        description: Commit to build instead of the tag, e.g. the release PR head.
+        required: false
+        type: string
+      publish:
+        description: Upload the archives to a GitHub release. `false` only checks that every target builds.
+        required: false
+        type: boolean
+        default: true
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -41,21 +51,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ inputs.ref || env.TAG }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
+      # Cache compiled dependencies, mostly the bundled DuckDB C++ build; rust-cache leaves out the
+      # workspace's own artifacts. Save only from master runs: other refs cannot restore a PR's or
+      # a tag's cache. The release PR build runs in the master-triggered Release Please workflow
+      # with the Cargo.lock the merge will have, so it saves the key the release build restores.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-          # Release binaries exhaust the cache quota.
-          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Install cross
         if: matrix.cross
-        run: cargo install cross --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
       - name: Build
         run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }} -p sqmeow-core --features bundled
@@ -90,6 +105,8 @@ jobs:
   publish:
     name: publish
     needs: build
+    # `inputs.publish` is null for tag pushes and manual runs, which always publish.
+    if: inputs.publish != false
     runs-on: ubuntu-latest
 
     steps:

@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  statuses: write
 
 jobs:
   release-please:
@@ -16,6 +17,7 @@ jobs:
     outputs:
       released: ${{ steps.release.outputs.releases_created }}
       tag: ${{ steps.release.outputs.tag_name }}
+      pr-sha: ${{ steps.head.outputs.sha }}
 
     steps:
       - uses: googleapis/release-please-action@v5
@@ -44,6 +46,61 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'chore: sync Cargo.lock with the released version' -- Cargo.lock
           git push
+
+      - name: Mark the release PR build pending
+        id: head
+        if: steps.release.outputs.pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$sha" \
+            -f state=pending -f context='release build' \
+            -f description='Building every release target' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+  # Build every release target from the release PR, so a broken build shows up before the merge.
+  # Running here, in a master-triggered workflow, rather than on the PR also saves the Rust caches
+  # under master, where the release build after the merge can restore them.
+  release-pr-build:
+    name: release PR build
+    needs: release-please
+    if: needs.release-please.outputs.pr-sha
+    # A newer master push rebuilds the updated PR, so an older build is not worth finishing.
+    concurrency:
+      group: release-pr-build
+      cancel-in-progress: true
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ needs.release-please.outputs.pr-sha }}
+      publish: false
+
+  release-pr-status:
+    name: release PR status
+    needs: [release-please, release-pr-build]
+    if: always() && needs.release-please.outputs.pr-sha
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.release-please.outputs.pr-sha }}
+          RESULT: ${{ needs.release-pr-build.result }}
+        run: |
+          set -euo pipefail
+          case "$RESULT" in
+            success) state=success description='Every release target builds' ;;
+            cancelled) state=error description='Superseded or cancelled' ;;
+            *) state=failure description='A release target failed to build' ;;
+          esac
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            -f state="$state" -f context='release build' -f description="$description" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
   # A tag pushed with the workflow token starts no workflow, so the build is called directly.
   release:
