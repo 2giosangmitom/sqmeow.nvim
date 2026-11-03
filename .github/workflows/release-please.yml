@@ -73,8 +73,10 @@ jobs:
       group: release-pr-build
       cancel-in-progress: true
     uses: ./.github/workflows/release.yml
+    # GitHub checks a called workflow's permissions before it runs, skipped jobs included, so the
+    # skipped `publish` job still needs write access granted here. The build jobs ask for read.
     permissions:
-      contents: read
+      contents: write
     with:
       ref: ${{ needs.release-please.outputs.pr-sha }}
       publish: false
