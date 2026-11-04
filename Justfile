@@ -16,9 +16,28 @@ build-debug:
 
 # Compile a static release binary for distribution. The `bundled` feature
 # compiles SQLite/DuckDB from source; `target` is a Rust target triple and
-# `builder` is `cargo`, `cross`, or another cargo wrapper.
+# `builder` is `cargo` or another cargo wrapper.
 dist-build target builder="cargo":
     {{builder}} build --release --locked --target {{quote(target)}} -p sqmeow-core --features bundled {{cargo_flags}}
+
+# `dist-build` for `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`, run in Docker.
+# The rust-musl-cross images ship GCC 12; cross's images ship GCC 9, which cannot compile the
+# bundled DuckDB sources. The image's own `stable` cannot be updated in place, so it is
+# reinstalled to meet the workspace's rust-version. The host's Cargo registry is mounted for
+# caching, and files the root container writes are handed back to the caller.
+dist-build-musl target:
+    docker run --rm \
+        -v "$PWD:/src" -w /src \
+        -v "${CARGO_HOME:-$HOME/.cargo}/registry:/root/.cargo/registry" \
+        -v "${CARGO_HOME:-$HOME/.cargo}/git:/root/.cargo/git" \
+        -e TARGET={{quote(target)}} -e OWNER="$(id -u):$(id -g)" -e FLAGS={{quote(cargo_flags)}} \
+        "ghcr.io/rust-cross/rust-musl-cross:$(echo {{quote(target)}} | cut -d- -f1)-musl" \
+        sh -euc ' \
+            trap "chown -R \"\$OWNER\" target /root/.cargo/registry /root/.cargo/git" EXIT; \
+            rustup toolchain uninstall stable >/dev/null 2>&1 || true; \
+            rustup toolchain install stable --profile minimal --target "$TARGET"; \
+            rustup default stable; \
+            cargo build --release --locked --target "$TARGET" -p sqmeow-core --features bundled $FLAGS'
 
 lint: lint-rust lint-lua
 

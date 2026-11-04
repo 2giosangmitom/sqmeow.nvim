@@ -4,20 +4,13 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: Release tag to build and publish. Leave empty when not publishing.
-        required: false
+        description: Release tag to build and publish.
+        required: true
         type: string
-      ref:
-        description: Commit to build instead of the tag, e.g. the release PR head.
-        required: false
-        type: string
-      publish:
-        description: Upload the archives to a GitHub release. `false` only checks that every target builds.
-        required: false
-        type: boolean
-        default: true
-  push:
-    tags: ["v*"]
+  # Release PRs (`chore(release): v<version>`, see `pull-request-title-pattern`) build every
+  # target without publishing, so a broken build shows up before the merge.
+  pull_request:
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       tag:
@@ -27,13 +20,19 @@ on:
 permissions:
   contents: read
 
+# A newer push to the release PR supersedes its running build; releases never cancel.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('release-pr-{0}', github.event.pull_request.number) || format('release-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
-  TAG: ${{ inputs.tag || github.ref_name }}
+  TAG: ${{ inputs.tag }}
 
 jobs:
   build:
     name: ${{ matrix.target }}
+    if: github.event_name != 'pull_request' || startsWith(github.event.pull_request.title, 'chore(release):')
     runs-on: ${{ matrix.runner }}
 
     strategy:
@@ -42,38 +41,44 @@ jobs:
         include:
           # musl, so the binary does not depend on the distribution's glibc.
           # SQLite/DuckDB compile from bundled sources (`--features bundled`),
-          # so no system database libraries are needed.
-          - { target: x86_64-unknown-linux-musl, runner: ubuntu-latest, cross: true }
-          - { target: aarch64-unknown-linux-musl, runner: ubuntu-latest, cross: true }
+          # so no system database libraries are needed. `just dist-build-musl`
+          # builds these in Docker with a C++ toolchain new enough for DuckDB.
+          - { target: x86_64-unknown-linux-musl, runner: ubuntu-latest, musl: true }
+          - { target: aarch64-unknown-linux-musl, runner: ubuntu-latest, musl: true }
           - { target: aarch64-apple-darwin, runner: macos-14 }
           - { target: x86_64-pc-windows-msvc, runner: windows-latest }
 
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref || env.TAG }}
+          # The PR head rather than GitHub's merge commit: that is what the merge releases.
+          ref: ${{ github.event.pull_request.head.sha || env.TAG }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       # Cache compiled dependencies, mostly the bundled DuckDB C++ build; rust-cache leaves out the
-      # workspace's own artifacts. Save only from master runs: other refs cannot restore a PR's or
-      # a tag's cache. The release PR build runs in the master-triggered Release Please workflow
-      # with the Cargo.lock the merge will have, so it saves the key the release build restores.
+      # workspace's own artifacts. Save only from master runs (the release build called by Release
+      # Please): other refs cannot restore a PR's or a tag's cache, and release PRs restore these.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
-      - name: Install cross
-        if: matrix.cross
-        uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2
+        if: matrix.musl
         with:
-          tool: cross
+          tool: just
 
       - name: Build
-        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }} -p sqmeow-core --features bundled
+        shell: bash
+        run: |
+          if [ "${{ matrix.musl }}" = true ]; then
+            just dist-build-musl ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }} -p sqmeow-core --features bundled
+          fi
 
       - name: Package
         shell: bash
@@ -105,8 +110,8 @@ jobs:
   publish:
     name: publish
     needs: build
-    # `inputs.publish` is null for tag pushes and manual runs, which always publish.
-    if: inputs.publish != false
+    # Release PR builds only check that every target builds.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -123,4 +128,4 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
           # A release-please release already has notes from the changelog.
-          generate_release_notes: ${{ !inputs.tag }}
+          generate_release_notes: false
