@@ -24,6 +24,22 @@ function M.on_connection(payload)
   if payload.state == 'error' or payload.state == 'closed' then
     state.remove_connection(payload.id)
   end
+  -- A lost server takes the databases opened from it along, and the drawer reloads on reconnect.
+  if payload.lost then
+    local api = require('sqmeow.api.connection')
+    local drawer = require('sqmeow.ui.drawer')
+    for _, child in ipairs(state.connection_list()) do
+      if child.parent == payload.id then
+        api.disconnect(child.id)
+        drawer.forget(child.id)
+      end
+    end
+    drawer.forget(payload.id)
+    notify(
+      ('lost connection to %s: %s'):format(connection.name, payload.error),
+      vim.log.levels.WARN
+    )
+  end
   state.failures[connection.name] = payload.state == 'error' and payload.error or nil
 
   if payload.state == 'connected' then

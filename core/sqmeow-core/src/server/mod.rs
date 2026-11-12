@@ -141,8 +141,13 @@ impl Core {
 
     /// Send an event to the editor.
     fn emit(&self, event: &str, payload: Value) {
+        let lost = connections::lost_connection(event, &payload);
         if let Err(error) = self.nvim.emit(event, payload) {
             tracing::warn!(%error, event, "could not send an event");
+        }
+        // Close a connection whose server is gone, after the event that found out.
+        if let Some((id, error)) = lost {
+            self.drop_lost(id, error);
         }
     }
 }
