@@ -10,6 +10,41 @@ use crate::server::args::Args;
 use crate::server::payload::map;
 use crate::server::session::{ConnId, Connection};
 
+/// Driver messages that mean the server or the link to it is gone.
+const LOST: &[&str] = &[
+    "connection closed",
+    "connection refused",
+    "connection reset",
+    "broken pipe",
+    "server closed the connection",
+    "unexpected eof",
+    "server has gone away",
+    "lost connection",
+    "pool closed",
+];
+
+/// The connection an event's error says is gone, with that error.
+pub(super) fn lost_connection(event: &str, payload: &Value) -> Option<(ConnId, String)> {
+    if event == "conn:state" {
+        return None;
+    }
+    let Value::Map(pairs) = payload else {
+        return None;
+    };
+    let field = |key: &str| {
+        pairs
+            .iter()
+            .find(|(name, _)| name.as_str() == Some(key))
+            .map(|(_, value)| value)
+    };
+    let error = field("error")?.as_str()?;
+    let id = field("conn_id")?.as_i64()?;
+    let lower = error.to_lowercase();
+    LOST.iter()
+        .any(|text| lower.contains(text))
+        .then(|| (ConnId(id), error.to_owned()))
+}
+
 struct OpenOptions {
     database: Option<String>,
     read_only: bool,
@@ -154,9 +189,49 @@ impl Core {
         Ok((answer, Box::pin(work)))
     }
 
+    /// Forget a connection whose server went away, so the editor can reconnect it.
+    pub(super) fn drop_lost(&self, id: ConnId, error: String) {
+        let Some(connection) = self.session.remove_connection(id) else {
+            return;
+        };
+        tracing::info!(id = id.0, %error, "connection lost");
+        self.emit_connection(
+            id,
+            "closed",
+            vec![("lost", Value::from(true)), ("error", Value::from(error))],
+        );
+        tokio::spawn(async move { connection.backend.close().await });
+    }
+
     fn emit_connection(&self, id: ConnId, state: &str, extra: Vec<(&str, Value)>) {
         let mut pairs = vec![("id", Value::from(id)), ("state", Value::from(state))];
         pairs.extend(extra);
         self.emit("conn:state", map(pairs));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(error: &str) -> Value {
+        map(vec![
+            ("conn_id", Value::from(3)),
+            ("error", Value::from(error)),
+        ])
+    }
+
+    #[test]
+    fn lost_connection_errors_name_the_connection() {
+        let (id, error) = lost_connection("schema:nodes", &event("connection closed")).unwrap();
+        assert_eq!(id, ConnId(3));
+        assert_eq!(error, "connection closed");
+        assert!(lost_connection("call:state", &event("Broken pipe (os error 32)")).is_some());
+    }
+
+    #[test]
+    fn other_errors_keep_the_connection() {
+        assert!(lost_connection("call:state", &event("syntax error at or near")).is_none());
+        assert!(lost_connection("conn:state", &event("connection refused")).is_none());
     }
 }
