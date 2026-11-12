@@ -171,10 +171,15 @@ T['a notice from connecting is shown as a warning'] = function()
   state.remove_connection(id)
 end
 
-T['a server lost through a database closes its cluster and siblings'] = function()
+T['a database losing its session probes its cluster and keeps its siblings'] = function()
   local state = require('sqmeow.core.state')
-  helpers.stub(require('sqmeow.ui.drawer'), 'render', function() end)
+  local drawer = require('sqmeow.ui.drawer')
+  helpers.stub(drawer, 'render', function() end)
   helpers.stub(require('sqmeow.ui.editor'), 'update_winbar', function() end)
+  local probed = {}
+  helpers.stub(drawer, 'load', function(id, path)
+    table.insert(probed, { id, path })
+  end)
   local cluster = state.next_connection_id()
   state.add_connection({ id = cluster, name = 'pg', url = 'postgres://pg', state = 'connected' })
   local child = state.next_connection_id()
@@ -193,6 +198,10 @@ T['a server lost through a database closes its cluster and siblings'] = function
     state = 'connected',
     parent = cluster,
   })
+  MiniTest.finally(function()
+    state.remove_connection(sibling)
+    state.remove_connection(cluster)
+  end)
 
   require('sqmeow.rpc.events').on_connection({
     id = child,
@@ -201,9 +210,10 @@ T['a server lost through a database closes its cluster and siblings'] = function
     error = 'connection closed',
   })
 
-  eq(state.connections[cluster], nil)
   eq(state.connections[child], nil)
-  eq(state.connections[sibling], nil)
+  eq(state.connections[cluster].state, 'connected')
+  eq(state.connections[sibling].state, 'connected')
+  eq(probed, { { cluster, {} } })
   eq(notes[1].level, vim.log.levels.WARN)
 end
 

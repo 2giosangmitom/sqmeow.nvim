@@ -207,7 +207,7 @@ impl Options {
         let (client, connection) = tokio::time::timeout(crate::CONNECT_TIMEOUT, open)
             .await
             .map_err(|_| Error::driver("PostgreSQL connection timed out"))?
-            .map_err(driver)?;
+            .map_err(connect_error)?;
         let task = tokio::spawn(async move {
             if let Err(error) = connection.await {
                 tracing::debug!(%error, "PostgreSQL connection ended");
@@ -385,7 +385,14 @@ pub(super) fn driver(error: tokio_postgres::Error) -> Error {
     if error.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED) {
         return Error::Cancelled;
     }
-    if error.is_closed() || retryable(&error) {
+    // A FATAL or PANIC response ends the session, as when the server terminates it.
+    let fatal = error.as_db_error().is_some_and(|db| {
+        matches!(
+            db.parsed_severity(),
+            Some(tokio_postgres::error::Severity::Fatal | tokio_postgres::error::Severity::Panic)
+        )
+    });
+    if fatal || error.is_closed() || retryable(&error) {
         return Error::ConnectionLost(error.to_string());
     }
     Error::driver(
@@ -393,6 +400,14 @@ pub(super) fn driver(error: tokio_postgres::Error) -> Error {
             .as_db_error()
             .map_or_else(|| error.to_string(), |db| db.to_string()),
     )
+}
+
+/// A failure while opening a connection, which has no connection yet to lose.
+pub(super) fn connect_error(error: tokio_postgres::Error) -> Error {
+    match driver(error) {
+        Error::ConnectionLost(message) => Error::Driver(message),
+        other => other,
+    }
 }
 
 pub(super) fn commit_error(error: tokio_postgres::Error) -> Error {

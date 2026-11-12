@@ -146,7 +146,7 @@ impl PostgresAdapter {
             .await?
             .query_one("select version()", &[])
             .await
-            .map_err(native::driver)?
+            .map_err(native::connect_error)?
             .get::<_, String>(0);
         if version.starts_with("CockroachDB") {
             let rows = pool
@@ -154,7 +154,7 @@ impl PostgresAdapter {
                 .await?
                 .simple_query("show session_id")
                 .await
-                .map_err(native::driver)?;
+                .map_err(native::connect_error)?;
             if let Some(tokio_postgres::SimpleQueryMessage::Row(row)) = rows.first() {
                 *cockroach_session.lock().unwrap() = row.get(0).map(str::to_owned);
             }
