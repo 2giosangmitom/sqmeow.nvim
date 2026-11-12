@@ -252,19 +252,19 @@ impl MySqlAdapter {
             native::retryable,
         )
         .await
-        .map_err(native::execution_error)?;
+        .map_err(Error::driver)?;
         let connection_id = connection.id();
         if read_only {
             connection
                 .query_drop("set session transaction read only")
                 .await
-                .map_err(native::execution_error)?;
+                .map_err(Error::driver)?;
         }
         let pool = Mutex::new(Some(connection));
         let meta = Mutex::new(Some(
             native::connect(options.clone(), preferred_tls)
                 .await
-                .map_err(native::execution_error)?,
+                .map_err(Error::driver)?,
         ));
 
         Ok(Self {

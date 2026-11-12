@@ -24,28 +24,24 @@ function M.on_connection(payload)
   if payload.state == 'error' or payload.state == 'closed' then
     state.remove_connection(payload.id)
   end
-  -- A lost server takes every connection to it along: the cluster it was opened from and the
-  -- databases opened from either. The drawer reloads them on reconnect.
+  -- A lost connection takes the databases opened from it along. One lost database session
+  -- does not prove the server is gone, so its cluster is probed: a dead server reports the
+  -- cluster lost too, which closes the rest. The drawer reloads them on reconnect.
   if payload.lost then
     local api = require('sqmeow.api.connection')
     local drawer = require('sqmeow.ui.drawer')
-    local root = connection.parent or payload.id
-    for _, other in ipairs(state.connection_list()) do
-      if other.parent == root then
-        drawer.forget(other.id)
+    for _, child in ipairs(state.connection_list()) do
+      if child.parent == payload.id then
+        api.disconnect(child.id)
+        drawer.forget(child.id)
       end
     end
-    if state.connections[root] then
-      api.disconnect(root)
-    else
-      for _, child in ipairs(state.connection_list()) do
-        if child.parent == root then
-          api.disconnect(child.id)
-        end
-      end
-    end
-    drawer.forget(root)
     drawer.forget(payload.id)
+    local parent = connection.parent and state.connections[connection.parent]
+    if parent and parent.state == 'connected' then
+      drawer.invalidate(parent.id, {})
+      drawer.load(parent.id, {})
+    end
     notify(
       ('lost connection to %s: %s'):format(connection.name, payload.error),
       vim.log.levels.WARN
