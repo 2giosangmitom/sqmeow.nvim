@@ -85,7 +85,7 @@ impl Core {
                     "error",
                     Value::from("nothing was applied: it was cancelled"),
                 )),
-                Err(error) => payload.push(("error", Value::from(error.to_string()))),
+                Err(error) => payload.extend(crate::server::payload::error(&error)),
             }
             self.emit("apply:done", map(payload));
         };

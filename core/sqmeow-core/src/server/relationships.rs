@@ -57,7 +57,7 @@ impl Request {
                 Value::Array(relationships.into_iter().map(relationship_node).collect()),
             )),
             // Unsupported backends must remain errors, not look like tables without keys.
-            Err(error) => payload.push(("error", Value::from(error.to_string()))),
+            Err(error) => payload.extend(crate::server::payload::error(&error)),
         }
         map(payload)
     }

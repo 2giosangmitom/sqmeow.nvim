@@ -252,19 +252,19 @@ impl MySqlAdapter {
             native::retryable,
         )
         .await
-        .map_err(Error::driver)?;
+        .map_err(native::execution_error)?;
         let connection_id = connection.id();
         if read_only {
             connection
                 .query_drop("set session transaction read only")
                 .await
-                .map_err(Error::driver)?;
+                .map_err(native::execution_error)?;
         }
         let pool = Mutex::new(Some(connection));
         let meta = Mutex::new(Some(
             native::connect(options.clone(), preferred_tls)
                 .await
-                .map_err(Error::driver)?,
+                .map_err(native::execution_error)?,
         ));
 
         Ok(Self {
@@ -461,7 +461,7 @@ impl Adapter for MySqlAdapter {
         connection
             .query_drop("start transaction")
             .await
-            .map_err(Error::driver)?;
+            .map_err(native::execution_error)?;
         let mut returned = Vec::new();
         for statement in statements {
             let outcome = self
@@ -491,7 +491,7 @@ impl Adapter for MySqlAdapter {
                     connection
                         .query_drop("rollback")
                         .await
-                        .map_err(Error::driver)?;
+                        .map_err(native::execution_error)?;
                     unfinished.armed = false;
                     return Err(if matches!(error, Error::Cancelled) {
                         error
@@ -505,7 +505,7 @@ impl Adapter for MySqlAdapter {
             connection
                 .query_drop("rollback")
                 .await
-                .map_err(Error::driver)?;
+                .map_err(native::execution_error)?;
             unfinished.armed = false;
             return Err(Error::Cancelled);
         }
@@ -590,8 +590,7 @@ impl Adapter for MySqlAdapter {
              order by schema_name",
         )
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         Ok(rows
             .iter()
@@ -618,8 +617,7 @@ impl Adapter for MySqlAdapter {
         )
         .bind(schema)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         Ok(rows
             .iter()
@@ -644,8 +642,7 @@ impl Adapter for MySqlAdapter {
         )
         .bind(schema)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         Ok(rows
             .iter()
@@ -679,8 +676,7 @@ impl Adapter for MySqlAdapter {
         );
         let row = query(&statement)
             .fetch_optional(&self.meta)
-            .await
-            .map_err(Error::driver)?
+            .await?
             .ok_or_else(|| Error::driver("routine source was not found"))?;
         let source: Option<String> = row.try_get(column).map_err(Error::driver)?;
         source
@@ -721,7 +717,7 @@ impl Adapter for MySqlAdapter {
         .bind(relation)
         .fetch_all(&self.meta)
         .await
-        .map_err(Error::driver)?;
+        ?;
 
         Ok(rows
             .iter()
@@ -756,8 +752,7 @@ impl Adapter for MySqlAdapter {
         .bind(schema)
         .bind(relation)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         let mut indexes: Vec<sqmeow_db::node::IndexNode> = Vec::new();
         for row in &rows {
@@ -799,8 +794,7 @@ impl Adapter for MySqlAdapter {
         .bind(schema)
         .bind(relation)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
         Ok(crate::relationship_nodes(rows))
     }
 
@@ -812,8 +806,7 @@ impl Adapter for MySqlAdapter {
         .bind(schema)
         .bind(relation)
         .fetch_optional(&self.meta)
-        .await
-        .map_err(Error::driver)?
+        .await?
         .filter(|comment| !comment.is_empty());
         let column_comments = query_as::<(String, String)>(
             "select column_name, column_comment from information_schema.columns
@@ -823,8 +816,7 @@ impl Adapter for MySqlAdapter {
         .bind(schema)
         .bind(relation)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         let parts = query_as::<(String, String, String, String, String)>(
             "select constraint_name, column_name, referenced_table_schema, referenced_table_name,
@@ -836,8 +828,7 @@ impl Adapter for MySqlAdapter {
         .bind(schema)
         .bind(relation)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
         let mut foreign_keys: Vec<sqmeow_db::node::ForeignKeyNode> = Vec::new();
         for (name, column, target_schema, target, referenced) in parts {
             if foreign_keys.last().is_none_or(|key| key.name != name) {
@@ -865,8 +856,7 @@ impl Adapter for MySqlAdapter {
         .bind(schema)
         .bind(relation)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
         let triggers = query_as::<(String, String)>(
             "select trigger_name, concat(action_timing, ' ', event_manipulation)
              from information_schema.triggers
@@ -876,8 +866,7 @@ impl Adapter for MySqlAdapter {
         .bind(schema)
         .bind(relation)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         let sql = format!(
             "show create table {}.{}",
@@ -886,8 +875,7 @@ impl Adapter for MySqlAdapter {
         );
         let definition = query(sql)
             .fetch_optional(&self.meta)
-            .await
-            .map_err(Error::driver)?
+            .await?
             .and_then(|row| row.try_get::<String, _>(1).ok());
 
         Ok(sqmeow_db::node::Details {
@@ -908,8 +896,7 @@ impl Adapter for MySqlAdapter {
             "select user, host, account_locked from mysql.user order by user, host",
         )
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
         Ok(rows
             .into_iter()
             .map(|(user, host, locked)| sqmeow_db::node::RoleNode {

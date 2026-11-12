@@ -54,51 +54,44 @@ impl<T> Query<T> {
         self.values.push(value.into());
         self
     }
-    async fn rows(self, session: &Session) -> std::result::Result<Vec<mysql_async::Row>, String> {
+    async fn rows(self, session: &Session) -> Result<Vec<mysql_async::Row>> {
         let mut session = session.lock().await;
-        let connection = session.as_mut().ok_or("connection is closed")?;
+        let connection = session
+            .as_mut()
+            .ok_or_else(|| Error::driver("connection is closed"))?;
         if self.values.is_empty() {
-            connection.query(self.sql).await.map_err(|e| e.to_string())
+            connection.query(self.sql).await.map_err(execution_error)
         } else {
-            let prepared = connection.prep(self.sql).await.map_err(|e| e.to_string())?;
+            let prepared = connection.prep(self.sql).await.map_err(execution_error)?;
             let rows = connection
                 .exec(&prepared, Params::Positional(self.values))
                 .await;
             let closed = connection.close(prepared).await;
-            let rows = rows.map_err(|e| e.to_string())?;
-            closed.map_err(|e| e.to_string())?;
+            let rows = rows.map_err(execution_error)?;
+            closed.map_err(execution_error)?;
             Ok(rows)
         }
     }
 }
 impl Query<Row> {
-    pub(super) async fn fetch_all(
-        self,
-        session: &Session,
-    ) -> std::result::Result<Vec<Row>, String> {
+    pub(super) async fn fetch_all(self, session: &Session) -> Result<Vec<Row>> {
         Ok(self.rows(session).await?.into_iter().map(Row).collect())
     }
-    pub(super) async fn fetch_optional(
-        self,
-        session: &Session,
-    ) -> std::result::Result<Option<Row>, String> {
+    pub(super) async fn fetch_optional(self, session: &Session) -> Result<Option<Row>> {
         Ok(self.fetch_all(session).await?.into_iter().next())
     }
 }
 impl<T: FromRow> Query<T> {
-    pub(super) async fn fetch_all(self, session: &Session) -> std::result::Result<Vec<T>, String> {
+    pub(super) async fn fetch_all(self, session: &Session) -> Result<Vec<T>> {
         self.rows(session)
             .await?
             .into_iter()
-            .map(|row| mysql_async::from_row_opt(row).map_err(|e| e.to_string()))
+            .map(|row| mysql_async::from_row_opt(row).map_err(Error::driver))
             .collect()
     }
 }
 impl<T: FromValue> Query<(T,)> {
-    pub(super) async fn fetch_optional(
-        self,
-        session: &Session,
-    ) -> std::result::Result<Option<T>, String> {
+    pub(super) async fn fetch_optional(self, session: &Session) -> Result<Option<T>> {
         Ok(self
             .fetch_all(session)
             .await?
@@ -343,9 +336,11 @@ fn decode(value: &Value, column: &WireColumn, timezone: &str) -> Cell {
     }
 }
 
-fn execution_error(error: mysql_async::Error) -> Error {
+pub(super) fn execution_error(error: mysql_async::Error) -> Error {
     if matches!(&error, mysql_async::Error::Server(server) if server.code == 1317) {
         Error::Cancelled
+    } else if matches!(&error, mysql_async::Error::Io(_)) {
+        Error::ConnectionLost(error.to_string())
     } else {
         Error::driver(error)
     }
@@ -387,7 +382,7 @@ async fn collect<P: mysql_async::prelude::Protocol>(
             }
         }
     }
-    output.drop_result().await.map_err(Error::driver)?;
+    output.drop_result().await.map_err(execution_error)?;
     Ok(results)
 }
 pub(super) async fn execute(

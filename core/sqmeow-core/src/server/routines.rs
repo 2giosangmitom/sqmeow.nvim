@@ -55,7 +55,7 @@ impl Request {
         ];
         match source {
             Ok(definitions) => payload.push(("source", Value::from(definitions.join("\n\n")))),
-            Err(error) => payload.push(("error", Value::from(error.to_string()))),
+            Err(error) => payload.extend(crate::server::payload::error(&error)),
         }
         map(payload)
     }

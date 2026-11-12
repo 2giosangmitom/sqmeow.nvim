@@ -12,6 +12,15 @@ pub fn map(pairs: Vec<(&str, Value)>) -> Value {
     )
 }
 
+/// An operation's failure, flagged `lost` when the connection that ran it is gone.
+pub fn error(error: &sqmeow_db::error::Error) -> Vec<(&'static str, Value)> {
+    let mut pairs = vec![("error", Value::from(error.to_string()))];
+    if error.is_connection_lost() {
+        pairs.push(("lost", Value::from(true)));
+    }
+    pairs
+}
+
 /// Build a msgpack array of strings.
 pub fn strings<I, S>(items: I) -> Value
 where

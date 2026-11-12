@@ -449,6 +449,7 @@ impl Core {
                     }
                 }
                 Err(error) => {
+                    let lost = error.is_connection_lost();
                     let (state, error) = match error {
                         DbError::Cancelled if deadline.passed() => (
                             "error",
@@ -488,6 +489,9 @@ impl Core {
                     }
                     if let Some(error) = error {
                         payload.push(("error", Value::from(error)));
+                    }
+                    if lost {
+                        payload.push(("lost", Value::from(true)));
                     }
                     if !kept.is_empty() {
                         let stored = self.session.store_run(kept);
