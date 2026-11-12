@@ -10,20 +10,7 @@ use crate::server::args::Args;
 use crate::server::payload::map;
 use crate::server::session::{ConnId, Connection};
 
-/// Driver messages that mean the server or the link to it is gone.
-const LOST: &[&str] = &[
-    "connection closed",
-    "connection refused",
-    "connection reset",
-    "broken pipe",
-    "server closed the connection",
-    "unexpected eof",
-    "server has gone away",
-    "lost connection",
-    "pool closed",
-];
-
-/// The connection an event's error says is gone, with that error.
+/// The connection an event reports as gone, with the error that showed it.
 pub(super) fn lost_connection(event: &str, payload: &Value) -> Option<(ConnId, String)> {
     if event == "conn:state" {
         return None;
@@ -37,12 +24,14 @@ pub(super) fn lost_connection(event: &str, payload: &Value) -> Option<(ConnId, S
             .find(|(name, _)| name.as_str() == Some(key))
             .map(|(_, value)| value)
     };
-    let error = field("error")?.as_str()?;
+    if field("lost")?.as_bool() != Some(true) {
+        return None;
+    }
     let id = field("conn_id")?.as_i64()?;
-    let lower = error.to_lowercase();
-    LOST.iter()
-        .any(|text| lower.contains(text))
-        .then(|| (ConnId(id), error.to_owned()))
+    let error = field("error")
+        .and_then(Value::as_str)
+        .unwrap_or("connection lost");
+    Some((ConnId(id), error.to_owned()))
 }
 
 struct OpenOptions {
@@ -214,24 +203,37 @@ impl Core {
 mod tests {
     use super::*;
 
-    fn event(error: &str) -> Value {
-        map(vec![
-            ("conn_id", Value::from(3)),
-            ("error", Value::from(error)),
-        ])
+    fn event(error: &str, lost: bool) -> Value {
+        let mut pairs = vec![("conn_id", Value::from(3)), ("error", Value::from(error))];
+        if lost {
+            pairs.push(("lost", Value::from(true)));
+        }
+        map(pairs)
     }
 
     #[test]
-    fn lost_connection_errors_name_the_connection() {
-        let (id, error) = lost_connection("schema:nodes", &event("connection closed")).unwrap();
+    fn events_flagged_lost_name_the_connection() {
+        let (id, error) =
+            lost_connection("schema:nodes", &event("connection closed", true)).unwrap();
         assert_eq!(id, ConnId(3));
         assert_eq!(error, "connection closed");
-        assert!(lost_connection("call:state", &event("Broken pipe (os error 32)")).is_some());
     }
 
     #[test]
-    fn other_errors_keep_the_connection() {
-        assert!(lost_connection("call:state", &event("syntax error at or near")).is_none());
-        assert!(lost_connection("conn:state", &event("connection refused")).is_none());
+    fn database_errors_quoting_lost_phrases_keep_the_connection() {
+        let raised = event("ERROR: P0001: lost connection", false);
+        assert!(lost_connection("call:state", &raised).is_none());
+        let missing = event(r#"relation "connection closed" does not exist"#, false);
+        assert!(lost_connection("schema:nodes", &missing).is_none());
+        assert!(lost_connection("conn:state", &event("connection closed", true)).is_none());
+    }
+
+    #[test]
+    fn payload_errors_flag_only_lost_connections() {
+        use sqmeow_db::error::Error;
+        let lost = crate::server::payload::error(&Error::ConnectionLost("gone".into()));
+        assert!(lost.iter().any(|(key, _)| *key == "lost"));
+        let quoted = crate::server::payload::error(&Error::driver("connection closed"));
+        assert!(quoted.iter().all(|(key, _)| *key != "lost"));
     }
 }

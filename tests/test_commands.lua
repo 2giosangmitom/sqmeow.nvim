@@ -171,6 +171,42 @@ T['a notice from connecting is shown as a warning'] = function()
   state.remove_connection(id)
 end
 
+T['a server lost through a database closes its cluster and siblings'] = function()
+  local state = require('sqmeow.core.state')
+  helpers.stub(require('sqmeow.ui.drawer'), 'render', function() end)
+  helpers.stub(require('sqmeow.ui.editor'), 'update_winbar', function() end)
+  local cluster = state.next_connection_id()
+  state.add_connection({ id = cluster, name = 'pg', url = 'postgres://pg', state = 'connected' })
+  local child = state.next_connection_id()
+  state.add_connection({
+    id = child,
+    name = 'pg/app',
+    url = 'postgres://pg',
+    state = 'connected',
+    parent = cluster,
+  })
+  local sibling = state.next_connection_id()
+  state.add_connection({
+    id = sibling,
+    name = 'pg/other',
+    url = 'postgres://pg',
+    state = 'connected',
+    parent = cluster,
+  })
+
+  require('sqmeow.rpc.events').on_connection({
+    id = child,
+    state = 'closed',
+    lost = true,
+    error = 'connection closed',
+  })
+
+  eq(state.connections[cluster], nil)
+  eq(state.connections[child], nil)
+  eq(state.connections[sibling], nil)
+  eq(notes[1].level, vim.log.levels.WARN)
+end
+
 T['use activates an open connection'] = function()
   local state = require('sqmeow.core.state')
   local id = state.next_connection_id()

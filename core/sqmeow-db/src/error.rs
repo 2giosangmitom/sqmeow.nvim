@@ -9,6 +9,10 @@ pub enum Error {
     #[error("unsupported database URL (unknown or invalid scheme)")]
     UnsupportedUrl(String),
 
+    /// The server or the link to it is gone; the connection cannot be used again.
+    #[error("{0}")]
+    ConnectionLost(String),
+
     /// The user cancelled while the statement was running.
     #[error("cancelled")]
     Cancelled,
@@ -18,6 +22,11 @@ impl Error {
     /// Wraps a driver error into [`Error::Driver`].
     pub fn driver(error: impl std::fmt::Display) -> Self {
         Self::Driver(error.to_string())
+    }
+
+    /// Whether the connection that returned this error is gone.
+    pub fn is_connection_lost(&self) -> bool {
+        matches!(self, Self::ConnectionLost(_))
     }
 }
 

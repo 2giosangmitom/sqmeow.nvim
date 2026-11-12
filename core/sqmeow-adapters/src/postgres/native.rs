@@ -385,6 +385,9 @@ pub(super) fn driver(error: tokio_postgres::Error) -> Error {
     if error.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED) {
         return Error::Cancelled;
     }
+    if error.is_closed() || retryable(&error) {
+        return Error::ConnectionLost(error.to_string());
+    }
     Error::driver(
         error
             .as_db_error()

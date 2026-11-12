@@ -146,7 +146,7 @@ impl PostgresAdapter {
             .await?
             .query_one("select version()", &[])
             .await
-            .map_err(Error::driver)?
+            .map_err(native::driver)?
             .get::<_, String>(0);
         if version.starts_with("CockroachDB") {
             let rows = pool
@@ -154,7 +154,7 @@ impl PostgresAdapter {
                 .await?
                 .simple_query("show session_id")
                 .await
-                .map_err(Error::driver)?;
+                .map_err(native::driver)?;
             if let Some(tokio_postgres::SimpleQueryMessage::Row(row)) = rows.first() {
                 *cockroach_session.lock().unwrap() = row.get(0).map(str::to_owned);
             }
@@ -189,8 +189,7 @@ impl PostgresAdapter {
                  order by datname",
             )
             .fetch_all(&self.meta)
-            .await
-            .map_err(Error::driver),
+            .await,
         )
     }
 
@@ -215,8 +214,7 @@ impl PostgresAdapter {
                 )
                 .bind(session)
                 .fetch_all(&connection)
-                .await
-                .map_err(Error::driver)?;
+                .await?;
                 connection.close().await;
             } else {
                 self.options
@@ -363,8 +361,7 @@ impl PostgresAdapter {
         )
         .bind(oid)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
         let constraints = pg::query_as::<(String, String)>(
             "select conname::text, pg_get_constraintdef(oid) from pg_catalog.pg_constraint
              where conrelid = $1 and contype in ('p', 'u', 'f', 'c', 'x')
@@ -372,8 +369,7 @@ impl PostgresAdapter {
         )
         .bind(oid)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
         let indexes = pg::query_scalar::<String>(
             "select pg_get_indexdef(i.indexrelid) from pg_catalog.pg_index i
              where i.indrelid = $1
@@ -383,7 +379,7 @@ impl PostgresAdapter {
         .bind(oid)
         .fetch_all(&self.meta)
         .await
-        .map_err(Error::driver)?;
+        ?;
 
         let mut lines: Vec<String> = columns
             .into_iter()
@@ -1024,8 +1020,7 @@ impl Adapter for PostgresAdapter {
              order by nspname",
         )
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         Ok(rows
             .iter()
@@ -1051,8 +1046,7 @@ impl Adapter for PostgresAdapter {
         )
         .bind(schema)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         Ok(rows
             .iter()
@@ -1086,8 +1080,7 @@ impl Adapter for PostgresAdapter {
         )
         .bind(schema)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         Ok(rows
             .iter()
@@ -1126,7 +1119,6 @@ impl Adapter for PostgresAdapter {
         .bind(prokind)
         .fetch_all(&self.meta)
         .await
-        .map_err(Error::driver)
     }
 
     async fn columns(&self, schema: &str, relation: &str) -> Result<Vec<ColumnNode>> {
@@ -1165,8 +1157,7 @@ impl Adapter for PostgresAdapter {
         .bind(schema)
         .bind(relation)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         Ok(rows
             .iter()
@@ -1206,8 +1197,7 @@ impl Adapter for PostgresAdapter {
         .bind(schema)
         .bind(relation)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         Ok(rows
             .into_iter()
@@ -1242,7 +1232,7 @@ impl Adapter for PostgresAdapter {
              where k.contype = 'f' and ((sn.nspname = $1 and s.relname = $2)
                                     or (tn.nspname = $1 and t.relname = $2))
              order by sn.nspname, s.relname, k.conname, k.oid",
-        ).bind(schema).bind(relation).fetch_all(&self.meta).await.map_err(Error::driver)?;
+        ).bind(schema).bind(relation).fetch_all(&self.meta).await?;
         Ok(rows
             .into_iter()
             .map(
@@ -1278,8 +1268,7 @@ impl Adapter for PostgresAdapter {
         .bind(schema)
         .bind(relation)
         .fetch_optional(&self.meta)
-        .await
-        .map_err(Error::driver)?
+        .await?
         else {
             return Ok(sqmeow_db::node::Details::default());
         };
@@ -1287,8 +1276,7 @@ impl Adapter for PostgresAdapter {
         let comment = pg::query_scalar::<Option<String>>("select obj_description($1, 'pg_class')")
             .bind(oid)
             .fetch_one(&self.meta)
-            .await
-            .map_err(Error::driver)?;
+            .await?;
         let column_comments = pg::query_as::<(String, String)>(
             "select a.attname::text, col_description(a.attrelid, a.attnum)
              from pg_catalog.pg_attribute a
@@ -1298,8 +1286,7 @@ impl Adapter for PostgresAdapter {
         )
         .bind(oid)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
         let foreign_keys = pg::query_as::<(String, Vec<String>, String, Vec<String>)>(
             "select k.conname::text,
                     array(select a.attname::text
@@ -1318,7 +1305,7 @@ impl Adapter for PostgresAdapter {
         .bind(oid)
         .fetch_all(&self.meta)
         .await
-        .map_err(Error::driver)?
+        ?
         .into_iter()
         .map(|(name, columns, target, referenced)| sqmeow_db::node::ForeignKeyNode {
             name,
@@ -1333,24 +1320,21 @@ impl Adapter for PostgresAdapter {
         )
         .bind(oid)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
         let triggers = pg::query_as::<(String, String)>(
             "select tgname::text, pg_get_triggerdef(oid, true) from pg_catalog.pg_trigger
              where tgrelid = $1 and not tgisinternal order by tgname",
         )
         .bind(oid)
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
 
         let definition = match kind as u8 {
             b'v' | b'm' => {
                 let body = pg::query_scalar::<String>("select pg_get_viewdef($1, true)")
                     .bind(oid)
                     .fetch_one(&self.meta)
-                    .await
-                    .map_err(Error::driver)?;
+                    .await?;
                 let what = if kind as u8 == b'm' {
                     "MATERIALIZED VIEW"
                 } else {
@@ -1385,8 +1369,7 @@ impl Adapter for PostgresAdapter {
              from pg_catalog.pg_roles where rolname !~ '^pg_' order by rolname",
         )
         .fetch_all(&self.meta)
-        .await
-        .map_err(Error::driver)?;
+        .await?;
         Ok(rows
             .into_iter()
             .map(

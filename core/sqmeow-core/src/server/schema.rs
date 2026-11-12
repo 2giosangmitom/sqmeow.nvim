@@ -71,7 +71,7 @@ impl Core {
                     payload.push(("indexes", Value::Array(index_nodes(indexes))));
                     payload.extend(details_payload(details));
                 }
-                Err(error) => payload.push(("error", Value::from(error.to_string()))),
+                Err(error) => payload.extend(crate::server::payload::error(&error)),
             }
             self.emit("structure:done", map(payload));
         };
@@ -108,7 +108,7 @@ impl Core {
             Ok(nodes) => payload.push(("nodes", Value::Array(nodes))),
             Err(error) => {
                 payload.push(("nodes", Value::Array(vec![])));
-                payload.push(("error", Value::from(error.to_string())));
+                payload.extend(crate::server::payload::error(&error));
             }
         }
         self.emit("schema:nodes", map(payload));
