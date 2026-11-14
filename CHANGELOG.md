@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.2.1](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.2.0...v3.2.1) (2026-11-14)
+
+
+### Fixes
+
+* azure sql connection ignores redirect ([#124](https://github.com/2giosangmitom/sqmeow.nvim/issues/124)) ([453b0d8](https://github.com/2giosangmitom/sqmeow.nvim/commit/453b0d8bfad03f4c3bd18c11383cd7013f72635a))
+* **connection:** close connections whose server is lost ([a719760](https://github.com/2giosangmitom/sqmeow.nvim/commit/a719760038c3a59e14ddb9edea5ad905656fb1fd))
+* **connection:** detect lost connections from typed errors ([9c7aa00](https://github.com/2giosangmitom/sqmeow.nvim/commit/9c7aa008a20714bffadea5adc8e5b18239d6f90c))
+* **connection:** keep setup failures and healthy sessions apart ([9f4b3ae](https://github.com/2giosangmitom/sqmeow.nvim/commit/9f4b3aede2f9f88cae02f917c9a98f30c15b05e3))
+
+
+### Documentation
+
+* rework contributor, agent, and issue guidance ([11e4d47](https://github.com/2giosangmitom/sqmeow.nvim/commit/11e4d47a3c19a6aa9c1aca1b94500386decba51e))
+
 ## [3.2.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.1.0...v3.2.0) (2026-11-04)
 
 
