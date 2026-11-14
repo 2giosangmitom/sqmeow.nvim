@@ -179,13 +179,23 @@ fn parse_url(input: &str, database: Option<&str>) -> Result<(Config, bool)> {
 
 async fn open(config: &Config) -> Result<Connection> {
     tokio::time::timeout(crate::CONNECT_TIMEOUT, async {
-        let tcp = TcpStream::connect(config.get_addr())
-            .await
-            .map_err(Error::driver)?;
-        tcp.set_nodelay(true).map_err(Error::driver)?;
-        Client::connect(config.clone(), tcp.compat_write())
-            .await
-            .map_err(Error::driver)
+        let mut config = config.clone();
+        for _ in 0..3 {
+            let tcp = TcpStream::connect(config.get_addr())
+                .await
+                .map_err(Error::driver)?;
+            tcp.set_nodelay(true).map_err(Error::driver)?;
+
+            match Client::connect(config.clone(), tcp.compat_write()).await {
+                Ok(client) => return Ok(client),
+                Err(tiberius::error::Error::Routing { host, port }) => {
+                    config.host(host);
+                    config.port(port);
+                }
+                Err(error) => return Err(Error::driver(error)),
+            }
+        }
+        Err(Error::driver("too many SQL Server redirects"))
     })
     .await
     .map_err(|_| Error::driver("timed out connecting to SQL Server"))?
