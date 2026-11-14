@@ -68,8 +68,6 @@ Calling `setup()` is optional unless you want to customize the defaults.
 <details>
 <summary>vim.pack (Neovim 0.12+)</summary>
 
-Register the handler before `vim.pack.add()`:
-
 ```lua
 vim.api.nvim_create_autocmd("PackChanged", {
   callback = function(event)
@@ -93,13 +91,9 @@ vim.pack.add({
 })
 ```
 
-Run `:packupdate` to update your plugins.
-
 </details>
 
 The install hook downloads the matching engine release. Prebuilt binaries are available for Linux (x86_64/ARM64), macOS (Apple Silicon), and Windows (x86_64).
-
-Building from source requires Rust, SQLite, and DuckDB. See [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions.
 
 To track `master` with lazy.nvim or vim.pack, remove the release version setting and use `install("cargo")`.
 
