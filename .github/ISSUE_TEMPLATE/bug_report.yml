@@ -1,7 +1,12 @@
 name: Bug report
 description: Report a bug in sqmeow.nvim
+title: "[Bug]: "
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [existing issues](https://github.com/2giosangmitom/sqmeow.nvim/issues) before opening a new one. Remove credentials and private data from anything you paste.
   - type: textarea
     id: description
     attributes:
@@ -13,7 +18,7 @@ body:
     id: reproduction
     attributes:
       label: Steps to reproduce
-      description: Give the steps, query, and config needed to reproduce the bug. Remove credentials and private data.
+      description: Give the smallest steps, query, and config that still show the bug. A minimal config helps rule out plugin conflicts.
       placeholder: |
         1. Connect to...
         2. Run this query...
@@ -24,11 +29,12 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Include the database version for connection or query bugs.
+      description: Include the database and version for connection or query bugs.
       placeholder: |
         OS:
         Neovim version:
         sqmeow.nvim tag or commit:
+        Engine version (from :checkhealth sqmeow):
         Database and version:
     validations:
       required: true
@@ -36,4 +42,4 @@ body:
     id: logs
     attributes:
       label: Logs or screenshots
-      description: Paste output from :checkhealth sqmeow or :Sqmeow messages, or attach a screenshot. Remove credentials and private data.
+      description: Paste output from :checkhealth sqmeow or :Sqmeow messages. Attach a screenshot or recording for UI bugs.

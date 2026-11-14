@@ -6,8 +6,6 @@ A lightweight database client that lives inside Neovim. Browse databases, run qu
 
 If you spend most of your time in the terminal and don't want to switch to a GUI just to inspect a few rows, sqmeow.nvim is for you.
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/2giosangmitom/sqmeow.nvim)
-
 ## Preview
 
 <details open>
@@ -29,19 +27,19 @@ If you spend most of your time in the terminal and don't want to switch to a GUI
 
 ## Features
 
-- **Multiple databases:** Work with SQL, NoSQL, and analytical databases in one place.
-- **Interactive results:** Browse, filter, sort, and edit data directly in Neovim.
-- **Query history:** Revisit previous results without running queries again.
-- **Local result processing:** Filter and sort retained rows using Polars.
-- **Project-local connections:** Keep connections and scratchpads alongside your project.
-- **Completion:** Database-aware suggestions with blink.cmp or nvim-cmp.
-- **Rust engine:** Database operations run in a separate Rust process.
+- Multiple databases: Work with SQL, NoSQL, and analytical databases in one place.
+- Interactive results: Browse, filter, sort, and edit data directly in Neovim.
+- Query history: Revisit previous results without running queries again.
+- Local result processing: Filter and sort retained rows using Polars.
+- Project-local connections: Keep connections and scratchpads alongside your project.
+- Completion: Database-aware suggestions with blink.cmp or nvim-cmp.
+- Rust engine: Database operations run in a separate Rust process.
 
 ## Supported databases
 
-- **Relational & analytical:** PostgreSQL, CockroachDB, MySQL, MariaDB, SQLite, DuckDB, ClickHouse, Oracle Database, Microsoft SQL Server.
-- **Key-value & document:** Redis, Valkey, Dragonfly, MongoDB, SurrealDB.
-- **Wide-column:** ScyllaDB, Cassandra.
+- Relational and analytical: PostgreSQL, CockroachDB, MySQL, MariaDB, SQLite, DuckDB, ClickHouse, Oracle Database, Microsoft SQL Server.
+- Key-value and document: Redis, Valkey, Dragonfly, MongoDB, SurrealDB.
+- Wide-column: ScyllaDB, Cassandra.
 
 ## Installation
 
@@ -116,41 +114,27 @@ After installation, run `:checkhealth sqmeow` to verify your setup. Use `:Sqmeow
 
 Use visual `<CR>` to execute selected text, or `<leader>E` to execute the entire buffer.
 
-Press `?` in the drawer or results window to see available keymaps.
+## Help
 
-### Keymaps
+The full manual ships as Vim help. Start with `:h sqmeow` for the table of contents. `:h sqmeow-keymaps` lists every mapping and shows how to override it, and `:h sqmeow-commands` covers the commands.
 
-| Key         | Action                                                |
-| ----------- | ----------------------------------------------------- |
-| `p` / `P`   | Preview a table / also open its query                 |
-| `gd` / `gr` | Query referenced parent row / referencing child rows  |
-| `gR`        | Browse declared foreign keys for a table or column    |
-| `L` / `H`   | Next / previous page                                  |
-| `K`         | Show row details                                      |
-| `gf` / `go` | Open the filter / sort bar                            |
-| `=`         | Filter by the current cell                            |
-| `s` / `S`   | Sort by column / add another sort column              |
-| `i`         | Stage a cell edit                                     |
-| `gs`        | Review staged edits                                   |
-| `<C-s>`     | Apply edits from the review window                    |
-| `x`         | Export results as CSV, JSON, or SQL (where supported) |
-| `R`         | Reset filters, sorting, and hidden columns            |
+Press `?` in the drawer or result window to see the mappings for that window.
 
-### Working with results
+## Working with results
 
-**Editing**
+### Editing
 
 Edit cells directly in the result grid, review your changes, and apply them when ready.
 
 Editing requires table-backed columns and a complete primary or unique key. Availability varies by database adapter. For server-enforced read-only access, use a read-only database account.
 
-**Filtering and sorting**
+### Filtering and sorting
 
 sqmeow.nvim uses Polars SQL to filter and sort retained results locally, including results from query history.
 
-You can explore data without rerunning the original query or losing staged edits. Rerun the query whenever you need fresh data.
+Explore data without rerunning the original query or losing staged edits. Rerun the query when you need fresh data.
 
-**Query languages**
+### Query languages
 
 Each database uses its own query language:
 
@@ -160,7 +144,7 @@ Each database uses its own query language:
 - ScyllaDB and Cassandra use CQL.
 - SurrealDB uses SurrealQL.
 
-For more details, see `:h sqmeow-commands`, `:h sqmeow-keymaps`, and `:h sqmeow-queries`.
+For more details, see `:h sqmeow-queries`.
 
 ## Connections
 
@@ -180,11 +164,11 @@ type = "sqlite"
 path = "app.db"
 ```
 
-The nearest project configuration overrides saved connections with the same name. Relative database paths are resolved from the project root.
+The nearest project configuration overrides saved connections with the same name. The plugin resolves relative database paths from the project root.
 
 ### Credentials
 
-You can also connect using a database URL:
+A connection can also use a database URL:
 
 ```toml
 [dev]
@@ -196,9 +180,9 @@ Set `DATABASE_URL` in your environment or in a `.env` file next to `.sqmeow/`. E
 
 Keep `.env` out of version control, and reconnect after changing credentials.
 
-**SSH tunnels**
+### SSH tunnels
 
-To connect through SSH, set `ssh = "user@bastion"` or use a Host alias from `~/.ssh/config`. The database host is resolved from the SSH host.
+To connect through SSH, set `ssh = "user@bastion"` or use a Host alias from `~/.ssh/config`. The plugin resolves the database host from the SSH host.
 
 See `:h sqmeow-project` and `:h sqmeow-credentials` for all connection options.
 
@@ -206,11 +190,7 @@ See `:h sqmeow-project` and `:h sqmeow-credentials` for all connection options.
 
 Store project queries in `.sqmeow/scratchpads/` using `.sql`, `.redis`, `.json`, or `.surql` files.
 
-Manage them directly from the drawer:
-
-- `a`: Create a file or folder.
-- `R`: Rename or move.
-- `d`: Delete.
+Create, rename, and delete them from the drawer. `:h sqmeow-keymaps` lists the scratchpad mappings.
 
 Queries run against the currently selected connection.
 
@@ -260,11 +240,11 @@ See `:h sqmeow-completion` for more details.
 
 ## Statusline
 
-Sqmeow exposes the current buffer's state as a plain table, so you can render connection and query telemetry in any statusline: [lualine.nvim](https://github.com/nvim-lualine/lualine.nvim), heirline, `mini.statusline`, or a custom `'statusline'`.
+sqmeow.nvim exposes the current buffer's state as a plain table, so you can render connection and query status in any statusline: [lualine.nvim](https://github.com/nvim-lualine/lualine.nvim), heirline, `mini.statusline`, or a custom `'statusline'`.
 
 `require("sqmeow.api.view").status()` returns `nil` outside database buffers, and `require("sqmeow.api.view").column()` returns the active result column and SQL type, or `""`.
 
-If you display connection and query telemetry in your global statusline, you can disable winbars completely (`ui = { winbar = false }`) or control them per window (`ui = { winbar = { editor = false, result = true, show_connection = false } }`).
+If your statusline already shows this, you can disable winbars completely (`ui = { winbar = false }`) or control them per window (`ui = { winbar = { editor = false, result = true, show_connection = false } }`).
 
 <details>
 <summary>lualine.nvim</summary>
@@ -387,7 +367,7 @@ See `:h sqmeow.api.view.status()` and `:h sqmeow.api.view.column()` for more det
 
 ## Configuration
 
-You can customize behavior with `setup()`.
+Customize behavior with `setup()`.
 
 Common options with their defaults:
 
@@ -424,11 +404,11 @@ Thanks to these projects for ideas and workflows:
 - [squix](https://github.com/eduardofuncao/squix)
 - [DBeaver](https://github.com/dbeaver/dbeaver)
 
-I've borrowed plenty of ideas and even some code here and there. That's the beauty of open source! :)
+I've borrowed ideas from these projects, and some code in a few places. That's the beauty of open source! :)
 
 ## Contributing
 
-Contributions welcome. Open an issue, report a bug, suggest a feature, or submit a pull request.
+Contributions are welcome. Report a bug, suggest a feature, or submit a pull request.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 

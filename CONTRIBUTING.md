@@ -2,8 +2,6 @@
 
 Thanks for your interest in contributing to sqmeow.nvim!
 
-You don't need to be a Rust expert or a Neovim wizard to help out.
-
 ## Ways to contribute
 
 | Interested in...        | Where to start                                                                  |
@@ -15,32 +13,50 @@ You don't need to be a Rust expert or a Neovim wizard to help out.
 
 Look for issues labeled `good first issue`, or ask for help finding something to work on.
 
-## Getting familiar with the codebase
-
-Read the [DeepWiki documentation](https://deepwiki.com/2giosangmitom/sqmeow.nvim) for the architecture and key components.
-
 ## Development setup
 
-[Nix](https://nixos.org/download/) supplies Rust, Neovim, formatters, and local database dependencies.
+You need:
 
-1. Install Nix with `nix-command` and `flakes` enabled.
-2. Clone the repository and enter its directory.
-3. Run the following commands:
+- Rust 1.98 or newer with `rustfmt` and `clippy` (`rustup component add rustfmt clippy`)
+- [`just`](https://github.com/casey/just)
+- Neovim 0.10 or newer
+- SQLite 3 development headers and a DuckDB 1.2 C library with headers
+- `stylua`, `selene`, and `lua-language-server` for `just lint-lua`
+
+Clone the repository, enter its directory, and build the engine:
 
 ```sh
-nix develop
-cargo build -j 1
+just build-debug
 ```
 
-The initial setup may take a while as Nix downloads and builds dependencies.
+The initial build can take a while because Cargo compiles every database adapter.
 
-On slower machines, use `-j 1` with Cargo and run checks individually to reduce memory usage.
+On machines with limited memory, run `SQMEOW_CARGO_FLAGS='-j 1' just build-debug`. Running checks one at a time also reduces memory use.
+
+On a fresh checkout, run `just docs-check` once before linting. It downloads the Lua plugins that LuaLS needs into `.tests/`.
 
 ### SQLite and DuckDB
 
-Development builds dynamically link against the system SQLite and DuckDB libraries provided by Nix.
+Development builds link dynamically against the SQLite and DuckDB libraries installed on your system. If they are not in a standard location, point Cargo at them:
 
-Distribution builds bundle SQLite and DuckDB from source using `just dist-build <target>`, which enables `-p sqmeow-core --features bundled`.
+```sh
+export SQLITE3_LIB_DIR=/usr/lib
+export SQLITE3_INCLUDE_DIR=/usr/include
+export DUCKDB_LIB_DIR=/usr/local/lib
+export DUCKDB_INCLUDE_DIR=/usr/local/include
+```
+
+A dynamically linked engine also needs the DuckDB library at runtime, so add its directory to `LD_LIBRARY_PATH` on Linux or `DYLD_LIBRARY_PATH` on macOS.
+
+To skip system DuckDB entirely, build the engine with DuckDB and SQLite compiled from source:
+
+```sh
+cargo build -p sqmeow-core --features bundled
+```
+
+Distribution builds do the same for supported triples with `just dist-build <target>`.
+
+CI runs the same recipes inside the [Nix](https://nixos.org/download/) dev shell (`nix develop`). Using it locally is optional and gives you the exact toolchain versions.
 
 ## Making changes
 
@@ -59,14 +75,17 @@ just test-lua
 | Command           | Purpose                            |
 | ----------------- | ---------------------------------- |
 | `just lint`       | Run Rust and Lua linters           |
+| `just fmt`        | Format Rust and Lua code           |
 | `just test-rust`  | Run Rust tests                     |
 | `just test-lua`   | Build the engine and run Lua tests |
 | `just docs-check` | Check documentation                |
-| `just`            | Run the full CI check suite        |
+| `just`            | Run lint, tests, and docs-check    |
 
-The full suite can take 10+ minutes. While developing, run only the checks relevant to your changes.
+`just` runs the same checks as CI, without the database setup. It can take 10+ minutes. While developing, run only the checks relevant to your changes.
 
 See the [Justfile](Justfile) for all available commands.
+
+User help is generated from the EmmyLua annotations in `lua/sqmeow/init.lua`, `config.lua`, `keymap.lua`, and `api/*.lua`. Edit those files, run `just docs`, and commit `doc/sqmeow.txt`. `just docs-check` fails when the committed help is stale.
 
 Once you're happy with your changes, push your branch and open a pull request.
 
@@ -74,7 +93,7 @@ Once you're happy with your changes, push your branch and open a pull request.
 
 ### Database tests
 
-SQLite and DuckDB work locally without additional setup.
+SQLite and DuckDB tests need no Docker services.
 
 Integration tests for server-based databases (PostgreSQL, MySQL, Redis, etc.) require Docker.
 
@@ -90,9 +109,9 @@ just test-lua
 just db-down
 ```
 
-Tests that require unavailable database servers are skipped automatically. They may still appear as passed in the test summary.
+The harness skips tests whose `SQMEOW_TEST_*_URL` is not set. Those tests can still appear as passed in the summary.
 
-A successful run without `just db-up` doesn't necessarily mean all integration tests were executed.
+Without `just db-up`, some integration tests will not run even when the suite passes.
 
 To see skip messages, run:
 
@@ -105,7 +124,7 @@ cargo test -- --nocapture
 To run a single SQLite integration test:
 
 ```sh
-nix develop --command cargo test -j 1 \
+cargo test -j 1 \
   -p sqmeow-adapters \
   --test sqlite \
   relationships_preserve_catalog_endpoints \
@@ -116,40 +135,30 @@ For other databases, set the corresponding `SQMEOW_TEST_*_URL` environment varia
 
 Check `just test-rust` in the [Justfile](Justfile) for supported environment variables.
 
-### Writing tests
-
-- Prefer unit tests for logic that doesn't need a real database.
-- Use integration tests for connectivity, basic CRUD operations, and database-specific regressions.
-- Use `rstest` named cases when testing the same behavior with multiple inputs.
-- Reserve larger scenario tests for transactions, cancellation, and editor state.
-
-Avoid duplicating entire test scenarios when a smaller, more targeted test would do the job.
-
 ## Pull requests
 
 - Discuss major features or architectural changes in an issue first.
 - Update tests and documentation when behavior changes.
 - Run the relevant checks and mention anything you couldn't test.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for PR titles, such as `fix: ...`, `feat: ...`, or `docs: ...`.
+- Keep PR title and description clear.
 
 When you're ready, [open a pull request](https://github.com/2giosangmitom/sqmeow.nvim/pulls) and follow the provided template.
-
-Don't worry about getting everything perfect. We'll work through feedback together.
 
 ## Bug reports
 
 [Open an issue](https://github.com/2giosangmitom/sqmeow.nvim/issues/new/choose) and follow the provided template.
 
-Include the database type, relevant queries, and steps to reproduce when possible.
+Include the database type, relevant queries, and reproduction steps.
 
-Please remove credentials and other sensitive information from logs or configuration before sharing them.
+Remove credentials and other sensitive information from logs or configuration before sharing them.
 
 ## AI-assisted contributions
 
 AI-assisted contributions are welcome. You are responsible for the changes you submit:
 
 1. Read and understand the code.
-2. Run `just` when possible, or explain which checks you skipped and why.
+2. Run the relevant checks, or explain which ones you skipped and why.
 3. Be ready to explain how your changes work and why they're needed.
 
 ## Need help?

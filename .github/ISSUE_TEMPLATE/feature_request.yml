@@ -1,7 +1,12 @@
 name: Feature request
 description: Suggest an improvement to sqmeow.nvim
+title: "[Feature]: "
 labels: [enhancement]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [existing issues](https://github.com/2giosangmitom/sqmeow.nvim/issues) before opening a new one.
   - type: textarea
     id: problem
     attributes:
@@ -9,6 +14,19 @@ body:
       description: What are you trying to do, and where do you get stuck?
     validations:
       required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: What part of sqmeow.nvim does this affect?
+      multiple: true
+      options:
+        - Drawer and connection management
+        - Query editor and completion
+        - Results grid, filter, and sort
+        - Editing and export
+        - Engine and database support
+        - Documentation
+        - Other
   - type: textarea
     id: proposal
     attributes:
@@ -19,5 +37,10 @@ body:
   - type: textarea
     id: alternatives
     attributes:
-      label: Workarounds and affected databases
-      description: How do you handle this now? Which databases do you use for this task?
+      label: Workarounds
+      description: How do you handle this now, if at all?
+  - type: textarea
+    id: databases
+    attributes:
+      label: Databases
+      description: Which databases does this apply to? Include versions if the request is database-specific.
