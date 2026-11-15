@@ -86,8 +86,19 @@ T['status reports connection and query telemetry for SQL editor buffers'] = func
   eq(info.elapsed, '12ms')
   eq(info.page, 1)
   eq(info.total_pages, 2)
+  eq(info.result_index, nil)
+  eq(info.total_results, nil)
   eq(info.truncated, false)
   eq(info.error, nil)
+
+  state.call.results = {
+    { call_id = 9, state = 'done', rows = 10 },
+    { call_id = 10, state = 'done', rows = 142 },
+    { call_id = 11, state = 'done', rows = 5 },
+  }
+  info = assert(view.status(buf), 'status is nil')
+  eq(info.result_index, 2)
+  eq(info.total_results, 3)
 
   -- A buffer bound to a different connection does not show another connection's call telemetry.
   local other = vim.api.nvim_create_buf(true, true)
