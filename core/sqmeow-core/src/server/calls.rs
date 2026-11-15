@@ -398,11 +398,10 @@ impl Core {
             ],
         );
 
-        let mut last: Option<ResultSet> = None;
-        // Each earlier statement's result, kept as a call of its own, how the editor sees it, and
-        // where the ones with rows are saved.
+        let mut completed: Vec<ResultSet> = Vec::new();
+        // Each sibling statement's result, kept as a call of its own, and where the ones with rows
+        // are saved.
         let mut kept: Vec<Call> = Vec::new();
-        let mut earlier: Vec<Value> = Vec::new();
         let mut saves: Vec<(usize, PathBuf)> = Vec::new();
         for (index, statement) in statements.iter().enumerate() {
             let run = wrapped.as_deref().unwrap_or(&statement.sql);
@@ -431,22 +430,7 @@ impl Core {
                 };
             match outcome {
                 Ok(results) => {
-                    for result in results {
-                        if let Some(previous) = last.replace(result) {
-                            let (call, mut summary) = self.keep(conn_id, previous, None);
-                            let call = call.with_parameters(parameters.clone());
-                            if let Some(path) = archive
-                                .as_deref()
-                                .filter(|_| !call.result.columns().is_empty())
-                            {
-                                let path = sibling(path, kept.len());
-                                summary.push(("archive", Value::from(path.display().to_string())));
-                                saves.push((kept.len(), path));
-                            }
-                            kept.push(call);
-                            earlier.push(map(summary));
-                        }
-                    }
+                    completed.extend(results);
                 }
                 Err(error) => {
                     let lost = error.is_connection_lost();
@@ -462,8 +446,10 @@ impl Core {
                         error => ("error", Some(error.to_string())),
                     };
                     let mut payload = elapsed(started);
-                    if let Some(previous) = last.take() {
+                    let mut earlier: Vec<Value> = Vec::new();
+                    for previous in completed {
                         let (call, mut summary) = self.keep(conn_id, previous, None);
+                        let call = call.with_parameters(parameters.clone());
                         if let Some(path) = archive
                             .as_deref()
                             .filter(|_| !call.result.columns().is_empty())
@@ -472,7 +458,7 @@ impl Core {
                             summary.push(("archive", Value::from(path.display().to_string())));
                             saves.push((kept.len(), path));
                         }
-                        kept.push(call.with_parameters(parameters.clone()));
+                        kept.push(call);
                         earlier.push(map(summary));
                     }
                     if !earlier.is_empty() {
@@ -504,8 +490,17 @@ impl Core {
             }
         }
 
-        // Only the last statement's rows are shown, timed over the whole call.
-        let mut result = last.unwrap_or_default();
+        // Start on the first row-returning statement (or the first statement when none return
+        // rows), timed over the whole call.
+        if completed.is_empty() {
+            completed.push(ResultSet::default());
+        }
+        let primary_index = completed
+            .iter()
+            .position(|result| !result.columns().is_empty())
+            .unwrap_or(0);
+        let mut completed: Vec<Option<ResultSet>> = completed.into_iter().map(Some).collect();
+        let mut result = completed[primary_index].take().unwrap_or_default();
         result.set_elapsed(started.elapsed());
         let appended = if inserted {
             let rows = self.session.take_inserted(conn_id);
@@ -516,7 +511,7 @@ impl Core {
 
         let call = Call::new(call_id, conn_id, result)
             .with_dialect(Some(connection.backend.dialect()))
-            .with_parameters(parameters);
+            .with_parameters(parameters.clone());
         let mut payload = summarize(&call, true);
         payload.extend(elapsed(started));
         if appended > 0 {
@@ -526,11 +521,36 @@ impl Core {
         if let Some(database) = connection.backend.database() {
             payload.push(("current_database", Value::from(database)));
         }
-        if !earlier.is_empty() {
+        if completed.len() > 1 {
             let mut current = payload.clone();
             current.push(("state", Value::from("done")));
-            earlier.push(map(current));
-            payload.push(("results", Value::Array(earlier)));
+            if let Some(path) = archive
+                .as_deref()
+                .filter(|_| !call.result.columns().is_empty())
+            {
+                current.push(("archive", Value::from(path.display().to_string())));
+            }
+            let mut current = Some(current);
+            let mut results = Vec::with_capacity(completed.len());
+            for entry in completed {
+                if let Some(other) = entry {
+                    let (other_call, mut summary) = self.keep(conn_id, other, None);
+                    let other_call = other_call.with_parameters(parameters.clone());
+                    if let Some(path) = archive
+                        .as_deref()
+                        .filter(|_| !other_call.result.columns().is_empty())
+                    {
+                        let path = sibling(path, kept.len());
+                        summary.push(("archive", Value::from(path.display().to_string())));
+                        saves.push((kept.len(), path));
+                    }
+                    kept.push(other_call);
+                    results.push(map(summary));
+                } else if let Some(current) = current.take() {
+                    results.push(map(current));
+                }
+            }
+            payload.push(("results", Value::Array(results)));
         }
 
         let mut stored = self
@@ -633,8 +653,10 @@ impl Core {
             if !earlier.is_empty() {
                 let mut current = payload.clone();
                 current.push(("state", Value::from("done")));
-                earlier.push(map(current));
-                payload.push(("results", Value::Array(earlier)));
+                let mut results = Vec::with_capacity(earlier.len() + 1);
+                results.push(map(current));
+                results.extend(earlier);
+                payload.push(("results", Value::Array(results)));
             }
 
             self.session

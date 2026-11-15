@@ -85,28 +85,47 @@ end
 T['multi-statement queries retain every result without splitting quoted semicolons'] = function()
   local summary = run([[select 'a;b' as first; select 2 as second]])
   eq(#summary.results, 2)
-  eq(summary.columns[1].name, 'second')
-  local first = rpc.request('row', { call_id = summary.results[1].call_id, row = 0 })
-  eq(first[1].value, 'a;b')
+  eq(summary.columns[1].name, 'first')
+  eq(row()[1].value, 'a;b')
+  local second = rpc.request('row', { call_id = summary.results[2].call_id, row = 0 })
+  eq(second[1].value, '2')
+end
+
+T['multi-statement queries start on the first row-returning result'] = function()
+  local summary = run('select 1 as first; update people set age = age where id = 0')
+  eq(#summary.results, 2)
+  eq(summary.call_id, summary.results[1].call_id)
+  eq(summary.columns[1].name, 'first')
+  eq(row()[1].value, '1')
+  eq(summary.results[2].affected, 0)
+
+  local middle = run(
+    'update people set age = age where id = 0; select 2 as second; update people set age = age where id = 0'
+  )
+  eq(#middle.results, 3)
+  eq(middle.call_id, middle.results[2].call_id)
+  eq(middle.columns[1].name, 'second')
   eq(row()[1].value, '2')
 end
 
 T['archived multi-statement results restore together'] = function()
   local summary = run('select 1 as first; select 2 as second')
-  local earlier = summary.results[1].archive
+  local second = summary.results[2].archive
   helpers.wait_for('both results should be saved', function()
-    return vim.uv.fs_stat(earlier) ~= nil and vim.uv.fs_stat(summary.archive) ~= nil
+    return vim.uv.fs_stat(second) ~= nil and vim.uv.fs_stat(summary.archive) ~= nil
   end)
   local entry = require('sqmeow.server.history').entries({ limit = 1 })[1]
-  eq(entry.results, { earlier })
+  eq(entry.results, { second })
   local before = state.call.call_id
   require('sqmeow.api.view').restore(entry)
   helpers.wait_for('the run should be restored', function()
     return state.call.call_id ~= before and state.call.state == 'done'
   end)
   eq(#state.call.results, 2)
-  eq(state.call.columns[1].name, 'second')
-  eq(row()[1].value, '2')
+  eq(state.call.columns[1].name, 'first')
+  eq(row()[1].value, '1')
+  local other = rpc.request('row', { call_id = state.call.results[2].call_id, row = 0 })
+  eq(other[1].value, '2')
 end
 
 T['a failed batch retains every completed result'] = function()
