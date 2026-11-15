@@ -445,6 +445,12 @@ M.actions = {
   cancel = function()
     require('sqmeow.api.query').cancel()
   end,
+  next_result = function()
+    require('sqmeow.api.query').next_result()
+  end,
+  prev_result = function()
+    require('sqmeow.api.query').prev_result()
+  end,
   help = function()
     require('sqmeow.ui.help').open('editor')
   end,

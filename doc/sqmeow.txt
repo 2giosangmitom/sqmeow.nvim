@@ -943,6 +943,8 @@ editor
  <CR> (x)    Run the selection
  <leader>E   Run the whole buffer
  <C-c>       Stop the running query
+ ]r          Show the next statement's result
+ [r          Show the previous statement's result
 Type ~
 `(table<string, sqmeow.Keymap[]>)`
 
@@ -1228,6 +1230,16 @@ Show the first page of the current result.
                                                   *sqmeow.api.query.last_page()*
                          `sqmeow.api.query.last_page`()
 Show the last page of the current result.
+
+------------------------------------------------------------------------------
+                                                *sqmeow.api.query.next_result()*
+                        `sqmeow.api.query.next_result`()
+Show the next statement's result from a multi-statement run.
+
+------------------------------------------------------------------------------
+                                                *sqmeow.api.query.prev_result()*
+                        `sqmeow.api.query.prev_result`()
+Show the previous statement's result from a multi-statement run.
 
 
 ==============================================================================

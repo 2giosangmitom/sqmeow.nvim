@@ -47,6 +47,18 @@ M.subcommands = {
       require('sqmeow.api.query').prev_page()
     end,
   },
+  next_result = {
+    desc = "Show the next statement's result",
+    run = function()
+      require('sqmeow.api.query').next_result()
+    end,
+  },
+  prev_result = {
+    desc = "Show the previous statement's result",
+    run = function()
+      require('sqmeow.api.query').prev_result()
+    end,
+  },
 }
 
 return M

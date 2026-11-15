@@ -206,6 +206,8 @@ M.defaults = {
     { action = 'execute_selection', lhs = '<CR>', mode = 'x', desc = 'Run the selection' },
     { action = 'execute_buffer', lhs = '<leader>E', desc = 'Run the whole buffer' },
     { action = 'cancel', lhs = '<C-c>', desc = 'Stop the running query' },
+    { action = 'next_result', lhs = ']r', desc = "Show the next statement's result" },
+    { action = 'prev_result', lhs = '[r', desc = "Show the previous statement's result" },
   },
 }
 

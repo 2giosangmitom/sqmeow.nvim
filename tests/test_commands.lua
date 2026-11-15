@@ -373,4 +373,28 @@ T['completes child databases when cluster has databases'] = function()
   eq(vim.tbl_contains(offered, 'cluster/testdb'), true)
 end
 
+T['next_result and prev_result work via api.query, :Sqmeow subcommands, and editor keymaps'] = function()
+  local actions = require('sqmeow.ui.result').actions
+  local seen = {}
+  helpers.stub(actions, 'next_result', function()
+    table.insert(seen, 'next')
+  end)
+  helpers.stub(actions, 'prev_result', function()
+    table.insert(seen, 'prev')
+  end)
+
+  require('sqmeow.api.query').next_result()
+  require('sqmeow.api.query').prev_result()
+  vim.cmd('Sqmeow next_result')
+  vim.cmd('Sqmeow prev_result')
+
+  local buf = helpers.temp_buf({ 'select 1; select 2;' })
+  vim.api.nvim_set_current_buf(buf)
+  require('sqmeow.ui.editor').attach(buf, nil)
+  vim.cmd('normal ]r')
+  vim.cmd('normal [r')
+
+  eq(seen, { 'next', 'prev', 'next', 'prev', 'next', 'prev' })
+end
+
 return T
