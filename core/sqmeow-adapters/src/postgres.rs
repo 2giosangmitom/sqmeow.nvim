@@ -1186,7 +1186,7 @@ impl Adapter for PostgresAdapter {
             "select i.relname::text,
                     array(select pg_get_indexdef(ix.indexrelid, k, true)
                           from generate_series(1, ix.indnkeyatts::int) k order by k)::text[],
-                    ix.indisunique, ix.indisprimary
+                    ix.indisunique and ix.indpred is null, ix.indisprimary
              from pg_catalog.pg_index ix
              join pg_catalog.pg_class i on i.oid = ix.indexrelid
              join pg_catalog.pg_class t on t.oid = ix.indrelid

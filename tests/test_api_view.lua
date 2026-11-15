@@ -259,13 +259,14 @@ T['erd collects neighborhood and schema metadata over RPC events'] = function()
   local erd_mod = require('sqmeow.core.erd')
   local orig_request = rpc.request
   rpc.request = function(method, params)
+    local req = params or {}
     if method == 'relationships' then
       vim.schedule(function()
         erd_mod.on_relationships({
-          conn_id = params.conn_id,
-          schema = params.schema,
-          relation = params.relation,
-          request_id = params.request_id,
+          conn_id = req.conn_id,
+          schema = req.schema,
+          relation = req.relation,
+          request_id = req.request_id,
           resolved_schema = 'public',
           resolved_relation = 'orders',
           relationships = {
@@ -284,9 +285,9 @@ T['erd collects neighborhood and schema metadata over RPC events'] = function()
       return true, nil
     elseif method == 'structure' then
       vim.schedule(function()
-        if params.relation == 'orders' then
+        if req.relation == 'orders' then
           erd_mod.on_structure({
-            conn_id = params.conn_id,
+            conn_id = req.conn_id,
             schema = 'public',
             relation = 'orders',
             columns = {
@@ -298,7 +299,7 @@ T['erd collects neighborhood and schema metadata over RPC events'] = function()
           })
         else
           erd_mod.on_structure({
-            conn_id = params.conn_id,
+            conn_id = req.conn_id,
             schema = 'public',
             relation = 'users',
             columns = {
@@ -343,6 +344,20 @@ T['erd rejects disconnected and unsupported NoSQL connections'] = function()
   eq(err, 'ERD generation needs an open connection')
 
   state.add_connection({
+    id = 1,
+    name = 'app',
+    url = 'postgres://localhost/app',
+    dialect = 'postgres',
+    state = 'connected',
+  })
+  local buf = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_set_current_buf(buf)
+  vim.b[buf].sqmeow_connection = 'closed_conn'
+  started, err = view.erd({ schema = 'public' })
+  eq(started, false)
+  eq(err, '`closed_conn` is not open')
+
+  state.add_connection({
     id = 2,
     name = 'cache',
     url = 'redis://localhost:6379/0',
@@ -352,6 +367,50 @@ T['erd rejects disconnected and unsupported NoSQL connections'] = function()
   started, err = view.erd({ conn_id = 2 })
   eq(started, false)
   eq(err, 'ERD is not supported for redis')
+end
+
+T['erd preserves distinct table casing, normalizes numeric commas, and respects qualified FK targets'] = function()
+  local erd, err = view.erd({
+    schema = 'public',
+    tables = {
+      {
+        schema = 'public',
+        relation = 'Foo',
+        structure = {
+          columns = {
+            { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
+            { name = 'amount', type_name = 'numeric(10, 2)', nullable = false },
+          },
+          indexes = {},
+          foreign_keys = {
+            {
+              name = 'foo_missing_archive_fkey',
+              columns = { 'id' },
+              target = 'archive.foo',
+              referenced = { 'id' },
+            },
+          },
+        },
+      },
+      {
+        schema = 'public',
+        relation = 'foo',
+        structure = {
+          columns = {
+            { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
+          },
+          indexes = {},
+          foreign_keys = {},
+        },
+      },
+    },
+  })
+
+  eq(err, nil)
+  assert(erd, 'erd is nil')
+  eq(#erd.table_order, 2)
+  eq(#erd.edges, 0)
+  assert(erd.mermaid:find('numeric%(10_2%) amount', 1) ~= nil, 'expected numeric(10_2)')
 end
 
 return T

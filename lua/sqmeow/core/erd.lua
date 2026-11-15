@@ -17,7 +17,59 @@ end
 ---@param relation string
 ---@return string
 local function table_key(schema, relation)
-  return ((schema or ''):lower()) .. '.' .. relation:lower()
+  return (schema or '') .. '.' .. relation
+end
+
+--- Resolve a table key in `tables_map` preserving canonical case first, then unambiguous
+--- case-insensitive matching within the same schema, and finally (only when `qualified` is false)
+--- an unambiguous relation match across schemas.
+---@param tables_map table<string, sqmeow.ErdTable>
+---@param table_order string[]
+---@param schema string|nil
+---@param relation string|nil
+---@param qualified boolean
+---@return string|nil
+local function find_table_key(tables_map, table_order, schema, relation, qualified)
+  if not relation or relation == '' then
+    return nil
+  end
+  local exact = table_key(schema, relation)
+  if tables_map[exact] then
+    return exact
+  end
+
+  local same_schema_match = nil
+  local same_schema_count = 0
+  for _, k in ipairs(table_order) do
+    local candidate = tables_map[k]
+    if
+      candidate
+      and same_ident(candidate.schema or '', schema or '')
+      and same_ident(candidate.relation, relation)
+    then
+      same_schema_match = k
+      same_schema_count = same_schema_count + 1
+    end
+  end
+  if same_schema_count == 1 then
+    return same_schema_match
+  elseif same_schema_count > 1 or qualified then
+    return nil
+  end
+
+  local any_schema_match = nil
+  local any_schema_count = 0
+  for _, k in ipairs(table_order) do
+    local candidate = tables_map[k]
+    if candidate and same_ident(candidate.relation, relation) then
+      any_schema_match = k
+      any_schema_count = any_schema_count + 1
+    end
+  end
+  if any_schema_count == 1 then
+    return any_schema_match
+  end
+  return nil
 end
 
 ---@param raw_type string|nil
@@ -34,8 +86,9 @@ local function normalize_mermaid_type(raw_type)
   t = t:gsub('^time without time zone', 'time')
   t = t:gsub('^time with time zone', 'timetz')
   t = t:gsub('^double precision', 'float8')
+  t = t:gsub('%s*,%s*', '_')
   t = t:gsub('%s+', '_')
-  t = t:gsub('[^%w_%-(),%[%]]', '')
+  t = t:gsub('[^%w_%-()%[%]]', '')
   if t == '' then
     t = 'unknown'
   end
@@ -58,9 +111,15 @@ end
 ---@param schema string|nil
 ---@param relation string
 ---@param multi_schema boolean
+---@param relation_counts table<string, integer>|nil
 ---@return string
-local function format_mermaid_entity_name(schema, relation, multi_schema)
-  local raw = (multi_schema and schema and schema ~= '') and (schema .. '.' .. relation) or relation
+local function format_mermaid_entity_name(schema, relation, multi_schema, relation_counts)
+  local need_schema = (
+    (multi_schema or (relation_counts and (relation_counts[relation:lower()] or 0) > 1))
+    and schema
+    and schema ~= ''
+  )
+  local raw = need_schema and (schema .. '.' .. relation) or relation
   if raw:match('^[%a_][%w_]*$') then
     return raw
   end
@@ -140,11 +199,16 @@ end
 function M.build_mermaid(tables_map, table_order)
   local schemas_seen = {}
   local schema_count = 0
+  local relation_counts = {}
   for _, key in ipairs(table_order) do
     local entry = tables_map[key]
-    if entry and entry.schema and entry.schema ~= '' and not schemas_seen[entry.schema:lower()] then
-      schemas_seen[entry.schema:lower()] = true
-      schema_count = schema_count + 1
+    if entry then
+      if entry.schema and entry.schema ~= '' and not schemas_seen[entry.schema] then
+        schemas_seen[entry.schema] = true
+        schema_count = schema_count + 1
+      end
+      local rel_lower = (entry.relation or ''):lower()
+      relation_counts[rel_lower] = (relation_counts[rel_lower] or 0) + 1
     end
   end
   local multi_schema = schema_count > 1
@@ -158,24 +222,14 @@ function M.build_mermaid(tables_map, table_order)
     if struct then
       for _, fk in ipairs(struct.foreign_keys or {}) do
         local target_raw = fk.target or ''
-        local target_schema, target_rel = target_raw:match('^([^.]+)%.(.+)$')
-        if not target_rel then
-          target_schema = entry.schema or ''
-          target_rel = target_raw
-        end
-        local target_key = table_key(target_schema, target_rel or '')
-        if not tables_map[target_key] then
-          for k, candidate in pairs(tables_map) do
-            if same_ident(candidate.relation, target_rel) then
-              target_key = k
-              target_schema = candidate.schema
-              target_rel = candidate.relation
-              break
-            end
-          end
-        end
+        local explicit_schema, parsed_rel = target_raw:match('^([^.]+)%.(.+)$')
+        local qualified = explicit_schema ~= nil
+        local target_schema = explicit_schema or entry.schema or ''
+        local target_rel = parsed_rel or target_raw
+        local target_key =
+          find_table_key(tables_map, table_order, target_schema, target_rel, qualified)
 
-        if tables_map[target_key] then
+        if target_key and tables_map[target_key] then
           local src_cols = table.concat(fk.columns or {}, ', ')
           local ref_cols = table.concat(fk.referenced or {}, ', ')
           local sig = ('%s(%s)->%s(%s)'):format(key, src_cols:lower(), target_key, ref_cols:lower())
@@ -207,10 +261,18 @@ function M.build_mermaid(tables_map, table_order)
   local mmd_lines = { 'erDiagram' }
 
   for _, edge in ipairs(edges) do
-    local parent_name =
-      format_mermaid_entity_name(edge.target_schema, edge.target_relation, multi_schema)
-    local child_name =
-      format_mermaid_entity_name(edge.source_schema, edge.source_relation, multi_schema)
+    local parent_name = format_mermaid_entity_name(
+      edge.target_schema,
+      edge.target_relation,
+      multi_schema,
+      relation_counts
+    )
+    local child_name = format_mermaid_entity_name(
+      edge.source_schema,
+      edge.source_relation,
+      multi_schema,
+      relation_counts
+    )
     local src_cols = table.concat(edge.columns, ', ')
     local ref_cols = table.concat(edge.referenced, ', ')
     local label = src_cols ~= '' and (src_cols .. ' -> ' .. ref_cols)
@@ -229,7 +291,8 @@ function M.build_mermaid(tables_map, table_order)
   for _, key in ipairs(table_order) do
     local entry = tables_map[key]
     local struct = entry and entry.structure or {}
-    local entity_name = format_mermaid_entity_name(entry.schema, entry.relation, multi_schema)
+    local entity_name =
+      format_mermaid_entity_name(entry.schema, entry.relation, multi_schema, relation_counts)
     table.insert(mmd_lines, ('  %s {'):format(entity_name))
 
     local fk_col_map = {}
@@ -338,18 +401,28 @@ function M.on_structure(payload)
   if not payload or not payload.conn_id or not payload.relation then
     return
   end
-  local key = ('%d:%s:%s'):format(
+  local exact_key = ('%d:%s:%s'):format(payload.conn_id, payload.schema or '', payload.relation)
+  local cbs = struct_waiters[exact_key]
+  if cbs then
+    struct_waiters[exact_key] = nil
+    for _, cb in ipairs(cbs) do
+      cb(payload)
+    end
+    return
+  end
+  local lower_key = ('%d:%s:%s'):format(
     payload.conn_id,
     (payload.schema or ''):lower(),
     payload.relation:lower()
   )
-  local cbs = struct_waiters[key]
-  if not cbs then
-    return
-  end
-  struct_waiters[key] = nil
-  for _, cb in ipairs(cbs) do
-    cb(payload)
+  for key, waiters in pairs(struct_waiters) do
+    if key:lower() == lower_key then
+      struct_waiters[key] = nil
+      for _, cb in ipairs(waiters) do
+        cb(payload)
+      end
+      return
+    end
   end
 end
 
@@ -359,12 +432,12 @@ function M.on_relationships(payload)
   if not payload or not payload.request_id then
     return
   end
-  local cb = rel_waiters[payload.request_id]
-  if not cb then
+  local waiter = rel_waiters[payload.request_id]
+  if not waiter then
     return
   end
   rel_waiters[payload.request_id] = nil
-  cb(payload)
+  waiter.cb(payload)
 end
 
 --- Handle a `schema:nodes` engine event.
@@ -397,6 +470,12 @@ function M.invalidate(conn_id)
       end
     end
   end
+  for req_id, waiter in pairs(rel_waiters) do
+    if waiter.conn_id == conn_id then
+      rel_waiters[req_id] = nil
+      waiter.cb({ conn_id = conn_id, request_id = req_id, error = 'connection closed' })
+    end
+  end
   for key, cbs in pairs(nodes_waiters) do
     if key:sub(1, #prefix) == prefix then
       nodes_waiters[key] = nil
@@ -407,33 +486,56 @@ function M.invalidate(conn_id)
   end
 end
 
---- Clear all pending waiters on engine restart.
+--- Fail and clear all pending waiters on engine restart.
 function M.reset()
+  local pending_struct = struct_waiters
+  local pending_rel = rel_waiters
+  local pending_nodes = nodes_waiters
   struct_waiters = {}
   rel_waiters = {}
   nodes_waiters = {}
+
+  for _, cbs in pairs(pending_struct) do
+    for _, cb in ipairs(cbs) do
+      cb({ error = 'engine restarted' })
+    end
+  end
+  for req_id, waiter in pairs(pending_rel) do
+    waiter.cb({ conn_id = waiter.conn_id, request_id = req_id, error = 'engine restarted' })
+  end
+  for _, cbs in pairs(pending_nodes) do
+    for _, cb in ipairs(cbs) do
+      cb({ nodes = {}, error = 'engine restarted' })
+    end
+  end
 end
 
 local function fetch_structure(conn_id, schema, relation, callback)
   local rpc = require('sqmeow.rpc.client')
-  local key = ('%d:%s:%s'):format(conn_id, (schema or ''):lower(), relation:lower())
-  struct_waiters[key] = struct_waiters[key] or {}
-  table.insert(struct_waiters[key], callback)
+  local key = ('%d:%s:%s'):format(conn_id, schema or '', relation)
+  if struct_waiters[key] then
+    table.insert(struct_waiters[key], callback)
+    return
+  end
+  struct_waiters[key] = { callback }
   local _, err = rpc.request('structure', {
     conn_id = conn_id,
     schema = schema or '',
     relation = relation,
   })
   if err then
+    local cbs = struct_waiters[key] or {}
     struct_waiters[key] = nil
-    callback({ error = err, conn_id = conn_id, schema = schema, relation = relation })
+    for _, cb in ipairs(cbs) do
+      cb({ error = err, conn_id = conn_id, schema = schema, relation = relation })
+    end
   end
 end
 
 local function fetch_relationships(conn_id, schema, relation, callback)
   local rpc = require('sqmeow.rpc.client')
   local req_id = rpc.next_request_id()
-  rel_waiters[req_id] = callback
+  rel_waiters[req_id] = { conn_id = conn_id, cb = callback }
   local _, err = rpc.request('relationships', {
     conn_id = conn_id,
     schema = schema or '',
@@ -455,15 +557,21 @@ local function fetch_nodes(conn_id, path, callback)
   local rpc = require('sqmeow.rpc.client')
   local path_str = table.concat(path or {}, '\0')
   local key = ('%d:%s'):format(conn_id, path_str)
-  nodes_waiters[key] = nodes_waiters[key] or {}
-  table.insert(nodes_waiters[key], callback)
+  if nodes_waiters[key] then
+    table.insert(nodes_waiters[key], callback)
+    return
+  end
+  nodes_waiters[key] = { callback }
   local _, err = rpc.request('introspect', {
     conn_id = conn_id,
     path = path or {},
   })
   if err then
+    local cbs = nodes_waiters[key] or {}
     nodes_waiters[key] = nil
-    callback({ error = err, nodes = {} })
+    for _, cb in ipairs(cbs) do
+      cb({ error = err, nodes = {} })
+    end
   end
 end
 
@@ -498,8 +606,14 @@ local function collect_structures(meta, table_list, discovered_rels, callback)
     finished = true
 
     for _, rel in ipairs(discovered_rels or {}) do
-      local src_key = table_key(rel.source_schema, rel.source_relation or '')
-      local src_entry = tables_map[src_key]
+      local src_key = find_table_key(
+        tables_map,
+        table_order,
+        rel.source_schema,
+        rel.source_relation or '',
+        rel.source_schema ~= nil and rel.source_schema ~= ''
+      )
+      local src_entry = src_key and tables_map[src_key] or nil
       if src_entry then
         src_entry.structure = src_entry.structure
           or { columns = {}, indexes = {}, foreign_keys = {} }
@@ -541,13 +655,21 @@ local function collect_structures(meta, table_list, discovered_rels, callback)
   for _, key in ipairs(table_order) do
     local entry = tables_map[key]
     fetch_structure(meta.conn_id, entry.schema, entry.relation, function(payload)
-      if payload and not payload.error then
-        entry.structure = payload
-        if payload.schema and payload.schema ~= '' then
-          entry.schema = payload.schema
-        end
-      else
-        entry.structure = { columns = {}, indexes = {}, foreign_keys = {} }
+      if finished then
+        return
+      end
+      if not payload or payload.error then
+        finished = true
+        callback(nil, (payload and payload.error) or 'structure request failed')
+        return
+      end
+      entry.structure = {
+        columns = payload.columns or {},
+        indexes = payload.indexes or {},
+        foreign_keys = payload.foreign_keys or {},
+      }
+      if payload.schema and payload.schema ~= '' then
+        entry.schema = payload.schema
       end
       pending = pending - 1
       if pending <= 0 then
@@ -576,8 +698,14 @@ local function resolve_connection(opts)
     end
     return conn, nil
   end
-  local conn = require('sqmeow.api.connection').target(0) or state.current_connection()
-  if not conn or conn.state ~= 'connected' then
+  local conn, target_err = require('sqmeow.api.connection').target(0)
+  if not conn then
+    if vim.b[0].sqmeow_connection then
+      return nil, target_err
+    end
+    return nil, 'ERD generation needs an open connection'
+  end
+  if conn.state ~= 'connected' then
     return nil, 'ERD generation needs an open connection'
   end
   return conn, nil
@@ -628,6 +756,7 @@ function M.generate(opts, callback)
     local visited = {}
     local table_list = {}
     local discovered_rels = {}
+    local aborted = false
 
     local function add_table(s, r)
       local key = table_key(s, r)
@@ -641,7 +770,7 @@ function M.generate(opts, callback)
     local root_item = add_table(schema, relation)
 
     local function expand_hop(remaining, done)
-      if remaining <= 0 then
+      if aborted or remaining <= 0 then
         return done()
       end
       local to_fetch = {}
@@ -658,18 +787,24 @@ function M.generate(opts, callback)
       local pending = #to_fetch
       for _, item in ipairs(to_fetch) do
         fetch_relationships(conn_id, item.schema, item.relation, function(payload)
-          if payload and not payload.error then
-            if payload.resolved_schema and payload.resolved_schema ~= '' then
-              item.schema = payload.resolved_schema
+          if aborted then
+            return
+          end
+          if not payload or payload.error then
+            aborted = true
+            cb(nil, (payload and payload.error) or 'relationships request failed')
+            return
+          end
+          if payload.resolved_schema and payload.resolved_schema ~= '' then
+            item.schema = payload.resolved_schema
+          end
+          for _, rel in ipairs(payload.relationships or {}) do
+            table.insert(discovered_rels, rel)
+            if rel.source_relation then
+              add_table(rel.source_schema or item.schema, rel.source_relation)
             end
-            for _, rel in ipairs(payload.relationships or {}) do
-              table.insert(discovered_rels, rel)
-              if rel.source_relation then
-                add_table(rel.source_schema or item.schema, rel.source_relation)
-              end
-              if rel.target_relation then
-                add_table(rel.target_schema or item.schema, rel.target_relation)
-              end
+            if rel.target_relation then
+              add_table(rel.target_schema or item.schema, rel.target_relation)
             end
           end
           pending = pending - 1
@@ -681,6 +816,9 @@ function M.generate(opts, callback)
     end
 
     expand_hop(hops, function()
+      if aborted then
+        return
+      end
       collect_structures({
         conn_id = conn_id,
         connection = conn.name,
@@ -735,10 +873,17 @@ function M.generate(opts, callback)
       return cb(nil, payload.error)
     end
     local schemas = {}
+    local default_schema = nil
     for _, n in ipairs((payload and payload.nodes) or {}) do
       if n.kind == 'schema' then
         table.insert(schemas, n.name)
+        if n.is_default and not default_schema then
+          default_schema = n.name
+        end
       end
+    end
+    if default_schema then
+      return load_schema_tables(default_schema)
     end
     if #schemas == 0 then
       return load_schema_tables('')
