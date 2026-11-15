@@ -27,6 +27,7 @@ Contents ~
   Configuration .............................................. |sqmeow-config|
   Keymaps ................................................... |sqmeow-keymaps|
   Relationships ....................................... |sqmeow-relationships|
+  Entity relationship diagram ................................... |sqmeow-erd|
 
 ------------------------------------------------------------------------------
                                                              *sqmeow-quickstart*
@@ -1327,6 +1328,83 @@ Parameters ~
 Usage ~
 >lua
   require('sqmeow.api.view').relationships(1, 'public', 'orders')
+<
+------------------------------------------------------------------------------
+Class ~
+{sqmeow.ErdTable}
+Fields ~
+{schema} `(string|nil)`
+{relation} `(string)`
+{structure} `(table|nil)`
+
+------------------------------------------------------------------------------
+Class ~
+{sqmeow.ErdEdge}
+Fields ~
+{source_key} `(string)`
+{source_schema} `(string)`
+{source_relation} `(string)`
+{target_key} `(string)`
+{target_schema} `(string)`
+{target_relation} `(string)`
+{columns} `(string[])`
+{referenced} `(string[])`
+{name} `(string)`
+{connector} `(string)`
+{cardinality_label} `(string)`
+
+------------------------------------------------------------------------------
+Class ~
+{sqmeow.Erd}
+Fields ~
+{mermaid} `(string)`
+{conn_id} `(integer|nil)`
+{connection} `(string|nil)`
+{dialect} `(string|nil)`
+{mode} '`(neighborhood)`'|'schema'
+{schema} `(string)`
+{center_schema} `(string|nil)`
+{center_relation} `(string|nil)`
+{hops} `(integer|nil)`
+{tables} `(sqmeow.ErdTable[])`
+{tables_map} `(table<string, sqmeow.ErdTable>)`
+{table_order} `(string[])`
+{edges} `(sqmeow.ErdEdge[])`
+
+------------------------------------------------------------------------------
+Class ~
+{sqmeow.ErdOpts}
+Fields ~
+{conn_id} `(integer|nil)` Connected database id; defaults to the buffer's or active connection.
+{connection} `(string|nil)` Open connection name when `conn_id` is omitted.
+{schema} `(string|nil)` Target schema (empty for schema-less adapters; auto-resolved when nil).
+{relation} `(string|nil)` Focal table for an N-hop neighborhood ERD; omit for a full schema ERD.
+{hops} `(integer|nil)` Neighborhood hop depth when `relation` is set (default 1).
+{tables} `(sqmeow.ErdTable[]|nil)` Pre-collected table structures for synchronous formatting.
+
+------------------------------------------------------------------------------
+                                                                    *sqmeow-erd*
+                   `sqmeow.api.view.erd`({opts}, {callback})
+Extract database schema metadata and foreign key relationships into a
+Mermaid `erDiagram`. With `relation`, traverses `hops` foreign-key hops
+around that table; without `relation`, collects every table in `schema`.
+Infers `||`/`|o` parent participation from nullability and `|o`/`o{` child
+multiplicity from primary/unique key indexes, and tags `PK`, `FK`, and `UK`
+columns. Pass `tables` to format pre-fetched structures synchronously.
+Parameters ~
+{opts} `(sqmeow.ErdOpts|nil)`
+{callback} `(fun(erd: sqmeow.Erd|nil, err: string|nil)|nil)`
+Return ~
+`(sqmeow.Erd|boolean|nil)` result `sqmeow.Erd` when `opts.tables` is given, or `started` boolean.
+Return ~
+`(string|nil)` err
+Usage ~
+>lua
+  require('sqmeow.api.view').erd({ schema = 'public', relation = 'orders' }, function(erd, err)
+    if erd then
+      print(erd.mermaid)
+    end
+  end)
 <
 ------------------------------------------------------------------------------
                                                         *sqmeow.api.view.open()*

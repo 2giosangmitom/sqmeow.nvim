@@ -1,3 +1,4 @@
+---@diagnostic disable: duplicate-set-field
 local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 
@@ -146,6 +147,211 @@ T['status and column follow the result grid'] = function()
 
   edit.set({ row = 0 }, 1, 'new@example.com')
   eq(assert(view.status(), 'status is nil').staged_changes, 1)
+end
+
+T['erd formats Mermaid erDiagram with cardinality and PK/FK/UK badges'] = function()
+  local erd, err = view.erd({
+    schema = 'public',
+    relation = 'orders',
+    tables = {
+      {
+        schema = 'public',
+        relation = 'users',
+        structure = {
+          columns = {
+            { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
+            { name = 'email', type_name = 'character varying(255)', nullable = false },
+          },
+          indexes = {
+            { name = 'users_email_key', columns = { 'email' }, unique = true, primary = false },
+          },
+          foreign_keys = {},
+        },
+      },
+      {
+        schema = 'public',
+        relation = 'orders',
+        structure = {
+          columns = {
+            { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
+            { name = 'user_id', type_name = 'int4', nullable = false },
+            { name = 'coupon_id', type_name = 'int4', nullable = true },
+          },
+          indexes = {
+            {
+              name = 'orders_coupon_uq',
+              columns = { 'coupon_id' },
+              unique = true,
+              primary = false,
+            },
+          },
+          foreign_keys = {
+            {
+              name = 'orders_user_id_fkey',
+              columns = { 'user_id' },
+              target = 'users',
+              referenced = { 'id' },
+            },
+            {
+              name = 'orders_coupon_id_fkey',
+              columns = { 'coupon_id' },
+              target = 'coupons',
+              referenced = { 'id' },
+            },
+          },
+        },
+      },
+      {
+        schema = 'public',
+        relation = 'coupons',
+        structure = {
+          columns = {
+            { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
+          },
+          indexes = {},
+          foreign_keys = {},
+        },
+      },
+    },
+  })
+
+  eq(err, nil)
+  assert(erd, 'erd is nil')
+  eq(erd.mode, 'neighborhood')
+  eq(#erd.edges, 2)
+  eq(erd.edges[1].connector, '||--o{')
+  eq(erd.edges[1].cardinality_label, '1:N')
+  eq(erd.edges[2].connector, '|o--|o')
+  eq(erd.edges[2].cardinality_label, '1:1 (optional)')
+  eq(
+    erd.mermaid,
+    table.concat({
+      'erDiagram',
+      '  users ||--o{ orders : "user_id -> id"',
+      '  coupons |o--|o orders : "coupon_id -> id"',
+      '',
+      '  users {',
+      '    int4 id PK',
+      '    varchar(255) email UK "NOT NULL"',
+      '  }',
+      '  orders {',
+      '    int4 id PK',
+      '    int4 user_id FK "NOT NULL -> users.id"',
+      '    int4 coupon_id FK "-> coupons.id"',
+      '  }',
+      '  coupons {',
+      '    int4 id PK',
+      '  }',
+    }, '\n')
+  )
+end
+
+T['erd collects neighborhood and schema metadata over RPC events'] = function()
+  state.add_connection({
+    id = 1,
+    name = 'app',
+    url = 'postgres://localhost/app',
+    dialect = 'postgres',
+    state = 'connected',
+  })
+
+  local rpc = require('sqmeow.rpc.client')
+  local erd_mod = require('sqmeow.core.erd')
+  local orig_request = rpc.request
+  rpc.request = function(method, params)
+    if method == 'relationships' then
+      vim.schedule(function()
+        erd_mod.on_relationships({
+          conn_id = params.conn_id,
+          schema = params.schema,
+          relation = params.relation,
+          request_id = params.request_id,
+          resolved_schema = 'public',
+          resolved_relation = 'orders',
+          relationships = {
+            {
+              name = 'orders_user_id_fkey',
+              source_schema = 'public',
+              source_relation = 'orders',
+              columns = { 'user_id' },
+              target_schema = 'public',
+              target_relation = 'users',
+              referenced = { 'id' },
+            },
+          },
+        })
+      end)
+      return true, nil
+    elseif method == 'structure' then
+      vim.schedule(function()
+        if params.relation == 'orders' then
+          erd_mod.on_structure({
+            conn_id = params.conn_id,
+            schema = 'public',
+            relation = 'orders',
+            columns = {
+              { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
+              { name = 'user_id', type_name = 'int4', nullable = false },
+            },
+            indexes = {},
+            foreign_keys = {},
+          })
+        else
+          erd_mod.on_structure({
+            conn_id = params.conn_id,
+            schema = 'public',
+            relation = 'users',
+            columns = {
+              { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
+            },
+            indexes = {},
+            foreign_keys = {},
+          })
+        end
+      end)
+      return true, nil
+    end
+    return orig_request(method, params)
+  end
+
+  local got_erd, got_err
+  local started, start_err = view.erd(
+    { conn_id = 1, schema = 'public', relation = 'orders', hops = 1 },
+    function(res, err)
+      got_erd, got_err = res, err
+    end
+  )
+  eq(started, true)
+  eq(start_err, nil)
+  vim.wait(500, function()
+    return got_erd ~= nil or got_err ~= nil
+  end)
+  rpc.request = orig_request
+
+  eq(got_err, nil)
+  assert(got_erd, 'got_erd is nil')
+  eq(got_erd.mode, 'neighborhood')
+  eq(got_erd.center_relation, 'orders')
+  eq(#got_erd.table_order, 2)
+  eq(#got_erd.edges, 1)
+  eq(got_erd.edges[1].connector, '||--o{')
+end
+
+T['erd rejects disconnected and unsupported NoSQL connections'] = function()
+  local started, err = view.erd({ schema = 'public' })
+  eq(started, false)
+  eq(err, 'ERD generation needs an open connection')
+
+  state.add_connection({
+    id = 2,
+    name = 'cache',
+    url = 'redis://localhost:6379/0',
+    dialect = 'redis',
+    state = 'connected',
+  })
+  started, err = view.erd({ conn_id = 2 })
+  eq(started, false)
+  eq(err, 'ERD is not supported for redis')
 end
 
 return T

@@ -277,6 +277,70 @@ function M.relationships(conn_id, schema, relation)
   require('sqmeow.ui.relationships').open(conn_id, schema, relation)
 end
 
+---@class sqmeow.ErdTable
+---@field schema string|nil
+---@field relation string
+---@field structure table|nil
+
+---@class sqmeow.ErdEdge
+---@field source_key string
+---@field source_schema string
+---@field source_relation string
+---@field target_key string
+---@field target_schema string
+---@field target_relation string
+---@field columns string[]
+---@field referenced string[]
+---@field name string
+---@field connector string
+---@field cardinality_label string
+
+---@class sqmeow.Erd
+---@field mermaid string
+---@field conn_id integer|nil
+---@field connection string|nil
+---@field dialect string|nil
+---@field mode 'neighborhood'|'schema'
+---@field schema string
+---@field center_schema string|nil
+---@field center_relation string|nil
+---@field hops integer|nil
+---@field tables sqmeow.ErdTable[]
+---@field tables_map table<string, sqmeow.ErdTable>
+---@field table_order string[]
+---@field edges sqmeow.ErdEdge[]
+
+---@class sqmeow.ErdOpts
+---@field conn_id integer|nil Connected database id; defaults to the buffer's or active connection.
+---@field connection string|nil Open connection name when `conn_id` is omitted.
+---@field schema string|nil Target schema (empty for schema-less adapters; auto-resolved when nil).
+---@field relation string|nil Focal table for an N-hop neighborhood ERD; omit for a full schema ERD.
+---@field hops integer|nil Neighborhood hop depth when `relation` is set (default 1).
+---@field tables sqmeow.ErdTable[]|nil Pre-collected table structures for synchronous formatting.
+
+--- Extract database schema metadata and foreign key relationships into a
+--- Mermaid `erDiagram`. With `relation`, traverses `hops` foreign-key hops
+--- around that table; without `relation`, collects every table in `schema`.
+--- Infers `||`/`|o` parent participation from nullability and `|o`/`o{` child
+--- multiplicity from primary/unique key indexes, and tags `PK`, `FK`, and `UK`
+--- columns. Pass `tables` to format pre-fetched structures synchronously.
+---@tag sqmeow-erd
+---@toc_entry Entity relationship diagram
+---@param opts sqmeow.ErdOpts|nil
+---@param callback fun(erd: sqmeow.Erd|nil, err: string|nil)|nil
+---@return sqmeow.Erd|boolean|nil result `sqmeow.Erd` when `opts.tables` is given, or `started` boolean.
+---@return string|nil err
+---@usage >lua
+---   require('sqmeow.api.view').erd({ schema = 'public', relation = 'orders' }, function(erd, err)
+---     if erd then
+---       print(erd.mermaid)
+---     end
+---   end)
+--- <
+function M.erd(opts, callback)
+  return require('sqmeow.core.erd').generate(opts, callback)
+end
+
 --- Open the result window.
 --- On Neovim 0.11+, drawer and result windows use 'winfixbuf': `:edit` and jumps
 --- that would replace their buffer fail with E1513. Switch to an editing window
