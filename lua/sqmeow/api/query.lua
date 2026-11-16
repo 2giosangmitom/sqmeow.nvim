@@ -277,4 +277,14 @@ function M.last_page()
   end)
 end
 
+--- Show the next statement's result from a multi-statement run.
+function M.next_result()
+  require('sqmeow.ui.result').actions.next_result()
+end
+
+--- Show the previous statement's result from a multi-statement run.
+function M.prev_result()
+  require('sqmeow.ui.result').actions.prev_result()
+end
+
 return M
