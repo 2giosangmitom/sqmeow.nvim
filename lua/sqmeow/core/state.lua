@@ -34,6 +34,8 @@ local M = {}
 ---@field elapsed string|nil
 ---@field page integer|nil
 ---@field total_pages integer|nil
+---@field result_index integer|nil
+---@field total_results integer|nil
 ---@field error string|nil
 ---@field column { index: integer, total: integer, name: string, type_name: string, class: string, key: string|nil }|nil
 

@@ -176,6 +176,15 @@ function M.status(bufnr)
         info.page = page
         info.total_pages = total
       end
+      if call.results and #call.results > 1 then
+        info.total_results = #call.results
+        for index, entry in ipairs(call.results) do
+          if entry.call_id == call.call_id then
+            info.result_index = index
+            break
+          end
+        end
+      end
       info.filtered = is_filtered(result.spec(), call)
     end
   end
