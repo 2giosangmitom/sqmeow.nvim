@@ -56,7 +56,7 @@ scylla = { version = "1.9", features = [
   "num-bigint-04",
   "rustls-023",
 ] }
-surrealdb = { version = "3.3", default-features = false, features = ["protocol-ws", "rustls"] }
+surrealdb = { version = "4.0", default-features = false, features = ["protocol-ws", "rustls"] }
 clickhouse = { version = "0.15", default-features = false, features = [
   "rustls-tls-ring",
   "rustls-tls-native-roots",
