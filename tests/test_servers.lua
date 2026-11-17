@@ -56,7 +56,11 @@ for _, spec in ipairs({
     eq(summary.rows > 0, true)
     local row = rpc.request('row', { call_id = summary.call_id, row = 0 })
     eq(#row > 0, true)
-    if server ~= 'mongodb' and server ~= 'scylla' and server ~= 'cassandra' then
+    if dialect == 'redis' then
+      eq(row[1].value, 'OK')
+      local second = rpc.request('row', { call_id = summary.results[2].call_id, row = 0 })
+      eq(second[1].value, '42')
+    elseif server ~= 'mongodb' and server ~= 'scylla' and server ~= 'cassandra' then
       eq(row[1].value, '42')
     end
   end

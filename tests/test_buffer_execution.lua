@@ -123,8 +123,10 @@ T['mssql keeps variables within GO batches'] = function()
   eq(row[1].value, '7')
   wait(assert(require('sqmeow.api.query').execute_buffer()))
   row = assert(rpc.request('row', { call_id = state.call.call_id, row = 0 }))
-  eq(row[1].value, '99')
+  eq(row[1].value, '7')
   eq(#state.call.results, 2)
+  local second = assert(rpc.request('row', { call_id = state.call.results[2].call_id, row = 0 }))
+  eq(second[1].value, '99')
 end
 
 T['mssql read-only checks filter fragments before execution'] = function()

@@ -610,16 +610,16 @@ T[']r and [r move between the results of several statements'] = function()
   focus_result()
   run('select 1 as first; update people set age = age where id = 0; select 2 as second')
   eq(#state.call.results, 3)
-  eq(state.call.columns[1].name, 'second')
-
-  result.actions.next_result()
   eq(state.call.columns[1].name, 'first')
+
   -- The update between them is a result of its own, which says how many rows it changed.
   result.actions.next_result()
   eq(state.call.affected, 0)
-  result.actions.prev_result()
-  result.actions.prev_result()
+  result.actions.next_result()
   eq(state.call.columns[1].name, 'second')
+  result.actions.prev_result()
+  result.actions.prev_result()
+  eq(state.call.columns[1].name, 'first')
 end
 
 T['a DELETE without WHERE asks first, and runs only when told to'] = function()
