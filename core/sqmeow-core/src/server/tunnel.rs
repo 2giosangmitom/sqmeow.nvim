@@ -58,8 +58,13 @@ pub async fn open(program: &str, url: &str, via: &str) -> Result<(String, Tunnel
         _ => (via, None),
     };
 
-    let local = std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|listener| listener.local_addr())
+    // Bound but never listening: a process forked meanwhile can hold a copy of this socket until it
+    // execs, and a listening copy would accept the probe below and pass for the tunnel.
+    let local = tokio::net::TcpSocket::new_v4()
+        .and_then(|socket| {
+            socket.bind(([127, 0, 0, 1], 0).into())?;
+            socket.local_addr()
+        })
         .map_err(|error| format!("no local port is free for the tunnel: {error}"))?
         .port();
     let mut command = Command::new(program);
@@ -85,8 +90,11 @@ pub async fn open(program: &str, url: &str, via: &str) -> Result<(String, Tunnel
         .spawn()
         .map_err(|error| format!("`{program}` could not be started: {error}"))?;
 
+    // Another process can still take the port before `ssh` binds it, so the tunnel counts as open
+    // only once the port answers on two polls in a row with `ssh` still running.
     let deadline = tokio::time::Instant::now() + sqmeow_adapters::CONNECT_TIMEOUT;
-    while TcpStream::connect(("127.0.0.1", local)).await.is_err() {
+    let mut answered = false;
+    loop {
         if let Ok(Some(status)) = child.try_wait() {
             let mut stderr = String::new();
             if let Some(mut pipe) = child.stderr.take() {
@@ -97,6 +105,11 @@ pub async fn open(program: &str, url: &str, via: &str) -> Result<(String, Tunnel
                 stderr.trim()
             ));
         }
+        let answers = TcpStream::connect(("127.0.0.1", local)).await.is_ok();
+        if answers && answered {
+            break;
+        }
+        answered = answers;
         if tokio::time::Instant::now() >= deadline {
             return Err(format!("ssh to `{via}` did not open the tunnel in time"));
         }
