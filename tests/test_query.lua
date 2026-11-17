@@ -92,7 +92,7 @@ T['multi-statement queries retain every result without splitting quoted semicolo
 end
 
 T['multi-statement queries start on the first row-returning result'] = function()
-  local summary = run('select 1 as first; update people set age = age where id = 0')
+  local summary = run('select 1 as first; update people set score = score where id = 0')
   eq(#summary.results, 2)
   eq(summary.call_id, summary.results[1].call_id)
   eq(summary.columns[1].name, 'first')
@@ -100,7 +100,7 @@ T['multi-statement queries start on the first row-returning result'] = function(
   eq(summary.results[2].affected, 0)
 
   local middle = run(
-    'update people set age = age where id = 0; select 2 as second; update people set age = age where id = 0'
+    'update people set score = score where id = 0; select 2 as second; update people set score = score where id = 0'
   )
   eq(#middle.results, 3)
   eq(middle.call_id, middle.results[2].call_id)
