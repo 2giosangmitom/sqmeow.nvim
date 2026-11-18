@@ -85,6 +85,10 @@ local function request(method, args, done)
   args.request_id = waiter.request_id
   table.insert(waiting, waiter)
   local _, err = rpc.request(method, args)
+  if not err then
+    -- An engine that does not echo the id would leave this waiter pending forever.
+    _, err = rpc.supports('request_id')
+  end
   if err then
     for index, other in ipairs(waiting) do
       if other == waiter then
@@ -141,31 +145,47 @@ local function children(conn_id, path, done)
   end)
 end
 
---- `schema`, or the connection's default schema when nil.
+--- `schema` in the catalog's spelling, or the connection's default schema when nil.
 ---@param conn_id integer
 ---@param schema string|nil
 ---@param done fun(schema: string|nil, err: string|nil)
 local function resolve_schema(conn_id, schema, done)
-  if schema then
-    return done(schema)
-  end
   children(conn_id, {}, function(nodes, err)
     if not nodes then
       return done(nil, err)
     end
-    local server = false
+    local schemas, server = {}, false
     for _, node in ipairs(nodes) do
-      if node.kind == 'schema' and node.is_default then
-        return done(node.name)
+      if node.kind == 'schema' then
+        table.insert(schemas, node)
       end
       server = server or node.kind == 'database'
     end
-    -- A server connection lists databases, each opened as a connection of its own.
-    done(
-      nil,
-      server and 'this connection is a server; read the schema from one of its databases'
-        or 'no schema is the default; pass `schema`'
-    )
+    -- A server connection lists databases, each opened as a connection of its own; its
+    -- metadata session would answer for whichever database it happens to sit in.
+    if server then
+      return done(nil, 'this connection is a server; read the schema from one of its databases')
+    end
+    local match, folded = nil, {}
+    for _, node in ipairs(schemas) do
+      if schema == nil and node.is_default then
+        return done(node.name)
+      end
+      if node.name == schema then
+        match = node.name
+      elseif schema and node.name:lower() == schema:lower() then
+        table.insert(folded, node.name)
+      end
+    end
+    if schema == nil then
+      return done(nil, 'no schema is the default; pass `schema`')
+    end
+    -- SQLite's `MAIN` is `main`; `lower` folds ASCII only, keeping distinct non-ASCII names.
+    match = match or (#folded == 1 and folded[1]) or nil
+    if not match then
+      return done(nil, ('schema %s not found'):format(schema))
+    end
+    done(match)
   end)
 end
 
@@ -179,8 +199,10 @@ local function schema_tables(conn_id, schema, done)
       return done(nil, err)
     end
     local tables = {}
+    -- The engine's `tables` group holds no views or sequences; foreign tables and other
+    -- table-like relations arrive as `relation`.
     for _, node in ipairs(nodes) do
-      if node.kind == 'table' then
+      if node.kind == 'table' or node.kind == 'relation' then
         table.insert(tables, { schema = schema, relation = node.name })
       end
     end

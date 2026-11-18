@@ -769,6 +769,7 @@ impl Adapter for MySqlAdapter {
                     primary: name == "PRIMARY",
                     columns: vec![column],
                     name,
+                    ..Default::default()
                 }),
             }
         }
@@ -836,6 +837,8 @@ impl Adapter for MySqlAdapter {
                     name,
                     columns: Vec::new(),
                     target: format!("{target_schema}.{target}"),
+                    target_schema,
+                    target_relation: target,
                     referenced: Vec::new(),
                 });
             }

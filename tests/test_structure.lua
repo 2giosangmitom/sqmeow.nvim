@@ -6,7 +6,9 @@ local drawer = require('sqmeow.ui.drawer')
 local state = require('sqmeow.core.state')
 local T = MiniTest.new_set()
 
-local function setup(request_error)
+---@param request_error string|nil What every engine request fails with.
+---@param stale string|nil Why the running engine lacks the `request_id` feature.
+local function setup(request_error, stale)
   structure.close()
   MiniTest.finally(structure.close)
   helpers.stub(state, 'connections', {
@@ -21,6 +23,9 @@ local function setup(request_error)
       return nil, request_error
     end
     return true
+  end)
+  helpers.stub(require('sqmeow.rpc.client'), 'supports', function()
+    return stale == nil, stale
   end)
   helpers.stub(require('sqmeow.core.utils'), 'notify', function(message)
     table.insert(messages, message)
@@ -244,6 +249,15 @@ T['preserves table structure rendering'] = function()
   helpers.contains(content(), 'CREATE TABLE public.users')
   eq(vim.bo.filetype, 'sqmeow-structure')
   eq(vim.bo.modifiable, false)
+end
+
+T['reports a stale engine instead of waiting for its reply'] = function()
+  local _, messages = setup(nil, 'the running engine predates this plugin; run `:Sqmeow restart`')
+  helpers.stub(drawer, 'current_node', function()
+    return { kind = 'table', name = 'users', conn_id = 1, path = { 'public', 'tables', 'users' } }
+  end)
+  drawer.actions.structure()
+  eq(messages, { 'the running engine predates this plugin; run `:Sqmeow restart`' })
 end
 
 return T

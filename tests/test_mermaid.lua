@@ -105,17 +105,114 @@ T['mermaid tags UK only for single-column unique keys'] = function()
   helpers.absent(text, 'UK')
 end
 
-T['mermaid ignores partial unique indexes reported as not unique'] = function()
+T['mermaid ignores partial unique indexes'] = function()
   local text = render({
     { relation = 'parents', columns = { pk('id') } },
     {
       relation = 'children',
       columns = { pk('id'), col('parent_id') },
-      indexes = { { name = 'active_uq', columns = { 'parent_id' }, unique = false } },
+      indexes = {
+        { name = 'active_uq', columns = { 'parent_id' }, unique = true, partial = true },
+      },
       foreign_keys = { { columns = { 'parent_id' }, target = 'parents', referenced = { 'id' } } },
     },
   })
   eq(edges(text), { '"parents" ||..o{ "children" : "parent_id -> id"' })
+  helpers.absent(text, 'UK')
+end
+
+T['mermaid finds a unique key inside a composite foreign key'] = function()
+  local text = render({
+    { relation = 'parents', columns = { pk('tenant_id'), pk('id') } },
+    {
+      relation = 'children',
+      columns = { pk('id'), col('tenant_id'), col('parent_id') },
+      indexes = { { name = 'one_per_parent', columns = { 'parent_id' }, unique = true } },
+      foreign_keys = {
+        {
+          columns = { 'tenant_id', 'parent_id' },
+          target = 'parents',
+          referenced = { 'tenant_id', 'id' },
+        },
+      },
+    },
+    {
+      relation = 'wider',
+      columns = { pk('id'), col('parent_id'), col('slot') },
+      indexes = { { name = 'wider_uq', columns = { 'parent_id', 'slot' }, unique = true } },
+      foreign_keys = { { columns = { 'parent_id' }, target = 'parents', referenced = { 'id' } } },
+    },
+  })
+  eq(edges(text), {
+    '"parents" ||..|o "children" : "tenant_id, parent_id -> tenant_id, id"',
+    '"parents" ||..o{ "wider" : "parent_id -> id"',
+  })
+end
+
+T['mermaid needs matching collations to infer one child'] = function()
+  local function diagram(child_collation)
+    return render({
+      {
+        relation = 'parents',
+        columns = { pk('code') },
+        indexes = {
+          { name = 'pk', columns = { 'code' }, primary = true, collations = { 'NOCASE' } },
+        },
+      },
+      {
+        relation = 'children',
+        columns = { pk('id'), col('code') },
+        indexes = {
+          { name = 'uq', columns = { 'code' }, unique = true, collations = { child_collation } },
+        },
+        foreign_keys = { { columns = { 'code' }, target = 'parents', referenced = { 'code' } } },
+      },
+    })
+  end
+  eq(edges(diagram('BINARY')), { '"parents" ||..o{ "children" : "code -> code"' })
+  eq(edges(diagram('nocase')), { '"parents" ||..|o "children" : "code -> code"' })
+end
+
+T['mermaid prefers the catalog target over the display name'] = function()
+  local text = render({
+    { schema = 'public', relation = 'customers', columns = { pk('id') } },
+    { schema = 'audit', relation = 'customers', columns = { pk('id') } },
+    {
+      schema = 'audit',
+      relation = 'orders',
+      columns = { pk('id'), col('customer_id') },
+      foreign_keys = {
+        {
+          columns = { 'customer_id' },
+          target = 'customers',
+          target_schema = 'public',
+          target_relation = 'customers',
+          referenced = { 'id' },
+        },
+      },
+    },
+  })
+  eq(edges(text), { '"public.customers" ||..o{ "audit.orders" : "customer_id -> id"' })
+end
+
+T['mermaid keeps literal quotes in catalog column names'] = function()
+  local text = render({
+    { relation = 'parents', columns = { pk('id') } },
+    {
+      relation = 'children',
+      columns = { pk('id'), col('pid', true), col('"pid"') },
+      foreign_keys = { { columns = { '"pid"' }, target = 'parents', referenced = { 'id' } } },
+    },
+  })
+  eq(edges(text), { [["parents" ||..o{ "children" : "'pid' -> id"]] })
+  helpers.contains(text, '    int4 _pid_ FK "NOT NULL -> parents.id"')
+  helpers.absent(text, 'int4 pid FK')
+end
+
+T['mermaid keeps direction statements out of names'] = function()
+  local text = render({ { relation = 'direction LR', columns = { pk('id') } } })
+  helpers.contains(text, '  "direction_LR" {')
+  eq(text:lower():find('direction%s+lr'), nil)
 end
 
 T['mermaid matches quoted index columns and exact column names'] = function()
@@ -214,6 +311,29 @@ T['mermaid writes the diagram to a file'] = function()
   })
   eq(vim.fn.readfile(path), vim.split(text, '\n'))
   vim.fn.delete(path)
+end
+
+T['mermaid warns when the clipboard does not take the copy'] = function()
+  local messages = {}
+  helpers.stub(vim, 'notify', function(message, level)
+    table.insert(messages, { message, level })
+  end)
+  local has, setreg, getreg = vim.fn.has, vim.fn.setreg, vim.fn.getreg
+  helpers.stub(vim.fn, 'has', function(feature)
+    return feature == 'clipboard' and 1 or has(feature)
+  end)
+  helpers.stub(vim.fn, 'setreg', function(register, value)
+    if register ~= '+' then
+      return setreg(register, value)
+    end
+    return 0
+  end)
+  helpers.stub(vim.fn, 'getreg', function(register)
+    return register == '+' and 'old contents' or getreg(register)
+  end)
+  export.mermaid({ tables = { { relation = 't', columns = { pk('id') } } } }, { clipboard = true })
+  eq(messages[1][2], vim.log.levels.WARN)
+  helpers.contains(messages[1][1], 'unnamed register')
 end
 
 T['mermaid says where a copy went without a clipboard provider'] = function()

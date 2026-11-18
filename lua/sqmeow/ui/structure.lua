@@ -165,6 +165,10 @@ function M.open(conn_id, schema, relation)
     request_id = rpc.next_request_id(),
   }
   local _, err = rpc.request('structure', wanted)
+  if not err then
+    -- An engine that does not echo the id would answer into the void.
+    _, err = rpc.supports('request_id')
+  end
   if err then
     wanted = nil
     utils.notify(err, vim.log.levels.ERROR)

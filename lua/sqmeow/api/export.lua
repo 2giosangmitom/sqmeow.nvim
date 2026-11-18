@@ -232,7 +232,8 @@ end
 --- Render collected table structures as a Mermaid `erDiagram`.
 --- Relationship lines run parent to child: the parent end is `||` when every
 --- foreign key column is NOT NULL, else `|o`; the child end is `|o` when the
---- key columns are a primary key or a full unique index, else `o{`. The line
+--- foreign key contains a primary key or full (not partial) unique index that
+--- compares like the parent key, else `o{`. The line
 --- is solid (`--`) when the key is part of the child's primary key and dotted
 --- (`..`) otherwise. Columns carry `PK`, `FK` and single-column `UK` tags.
 --- Foreign keys to tables outside `schema.tables` are tagged but draw no line.
@@ -241,9 +242,8 @@ end
 ---@param schema { tables: sqmeow.SchemaTable[] } From |sqmeow-schema|,
 --- or built by hand.
 ---@param opts { path: string|nil, clipboard: boolean|nil }|nil `path`: write
---- the diagram to this file; `clipboard = true`: copy it to the system
---- clipboard, or only to the unnamed register when Neovim has no clipboard
---- provider.
+--- the diagram to this file; `clipboard = true`: copy it to the unnamed
+--- register and the system clipboard, warning when the clipboard did not take it.
 ---@return string mermaid
 ---@usage >lua
 ---   local started, err = require('sqmeow.api.view').schema({ schema = 'public' }, function(schema, e)
@@ -272,12 +272,17 @@ function M.mermaid(schema, opts)
   if opts.clipboard then
     vim.fn.setreg('"', text)
     local count = #(schema.tables or {})
-    local copied = vim.fn.has('clipboard') == 1 and pcall(vim.fn.setreg, '+', text)
+    -- A provider command can fail without `setreg` raising; reading back confirms delivery.
+    local copied = vim.fn.has('clipboard') == 1
+      and pcall(vim.fn.setreg, '+', text)
+      and select(2, pcall(vim.fn.getreg, '+')) == text
     if copied then
       notify(('copied the diagram of %d tables to the clipboard'):format(count))
     else
       notify(
-        ('no clipboard provider: the diagram of %d tables is in the unnamed register'):format(count),
+        ('the clipboard did not take the diagram of %d tables; it is in the unnamed register'):format(
+          count
+        ),
         vim.log.levels.WARN
       )
     end

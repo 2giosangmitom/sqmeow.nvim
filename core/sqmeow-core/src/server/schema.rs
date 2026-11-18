@@ -459,6 +459,8 @@ fn details_payload(details: Details) -> Vec<(&'static str, Value)> {
                 ("name", Value::from(key.name)),
                 ("columns", strings(key.columns)),
                 ("target", Value::from(key.target)),
+                ("target_schema", Value::from(key.target_schema)),
+                ("target_relation", Value::from(key.target_relation)),
                 ("referenced", strings(key.referenced)),
             ])
         })
@@ -485,6 +487,8 @@ fn index_nodes(indexes: Vec<IndexNode>) -> Vec<Value> {
                 ("columns", strings(index.columns)),
                 ("unique", Value::from(index.unique)),
                 ("primary", Value::from(index.primary)),
+                ("partial", Value::from(index.partial)),
+                ("collations", strings(index.collations)),
             ])
         })
         .collect()

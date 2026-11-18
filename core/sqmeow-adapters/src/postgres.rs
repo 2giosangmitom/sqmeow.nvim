@@ -1182,11 +1182,11 @@ impl Adapter for PostgresAdapter {
         schema: &str,
         relation: &str,
     ) -> Result<Vec<sqmeow_db::node::IndexNode>> {
-        let rows = pg::query_as::<(String, Vec<String>, bool, bool)>(
+        let rows = pg::query_as::<(String, Vec<String>, bool, bool, bool)>(
             "select i.relname::text,
                     array(select pg_get_indexdef(ix.indexrelid, k, true)
                           from generate_series(1, ix.indnkeyatts::int) k order by k)::text[],
-                    ix.indisunique and ix.indpred is null, ix.indisprimary
+                    ix.indisunique, ix.indisprimary, ix.indpred is not null
              from pg_catalog.pg_index ix
              join pg_catalog.pg_class i on i.oid = ix.indexrelid
              join pg_catalog.pg_class t on t.oid = ix.indrelid
@@ -1202,11 +1202,13 @@ impl Adapter for PostgresAdapter {
         Ok(rows
             .into_iter()
             .map(
-                |(name, columns, unique, primary)| sqmeow_db::node::IndexNode {
+                |(name, columns, unique, primary, partial)| sqmeow_db::node::IndexNode {
                     name,
                     columns,
                     unique,
                     primary,
+                    partial,
+                    collations: Vec::new(),
                 },
             )
             .collect())
@@ -1287,13 +1289,24 @@ impl Adapter for PostgresAdapter {
         .bind(oid)
         .fetch_all(&self.meta)
         .await?;
-        let foreign_keys = pg::query_as::<(String, Vec<String>, String, Vec<String>)>(
+        let foreign_keys = pg::query_as::<(
+            String,
+            Vec<String>,
+            String,
+            String,
+            String,
+            Vec<String>,
+        )>(
             "select k.conname::text,
                     array(select a.attname::text
                           from unnest(k.conkey) with ordinality as u(n, i)
                           join pg_catalog.pg_attribute a on a.attrelid = k.conrelid and a.attnum = u.n
                           order by u.i),
                     k.confrelid::regclass::text,
+                    (select n.nspname::text from pg_catalog.pg_class c
+                       join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+                      where c.oid = k.confrelid),
+                    (select c.relname::text from pg_catalog.pg_class c where c.oid = k.confrelid),
                     array(select a.attname::text
                           from unnest(k.confkey) with ordinality as u(n, i)
                           join pg_catalog.pg_attribute a on a.attrelid = k.confrelid and a.attnum = u.n
@@ -1307,12 +1320,18 @@ impl Adapter for PostgresAdapter {
         .await
         ?
         .into_iter()
-        .map(|(name, columns, target, referenced)| sqmeow_db::node::ForeignKeyNode {
-            name,
-            columns,
-            target,
-            referenced,
-        })
+        .map(
+            |(name, columns, target, target_schema, target_relation, referenced)| {
+                sqmeow_db::node::ForeignKeyNode {
+                    name,
+                    columns,
+                    target,
+                    target_schema,
+                    target_relation,
+                    referenced,
+                }
+            },
+        )
         .collect();
         let checks = pg::query_as::<(String, String)>(
             "select conname::text, pg_get_constraintdef(oid) from pg_catalog.pg_constraint

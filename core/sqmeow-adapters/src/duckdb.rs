@@ -488,6 +488,7 @@ impl Adapter for DuckDbAdapter {
                         columns: list_names(&row.get::<_, String>(1)?),
                         unique: row.get(2)?,
                         primary: row.get(3)?,
+                        ..Default::default()
                     })
                 },
             )
@@ -580,6 +581,9 @@ impl Adapter for DuckDbAdapter {
                         name: row.get(0)?,
                         columns: list_names(&row.get::<_, String>(1)?),
                         target: row.get(2)?,
+                        // DuckDB keys reference a table of the same schema.
+                        target_schema: schema.clone(),
+                        target_relation: row.get(2)?,
                         referenced: list_names(&row.get::<_, String>(3)?),
                     })
                 },

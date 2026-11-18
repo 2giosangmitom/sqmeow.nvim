@@ -1336,9 +1336,12 @@ Fields ~
 {schema} `(string|nil)` Empty or nil for schema-less adapters.
 {relation} `(string)`
 {columns} `(table[])` Column nodes: `name`, `type_name`, `nullable`, `primary_key`.
-{indexes} `(table[]|nil)` `name`, `columns`, `unique`, `primary`.
-{foreign_keys} `(table[]|nil)` `name`, `columns`, `target` (`relation` or
-`schema.relation`), `referenced`.
+{indexes} `(table[]|nil)` `name`, `columns`, `unique`, `primary`, `partial`,
+`collations` (per key column, empty when unknown).
+{foreign_keys} `(table[]|nil)` `name`, `columns`, `referenced`, `target`
+(display name), and the referenced table as `target_schema` and
+`target_relation`. Hand-built input may give only `target`: `relation` or
+`schema.relation`.
 
 ------------------------------------------------------------------------------
 Class ~
@@ -1491,7 +1494,8 @@ overrides the target, `batch` combines INSERT rows, `create` includes DDL.
 Render collected table structures as a Mermaid `erDiagram`.
 Relationship lines run parent to child: the parent end is `||` when every
 foreign key column is NOT NULL, else `|o`; the child end is `|o` when the
-key columns are a primary key or a full unique index, else `o{`. The line
+foreign key contains a primary key or full (not partial) unique index that
+compares like the parent key, else `o{`. The line
 is solid (`--`) when the key is part of the child's primary key and dotted
 (`..`) otherwise. Columns carry `PK`, `FK` and single-column `UK` tags.
 Foreign keys to tables outside `schema.tables` are tagged but draw no line.
@@ -1501,9 +1505,8 @@ Parameters ~
 {schema} `({ tables: sqmeow.SchemaTable[] })` From |sqmeow-schema|,
 or built by hand.
 {opts} `({ path: string|nil, clipboard: boolean|nil }|nil)` `path`: write
-the diagram to this file; `clipboard = true`: copy it to the system
-clipboard, or only to the unnamed register when Neovim has no clipboard
-provider.
+the diagram to this file; `clipboard = true`: copy it to the unnamed
+register and the system clipboard, warning when the clipboard did not take it.
 Return ~
 `(string)` mermaid
 Usage ~

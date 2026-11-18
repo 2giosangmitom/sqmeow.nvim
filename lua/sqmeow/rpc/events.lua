@@ -164,7 +164,10 @@ end
 --- Handle one level of the schema tree arriving.
 ---@param payload table
 function M.on_nodes(payload)
-  require('sqmeow.ui.drawer').on_nodes(payload)
+  -- Tagged replies answer a schema read; only the drawer's own untagged ones update its tree.
+  if payload.request_id == nil then
+    require('sqmeow.ui.drawer').on_nodes(payload)
+  end
   require('sqmeow.core.schema').on_nodes(payload)
   pcall(function()
     require('sqmeow.completion').ensure(payload.conn_id)

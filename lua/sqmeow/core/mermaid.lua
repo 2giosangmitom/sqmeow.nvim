@@ -15,7 +15,8 @@ local function key(schema, relation)
   return schema .. '\0' .. relation
 end
 
---- A column name as the catalog spells it: index definitions quote mixed-case names.
+--- An index key as a column name. Index keys can be SQL, as PostgreSQL's quote mixed-case
+--- names; catalog column names never are, so only index keys pass through here.
 ---@param name string
 ---@return string
 local function unquote(name)
@@ -38,7 +39,6 @@ local function column_finder(tbl)
     if not name then
       return nil
     end
-    name = unquote(name)
     return exact[name] or folded[lower(name)] or nil
   end
 end
@@ -62,11 +62,12 @@ local function column_set(find, names)
   return set
 end
 
+--- Whether every column of the nonempty set `a` is in `b`.
 ---@param a table<table, true>|nil
 ---@param b table<table, true>|nil
 ---@return boolean
-local function same_set(a, b)
-  if not a or not b or vim.tbl_count(a) ~= vim.tbl_count(b) then
+local function subset(a, b)
+  if not a or not b or next(a) == nil then
     return false
   end
   for column in pairs(a) do
@@ -87,6 +88,37 @@ local function primary_key(tbl)
     end
   end
   return set
+end
+
+---@class sqmeow.MermaidKey
+---@field columns table<table, true>
+---@field collations table<table, string> Collation of each column, where the adapter says.
+
+--- The keys that hold a value at most once: the primary key and every full unique index.
+--- A partial index leaves rows outside its predicate free to repeat, so it is no key.
+---@param tbl sqmeow.SchemaTable
+---@param find fun(name: string|nil): table|nil
+---@return sqmeow.MermaidKey[]
+local function unique_keys(tbl, find)
+  local keys = { { columns = primary_key(tbl), collations = {} } }
+  for _, index in ipairs(tbl.indexes or {}) do
+    if (index.unique or index.primary) and not index.partial then
+      local columns, collations = {}, {}
+      for i, name in ipairs(index.columns or {}) do
+        local column = find(unquote(name))
+        if not column then
+          columns = nil
+          break
+        end
+        columns[column] = true
+        collations[column] = (index.collations or {})[i]
+      end
+      if columns then
+        table.insert(keys, { columns = columns, collations = collations })
+      end
+    end
+  end
+  return keys
 end
 
 --- Words Mermaid's attribute lexer reads as key markers rather than names.
@@ -151,20 +183,32 @@ local function allocator(separator)
   end
 end
 
+--- Directions Mermaid's ER lexer finds anywhere on a line after `direction`.
+local directions = { TB = true, BT = true, RL = true, LR = true }
+
 --- Text safe inside a Mermaid double-quoted string.
 ---@param text string
 ---@return string
 local function quoted(text)
-  return '"' .. text:gsub('["%%\\]', "'"):gsub('%c', ' ') .. '"'
+  text = text:gsub('["%%\\]', "'"):gsub('%c', ' ')
+  -- `direction LR` anywhere on a line is read as a layout statement, in any letter case.
+  text = text:gsub('([Dd][Ii][Rr][Ee][Cc][Tt][Ii][Oo][Nn])(%s+)(%a%a)', function(word, _, way)
+    if directions[way:upper()] then
+      return word .. '_' .. way
+    end
+  end)
+  return '"' .. text .. '"'
 end
 
 --- Render `schema` as a Mermaid `erDiagram`.
 ---
 --- Relationship lines come first, parent to child. The parent end is `||` when every
 --- foreign key column is NOT NULL and `|o` otherwise; the child end is `|o` when the
---- key columns are unique and `o{` otherwise. The line is solid (`--`) when the key
---- is part of the child's primary key and dotted (`..`) otherwise. Foreign keys to
---- tables outside `schema.tables` are tagged on their columns but drawn as no line.
+--- foreign key contains the primary key or a full unique index, compared under the
+--- parent's collation where the adapter reports one, and `o{` otherwise. The line is
+--- solid (`--`) when the key is part of the child's primary key and dotted (`..`)
+--- otherwise. Foreign keys to tables outside `schema.tables` are tagged on their
+--- columns but drawn as no line.
 ---@param schema { tables: sqmeow.SchemaTable[] }
 ---@return string
 function M.erd(schema)
@@ -185,10 +229,16 @@ function M.erd(schema)
       or folded[key(lower(table_schema), lower(relation))]
       or nil
   end
-  --- The table a foreign key names: `relation` in the child's schema, or `schema.relation`.
-  --- An unqualified name may contain dots itself, so it is tried whole first.
-  local function find(child, target)
-    target = target or ''
+  --- The table a foreign key references. The catalog's `target_schema` and
+  --- `target_relation` decide when present; hand-built input may give only `target`:
+  --- `relation` in the child's schema, or `schema.relation`. An unqualified name may
+  --- contain dots itself, so it is tried whole first.
+  local function find(child, fk)
+    if (fk.target_relation or '') ~= '' then
+      local target_schema = (fk.target_schema or '') ~= '' and fk.target_schema or child.schema
+      return exact[key(target_schema or '', fk.target_relation)]
+    end
+    local target = fk.target or ''
     local found = lookup(child.schema or '', target)
     if found then
       return found
@@ -210,9 +260,53 @@ function M.erd(schema)
     entities[tbl] = quoted(entity_name(quoted(name):sub(2, -2)))
   end
 
-  local finders = {}
+  local finders, table_keys = {}, {}
   for _, tbl in ipairs(tables) do
     finders[tbl] = column_finder(tbl)
+    table_keys[tbl] = unique_keys(tbl, finders[tbl])
+  end
+
+  --- The collation the parent compares `referenced` with: that of its key holding the
+  --- column, or `BINARY`, the default of the one adapter that reports collations.
+  local function parent_collation(parent, referenced)
+    local column = finders[parent](referenced)
+    for _, candidate in ipairs(table_keys[parent]) do
+      if column and candidate.collations[column] then
+        return candidate.collations[column]
+      end
+    end
+    return 'BINARY'
+  end
+
+  --- Whether `fk` lets at most one child row reference a parent row: the foreign key
+  --- contains a unique key of the child, which compares its values the way the parent
+  --- key does wherever the adapter reports collations.
+  local function one_child(child, parent, fk, set)
+    local positions = {}
+    for i, name in ipairs(fk.columns or {}) do
+      local column = finders[child](name)
+      if column then
+        positions[column] = i
+      end
+    end
+    for _, candidate in ipairs(table_keys[child]) do
+      if subset(candidate.columns, set) then
+        local agrees = true
+        for column in pairs(candidate.columns) do
+          local collation = candidate.collations[column]
+          local referenced = (fk.referenced or {})[positions[column]]
+          if collation and not referenced then
+            agrees = false
+          elseif collation then
+            agrees = agrees and collation:upper() == parent_collation(parent, referenced):upper()
+          end
+        end
+        if agrees then
+          return true
+        end
+      end
+    end
+    return false
   end
 
   local lines = { 'erDiagram' }
@@ -220,7 +314,7 @@ function M.erd(schema)
     local find_column = finders[child]
     local pk = primary_key(child)
     for _, fk in ipairs(child.foreign_keys or {}) do
-      local parent = find(child, fk.target)
+      local parent = find(child, fk)
       if parent then
         local columns = fk.columns or {}
         local set = column_set(find_column, columns)
@@ -229,12 +323,7 @@ function M.erd(schema)
         for column in pairs(set or {}) do
           optional = optional or column.nullable ~= false
         end
-        local unique = same_set(set, pk)
-        for _, index in ipairs(child.indexes or {}) do
-          if (index.unique or index.primary) and not unique then
-            unique = same_set(set, column_set(find_column, index.columns or {}))
-          end
-        end
+        local unique = set ~= nil and one_child(child, parent, fk, set)
         local identifying = set ~= nil
         for column in pairs(set or {}) do
           identifying = identifying and pk[column] == true
@@ -273,10 +362,16 @@ function M.erd(schema)
         end
       end
     end
-    -- `UK` marks a column unique on its own; a composite key does not make each member unique.
+    -- `UK` marks a column unique on its own; a composite key does not make each member
+    -- unique, and a partial index only among the rows it covers.
     for _, index in ipairs(tbl.indexes or {}) do
-      if index.unique and not index.primary and #(index.columns or {}) == 1 then
-        local column = find_column(index.columns[1])
+      if
+        index.unique
+        and not index.primary
+        and not index.partial
+        and #(index.columns or {}) == 1
+      then
+        local column = find_column(unquote(index.columns[1]))
         if column then
           unique[column] = true
         end
@@ -289,7 +384,7 @@ function M.erd(schema)
       table.insert(lines, '    string _no_columns_ "empty"')
     end
     for _, column in ipairs(tbl.columns or {}) do
-      local reference = column.references or references[column]
+      local reference = references[column] or column.references
       local keys = {}
       if column.primary_key then
         table.insert(keys, 'PK')

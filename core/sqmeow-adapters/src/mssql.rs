@@ -616,6 +616,7 @@ async fn index_rows(client: &mut Connection, schema: &str, table: &str) -> Resul
                 columns: vec![],
                 unique: row.get(2).unwrap_or(false),
                 primary: row.get(3).unwrap_or(false),
+                ..Default::default()
             });
         }
         indexes
@@ -866,6 +867,8 @@ impl Adapter for MsSqlAdapter {
                     name,
                     columns: vec![],
                     target: format!("{}.{}", text(&row, 2), text(&row, 3)),
+                    target_schema: text(&row, 2),
+                    target_relation: text(&row, 3),
                     referenced: vec![],
                 });
             }

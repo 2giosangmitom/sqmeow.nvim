@@ -147,11 +147,16 @@ pub struct RoleNode {
 }
 
 /// A foreign key: `columns` hold values of `referenced` in `target`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ForeignKeyNode {
     pub name: String,
     pub columns: Vec<String>,
+    /// The referenced table as shown to people, qualified only where the catalog does so.
     pub target: String,
+    /// The referenced table's schema and name as the catalog spells them, so a reader
+    /// need not parse `target`. Empty when the adapter cannot tell.
+    pub target_schema: String,
+    pub target_relation: String,
     pub referenced: Vec<String>,
 }
 
@@ -185,13 +190,17 @@ pub struct Details {
 }
 
 /// An index or a unique constraint on a table.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IndexNode {
     pub name: String,
     /// Its columns in order, or the expressions it is on.
     pub columns: Vec<String>,
     pub unique: bool,
     pub primary: bool,
+    /// Whether a predicate limits it to some rows, so uniqueness holds only among those.
+    pub partial: bool,
+    /// The collation each key column compares with, in column order; empty when unknown.
+    pub collations: Vec<String>,
 }
 
 impl ColumnNode {

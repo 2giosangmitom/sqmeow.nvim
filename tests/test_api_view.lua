@@ -162,6 +162,9 @@ local function stub_engine(replies)
     introspect = collector.on_nodes,
   }
   local sent = {}
+  helpers.stub(rpc, 'supports', function()
+    return true
+  end)
   helpers.stub(rpc, 'request', function(method, args)
     table.insert(sent, method)
     if replies[method] then
@@ -177,10 +180,12 @@ local function stub_engine(replies)
   return sent
 end
 
---- `public` is the default schema; `tables` lists its tables.
+--- `public` is the default schema and `tables` lists its tables; `audit` holds one other.
+--- Any other path is an error, so a test notices a request for the wrong schema.
 local function catalog(tables)
   return function(args)
-    if #args.path == 0 then
+    local path = table.concat(args.path, '/')
+    if path == '' then
       return {
         path = args.path,
         nodes = {
@@ -188,6 +193,10 @@ local function catalog(tables)
           { kind = 'schema', name = 'public', is_default = true },
         },
       }
+    elseif path == 'audit/tables' then
+      return { path = args.path, nodes = { { kind = 'table', name = 'log' } } }
+    elseif path ~= 'public/tables' then
+      return { path = args.path, nodes = {}, error = 'unexpected path ' .. path }
     end
     local nodes = { { kind = 'view', name = 'active_users' } }
     for _, name in ipairs(tables) do
@@ -345,6 +354,50 @@ T['schema sends a server connection to its databases'] = function()
   eq(err, 'this connection is a server; read the schema from one of its databases')
 end
 
+T['schema reads foreign tables and canonical schema names'] = function()
+  connect()
+  local base = catalog({ 'orders' })
+  stub_engine({
+    introspect = function(args)
+      local reply = base(args)
+      if table.concat(args.path, '/') == 'public/tables' then
+        table.insert(reply.nodes, { kind = 'relation', name = 'remote_orders' })
+      end
+      return reply
+    end,
+    structure = structure,
+  })
+  local schema, err = collect({ conn_id = 1, schema = 'PUBLIC' })
+
+  eq(err, nil)
+  eq(names(assert(schema, 'schema is nil')), { 'public.orders', 'public.remote_orders' })
+end
+
+T['schema refuses a server connection even with a schema'] = function()
+  connect()
+  local sent = stub_engine({
+    introspect = function(args)
+      return { path = args.path, nodes = { { kind = 'database', name = 'app' } } }
+    end,
+  })
+  local _, err = collect({ conn_id = 1, schema = 'public' })
+  eq(err, 'this connection is a server; read the schema from one of its databases')
+  eq(sent, { 'introspect' })
+end
+
+T['schema reports a stale engine instead of waiting for it'] = function()
+  connect()
+  local rpc = require('sqmeow.rpc.client')
+  helpers.stub(rpc, 'request', function()
+    return true
+  end)
+  helpers.stub(rpc, 'supports', function()
+    return false, 'the running engine predates this plugin; run `:Sqmeow restart`'
+  end)
+  local _, err = collect({ conn_id = 1 })
+  eq(err, 'the running engine predates this plugin; run `:Sqmeow restart`')
+end
+
 T['schema reports the first structure error'] = function()
   connect()
   stub_engine({
@@ -367,10 +420,20 @@ T['schema ignores replies to other requests for the same table'] = function()
     table.insert(requests, { method = method, args = args })
     return true
   end)
+  helpers.stub(require('sqmeow.rpc.client'), 'supports', function()
+    return true
+  end)
   local got
   view.schema({ conn_id = 1, schema = 'public' }, function(schema)
     got = schema
   end)
+  collector.on_nodes({
+    conn_id = 1,
+    path = {},
+    request_id = requests[1].args.request_id,
+    nodes = { { kind = 'schema', name = 'public' } },
+  })
+  table.remove(requests, 1)
   local listing = requests[1].args
   -- The drawer's own read of the same path carries no id of this request.
   collector.on_nodes({ conn_id = 1, path = listing.path, nodes = {} })
@@ -393,6 +456,9 @@ end
 T['schema fails pending reads on disconnect and engine stop'] = function()
   connect()
   helpers.stub(require('sqmeow.rpc.client'), 'request', function()
+    return true
+  end)
+  helpers.stub(require('sqmeow.rpc.client'), 'supports', function()
     return true
   end)
   local errors = {}
@@ -419,6 +485,9 @@ T['schema isolates a failing callback from other reads'] = function()
   helpers.stub(require('sqmeow.rpc.client'), 'request', function()
     return true
   end)
+  helpers.stub(require('sqmeow.rpc.client'), 'supports', function()
+    return true
+  end)
   local messages = {}
   helpers.stub(vim, 'notify', function(message)
     table.insert(messages, message)
@@ -435,6 +504,19 @@ T['schema isolates a failing callback from other reads'] = function()
   eq(second, 'connection closed')
   eq(#messages, 1)
   helpers.contains(messages[1], 'boom')
+end
+
+T['schema replies leave the drawer tree alone'] = function()
+  local drawer = require('sqmeow.ui.drawer')
+  local seen = {}
+  helpers.stub(drawer, 'on_nodes', function(payload)
+    table.insert(seen, payload)
+  end)
+  local events = require('sqmeow.rpc.events')
+  events.on_nodes({ conn_id = 1, path = { 'public', 'tables' }, request_id = 7, nodes = {} })
+  eq(#seen, 0)
+  events.on_nodes({ conn_id = 1, path = { 'public', 'tables' }, nodes = {} })
+  eq(#seen, 1)
 end
 
 T['schema rejects disconnected and non-relational connections'] = function()

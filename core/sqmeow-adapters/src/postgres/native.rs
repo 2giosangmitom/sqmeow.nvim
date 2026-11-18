@@ -565,6 +565,7 @@ macro_rules! tuple {
 tuple!(A:0,B:1);
 tuple!(A:0,B:1,C:2,D:3);
 tuple!(A:0,B:1,C:2,D:3,E:4);
+tuple!(A:0,B:1,C:2,D:3,E:4,F:5);
 tuple!(A:0,B:1,C:2,D:3,E:4,F:5,G:6);
 
 pub(super) fn foreign_key(row: &Row) -> Option<sqmeow_db::types::ForeignKey> {

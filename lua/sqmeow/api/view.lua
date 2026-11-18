@@ -281,9 +281,12 @@ end
 ---@field schema string|nil Empty or nil for schema-less adapters.
 ---@field relation string
 ---@field columns table[] Column nodes: `name`, `type_name`, `nullable`, `primary_key`.
----@field indexes table[]|nil `name`, `columns`, `unique`, `primary`.
----@field foreign_keys table[]|nil `name`, `columns`, `target` (`relation` or
---- `schema.relation`), `referenced`.
+---@field indexes table[]|nil `name`, `columns`, `unique`, `primary`, `partial`,
+--- `collations` (per key column, empty when unknown).
+---@field foreign_keys table[]|nil `name`, `columns`, `referenced`, `target`
+--- (display name), and the referenced table as `target_schema` and
+--- `target_relation`. Hand-built input may give only `target`: `relation` or
+--- `schema.relation`.
 
 ---@class sqmeow.Schema
 ---@field conn_id integer

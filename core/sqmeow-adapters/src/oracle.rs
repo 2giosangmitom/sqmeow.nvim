@@ -1078,6 +1078,7 @@ impl Adapter for OracleAdapter {
                         primary: row.primary,
                         columns: vec![column],
                         name: row.name,
+                        ..Default::default()
                     }),
                 }
             }
@@ -1407,10 +1408,10 @@ fn foreign_keys(
     relation: &str,
 ) -> Result<Vec<ForeignKeyNode>> {
     let binds = [schema.to_owned(), relation.to_owned()];
-    let rows: Vec<(String, String, String, String)> = OracleAdapter::query_bound(
+    let rows: Vec<(String, String, String, String, String)> = OracleAdapter::query_bound(
         meta,
         "select k.constraint_name, cc.column_name,
-                rc.owner || '.' || rc.table_name, rcc.column_name
+                rc.owner, rc.table_name, rcc.column_name
          from all_constraints k
          join all_cons_columns cc
            on cc.owner = k.owner and cc.constraint_name = k.constraint_name
@@ -1427,14 +1428,15 @@ fn foreign_keys(
                 row.get::<String>(0).map_err(Error::driver)?,
                 row.get::<String>(1).map_err(Error::driver)?,
                 row.get::<String>(2).map_err(Error::driver)?,
-                row.get::<Option<String>>(3)
+                row.get::<String>(3).map_err(Error::driver)?,
+                row.get::<Option<String>>(4)
                     .map_err(Error::driver)?
                     .unwrap_or_default(),
             ))
         },
     )?;
     let mut keys: Vec<ForeignKeyNode> = Vec::new();
-    for (name, column, target, referenced) in rows {
+    for (name, column, target_schema, target_relation, referenced) in rows {
         match keys.last_mut() {
             Some(key) if key.name == name => {
                 key.columns.push(column);
@@ -1443,7 +1445,9 @@ fn foreign_keys(
             _ => keys.push(ForeignKeyNode {
                 name,
                 columns: vec![column],
-                target,
+                target: format!("{target_schema}.{target_relation}"),
+                target_schema,
+                target_relation,
                 referenced: vec![referenced],
             }),
         }

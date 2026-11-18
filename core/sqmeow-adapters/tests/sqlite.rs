@@ -67,6 +67,56 @@ async fn relationships_preserve_catalog_endpoints() {
 }
 
 #[tokio::test]
+async fn structure_reports_partial_indexes_collations_and_implicit_references() {
+    let backend = database().await;
+    run(
+        &backend,
+        "create table Parent (code text collate nocase primary key)",
+    )
+    .await;
+    run(
+        &backend,
+        "create table child (id integer primary key, code text references parent, active integer)",
+    )
+    .await;
+    run(
+        &backend,
+        "create unique index child_active on child (code) where active = 1",
+    )
+    .await;
+    run(
+        &backend,
+        "create unique index child_code on child (code collate binary)",
+    )
+    .await;
+
+    let indexes = backend.indexes("main", "child").await.unwrap();
+    let partial = indexes.iter().find(|i| i.name == "child_active").unwrap();
+    // A partial unique index still enforces uniqueness among the rows it covers.
+    assert!(partial.unique && partial.partial);
+    assert_eq!(partial.columns, ["code"]);
+    let full = indexes.iter().find(|i| i.name == "child_code").unwrap();
+    assert!(full.unique && !full.partial);
+    assert_eq!(full.collations, ["BINARY"]);
+    let parent = backend.indexes("main", "Parent").await.unwrap();
+    assert_eq!(parent[0].collations, ["NOCASE"]);
+
+    let details = backend.details("main", "child").await.unwrap();
+    let key = &details.foreign_keys[0];
+    assert_eq!(key.target, "parent");
+    assert_eq!(
+        (key.target_schema.as_str(), key.target_relation.as_str()),
+        ("main", "Parent")
+    );
+    // `references parent` names no column, so it points at the primary key.
+    assert_eq!(key.referenced, ["code"]);
+    let columns = backend.columns("main", "child").await.unwrap();
+    let code = columns.iter().find(|c| c.name == "code").unwrap();
+    assert_eq!(code.foreign_key.as_ref().unwrap().column, "code");
+    backend.close().await;
+}
+
+#[tokio::test]
 async fn a_failing_statement_rolls_back_the_ones_before_it() {
     failed_apply_rolls_back(
         &database().await,

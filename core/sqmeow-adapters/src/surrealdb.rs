@@ -452,6 +452,7 @@ impl Adapter for SurrealAdapter {
                 },
                 unique: text(index.get("index")) == "UNIQUE",
                 primary: false,
+                ..Default::default()
             })
             .collect();
         indexes.sort_by(|a, b| a.name.cmp(&b.name));
@@ -463,6 +464,7 @@ impl Adapter for SurrealAdapter {
                 columns: vec!["id".to_owned()],
                 unique: true,
                 primary: true,
+                ..Default::default()
             },
         );
         Ok(indexes)
