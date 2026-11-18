@@ -6,7 +6,9 @@ local drawer = require('sqmeow.ui.drawer')
 local state = require('sqmeow.core.state')
 local T = MiniTest.new_set()
 
-local function setup(request_error)
+---@param request_error string|nil What every engine request fails with.
+---@param stale string|nil Why the running engine lacks the `request_id` feature.
+local function setup(request_error, stale)
   structure.close()
   MiniTest.finally(structure.close)
   helpers.stub(state, 'connections', {
@@ -21,6 +23,9 @@ local function setup(request_error)
       return nil, request_error
     end
     return true
+  end)
+  helpers.stub(require('sqmeow.rpc.client'), 'supports', function()
+    return stale == nil, stale
   end)
   helpers.stub(require('sqmeow.core.utils'), 'notify', function(message)
     table.insert(messages, message)
@@ -214,11 +219,23 @@ T['preserves table structure rendering'] = function()
     return { kind = 'table', name = 'users', conn_id = 1, path = { 'public', 'tables', 'users' } }
   end)
   drawer.actions.structure()
-  eq(
-    requests[1],
-    { method = 'structure', args = { conn_id = 1, schema = 'public', relation = 'users' } }
-  )
+  local request_id = requests[1].args.request_id
+  eq(type(request_id), 'number')
+  eq(requests[1], {
+    method = 'structure',
+    args = { conn_id = 1, schema = 'public', relation = 'users', request_id = request_id },
+  })
+  -- A reply to another reader of the same table is not this popup's.
   structure.on_done({
+    conn_id = 1,
+    schema = 'public',
+    relation = 'users',
+    request_id = request_id + 1000,
+    columns = {},
+  })
+  eq(vim.bo.filetype ~= 'sqmeow-structure', true)
+  structure.on_done({
+    request_id = request_id,
     conn_id = 1,
     schema = 'public',
     relation = 'users',
@@ -232,6 +249,15 @@ T['preserves table structure rendering'] = function()
   helpers.contains(content(), 'CREATE TABLE public.users')
   eq(vim.bo.filetype, 'sqmeow-structure')
   eq(vim.bo.modifiable, false)
+end
+
+T['reports a stale engine instead of waiting for its reply'] = function()
+  local _, messages = setup(nil, 'the running engine predates this plugin; run `:Sqmeow restart`')
+  helpers.stub(drawer, 'current_node', function()
+    return { kind = 'table', name = 'users', conn_id = 1, path = { 'public', 'tables', 'users' } }
+  end)
+  drawer.actions.structure()
+  eq(messages, { 'the running engine predates this plugin; run `:Sqmeow restart`' })
 end
 
 return T

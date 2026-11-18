@@ -65,6 +65,35 @@ impl SqliteAdapter {
         self.meta().fetch(sql.into(), Vec::new()).await
     }
 
+    /// A table's primary key columns in key order: what `REFERENCES parent` without
+    /// columns points at.
+    async fn primary_key(&self, schema: &str, table: &str) -> Result<Vec<String>> {
+        let mut rows = self
+            .fetch(format!(
+                "pragma {}.table_info({})",
+                self.quote_ident(schema),
+                self.quote_ident(table)
+            ))
+            .await?;
+        rows.retain(|r| r.int("pk") > 0);
+        rows.sort_by_key(|r| r.int("pk"));
+        rows.iter().map(|r| r.required("name")).collect()
+    }
+
+    /// The declared spelling of a table a foreign key names in any letter case.
+    async fn declared_table(&self, schema: &str, table: &str) -> Result<String> {
+        Ok(self
+            .fetch(format!(
+                "select name from {}.sqlite_master where type = 'table'",
+                self.quote_ident(schema)
+            ))
+            .await?
+            .iter()
+            .filter_map(|r| r.text("name"))
+            .find(|name| name.eq_ignore_ascii_case(table))
+            .unwrap_or_else(|| table.to_owned()))
+    }
+
     async fn run(
         &self,
         sql: &str,
@@ -190,7 +219,7 @@ impl Adapter for SqliteAdapter {
                 vec![],
             )
             .await?;
-        let references: HashMap<String, ForeignKey> = self
+        let keys = self
             .execution
             .fetch(
                 format!(
@@ -201,18 +230,26 @@ impl Adapter for SqliteAdapter {
                 vec![],
             )
             .await
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|row| {
-                Some((
-                    row.text("from")?,
-                    ForeignKey {
-                        table: row.text("table")?,
-                        column: row.text("to").unwrap_or_else(|| "rowid".into()),
-                    },
-                ))
-            })
-            .collect();
+            .unwrap_or_default();
+        let mut references: HashMap<String, ForeignKey> = HashMap::new();
+        for row in &keys {
+            let (Some(from), Some(table)) = (row.text("from"), row.text("table")) else {
+                continue;
+            };
+            // `REFERENCES parent` without columns points at the parent's primary key, by
+            // position; a rowid table's key is its rowid.
+            let column = match row.text("to") {
+                Some(column) => column,
+                None => self
+                    .primary_key(schema, &table)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .nth(usize::try_from(row.int("seq")).unwrap_or(0))
+                    .unwrap_or_else(|| "rowid".into()),
+            };
+            references.insert(from, ForeignKey { table, column });
+        }
         Ok(rows
             .iter()
             .filter_map(|row| {
@@ -243,21 +280,33 @@ impl Adapter for SqliteAdapter {
         let mut indexes = Vec::new();
         for row in rows {
             let name = row.required("name")?;
-            let columns = self
+            let mut keys = self
                 .fetch(format!(
-                    "pragma {}.index_info({})",
+                    "pragma {}.index_xinfo({})",
                     self.quote_ident(schema),
                     self.quote_ident(&name)
                 ))
-                .await?
-                .iter()
-                .map(|r| r.text("name").unwrap_or_else(|| "(expression)".into()))
-                .collect();
+                .await?;
+            // `index_xinfo` also lists the rowid and other auxiliary columns after the key.
+            keys.retain(|r| r.int("key") == 1);
+            keys.sort_by_key(|r| r.int("seqno"));
             indexes.push(IndexNode {
                 name,
-                columns,
+                columns: keys
+                    .iter()
+                    .map(|r| r.text("name").unwrap_or_else(|| "(expression)".into()))
+                    .collect(),
                 unique: row.int("unique") == 1,
                 primary: row.text("origin").is_some_and(|v| v == "pk"),
+                partial: row.int("partial") == 1,
+                collations: keys
+                    .iter()
+                    // Collation names are case-insensitive; SQLite reports them as written.
+                    .map(|r| {
+                        r.text("coll")
+                            .map_or_else(|| "BINARY".into(), |c| c.to_ascii_uppercase())
+                    })
+                    .collect(),
             });
         }
         indexes.sort_by(|a, b| a.name.cmp(&b.name));
@@ -378,16 +427,22 @@ impl Adapter for SqliteAdapter {
                 keys.push((
                     id,
                     ForeignKeyNode {
-                        name: String::new(),
-                        columns: vec![],
                         target: row.required("table")?,
-                        referenced: vec![],
+                        ..ForeignKeyNode::default()
                     },
                 ));
             }
             let key = &mut keys.last_mut().expect("inserted above").1;
             key.columns.push(row.required("from")?);
             key.referenced.extend(row.text("to"));
+        }
+        for (_, key) in &mut keys {
+            key.target_schema = schema.to_owned();
+            key.target_relation = self.declared_table(schema, &key.target).await?;
+            // `REFERENCES parent` without columns points at the parent's primary key.
+            if key.referenced.is_empty() {
+                key.referenced = self.primary_key(schema, &key.target_relation).await?;
+            }
         }
         Ok(Details {
             definition,

@@ -13,6 +13,7 @@ M.version = '3.2.0' -- x-release-please-version
 ---@field core_version string
 ---@field pid integer
 ---@field adapters string[]
+---@field features string[]|nil Protocol behaviors it offers, such as `request_id`.
 
 local channel = nil
 local info = nil
@@ -62,6 +63,8 @@ local function forget(job)
   -- Only the current engine's exit clears the state.
   if channel == job then
     channel, info = nil, nil
+    -- Requests sent to it will never be answered; a replacement engine's are untouched.
+    require('sqmeow.rpc.events').on_engine_stop()
   end
 end
 
@@ -219,6 +222,22 @@ end
 function M.next_request_id()
   request_sequence = request_sequence + 1
   return request_sequence
+end
+
+--- Whether the running engine offers a protocol `feature`. An engine started before the
+--- plugin was updated may lack one; the error says how to replace it. True when no
+--- engine runs, since the next start uses the installed binary.
+---@param feature string
+---@return boolean supported
+---@return string|nil error
+function M.supports(feature)
+  if not info or vim.list_contains(info.features or {}, feature) then
+    return true
+  end
+  return false,
+    ('the running engine %s predates this plugin; run `:Sqmeow restart`'):format(
+      info.core_version or ''
+    )
 end
 
 --- Calls an engine method and waits for its answer.

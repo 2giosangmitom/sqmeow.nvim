@@ -10,6 +10,11 @@ local notify = require('sqmeow.core.utils').notify
 ---@param payload table
 function M.on_connection(payload)
   local state = require('sqmeow.core.state')
+  -- An explicit disconnect forgets the connection before its `closed` event arrives,
+  -- so pending schema reads are failed before the missing-connection check.
+  if payload.state == 'error' or payload.state == 'closed' then
+    require('sqmeow.core.schema').invalidate(payload.id)
+  end
   local connection = state.connections[payload.id]
   if not connection then
     return
@@ -159,7 +164,11 @@ end
 --- Handle one level of the schema tree arriving.
 ---@param payload table
 function M.on_nodes(payload)
-  require('sqmeow.ui.drawer').on_nodes(payload)
+  -- Tagged replies answer a schema read; only the drawer's own untagged ones update its tree.
+  if payload.request_id == nil then
+    require('sqmeow.ui.drawer').on_nodes(payload)
+  end
+  require('sqmeow.core.schema').on_nodes(payload)
   pcall(function()
     require('sqmeow.completion').ensure(payload.conn_id)
   end)
@@ -170,7 +179,13 @@ function M.on_engine_restart()
   require('sqmeow.ui.drawer').cancel_edits()
   require('sqmeow.ui.structure').close()
   require('sqmeow.ui.relationships').close()
+  require('sqmeow.core.schema').reset()
   require('sqmeow.ui.result').forget()
+end
+
+--- Handle the engine stopping or exiting: nothing it was asked will be answered.
+function M.on_engine_stop()
+  require('sqmeow.core.schema').reset('engine stopped')
 end
 
 --- Subscribe to engine events. Safe to call repeatedly.
@@ -194,11 +209,13 @@ function M.ensure()
   rpc.on('relationships:done', function(payload)
     vim.schedule(function()
       require('sqmeow.ui.relationships').on_done(payload)
+      require('sqmeow.core.schema').on_relationships(payload)
     end)
   end)
   rpc.on('structure:done', function(payload)
     vim.schedule(function()
       require('sqmeow.ui.structure').on_done(payload)
+      require('sqmeow.core.schema').on_structure(payload)
     end)
   end)
   -- These handlers issue RPC requests. Defer them until Neovim has read the initiating reply.

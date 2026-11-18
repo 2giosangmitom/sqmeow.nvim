@@ -90,6 +90,9 @@ impl Core {
             ("core_version", Value::from(env!("CARGO_PKG_VERSION"))),
             ("pid", Value::from(std::process::id())),
             ("adapters", strings(sqmeow_adapters::supported())),
+            // Protocol behaviors a client may rely on. `request_id`: `introspect` and
+            // `structure` echo the caller's request id in their completion events.
+            ("features", strings(["request_id"])),
         ]))
     }
 

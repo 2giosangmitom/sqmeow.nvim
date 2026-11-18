@@ -156,8 +156,19 @@ end
 ---@param schema string
 ---@param relation string
 function M.open(conn_id, schema, relation)
-  wanted = { conn_id = conn_id, schema = schema, relation = relation }
-  local _, err = require('sqmeow.rpc.client').request('structure', wanted)
+  local rpc = require('sqmeow.rpc.client')
+  -- The id keeps a reply meant for another reader of the same table, such as a schema read, out.
+  wanted = {
+    conn_id = conn_id,
+    schema = schema,
+    relation = relation,
+    request_id = rpc.next_request_id(),
+  }
+  local _, err = rpc.request('structure', wanted)
+  if not err then
+    -- An engine that does not echo the id would answer into the void.
+    _, err = rpc.supports('request_id')
+  end
   if err then
     wanted = nil
     utils.notify(err, vim.log.levels.ERROR)
@@ -228,6 +239,7 @@ function M.on_done(payload)
     not (
       wanted
       and not wanted.kind
+      and payload.request_id == wanted.request_id
       and payload.conn_id == wanted.conn_id
       and payload.schema == wanted.schema
       and payload.relation == wanted.relation

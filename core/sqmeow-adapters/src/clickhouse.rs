@@ -331,6 +331,7 @@ impl Adapter for ClickHouseAdapter {
                 columns: vec![row[0].clone()],
                 unique: false,
                 primary: true,
+                ..Default::default()
             });
         let skipping = self
             .rows(
@@ -345,6 +346,7 @@ impl Adapter for ClickHouseAdapter {
                 columns: vec![row[1].clone()],
                 unique: false,
                 primary: false,
+                ..Default::default()
             });
         Ok(primary.chain(skipping).collect())
     }

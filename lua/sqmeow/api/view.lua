@@ -286,6 +286,64 @@ function M.relationships(conn_id, schema, relation)
   require('sqmeow.ui.relationships').open(conn_id, schema, relation)
 end
 
+---@class sqmeow.SchemaTable
+---@field schema string|nil Empty or nil for schema-less adapters.
+---@field relation string
+---@field columns table[] Column nodes: `name`, `type_name`, `nullable`, `primary_key`.
+---@field indexes table[]|nil `name`, `columns`, `unique`, `primary`, `partial`,
+--- `collations` (per key column, empty when unknown).
+---@field foreign_keys table[]|nil `name`, `columns`, `referenced`, `target`
+--- (display name), and the referenced table as `target_schema` and
+--- `target_relation`. Hand-built input may give only `target`: `relation` or
+--- `schema.relation`.
+
+---@class sqmeow.Schema
+---@field conn_id integer
+---@field connection string
+---@field dialect string
+---@field schema string Schema of the first table: the one read, or `relation`'s.
+---@field relation string|nil Focal table of a neighborhood.
+---@field hops integer|nil Neighborhood depth.
+---@field tables sqmeow.SchemaTable[]
+
+---@class sqmeow.SchemaOpts
+---@field conn_id integer|nil Open connection id; defaults to the buffer's target.
+---@field connection string|nil Open connection name when `conn_id` is omitted.
+---@field schema string|nil Schema to read; defaults to the connection's default schema.
+---@field relation string|nil Read only this table and its foreign-key neighbors.
+---@field hops integer|nil Neighborhood depth when `relation` is set (default 1;
+--- 0 reads only `relation`).
+
+--- Read table structures (columns, indexes, foreign keys) from an open
+--- connection. Without `relation`, reads every table of `schema`; with it,
+--- that table and every table within `hops` foreign keys in either direction.
+--- `relation` must be a table of the schema; it matches case-insensitively
+--- when only one table does. Only collects metadata; render it with
+--- |sqmeow.api.export.mermaid()|. Not supported for Redis and MongoDB, nor on a
+--- server connection: read from one of its databases.
+---@tag sqmeow-schema
+---@toc_entry Schema structure
+---@param opts sqmeow.SchemaOpts|nil
+---@param callback fun(schema: sqmeow.Schema|nil, err: string|nil) Called once
+--- the structures arrive, or with the first error.
+---@return boolean started False when nothing was requested; `callback` is not called.
+---@return string|nil err Why it did not start.
+---@usage >lua
+---   local view = require('sqmeow.api.view')
+---   local started, err = view.schema({ relation = 'orders', hops = 2 }, function(schema, e)
+---     if not schema then
+---       return vim.notify(e, vim.log.levels.ERROR)
+---     end
+---     require('sqmeow.api.export').mermaid(schema, { path = 'orders.mmd' })
+---   end)
+---   if not started then
+---     vim.notify(err, vim.log.levels.ERROR)
+---   end
+--- <
+function M.schema(opts, callback)
+  return require('sqmeow.core.schema').collect(opts, callback)
+end
+
 --- Open the result window.
 --- On Neovim 0.11+, drawer and result windows use 'winfixbuf': `:edit` and jumps
 --- that would replace their buffer fail with E1513. Switch to an editing window

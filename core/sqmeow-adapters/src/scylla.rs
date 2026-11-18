@@ -307,6 +307,7 @@ impl Adapter for ScyllaAdapter {
             columns: key.into_iter().map(|(name, ..)| name).collect(),
             unique: true,
             primary: true,
+            ..Default::default()
         });
 
         Ok(primary
@@ -319,6 +320,7 @@ impl Adapter for ScyllaAdapter {
                         columns: options.get("target").cloned().into_iter().collect(),
                         unique: false,
                         primary: false,
+                        ..Default::default()
                     }),
             )
             .collect())

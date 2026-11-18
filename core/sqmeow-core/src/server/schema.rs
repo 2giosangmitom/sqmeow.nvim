@@ -35,9 +35,11 @@ impl Core {
         let pattern = args
             .opt_string("pattern")
             .filter(|pattern| !pattern.is_empty());
+        // Echoed back so a caller can tell its reply from another caller's for the same path.
+        let request_id = args.opt_integer("request_id");
         let connection = self.connection(conn_id)?;
 
-        let work = self.read_level(connection, path, pattern);
+        let work = self.read_level(connection, path, pattern, request_id);
         Ok((Value::Boolean(true), Box::pin(work)))
     }
 
@@ -47,6 +49,8 @@ impl Core {
         // Empty for a table the result names without one.
         let schema = args.opt_string("schema").unwrap_or_default();
         let relation = args.string("relation")?;
+        // Echoed back so a caller can tell its reply from another caller's for the same table.
+        let request_id = args.opt_integer("request_id");
         let connection = self.connection(conn_id)?;
 
         let work = async move {
@@ -65,6 +69,9 @@ impl Core {
                 ("schema", Value::from(schema.as_str())),
                 ("relation", Value::from(relation.as_str())),
             ];
+            if let Some(request_id) = request_id {
+                payload.push(("request_id", Value::from(request_id)));
+            }
             match read.await {
                 Ok((columns, indexes, details)) => {
                     payload.push(("columns", Value::Array(column_nodes(columns))));
@@ -84,6 +91,7 @@ impl Core {
         connection: Arc<Connection>,
         path: Vec<String>,
         pattern: Option<String>,
+        request_id: Option<i64>,
     ) {
         let pattern = pattern.as_deref();
         let nodes = match path.as_slice() {
@@ -104,6 +112,9 @@ impl Core {
             ("conn_id", Value::from(connection.id)),
             ("path", strings(path)),
         ];
+        if let Some(request_id) = request_id {
+            payload.push(("request_id", Value::from(request_id)));
+        }
         match nodes {
             Ok(nodes) => payload.push(("nodes", Value::Array(nodes))),
             Err(error) => {
@@ -448,6 +459,8 @@ fn details_payload(details: Details) -> Vec<(&'static str, Value)> {
                 ("name", Value::from(key.name)),
                 ("columns", strings(key.columns)),
                 ("target", Value::from(key.target)),
+                ("target_schema", Value::from(key.target_schema)),
+                ("target_relation", Value::from(key.target_relation)),
                 ("referenced", strings(key.referenced)),
             ])
         })
@@ -474,6 +487,8 @@ fn index_nodes(indexes: Vec<IndexNode>) -> Vec<Value> {
                 ("columns", strings(index.columns)),
                 ("unique", Value::from(index.unique)),
                 ("primary", Value::from(index.primary)),
+                ("partial", Value::from(index.partial)),
+                ("collations", strings(index.collations)),
             ])
         })
         .collect()

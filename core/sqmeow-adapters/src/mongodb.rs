@@ -473,6 +473,7 @@ impl Adapter for MongoAdapter {
                 unique: primary || options.unique == Some(true),
                 primary,
                 name,
+                ..Default::default()
             });
         }
         Ok(indexes)
