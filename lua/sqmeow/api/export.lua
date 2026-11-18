@@ -229,4 +229,44 @@ function M.export(opts)
   end
 end
 
+--- Render collected table structures as a Mermaid `erDiagram`.
+--- Relationship lines run parent to child: the parent end is `||` when every
+--- foreign key column is NOT NULL, else `|o`; the child end is `|o` when the
+--- key columns are a primary key or unique index, else `o{`. Columns carry
+--- `PK`, `FK` and `UK` tags. Foreign keys to tables outside `schema.tables`
+--- are tagged but draw no line.
+---@param schema { tables: sqmeow.SchemaTable[] } From |sqmeow-schema|,
+--- or built by hand.
+---@param opts { path: string|nil, clipboard: boolean|nil }|nil `path`: write
+--- the diagram to this file; `clipboard = true`: copy it.
+---@return string mermaid
+---@usage >lua
+---   require('sqmeow.api.view').schema({ schema = 'public' }, function(schema, err)
+---     if not schema then
+---       return vim.notify(err, vim.log.levels.ERROR)
+---     end
+---     require('sqmeow.api.export').mermaid(schema, { path = 'public.mmd' })
+---   end)
+--- <
+function M.mermaid(schema, opts)
+  opts = opts or {}
+  local text = require('sqmeow.core.mermaid').erd(schema)
+  local lines = vim.split(text, '\n', { plain = true })
+  if opts.path then
+    local path = vim.fn.fnamemodify(vim.fs.normalize(opts.path), ':p')
+    local ok, err = pcall(vim.fn.writefile, lines, path)
+    if not ok or err ~= 0 then
+      notify(('could not write %s'):format(path), vim.log.levels.ERROR)
+    else
+      notify(('wrote %s (%d tables)'):format(path, #(schema.tables or {})))
+    end
+  end
+  if opts.clipboard then
+    vim.fn.setreg('"', text)
+    pcall(vim.fn.setreg, '+', text)
+    notify(('copied the diagram of %d tables'):format(#(schema.tables or {})))
+  end
+  return text
+end
+
 return M

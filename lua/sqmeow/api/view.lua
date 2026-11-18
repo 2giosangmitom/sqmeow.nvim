@@ -277,68 +277,51 @@ function M.relationships(conn_id, schema, relation)
   require('sqmeow.ui.relationships').open(conn_id, schema, relation)
 end
 
----@class sqmeow.ErdTable
----@field schema string|nil
+---@class sqmeow.SchemaTable
+---@field schema string|nil Empty or nil for schema-less adapters.
 ---@field relation string
----@field structure table|nil
+---@field columns table[] Column nodes: `name`, `type_name`, `nullable`, `primary_key`.
+---@field indexes table[]|nil `name`, `columns`, `unique`, `primary`.
+---@field foreign_keys table[]|nil `name`, `columns`, `target` (`relation` or
+--- `schema.relation`), `referenced`.
 
----@class sqmeow.ErdEdge
----@field source_key string
----@field source_schema string
----@field source_relation string
----@field target_key string
----@field target_schema string
----@field target_relation string
----@field columns string[]
----@field referenced string[]
----@field name string
----@field connector string
----@field cardinality_label string
+---@class sqmeow.Schema
+---@field conn_id integer
+---@field connection string
+---@field dialect string
+---@field schema string Schema of the first table: the one read, or `relation`'s.
+---@field relation string|nil Focal table of a neighborhood.
+---@field hops integer|nil Neighborhood depth.
+---@field tables sqmeow.SchemaTable[]
 
----@class sqmeow.Erd
----@field mermaid string
----@field conn_id integer|nil
----@field connection string|nil
----@field dialect string|nil
----@field mode 'neighborhood'|'schema'
----@field schema string
----@field center_schema string|nil
----@field center_relation string|nil
----@field hops integer|nil
----@field tables sqmeow.ErdTable[]
----@field tables_map table<string, sqmeow.ErdTable>
----@field table_order string[]
----@field edges sqmeow.ErdEdge[]
-
----@class sqmeow.ErdOpts
----@field conn_id integer|nil Connected database id; defaults to the buffer's or active connection.
+---@class sqmeow.SchemaOpts
+---@field conn_id integer|nil Open connection id; defaults to the buffer's target.
 ---@field connection string|nil Open connection name when `conn_id` is omitted.
----@field schema string|nil Target schema (empty for schema-less adapters; auto-resolved when nil).
----@field relation string|nil Focal table for an N-hop neighborhood ERD; omit for a full schema ERD.
----@field hops integer|nil Neighborhood hop depth when `relation` is set (default 1).
----@field tables sqmeow.ErdTable[]|nil Pre-collected table structures for synchronous formatting.
+---@field schema string|nil Schema to read; defaults to the connection's default schema.
+---@field relation string|nil Read only this table and its foreign-key neighbors.
+---@field hops integer|nil Neighborhood depth when `relation` is set (default 1).
 
---- Extract database schema metadata and foreign key relationships into a
---- Mermaid `erDiagram`. With `relation`, traverses `hops` foreign-key hops
---- around that table; without `relation`, collects every table in `schema`.
---- Infers `||`/`|o` parent participation from nullability and `|o`/`o{` child
---- multiplicity from primary/unique key indexes, and tags `PK`, `FK`, and `UK`
---- columns. Pass `tables` to format pre-fetched structures synchronously.
----@tag sqmeow-erd
----@toc_entry Entity relationship diagram
----@param opts sqmeow.ErdOpts|nil
----@param callback fun(erd: sqmeow.Erd|nil, err: string|nil)|nil
----@return sqmeow.Erd|boolean|nil result `sqmeow.Erd` when `opts.tables` is given, or `started` boolean.
----@return string|nil err
+--- Read table structures (columns, indexes, foreign keys) from an open
+--- connection. Without `relation`, reads every table of `schema`; with it,
+--- that table and every table within `hops` foreign keys in either direction.
+--- Only collects metadata; render it with |sqmeow.api.export.mermaid()|.
+--- Not supported for Redis and MongoDB.
+---@tag sqmeow-schema
+---@toc_entry Schema structure
+---@param opts sqmeow.SchemaOpts|nil
+---@param callback fun(schema: sqmeow.Schema|nil, err: string|nil) Called once
+--- the structures arrive, or with the first error.
+---@return boolean started False when nothing was requested; `callback` is not called.
+---@return string|nil err Why it did not start.
 ---@usage >lua
----   require('sqmeow.api.view').erd({ schema = 'public', relation = 'orders' }, function(erd, err)
----     if erd then
----       print(erd.mermaid)
+---   require('sqmeow.api.view').schema({ relation = 'orders', hops = 2 }, function(schema, err)
+---     if schema then
+---       require('sqmeow.api.export').mermaid(schema, { path = 'orders.mmd' })
 ---     end
 ---   end)
 --- <
-function M.erd(opts, callback)
-  return require('sqmeow.core.erd').generate(opts, callback)
+function M.schema(opts, callback)
+  return require('sqmeow.core.schema').collect(opts, callback)
 end
 
 --- Open the result window.

@@ -23,7 +23,7 @@ function M.on_connection(payload)
   -- Remove closed or failed connections before redrawing the drawer.
   if payload.state == 'error' or payload.state == 'closed' then
     state.remove_connection(payload.id)
-    require('sqmeow.core.erd').invalidate(payload.id)
+    require('sqmeow.core.schema').invalidate(payload.id)
   end
   -- A lost connection takes the databases opened from it along. One lost database session
   -- does not prove the server is gone, so its cluster is probed: a dead server reports the
@@ -161,7 +161,7 @@ end
 ---@param payload table
 function M.on_nodes(payload)
   require('sqmeow.ui.drawer').on_nodes(payload)
-  require('sqmeow.core.erd').on_nodes(payload)
+  require('sqmeow.core.schema').on_nodes(payload)
   pcall(function()
     require('sqmeow.completion').ensure(payload.conn_id)
   end)
@@ -172,7 +172,7 @@ function M.on_engine_restart()
   require('sqmeow.ui.drawer').cancel_edits()
   require('sqmeow.ui.structure').close()
   require('sqmeow.ui.relationships').close()
-  require('sqmeow.core.erd').reset()
+  require('sqmeow.core.schema').reset()
   require('sqmeow.ui.result').forget()
 end
 
@@ -197,13 +197,13 @@ function M.ensure()
   rpc.on('relationships:done', function(payload)
     vim.schedule(function()
       require('sqmeow.ui.relationships').on_done(payload)
-      require('sqmeow.core.erd').on_relationships(payload)
+      require('sqmeow.core.schema').on_relationships(payload)
     end)
   end)
   rpc.on('structure:done', function(payload)
     vim.schedule(function()
       require('sqmeow.ui.structure').on_done(payload)
-      require('sqmeow.core.erd').on_structure(payload)
+      require('sqmeow.core.schema').on_structure(payload)
     end)
   end)
   -- These handlers issue RPC requests. Defer them until Neovim has read the initiating reply.

@@ -149,213 +149,178 @@ T['status and column follow the result grid'] = function()
   eq(assert(view.status(), 'status is nil').staged_changes, 1)
 end
 
-T['erd formats Mermaid erDiagram with cardinality and PK/FK/UK badges'] = function()
-  local erd, err = view.erd({
-    schema = 'public',
-    relation = 'orders',
-    tables = {
-      {
-        schema = 'public',
-        relation = 'users',
-        structure = {
-          columns = {
-            { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
-            { name = 'email', type_name = 'character varying(255)', nullable = false },
-          },
-          indexes = {
-            { name = 'users_email_key', columns = { 'email' }, unique = true, primary = false },
-          },
-          foreign_keys = {},
-        },
-      },
-      {
-        schema = 'public',
-        relation = 'orders',
-        structure = {
-          columns = {
-            { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
-            { name = 'user_id', type_name = 'int4', nullable = false },
-            { name = 'coupon_id', type_name = 'int4', nullable = true },
-          },
-          indexes = {
-            {
-              name = 'orders_coupon_uq',
-              columns = { 'coupon_id' },
-              unique = true,
-              primary = false,
-            },
-          },
-          foreign_keys = {
-            {
-              name = 'orders_user_id_fkey',
-              columns = { 'user_id' },
-              target = 'users',
-              referenced = { 'id' },
-            },
-            {
-              name = 'orders_coupon_id_fkey',
-              columns = { 'coupon_id' },
-              target = 'coupons',
-              referenced = { 'id' },
-            },
-          },
-        },
-      },
-      {
-        schema = 'public',
-        relation = 'coupons',
-        structure = {
-          columns = {
-            { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
-          },
-          indexes = {},
-          foreign_keys = {},
-        },
-      },
-    },
+--- Answer engine requests from `replies[method](args)` through the schema collector's events.
+local function stub_engine(replies)
+  local rpc = require('sqmeow.rpc.client')
+  local collector = require('sqmeow.core.schema')
+  local deliver = {
+    structure = collector.on_structure,
+    relationships = collector.on_relationships,
+    introspect = collector.on_nodes,
+  }
+  local original = rpc.request
+  local sent = {}
+  rpc.request = function(method, args)
+    if not replies[method] then
+      return original(method, args)
+    end
+    table.insert(sent, method)
+    vim.schedule(function()
+      deliver[method](replies[method](args))
+    end)
+    return true
+  end
+  return sent, function()
+    rpc.request = original
+  end
+end
+
+local function structure(args, columns, foreign_keys)
+  return {
+    conn_id = args.conn_id,
+    schema = args.schema,
+    relation = args.relation,
+    columns = columns,
+    indexes = {},
+    foreign_keys = foreign_keys or {},
+  }
+end
+
+local function connect()
+  state.add_connection({
+    id = 1,
+    name = 'app',
+    url = 'postgres://localhost/app',
+    dialect = 'postgres',
+    state = 'connected',
   })
+end
+
+local function collect(opts)
+  local got, got_err
+  local started, err = view.schema(opts, function(schema, e)
+    got, got_err = schema, e
+  end)
+  eq({ started, err }, { true, nil })
+  vim.wait(500, function()
+    return got ~= nil or got_err ~= nil
+  end)
+  return got, got_err
+end
+
+T['schema reads a table neighborhood over relationships and structure'] = function()
+  connect()
+  local sent, restore = stub_engine({
+    relationships = function(args)
+      return {
+        conn_id = args.conn_id,
+        request_id = args.request_id,
+        resolved_schema = 'public',
+        resolved_relation = args.relation,
+        relationships = {
+          {
+            name = 'orders_user_id_fkey',
+            source_schema = 'public',
+            source_relation = 'orders',
+            columns = { 'user_id' },
+            target_schema = 'public',
+            target_relation = 'users',
+            referenced = { 'id' },
+          },
+        },
+      }
+    end,
+    structure = function(args)
+      return structure(args, { { name = 'id', type_name = 'int4', primary_key = true } })
+    end,
+  })
+  local schema, err = collect({ conn_id = 1, relation = 'orders' })
+  restore()
 
   eq(err, nil)
-  assert(erd, 'erd is nil')
-  eq(erd.mode, 'neighborhood')
-  eq(#erd.edges, 2)
-  eq(erd.edges[1].connector, '||--o{')
-  eq(erd.edges[1].cardinality_label, '1:N')
-  eq(erd.edges[2].connector, '|o--|o')
-  eq(erd.edges[2].cardinality_label, '1:1 (optional)')
+  schema = assert(schema, 'schema is nil')
+  eq(schema.schema, 'public')
+  eq(schema.relation, 'orders')
+  eq(schema.hops, 1)
   eq(
-    erd.mermaid,
-    table.concat({
-      'erDiagram',
-      '  users ||--o{ orders : "user_id -> id"',
-      '  coupons |o--|o orders : "coupon_id -> id"',
-      '',
-      '  users {',
-      '    int4 id PK',
-      '    varchar(255) email UK "NOT NULL"',
-      '  }',
-      '  orders {',
-      '    int4 id PK',
-      '    int4 user_id FK "NOT NULL -> users.id"',
-      '    int4 coupon_id FK "-> coupons.id"',
-      '  }',
-      '  coupons {',
-      '    int4 id PK',
-      '  }',
-    }, '\n')
+    vim.tbl_map(function(t)
+      return t.schema .. '.' .. t.relation
+    end, schema.tables),
+    { 'public.orders', 'public.users' }
   )
+  eq(sent, { 'relationships', 'structure', 'structure' })
 end
 
-T['erd collects neighborhood and schema metadata over RPC events'] = function()
-  state.add_connection({
-    id = 1,
-    name = 'app',
-    url = 'postgres://localhost/app',
-    dialect = 'postgres',
-    state = 'connected',
+T['schema reads every table of the default schema'] = function()
+  connect()
+  local _, restore = stub_engine({
+    introspect = function(args)
+      local nodes = #args.path == 0
+          and {
+            { kind = 'schema', name = 'audit' },
+            { kind = 'schema', name = 'public', is_default = true },
+          }
+        or { { kind = 'table', name = 'users' }, { kind = 'view', name = 'active_users' } }
+      return { conn_id = args.conn_id, path = args.path, nodes = nodes }
+    end,
+    structure = function(args)
+      return structure(args, {})
+    end,
   })
+  local schema, err = collect({ conn_id = 1 })
+  restore()
 
+  eq(err, nil)
+  schema = assert(schema, 'schema is nil')
+  eq(schema.schema, 'public')
+  eq(#schema.tables, 1)
+  eq(schema.tables[1].relation, 'users')
+end
+
+T['schema reports the first structure error'] = function()
+  connect()
+  local _, restore = stub_engine({
+    introspect = function(args)
+      return { conn_id = args.conn_id, path = args.path, nodes = { { kind = 'table', name = 't' } } }
+    end,
+    structure = function(args)
+      return vim.tbl_extend('force', args, { error = 'permission denied' })
+    end,
+  })
+  local schema, err = collect({ conn_id = 1, schema = 'public' })
+  restore()
+
+  eq(schema, nil)
+  eq(err, 'permission denied')
+end
+
+T['schema fails pending requests when the connection closes'] = function()
+  connect()
   local rpc = require('sqmeow.rpc.client')
-  local erd_mod = require('sqmeow.core.erd')
-  local orig_request = rpc.request
-  rpc.request = function(method, params)
-    local req = params or {}
-    if method == 'relationships' then
-      vim.schedule(function()
-        erd_mod.on_relationships({
-          conn_id = req.conn_id,
-          schema = req.schema,
-          relation = req.relation,
-          request_id = req.request_id,
-          resolved_schema = 'public',
-          resolved_relation = 'orders',
-          relationships = {
-            {
-              name = 'orders_user_id_fkey',
-              source_schema = 'public',
-              source_relation = 'orders',
-              columns = { 'user_id' },
-              target_schema = 'public',
-              target_relation = 'users',
-              referenced = { 'id' },
-            },
-          },
-        })
-      end)
-      return true, nil
-    elseif method == 'structure' then
-      vim.schedule(function()
-        if req.relation == 'orders' then
-          erd_mod.on_structure({
-            conn_id = req.conn_id,
-            schema = 'public',
-            relation = 'orders',
-            columns = {
-              { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
-              { name = 'user_id', type_name = 'int4', nullable = false },
-            },
-            indexes = {},
-            foreign_keys = {},
-          })
-        else
-          erd_mod.on_structure({
-            conn_id = req.conn_id,
-            schema = 'public',
-            relation = 'users',
-            columns = {
-              { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
-            },
-            indexes = {},
-            foreign_keys = {},
-          })
-        end
-      end)
-      return true, nil
-    end
-    return orig_request(method, params)
+  local original = rpc.request
+  rpc.request = function()
+    return true
   end
-
-  local got_erd, got_err
-  local started, start_err = view.erd(
-    { conn_id = 1, schema = 'public', relation = 'orders', hops = 1 },
-    function(res, err)
-      got_erd, got_err = res, err
-    end
-  )
-  eq(started, true)
-  eq(start_err, nil)
-  vim.wait(500, function()
-    return got_erd ~= nil or got_err ~= nil
+  local got_err
+  view.schema({ conn_id = 1, schema = 'public' }, function(_, err)
+    got_err = err
   end)
-  rpc.request = orig_request
-
-  eq(got_err, nil)
-  assert(got_erd, 'got_erd is nil')
-  eq(got_erd.mode, 'neighborhood')
-  eq(got_erd.center_relation, 'orders')
-  eq(#got_erd.table_order, 2)
-  eq(#got_erd.edges, 1)
-  eq(got_erd.edges[1].connector, '||--o{')
+  rpc.request = original
+  require('sqmeow.core.schema').invalidate(1)
+  eq(got_err, 'connection closed')
 end
 
-T['erd rejects disconnected and unsupported NoSQL connections'] = function()
-  local started, err = view.erd({ schema = 'public' })
-  eq(started, false)
-  eq(err, 'ERD generation needs an open connection')
+T['schema rejects disconnected and non-relational connections'] = function()
+  eq(
+    { view.schema({ schema = 'public' }, function() end) },
+    { false, 'connect to a database first' }
+  )
 
-  state.add_connection({
-    id = 1,
-    name = 'app',
-    url = 'postgres://localhost/app',
-    dialect = 'postgres',
-    state = 'connected',
-  })
+  connect()
   local buf = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_set_current_buf(buf)
   vim.b[buf].sqmeow_connection = 'closed_conn'
-  started, err = view.erd({ schema = 'public' })
-  eq(started, false)
-  eq(err, '`closed_conn` is not open')
+  eq({ view.schema({}, function() end) }, { false, '`closed_conn` is not open' })
 
   state.add_connection({
     id = 2,
@@ -364,53 +329,7 @@ T['erd rejects disconnected and unsupported NoSQL connections'] = function()
     dialect = 'redis',
     state = 'connected',
   })
-  started, err = view.erd({ conn_id = 2 })
-  eq(started, false)
-  eq(err, 'ERD is not supported for redis')
-end
-
-T['erd preserves distinct table casing, normalizes numeric commas, and respects qualified FK targets'] = function()
-  local erd, err = view.erd({
-    schema = 'public',
-    tables = {
-      {
-        schema = 'public',
-        relation = 'Foo',
-        structure = {
-          columns = {
-            { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
-            { name = 'amount', type_name = 'numeric(10, 2)', nullable = false },
-          },
-          indexes = {},
-          foreign_keys = {
-            {
-              name = 'foo_missing_archive_fkey',
-              columns = { 'id' },
-              target = 'archive.foo',
-              referenced = { 'id' },
-            },
-          },
-        },
-      },
-      {
-        schema = 'public',
-        relation = 'foo',
-        structure = {
-          columns = {
-            { name = 'id', type_name = 'int4', primary_key = true, nullable = false },
-          },
-          indexes = {},
-          foreign_keys = {},
-        },
-      },
-    },
-  })
-
-  eq(err, nil)
-  assert(erd, 'erd is nil')
-  eq(#erd.table_order, 2)
-  eq(#erd.edges, 0)
-  assert(erd.mermaid:find('numeric%(10_2%) amount', 1) ~= nil, 'expected numeric(10_2)')
+  eq({ view.schema({ conn_id = 2 }, function() end) }, { false, 'redis has no relational schema' })
 end
 
 return T

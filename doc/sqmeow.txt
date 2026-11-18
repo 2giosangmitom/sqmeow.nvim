@@ -27,7 +27,7 @@ Contents ~
   Configuration .............................................. |sqmeow-config|
   Keymaps ................................................... |sqmeow-keymaps|
   Relationships ....................................... |sqmeow-relationships|
-  Entity relationship diagram ................................... |sqmeow-erd|
+  Schema structure ........................................... |sqmeow-schema|
 
 ------------------------------------------------------------------------------
                                                              *sqmeow-quickstart*
@@ -1331,78 +1331,58 @@ Usage ~
 <
 ------------------------------------------------------------------------------
 Class ~
-{sqmeow.ErdTable}
+{sqmeow.SchemaTable}
 Fields ~
-{schema} `(string|nil)`
+{schema} `(string|nil)` Empty or nil for schema-less adapters.
 {relation} `(string)`
-{structure} `(table|nil)`
+{columns} `(table[])` Column nodes: `name`, `type_name`, `nullable`, `primary_key`.
+{indexes} `(table[]|nil)` `name`, `columns`, `unique`, `primary`.
+{foreign_keys} `(table[]|nil)` `name`, `columns`, `target` (`relation` or
+`schema.relation`), `referenced`.
 
 ------------------------------------------------------------------------------
 Class ~
-{sqmeow.ErdEdge}
+{sqmeow.Schema}
 Fields ~
-{source_key} `(string)`
-{source_schema} `(string)`
-{source_relation} `(string)`
-{target_key} `(string)`
-{target_schema} `(string)`
-{target_relation} `(string)`
-{columns} `(string[])`
-{referenced} `(string[])`
-{name} `(string)`
-{connector} `(string)`
-{cardinality_label} `(string)`
+{conn_id} `(integer)`
+{connection} `(string)`
+{dialect} `(string)`
+{schema} `(string)` Schema of the first table: the one read, or `relation`'s.
+{relation} `(string|nil)` Focal table of a neighborhood.
+{hops} `(integer|nil)` Neighborhood depth.
+{tables} `(sqmeow.SchemaTable[])`
 
 ------------------------------------------------------------------------------
 Class ~
-{sqmeow.Erd}
+{sqmeow.SchemaOpts}
 Fields ~
-{mermaid} `(string)`
-{conn_id} `(integer|nil)`
-{connection} `(string|nil)`
-{dialect} `(string|nil)`
-{mode} '`(neighborhood)`'|'schema'
-{schema} `(string)`
-{center_schema} `(string|nil)`
-{center_relation} `(string|nil)`
-{hops} `(integer|nil)`
-{tables} `(sqmeow.ErdTable[])`
-{tables_map} `(table<string, sqmeow.ErdTable>)`
-{table_order} `(string[])`
-{edges} `(sqmeow.ErdEdge[])`
-
-------------------------------------------------------------------------------
-Class ~
-{sqmeow.ErdOpts}
-Fields ~
-{conn_id} `(integer|nil)` Connected database id; defaults to the buffer's or active connection.
+{conn_id} `(integer|nil)` Open connection id; defaults to the buffer's target.
 {connection} `(string|nil)` Open connection name when `conn_id` is omitted.
-{schema} `(string|nil)` Target schema (empty for schema-less adapters; auto-resolved when nil).
-{relation} `(string|nil)` Focal table for an N-hop neighborhood ERD; omit for a full schema ERD.
-{hops} `(integer|nil)` Neighborhood hop depth when `relation` is set (default 1).
-{tables} `(sqmeow.ErdTable[]|nil)` Pre-collected table structures for synchronous formatting.
+{schema} `(string|nil)` Schema to read; defaults to the connection's default schema.
+{relation} `(string|nil)` Read only this table and its foreign-key neighbors.
+{hops} `(integer|nil)` Neighborhood depth when `relation` is set (default 1).
 
 ------------------------------------------------------------------------------
-                                                                    *sqmeow-erd*
-                   `sqmeow.api.view.erd`({opts}, {callback})
-Extract database schema metadata and foreign key relationships into a
-Mermaid `erDiagram`. With `relation`, traverses `hops` foreign-key hops
-around that table; without `relation`, collects every table in `schema`.
-Infers `||`/`|o` parent participation from nullability and `|o`/`o{` child
-multiplicity from primary/unique key indexes, and tags `PK`, `FK`, and `UK`
-columns. Pass `tables` to format pre-fetched structures synchronously.
+                                                                 *sqmeow-schema*
+                  `sqmeow.api.view.schema`({opts}, {callback})
+Read table structures (columns, indexes, foreign keys) from an open
+connection. Without `relation`, reads every table of `schema`; with it,
+that table and every table within `hops` foreign keys in either direction.
+Only collects metadata; render it with |sqmeow.api.export.mermaid()|.
+Not supported for Redis and MongoDB.
 Parameters ~
-{opts} `(sqmeow.ErdOpts|nil)`
-{callback} `(fun(erd: sqmeow.Erd|nil, err: string|nil)|nil)`
+{opts} `(sqmeow.SchemaOpts|nil)`
+{callback} `(fun(schema: sqmeow.Schema|nil, err: string|nil))` Called once
+the structures arrive, or with the first error.
 Return ~
-`(sqmeow.Erd|boolean|nil)` result `sqmeow.Erd` when `opts.tables` is given, or `started` boolean.
+`(boolean)` started False when nothing was requested; `callback` is not called.
 Return ~
-`(string|nil)` err
+`(string|nil)` err Why it did not start.
 Usage ~
 >lua
-  require('sqmeow.api.view').erd({ schema = 'public', relation = 'orders' }, function(erd, err)
-    if erd then
-      print(erd.mermaid)
+  require('sqmeow.api.view').schema({ relation = 'orders', hops = 2 }, function(schema, err)
+    if schema then
+      require('sqmeow.api.export').mermaid(schema, { path = 'orders.mmd' })
     end
   end)
 <
@@ -1497,5 +1477,30 @@ headers. `offset` (zero-based) and `limit` select rows. SQL options: `table`
 overrides the target, `batch` combines INSERT rows, `create` includes DDL.
 `all = true` exports retained rows outside the current filtered view.
 
+------------------------------------------------------------------------------
+                                                   *sqmeow.api.export.mermaid()*
+                 `sqmeow.api.export.mermaid`({schema}, {opts})
+Render collected table structures as a Mermaid `erDiagram`.
+Relationship lines run parent to child: the parent end is `||` when every
+foreign key column is NOT NULL, else `|o`; the child end is `|o` when the
+key columns are a primary key or unique index, else `o{`. Columns carry
+`PK`, `FK` and `UK` tags. Foreign keys to tables outside `schema.tables`
+are tagged but draw no line.
+Parameters ~
+{schema} `({ tables: sqmeow.SchemaTable[] })` From |sqmeow-schema|,
+or built by hand.
+{opts} `({ path: string|nil, clipboard: boolean|nil }|nil)` `path`: write
+the diagram to this file; `clipboard = true`: copy it.
+Return ~
+`(string)` mermaid
+Usage ~
+>lua
+  require('sqmeow.api.view').schema({ schema = 'public' }, function(schema, err)
+    if not schema then
+      return vim.notify(err, vim.log.levels.ERROR)
+    end
+    require('sqmeow.api.export').mermaid(schema, { path = 'public.mmd' })
+  end)
+<
 
  vim:tw=78:ts=8:noet:ft=help:norl:
