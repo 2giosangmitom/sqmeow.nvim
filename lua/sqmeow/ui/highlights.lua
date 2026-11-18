@@ -36,6 +36,17 @@ M.links = {
   SqmeowDetailName = 'Identifier',
   SqmeowDetailType = 'Type',
 
+  -- The entity-relationship diagram.
+  SqmeowErdBorder = 'FloatBorder',
+  SqmeowErdTitle = 'Title',
+  SqmeowErdKey = 'Identifier',
+  SqmeowErdType = 'Comment',
+  SqmeowErdMore = 'Comment',
+  SqmeowErdEdge = 'NonText',
+  SqmeowErdMarker = 'Operator',
+  SqmeowErdFocus = 'Special',
+  SqmeowErdEdgeActive = 'Function',
+
   SqmeowIconConnection = 'Directory',
   SqmeowIconSchema = 'Directory',
   SqmeowIconTable = 'Type',

@@ -344,6 +344,32 @@ function M.schema(opts, callback)
   return require('sqmeow.core.schema').collect(opts, callback)
 end
 
+--- Draw an entity-relationship diagram in a new tab: every table of `schema`, or,
+--- with `relation`, that table and the tables within `hops` foreign keys of it.
+---
+--- Tables are boxes laid out left to right, parents before children, with each
+--- foreign key drawn from the referenced column to the referencing one in crow's
+--- foot notation, read outward from the table: `┼┼` exactly one, `┼○` zero or
+--- one, `<○` zero or more. Read only; nothing queries rows. `gE` in the drawer opens it on the node under
+--- the cursor. In the diagram, `gd`/`gr` follow keys, `<CR>` redraws around a
+--- table and `<BS>` goes back, `+`/`-` change the hops, `za` shows a table's
+--- folded columns, and `x` copies it as Mermaid. See |sqmeow-keymaps|.
+---
+--- Options live under `ui.erd` in |sqmeow-config|; colours are the
+--- `SqmeowErd*` highlight groups.
+---@tag sqmeow-diagram
+---@toc_entry Entity-relationship diagram
+---@param opts sqmeow.SchemaOpts|nil As |sqmeow-schema| takes; `hops`
+--- defaults to `ui.erd.hops`.
+---@return boolean started False when nothing was requested.
+---@return string|nil err Why it did not start.
+---@usage >lua
+---   require('sqmeow.api.view').diagram({ relation = 'orders', hops = 2 })
+--- <
+function M.diagram(opts)
+  return require('sqmeow.ui.erd').open(opts)
+end
+
 --- Open the result window.
 --- On Neovim 0.11+, drawer and result windows use 'winfixbuf': `:edit` and jumps
 --- that would replace their buffer fail with E1513. Switch to an editing window

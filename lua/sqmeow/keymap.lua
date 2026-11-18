@@ -1,5 +1,5 @@
 --- Buffer-local mappings for the drawer, results, row details, relationship browsing, the
---- filter bar, and the editor.
+--- diagram, the filter bar, and the editor.
 ---
 --- Set by window and action. String sets one key, list sets aliases, `false`
 --- disables: >lua
@@ -53,6 +53,11 @@ M.defaults = {
     },
     { action = 'structure', lhs = 'K', desc = 'Show the structure of this table or key' },
     { action = 'relationships', lhs = 'gR', desc = 'Browse table relationships' },
+    {
+      action = 'diagram',
+      lhs = 'gE',
+      desc = "Show the schema's entity-relationship diagram, or this table's neighbourhood",
+    },
     { action = 'filter_keys', lhs = 'f', desc = 'Show only the Redis keys matching a pattern' },
     { action = 'refresh', lhs = 'r', desc = 'Reload this subtree' },
     { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified name or history command' },
@@ -168,6 +173,31 @@ M.defaults = {
     { action = 'structure', lhs = 'K', desc = 'Show the other table’s structure' },
     { action = 'help', lhs = '?', desc = 'Show these mappings' },
     { action = 'close', lhs = { 'q', '<Esc>' }, desc = 'Close relationship browsing' },
+  },
+
+  -- The entity-relationship diagram.
+  erd = {
+    { action = 'next_table', lhs = { '<Tab>', ']]' }, desc = 'Next table' },
+    { action = 'prev_table', lhs = { '<S-Tab>', '[[' }, desc = 'Previous table' },
+    {
+      action = 'goto_parent',
+      lhs = 'gd',
+      desc = 'Go to the table this foreign key or line references',
+    },
+    { action = 'goto_children', lhs = 'gr', desc = 'Go to a table referencing this one' },
+    { action = 'focus', lhs = '<CR>', desc = 'Redraw around this table' },
+    { action = 'back', lhs = '<BS>', desc = 'Return to the previous diagram' },
+    { action = 'more_hops', lhs = '+', desc = 'Follow one more foreign key from the focus' },
+    { action = 'fewer_hops', lhs = '-', desc = 'Follow one foreign key fewer' },
+    { action = 'toggle_columns', lhs = 'za', desc = "Show or fold this table's columns" },
+    { action = 'compact', lhs = 'C', desc = 'Show only key columns, or every column' },
+    { action = 'structure', lhs = 'K', desc = "Show this table's structure" },
+    { action = 'relationships', lhs = 'gR', desc = "Browse this table's relationships" },
+    { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified table name' },
+    { action = 'export', lhs = 'x', desc = 'Copy the diagram as Mermaid' },
+    { action = 'refresh', lhs = 'r', desc = 'Read the schema again' },
+    { action = 'help', lhs = '?', desc = 'Show these mappings' },
+    { action = 'close', lhs = 'q', desc = 'Close the diagram' },
   },
 
   -- The row-details popup.
@@ -365,7 +395,15 @@ end
 function M.summary()
   local lines = {}
 
-  for _, surface in ipairs({ 'drawer', 'result', 'detail', 'relationships', 'filter', 'editor' }) do
+  for _, surface in ipairs({
+    'drawer',
+    'result',
+    'detail',
+    'relationships',
+    'erd',
+    'filter',
+    'editor',
+  }) do
     table.insert(lines, surface)
     vim.list_extend(lines, require('sqmeow.ui.help').lines(surface))
     table.insert(lines, '')

@@ -1107,6 +1107,37 @@ function M.actions.relationships()
   require('sqmeow.ui.relationships').open(node.conn_id, node.path[1], node.path[#node.path])
 end
 
+--- Show the entity-relationship diagram: a table's foreign-key neighbourhood from a table,
+--- the whole schema from anything else under a schema, or the default schema from a
+--- connection or database.
+function M.actions.diagram()
+  local node = M.current_node()
+  if not node then
+    return
+  end
+  local conn_id = node.conn_id
+  local opts
+  if node.kind == 'database' then
+    local opened = opened_database(node)
+    if not opened then
+      return utils.notify('expand the database first', vim.log.levels.WARN)
+    end
+    opts = { conn_id = opened.id }
+  elseif node.kind == 'table' or node.kind == 'relation' then
+    opts = { conn_id = conn_id, schema = node.path[1], relation = node.path[#node.path] }
+  elseif node.path and #node.path > 0 then
+    opts = { conn_id = conn_id, schema = node.path[1] }
+  elseif conn_id then
+    opts = { conn_id = conn_id }
+  else
+    return
+  end
+  local started, err = require('sqmeow.ui.erd').open(opts)
+  if not started then
+    utils.notify(err or 'the diagram could not be read', vim.log.levels.ERROR)
+  end
+end
+
 --- Copy the qualified name, or the full command on a history entry.
 function M.actions.yank_name()
   local node = M.current_node()

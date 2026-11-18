@@ -41,6 +41,18 @@ M.subcommands = {
       end, { 'csv', 'json', 'sql' })
     end,
   },
+  diagram = {
+    desc = 'Draw the schema, or a table and its neighbours: `diagram [table] [hops]`',
+    run = function(args)
+      local started, err = require('sqmeow.api.view').diagram({
+        relation = args[1],
+        hops = tonumber(args[2]),
+      })
+      if not started then
+        notify(err or 'the diagram could not be read', vim.log.levels.ERROR)
+      end
+    end,
+  },
   toggle = {
     desc = 'Toggle the schema drawer',
     run = function()

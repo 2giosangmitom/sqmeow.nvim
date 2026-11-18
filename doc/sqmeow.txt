@@ -28,6 +28,7 @@ Contents ~
   Keymaps ................................................... |sqmeow-keymaps|
   Relationships ....................................... |sqmeow-relationships|
   Schema structure ........................................... |sqmeow-schema|
+  Entity-relationship diagram ............................... |sqmeow-diagram|
 
 ------------------------------------------------------------------------------
                                                              *sqmeow-quickstart*
@@ -651,6 +652,21 @@ Default configuration. Pass only changed fields to setup. Icons control display 
         -- Display active column name and type in the winbar.
         winbar_column_info = true,
       },
+      -- The entity-relationship diagram (`gE` in the drawer).
+      erd = {
+        -- Foreign keys followed from the table a diagram opens on.
+        hops = 1,
+        -- Columns a table shows before the rest fold away; key columns always show. 0 shows all.
+        max_rows = 12,
+        -- Widest a column name or type is drawn.
+        max_column_width = 32,
+        -- Largest schema drawn whole; open a larger one from a table. 0 draws any size.
+        max_tables = 200,
+        -- Start with only key columns shown.
+        compact = false,
+        -- Draw foreign keys outside the child's primary key dashed, as Mermaid does.
+        dashed = false,
+      },
       -- The border of every dialog.
       border = 'default',
       -- Boolean, or `{ editor = true, result = true, show_connection = true }`.
@@ -734,6 +750,9 @@ Default configuration. Pass only changed fields to setup. Icons control display 
       -- What the result grid is drawn with.
       grid = { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' },
 
+      -- Ends of a diagram's foreign keys, crow's foot notation. Each is one column wide.
+      erd = { one = '┼', zero = '○', many = '<', many_reversed = '>' },
+
       -- Before a result row with staged changes. Each is one column wide.
       edit = { changed = '~', deleted = '-', added = '+' },
 
@@ -815,7 +834,7 @@ Return ~
 ------------------------------------------------------------------------------
                                                                 *sqmeow-keymaps*
 Buffer-local mappings for the drawer, results, row details, relationship browsing, the
-filter bar, and the editor.
+diagram, the filter bar, and the editor.
 
 Set by window and action. String sets one key, list sets aliases, `false`
 disables: >lua
@@ -867,6 +886,7 @@ drawer
  P         Preview relation or recorded query in an editor
  K         Show the structure of this table or key
  gR        Browse table relationships
+ gE        Show the schema's entity-relationship diagram, or this table's neighbourhood
  f         Show only the Redis keys matching a pattern
  r         Reload this subtree
  y         Yank the qualified name or history command
@@ -931,6 +951,25 @@ relationships
  K          Show the other table’s structure
  ?          Show these mappings
  q, <Esc>   Close relationship browsing
+
+erd
+ <Tab>, ]]     Next table
+ <S-Tab>, [[   Previous table
+ gd            Go to the table this foreign key or line references
+ gr            Go to a table referencing this one
+ <CR>          Redraw around this table
+ <BS>          Return to the previous diagram
+ +             Follow one more foreign key from the focus
+ -             Follow one foreign key fewer
+ za            Show or fold this table's columns
+ C             Show only key columns, or every column
+ K             Show this table's structure
+ gR            Browse this table's relationships
+ y             Yank the qualified table name
+ x             Copy the diagram as Mermaid
+ r             Read the schema again
+ ?             Show these mappings
+ q             Close the diagram
 
 filter
  <CR>       Apply the filter and sort expressions
@@ -1408,6 +1447,33 @@ Usage ~
   if not started then
     vim.notify(err, vim.log.levels.ERROR)
   end
+<
+------------------------------------------------------------------------------
+                                                                *sqmeow-diagram*
+                       `sqmeow.api.view.diagram`({opts})
+Draw an entity-relationship diagram in a new tab: every table of `schema`, or,
+with `relation`, that table and the tables within `hops` foreign keys of it.
+
+Tables are boxes laid out left to right, parents before children, with each
+foreign key drawn from the referenced column to the referencing one in crow's
+foot notation, read outward from the table: `┼┼` exactly one, `┼○` zero or
+one, `<○` zero or more. Read only; nothing queries rows. `gE` in the drawer opens it on the node under
+the cursor. In the diagram, `gd`/`gr` follow keys, `<CR>` redraws around a
+table and `<BS>` goes back, `+`/`-` change the hops, `za` shows a table's
+folded columns, and `x` copies it as Mermaid. See |sqmeow-keymaps|.
+
+Options live under `ui.erd` in |sqmeow-config|; colours are the
+`SqmeowErd*` highlight groups.
+Parameters ~
+{opts} `(sqmeow.SchemaOpts|nil)` As |sqmeow-schema| takes; `hops`
+defaults to `ui.erd.hops`.
+Return ~
+`(boolean)` started False when nothing was requested.
+Return ~
+`(string|nil)` err Why it did not start.
+Usage ~
+>lua
+  require('sqmeow.api.view').diagram({ relation = 'orders', hops = 2 })
 <
 ------------------------------------------------------------------------------
                                                         *sqmeow.api.view.open()*
