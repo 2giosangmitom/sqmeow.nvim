@@ -3,6 +3,7 @@ local MiniTest = require('mini.test')
 local eq = MiniTest.expect.equality
 
 local config = require('sqmeow.config')
+local helpers = require('tests.helpers')
 local edit = require('sqmeow.ui.edit')
 local result = require('sqmeow.ui.result')
 local state = require('sqmeow.core.state')
@@ -150,6 +151,8 @@ T['status and column follow the result grid'] = function()
 end
 
 --- Answer engine requests from `replies[method](args)` through the schema collector's events.
+--- The stub is removed when the case ends, even when it fails.
+---@return string[] sent Methods requested, in order.
 local function stub_engine(replies)
   local rpc = require('sqmeow.rpc.client')
   local collector = require('sqmeow.core.schema')
@@ -158,31 +161,65 @@ local function stub_engine(replies)
     relationships = collector.on_relationships,
     introspect = collector.on_nodes,
   }
-  local original = rpc.request
   local sent = {}
-  rpc.request = function(method, args)
-    if not replies[method] then
-      return original(method, args)
-    end
+  helpers.stub(rpc, 'request', function(method, args)
     table.insert(sent, method)
-    vim.schedule(function()
-      deliver[method](replies[method](args))
-    end)
+    if replies[method] then
+      vim.schedule(function()
+        local payload = replies[method](args)
+        payload.conn_id = payload.conn_id or args.conn_id
+        payload.request_id = payload.request_id or args.request_id
+        deliver[method](payload)
+      end)
+    end
     return true
-  end
-  return sent, function()
-    rpc.request = original
+  end)
+  return sent
+end
+
+--- `public` is the default schema; `tables` lists its tables.
+local function catalog(tables)
+  return function(args)
+    if #args.path == 0 then
+      return {
+        path = args.path,
+        nodes = {
+          { kind = 'schema', name = 'audit' },
+          { kind = 'schema', name = 'public', is_default = true },
+        },
+      }
+    end
+    local nodes = { { kind = 'view', name = 'active_users' } }
+    for _, name in ipairs(tables) do
+      table.insert(nodes, { kind = 'table', name = name })
+    end
+    return { path = args.path, nodes = nodes }
   end
 end
 
-local function structure(args, columns, foreign_keys)
+local function structure(args)
   return {
-    conn_id = args.conn_id,
     schema = args.schema,
     relation = args.relation,
-    columns = columns,
+    columns = { { name = 'id', type_name = 'int4', primary_key = true } },
     indexes = {},
-    foreign_keys = foreign_keys or {},
+    foreign_keys = {},
+  }
+end
+
+local function orders_relationships()
+  return {
+    relationships = {
+      {
+        name = 'orders_user_id_fkey',
+        source_schema = 'public',
+        source_relation = 'orders',
+        columns = { 'user_id' },
+        target_schema = 'public',
+        target_relation = 'users',
+        referenced = { 'id' },
+      },
+    },
   }
 end
 
@@ -208,106 +245,196 @@ local function collect(opts)
   return got, got_err
 end
 
+local function names(schema)
+  return vim.tbl_map(function(t)
+    return t.schema .. '.' .. t.relation
+  end, schema.tables)
+end
+
 T['schema reads a table neighborhood over relationships and structure'] = function()
   connect()
-  local sent, restore = stub_engine({
-    relationships = function(args)
+  local sent = stub_engine({
+    introspect = catalog({ 'orders', 'users' }),
+    relationships = orders_relationships,
+    structure = structure,
+  })
+  -- The catalog's spelling wins over the caller's.
+  local schema, err = collect({ conn_id = 1, relation = 'ORDERS' })
+
+  eq(err, nil)
+  schema = assert(schema, 'schema is nil')
+  eq({ schema.schema, schema.relation, schema.hops }, { 'public', 'orders', 1 })
+  eq(names(schema), { 'public.orders', 'public.users' })
+  eq(sent, { 'introspect', 'introspect', 'relationships', 'structure', 'structure' })
+end
+
+T['schema with zero hops reads only the focal table'] = function()
+  connect()
+  local sent = stub_engine({
+    introspect = catalog({ 'orders', 'users' }),
+    relationships = orders_relationships,
+    structure = structure,
+  })
+  local schema = assert(collect({ conn_id = 1, relation = 'orders', hops = 0 }), 'schema is nil')
+
+  eq(names(schema), { 'public.orders' })
+  eq(schema.hops, 0)
+  eq(vim.tbl_contains(sent, 'relationships'), false)
+end
+
+T['schema keeps dotted names in different schemas apart'] = function()
+  connect()
+  stub_engine({
+    introspect = catalog({ 'root' }),
+    relationships = function()
       return {
-        conn_id = args.conn_id,
-        request_id = args.request_id,
-        resolved_schema = 'public',
-        resolved_relation = args.relation,
         relationships = {
           {
-            name = 'orders_user_id_fkey',
             source_schema = 'public',
-            source_relation = 'orders',
-            columns = { 'user_id' },
-            target_schema = 'public',
-            target_relation = 'users',
-            referenced = { 'id' },
+            source_relation = 'root',
+            target_schema = 'a.b',
+            target_relation = 'c',
+          },
+          {
+            source_schema = 'public',
+            source_relation = 'root',
+            target_schema = 'a',
+            target_relation = 'b.c',
           },
         },
       }
     end,
-    structure = function(args)
-      return structure(args, { { name = 'id', type_name = 'int4', primary_key = true } })
-    end,
+    structure = structure,
   })
-  local schema, err = collect({ conn_id = 1, relation = 'orders' })
-  restore()
+  local schema = assert(collect({ conn_id = 1, relation = 'root' }), 'schema is nil')
 
-  eq(err, nil)
-  schema = assert(schema, 'schema is nil')
-  eq(schema.schema, 'public')
-  eq(schema.relation, 'orders')
-  eq(schema.hops, 1)
-  eq(
-    vim.tbl_map(function(t)
-      return t.schema .. '.' .. t.relation
-    end, schema.tables),
-    { 'public.orders', 'public.users' }
-  )
-  eq(sent, { 'relationships', 'structure', 'structure' })
+  eq(names(schema), { 'public.root', 'a.b.c', 'a.b.c' })
+  eq(schema.tables[2].schema, 'a.b')
+  eq(schema.tables[3].schema, 'a')
+end
+
+T['schema reports a table missing from the catalog'] = function()
+  connect()
+  local sent = stub_engine({ introspect = catalog({ 'orders' }) })
+  local schema, err = collect({ conn_id = 1, relation = 'missing' })
+
+  eq(schema, nil)
+  eq(err, 'table missing not found in public')
+  eq(sent, { 'introspect', 'introspect' })
 end
 
 T['schema reads every table of the default schema'] = function()
   connect()
-  local _, restore = stub_engine({
-    introspect = function(args)
-      local nodes = #args.path == 0
-          and {
-            { kind = 'schema', name = 'audit' },
-            { kind = 'schema', name = 'public', is_default = true },
-          }
-        or { { kind = 'table', name = 'users' }, { kind = 'view', name = 'active_users' } }
-      return { conn_id = args.conn_id, path = args.path, nodes = nodes }
-    end,
-    structure = function(args)
-      return structure(args, {})
-    end,
-  })
+  stub_engine({ introspect = catalog({ 'users' }), structure = structure })
   local schema, err = collect({ conn_id = 1 })
-  restore()
 
   eq(err, nil)
   schema = assert(schema, 'schema is nil')
   eq(schema.schema, 'public')
-  eq(#schema.tables, 1)
-  eq(schema.tables[1].relation, 'users')
+  eq(names(schema), { 'public.users' })
+end
+
+T['schema sends a server connection to its databases'] = function()
+  connect()
+  stub_engine({
+    introspect = function(args)
+      return { path = args.path, nodes = { { kind = 'database', name = 'app' } } }
+    end,
+  })
+  local _, err = collect({ conn_id = 1 })
+  eq(err, 'this connection is a server; read the schema from one of its databases')
 end
 
 T['schema reports the first structure error'] = function()
   connect()
-  local _, restore = stub_engine({
-    introspect = function(args)
-      return { conn_id = args.conn_id, path = args.path, nodes = { { kind = 'table', name = 't' } } }
-    end,
+  stub_engine({
+    introspect = catalog({ 't' }),
     structure = function(args)
-      return vim.tbl_extend('force', args, { error = 'permission denied' })
+      return vim.tbl_extend('force', structure(args), { error = 'permission denied' })
     end,
   })
   local schema, err = collect({ conn_id = 1, schema = 'public' })
-  restore()
 
   eq(schema, nil)
   eq(err, 'permission denied')
 end
 
-T['schema fails pending requests when the connection closes'] = function()
+T['schema ignores replies to other requests for the same table'] = function()
   connect()
-  local rpc = require('sqmeow.rpc.client')
-  local original = rpc.request
-  rpc.request = function()
+  local collector = require('sqmeow.core.schema')
+  local requests = {}
+  helpers.stub(require('sqmeow.rpc.client'), 'request', function(method, args)
+    table.insert(requests, { method = method, args = args })
     return true
-  end
-  local got_err
-  view.schema({ conn_id = 1, schema = 'public' }, function(_, err)
-    got_err = err
   end)
-  rpc.request = original
+  local got
+  view.schema({ conn_id = 1, schema = 'public' }, function(schema)
+    got = schema
+  end)
+  local listing = requests[1].args
+  -- The drawer's own read of the same path carries no id of this request.
+  collector.on_nodes({ conn_id = 1, path = listing.path, nodes = {} })
+  collector.on_nodes({ conn_id = 1, path = listing.path, request_id = listing.request_id + 1000 })
+  eq(#requests, 1)
+  collector.on_nodes({
+    conn_id = 1,
+    path = listing.path,
+    request_id = listing.request_id,
+    nodes = { { kind = 'table', name = 't' } },
+  })
+  eq(requests[2].method, 'structure')
+  collector.on_structure(vim.tbl_extend('force', structure(requests[2].args), {
+    conn_id = 1,
+    request_id = requests[2].args.request_id,
+  }))
+  eq(names(assert(got, 'schema is nil')), { 'public.t' })
+end
+
+T['schema fails pending reads on disconnect and engine stop'] = function()
+  connect()
+  helpers.stub(require('sqmeow.rpc.client'), 'request', function()
+    return true
+  end)
+  local errors = {}
+  local function read()
+    view.schema({ conn_id = 1, schema = 'public' }, function(_, err)
+      table.insert(errors, err)
+    end)
+  end
+
+  -- An explicit disconnect forgets the connection before `closed` arrives.
+  read()
+  state.remove_connection(1)
+  require('sqmeow.rpc.events').on_connection({ id = 1, state = 'closed' })
+  eq(errors, { 'connection closed' })
+
+  connect()
+  read()
+  require('sqmeow.rpc.events').on_engine_stop()
+  eq(errors, { 'connection closed', 'engine stopped' })
+end
+
+T['schema isolates a failing callback from other reads'] = function()
+  connect()
+  helpers.stub(require('sqmeow.rpc.client'), 'request', function()
+    return true
+  end)
+  local messages = {}
+  helpers.stub(vim, 'notify', function(message)
+    table.insert(messages, message)
+  end)
+  local second
+  view.schema({ conn_id = 1, schema = 'public' }, function()
+    error('boom')
+  end)
+  view.schema({ conn_id = 1, schema = 'public' }, function(_, err)
+    second = err
+  end)
   require('sqmeow.core.schema').invalidate(1)
-  eq(got_err, 'connection closed')
+
+  eq(second, 'connection closed')
+  eq(#messages, 1)
+  helpers.contains(messages[1], 'boom')
 end
 
 T['schema rejects disconnected and non-relational connections'] = function()

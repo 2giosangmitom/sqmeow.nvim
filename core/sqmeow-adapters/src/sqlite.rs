@@ -256,7 +256,8 @@ impl Adapter for SqliteAdapter {
             indexes.push(IndexNode {
                 name,
                 columns,
-                unique: row.int("unique") == 1,
+                // A partial index leaves rows outside its predicate free to repeat.
+                unique: row.int("unique") == 1 && row.int("partial") != 1,
                 primary: row.text("origin").is_some_and(|v| v == "pk"),
             });
         }

@@ -299,13 +299,16 @@ end
 ---@field connection string|nil Open connection name when `conn_id` is omitted.
 ---@field schema string|nil Schema to read; defaults to the connection's default schema.
 ---@field relation string|nil Read only this table and its foreign-key neighbors.
----@field hops integer|nil Neighborhood depth when `relation` is set (default 1).
+---@field hops integer|nil Neighborhood depth when `relation` is set (default 1;
+--- 0 reads only `relation`).
 
 --- Read table structures (columns, indexes, foreign keys) from an open
 --- connection. Without `relation`, reads every table of `schema`; with it,
 --- that table and every table within `hops` foreign keys in either direction.
---- Only collects metadata; render it with |sqmeow.api.export.mermaid()|.
---- Not supported for Redis and MongoDB.
+--- `relation` must be a table of the schema; it matches case-insensitively
+--- when only one table does. Only collects metadata; render it with
+--- |sqmeow.api.export.mermaid()|. Not supported for Redis and MongoDB, nor on a
+--- server connection: read from one of its databases.
 ---@tag sqmeow-schema
 ---@toc_entry Schema structure
 ---@param opts sqmeow.SchemaOpts|nil
@@ -314,11 +317,16 @@ end
 ---@return boolean started False when nothing was requested; `callback` is not called.
 ---@return string|nil err Why it did not start.
 ---@usage >lua
----   require('sqmeow.api.view').schema({ relation = 'orders', hops = 2 }, function(schema, err)
----     if schema then
----       require('sqmeow.api.export').mermaid(schema, { path = 'orders.mmd' })
+---   local view = require('sqmeow.api.view')
+---   local started, err = view.schema({ relation = 'orders', hops = 2 }, function(schema, e)
+---     if not schema then
+---       return vim.notify(e, vim.log.levels.ERROR)
 ---     end
+---     require('sqmeow.api.export').mermaid(schema, { path = 'orders.mmd' })
 ---   end)
+---   if not started then
+---     vim.notify(err, vim.log.levels.ERROR)
+---   end
 --- <
 function M.schema(opts, callback)
   return require('sqmeow.core.schema').collect(opts, callback)

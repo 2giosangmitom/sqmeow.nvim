@@ -214,11 +214,23 @@ T['preserves table structure rendering'] = function()
     return { kind = 'table', name = 'users', conn_id = 1, path = { 'public', 'tables', 'users' } }
   end)
   drawer.actions.structure()
-  eq(
-    requests[1],
-    { method = 'structure', args = { conn_id = 1, schema = 'public', relation = 'users' } }
-  )
+  local request_id = requests[1].args.request_id
+  eq(type(request_id), 'number')
+  eq(requests[1], {
+    method = 'structure',
+    args = { conn_id = 1, schema = 'public', relation = 'users', request_id = request_id },
+  })
+  -- A reply to another reader of the same table is not this popup's.
   structure.on_done({
+    conn_id = 1,
+    schema = 'public',
+    relation = 'users',
+    request_id = request_id + 1000,
+    columns = {},
+  })
+  eq(vim.bo.filetype ~= 'sqmeow-structure', true)
+  structure.on_done({
+    request_id = request_id,
     conn_id = 1,
     schema = 'public',
     relation = 'users',

@@ -3,24 +3,34 @@
 
 local M = {}
 
---- Requests waiting for their completion event.
----@type { kind: string, conn_id: integer|nil, match: fun(payload: table): boolean, done: fun(payload: table) }[]
+--- Requests waiting for their completion event, by the request id the engine echoes.
+---@type { conn_id: integer, request_id: integer, done: fun(payload: table) }[]
 local waiting = {}
 
---- Complete the waiters `payload` answers.
----@param kind string
+--- Run a waiter's continuation; a failing one must not strand the others.
+---@param waiter { done: fun(payload: table) }
 ---@param payload table
-local function deliver(kind, payload)
-  local ready = {}
-  for index = #waiting, 1, -1 do
-    local waiter = waiting[index]
-    if waiter.kind == kind and waiter.match(payload) then
-      table.remove(waiting, index)
-      table.insert(ready, 1, waiter)
-    end
+local function settle(waiter, payload)
+  local ok, err = xpcall(waiter.done, debug.traceback, payload)
+  if not ok then
+    require('sqmeow.core.utils').notify(
+      ('a schema read callback failed: %s'):format(err),
+      vim.log.levels.ERROR
+    )
   end
-  for _, waiter in ipairs(ready) do
-    waiter.done(payload)
+end
+
+--- Complete the waiter `payload` answers.
+---@param payload table
+local function deliver(payload)
+  if not payload or payload.request_id == nil then
+    return
+  end
+  for index, waiter in ipairs(waiting) do
+    if waiter.request_id == payload.request_id and waiter.conn_id == payload.conn_id then
+      table.remove(waiting, index)
+      return settle(waiter, payload)
+    end
   end
 end
 
@@ -34,23 +44,23 @@ local function fail(conn_id, message)
   end
   waiting = kept
   for _, waiter in ipairs(failed) do
-    waiter.done({ error = message })
+    settle(waiter, { error = message })
   end
 end
 
 ---@param payload table `structure:done`
 function M.on_structure(payload)
-  deliver('structure', payload)
+  deliver(payload)
 end
 
 ---@param payload table `relationships:done`
 function M.on_relationships(payload)
-  deliver('relationships', payload)
+  deliver(payload)
 end
 
 ---@param payload table `schema:nodes`
 function M.on_nodes(payload)
-  deliver('introspect', payload)
+  deliver(payload)
 end
 
 --- Fail pending requests of a closed or lost connection.
@@ -59,28 +69,29 @@ function M.invalidate(conn_id)
   fail(conn_id, 'connection closed')
 end
 
---- Fail every pending request; the engine restarted.
-function M.reset()
-  fail(nil, 'engine restarted')
+--- Fail every pending request; the engine that would answer them is gone.
+---@param message string|nil
+function M.reset(message)
+  fail(nil, message or 'engine restarted')
 end
 
---- Send `method` and call `done` with the event that completes it.
+--- Send `method` with a fresh request id and call `done` with the event that echoes it.
 ---@param method 'structure'|'relationships'|'introspect'
 ---@param args table
----@param match fun(payload: table): boolean
 ---@param done fun(payload: table)
-local function request(method, args, match, done)
-  local waiter = { kind = method, conn_id = args.conn_id, match = match, done = done }
+local function request(method, args, done)
+  local rpc = require('sqmeow.rpc.client')
+  local waiter = { conn_id = args.conn_id, request_id = rpc.next_request_id(), done = done }
+  args.request_id = waiter.request_id
   table.insert(waiting, waiter)
-  local _, err = require('sqmeow.rpc.client').request(method, args)
+  local _, err = rpc.request(method, args)
   if err then
     for index, other in ipairs(waiting) do
       if other == waiter then
         table.remove(waiting, index)
-        break
+        return settle(waiter, { error = err })
       end
     end
-    done({ error = err })
   end
 end
 
@@ -94,6 +105,9 @@ local function each(items, start, done)
     return done(nil)
   end
   for _, item in ipairs(items) do
+    if finished then
+      return
+    end
     start(item, function(err)
       if finished then
         return
@@ -107,13 +121,19 @@ local function each(items, start, done)
   end
 end
 
+--- A key that keeps `a.b`.`c` and `a`.`b.c` apart.
+---@param schema string
+---@param relation string
+---@return string
+local function key(schema, relation)
+  return schema .. '\0' .. relation
+end
+
 ---@param conn_id integer
 ---@param path string[]
 ---@param done fun(nodes: table[]|nil, err: string|nil)
 local function children(conn_id, path, done)
   request('introspect', { conn_id = conn_id, path = path }, function(payload)
-    return payload.conn_id == conn_id and vim.deep_equal(payload.path or {}, path)
-  end, function(payload)
     if payload.error then
       return done(nil, payload.error)
     end
@@ -121,87 +141,103 @@ local function children(conn_id, path, done)
   end)
 end
 
---- Every table of `schema`, or of the default schema when `schema` is nil.
+--- `schema`, or the connection's default schema when nil.
 ---@param conn_id integer
 ---@param schema string|nil
----@param done fun(tables: { schema: string, relation: string }[]|nil, err: string|nil)
-local function schema_tables(conn_id, schema, done)
-  local function list(name)
-    children(conn_id, { name, 'tables' }, function(nodes, err)
-      if not nodes then
-        return done(nil, err)
-      end
-      local tables = {}
-      for _, node in ipairs(nodes) do
-        if node.kind == 'table' then
-          table.insert(tables, { schema = name, relation = node.name })
-        end
-      end
-      done(tables)
-    end)
-  end
-
+---@param done fun(schema: string|nil, err: string|nil)
+local function resolve_schema(conn_id, schema, done)
   if schema then
-    return list(schema)
+    return done(schema)
   end
   children(conn_id, {}, function(nodes, err)
     if not nodes then
       return done(nil, err)
     end
+    local server = false
     for _, node in ipairs(nodes) do
       if node.kind == 'schema' and node.is_default then
-        return list(node.name)
+        return done(node.name)
       end
+      server = server or node.kind == 'database'
     end
-    done(nil, 'no schema is the default; pass `schema`')
+    -- A server connection lists databases, each opened as a connection of its own.
+    done(
+      nil,
+      server and 'this connection is a server; read the schema from one of its databases'
+        or 'no schema is the default; pass `schema`'
+    )
   end)
 end
 
---- `relation` and the tables within `hops` foreign keys of it, in either direction.
+--- The tables of `schema`, in the catalog's spelling.
 ---@param conn_id integer
 ---@param schema string
----@param relation string
----@param hops integer
 ---@param done fun(tables: { schema: string, relation: string }[]|nil, err: string|nil)
-local function neighborhood(conn_id, schema, relation, hops, done)
-  local tables, seen = {}, {}
-  local function add(table_schema, name)
-    local key = table_schema .. '.' .. name
-    if not seen[key] then
-      seen[key] = true
-      table.insert(tables, { schema = table_schema, relation = name })
+local function schema_tables(conn_id, schema, done)
+  children(conn_id, { schema, 'tables' }, function(nodes, err)
+    if not nodes then
+      return done(nil, err)
+    end
+    local tables = {}
+    for _, node in ipairs(nodes) do
+      if node.kind == 'table' then
+        table.insert(tables, { schema = schema, relation = node.name })
+      end
+    end
+    done(tables)
+  end)
+end
+
+--- The table `relation` names in `tables`: an exact match, else the only case-insensitive one.
+---@param tables { schema: string, relation: string }[]
+---@param relation string
+---@return { schema: string, relation: string }|nil
+local function find_table(tables, relation)
+  local folded = {}
+  for _, tbl in ipairs(tables) do
+    if tbl.relation == relation then
+      return tbl
+    end
+    if tbl.relation:lower() == relation:lower() then
+      table.insert(folded, tbl)
     end
   end
-  add(schema, relation)
+  return #folded == 1 and folded[1] or nil
+end
+
+--- `focal` and the tables within `hops` foreign keys of it, in either direction.
+---@param conn_id integer
+---@param focal { schema: string, relation: string }
+---@param hops integer
+---@param done fun(tables: { schema: string, relation: string }[]|nil, err: string|nil)
+local function neighborhood(conn_id, focal, hops, done)
+  local tables, seen = {}, {}
+  local function add(schema, relation)
+    if relation and not seen[key(schema, relation)] then
+      seen[key(schema, relation)] = true
+      table.insert(tables, { schema = schema, relation = relation })
+    end
+  end
+  add(focal.schema, focal.relation)
 
   local expanded = 0
   local function hop(left)
     local frontier = vim.list_slice(tables, expanded + 1)
     expanded = #tables
-    if left == 0 or #frontier == 0 then
+    if left <= 0 or #frontier == 0 then
       return done(tables)
     end
-    each(frontier, function(item, settle)
-      local id = require('sqmeow.rpc.client').next_request_id()
-      local args =
-        { conn_id = conn_id, schema = item.schema, relation = item.relation, request_id = id }
+    each(frontier, function(item, settled)
+      local args = { conn_id = conn_id, schema = item.schema, relation = item.relation }
       request('relationships', args, function(payload)
-        return payload.request_id == id
-      end, function(payload)
         if payload.error then
-          return settle(payload.error)
+          return settled(payload.error)
         end
-        -- An empty schema or differently cased name resolves to the catalog's spelling.
-        item.schema = (payload.resolved_schema or '') ~= '' and payload.resolved_schema
-          or item.schema
-        item.relation = (payload.resolved_relation or '') ~= '' and payload.resolved_relation
-          or item.relation
-        seen[item.schema .. '.' .. item.relation] = true
         for _, rel in ipairs(payload.relationships or {}) do
           add(rel.source_schema or item.schema, rel.source_relation)
           add(rel.target_schema or item.schema, rel.target_relation)
         end
-        settle(nil)
+        settled(nil)
       end)
     end, function(err)
       if err then
@@ -217,20 +253,16 @@ end
 ---@param tables { schema: string, relation: string }[]
 ---@param done fun(tables: sqmeow.SchemaTable[]|nil, err: string|nil)
 local function structures(conn_id, tables, done)
-  each(tables, function(item, settle)
+  each(tables, function(item, settled)
     local args = { conn_id = conn_id, schema = item.schema, relation = item.relation }
     request('structure', args, function(payload)
-      return payload.conn_id == conn_id
-        and payload.schema == args.schema
-        and payload.relation == args.relation
-    end, function(payload)
       if payload.error then
-        return settle(payload.error)
+        return settled(payload.error)
       end
       item.columns = payload.columns or {}
       item.indexes = payload.indexes or {}
       item.foreign_keys = payload.foreign_keys or {}
-      settle(nil)
+      settled(nil)
     end)
   end, function(err)
     if err then
@@ -277,14 +309,11 @@ function M.collect(opts, callback)
   require('sqmeow.rpc.events').ensure()
 
   local relation = (opts.relation or '') ~= '' and opts.relation or nil
-  local hops = relation and math.max(1, opts.hops or 1) or nil
+  local hops = relation and math.max(0, math.floor(opts.hops or 1)) or nil
 
-  local function collected(tables, list_err)
+  local function finish(tables, list_err)
     if not tables then
       return callback(nil, list_err)
-    end
-    if #tables == 0 then
-      return callback(nil, 'no tables found')
     end
     structures(conn.id, tables, function(found, struct_err)
       if not found then
@@ -302,11 +331,28 @@ function M.collect(opts, callback)
     end)
   end
 
-  if relation then
-    neighborhood(conn.id, opts.schema or '', relation, hops or 1, collected)
-  else
-    schema_tables(conn.id, opts.schema, collected)
-  end
+  resolve_schema(conn.id, opts.schema, function(schema, schema_err)
+    if not schema then
+      return callback(nil, schema_err)
+    end
+    schema_tables(conn.id, schema, function(tables, list_err)
+      if not tables then
+        return callback(nil, list_err)
+      end
+      if not relation then
+        if #tables == 0 then
+          return callback(nil, ('no tables found in %s'):format(schema))
+        end
+        return finish(tables)
+      end
+      -- The catalog decides whether the table exists and how it is spelled.
+      local focal = find_table(tables, relation)
+      if not focal then
+        return callback(nil, ('table %s not found in %s'):format(relation, schema))
+      end
+      neighborhood(conn.id, focal, hops or 1, finish)
+    end)
+  end)
   return true
 end
 

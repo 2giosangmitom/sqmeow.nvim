@@ -232,21 +232,29 @@ end
 --- Render collected table structures as a Mermaid `erDiagram`.
 --- Relationship lines run parent to child: the parent end is `||` when every
 --- foreign key column is NOT NULL, else `|o`; the child end is `|o` when the
---- key columns are a primary key or unique index, else `o{`. Columns carry
---- `PK`, `FK` and `UK` tags. Foreign keys to tables outside `schema.tables`
---- are tagged but draw no line.
+--- key columns are a primary key or a full unique index, else `o{`. The line
+--- is solid (`--`) when the key is part of the child's primary key and dotted
+--- (`..`) otherwise. Columns carry `PK`, `FK` and single-column `UK` tags.
+--- Foreign keys to tables outside `schema.tables` are tagged but draw no line.
+--- Entity names are quoted; attribute names Mermaid cannot read, such as `fk`
+--- or `line item`, are adjusted and kept distinct within their table.
 ---@param schema { tables: sqmeow.SchemaTable[] } From |sqmeow-schema|,
 --- or built by hand.
 ---@param opts { path: string|nil, clipboard: boolean|nil }|nil `path`: write
---- the diagram to this file; `clipboard = true`: copy it.
+--- the diagram to this file; `clipboard = true`: copy it to the system
+--- clipboard, or only to the unnamed register when Neovim has no clipboard
+--- provider.
 ---@return string mermaid
 ---@usage >lua
----   require('sqmeow.api.view').schema({ schema = 'public' }, function(schema, err)
+---   local started, err = require('sqmeow.api.view').schema({ schema = 'public' }, function(schema, e)
 ---     if not schema then
----       return vim.notify(err, vim.log.levels.ERROR)
+---       return vim.notify(e, vim.log.levels.ERROR)
 ---     end
 ---     require('sqmeow.api.export').mermaid(schema, { path = 'public.mmd' })
 ---   end)
+---   if not started then
+---     vim.notify(err, vim.log.levels.ERROR)
+---   end
 --- <
 function M.mermaid(schema, opts)
   opts = opts or {}
@@ -263,8 +271,16 @@ function M.mermaid(schema, opts)
   end
   if opts.clipboard then
     vim.fn.setreg('"', text)
-    pcall(vim.fn.setreg, '+', text)
-    notify(('copied the diagram of %d tables'):format(#(schema.tables or {})))
+    local count = #(schema.tables or {})
+    local copied = vim.fn.has('clipboard') == 1 and pcall(vim.fn.setreg, '+', text)
+    if copied then
+      notify(('copied the diagram of %d tables to the clipboard'):format(count))
+    else
+      notify(
+        ('no clipboard provider: the diagram of %d tables is in the unnamed register'):format(count),
+        vim.log.levels.WARN
+      )
+    end
   end
   return text
 end

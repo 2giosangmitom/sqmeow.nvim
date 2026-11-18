@@ -10,6 +10,11 @@ local notify = require('sqmeow.core.utils').notify
 ---@param payload table
 function M.on_connection(payload)
   local state = require('sqmeow.core.state')
+  -- An explicit disconnect forgets the connection before its `closed` event arrives,
+  -- so pending schema reads are failed before the missing-connection check.
+  if payload.state == 'error' or payload.state == 'closed' then
+    require('sqmeow.core.schema').invalidate(payload.id)
+  end
   local connection = state.connections[payload.id]
   if not connection then
     return
@@ -23,7 +28,6 @@ function M.on_connection(payload)
   -- Remove closed or failed connections before redrawing the drawer.
   if payload.state == 'error' or payload.state == 'closed' then
     state.remove_connection(payload.id)
-    require('sqmeow.core.schema').invalidate(payload.id)
   end
   -- A lost connection takes the databases opened from it along. One lost database session
   -- does not prove the server is gone, so its cluster is probed: a dead server reports the
@@ -174,6 +178,11 @@ function M.on_engine_restart()
   require('sqmeow.ui.relationships').close()
   require('sqmeow.core.schema').reset()
   require('sqmeow.ui.result').forget()
+end
+
+--- Handle the engine stopping or exiting: nothing it was asked will be answered.
+function M.on_engine_stop()
+  require('sqmeow.core.schema').reset('engine stopped')
 end
 
 --- Subscribe to engine events. Safe to call repeatedly.

@@ -62,6 +62,8 @@ local function forget(job)
   -- Only the current engine's exit clears the state.
   if channel == job then
     channel, info = nil, nil
+    -- Requests sent to it will never be answered; a replacement engine's are untouched.
+    require('sqmeow.rpc.events').on_engine_stop()
   end
 end
 
