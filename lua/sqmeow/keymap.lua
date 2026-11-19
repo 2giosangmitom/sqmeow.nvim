@@ -191,6 +191,11 @@ M.defaults = {
     { action = 'fewer_hops', lhs = '-', desc = 'Follow one foreign key fewer' },
     { action = 'toggle_columns', lhs = 'za', desc = "Show or fold this table's columns" },
     { action = 'compact', lhs = 'C', desc = 'Show only key columns, or every column' },
+    {
+      action = 'overview',
+      lhs = 'O',
+      desc = 'Overview: every table of the schema by name, or back to columns',
+    },
     { action = 'structure', lhs = 'K', desc = "Show this table's structure" },
     { action = 'relationships', lhs = 'gR', desc = "Browse this table's relationships" },
     { action = 'yank_name', lhs = 'y', desc = 'Yank the qualified table name' },

@@ -25,7 +25,10 @@ local function fk(columns, target, referenced)
 end
 
 local icons = function(kind)
-  return kind == 'primary_key' and '#' or '>'
+  if kind == 'primary_key' then
+    return '#'
+  end
+  return kind == 'foreign_key' and '>' or ' '
 end
 
 --- Lay out and draw tables, answering the layout and the drawn lines.
@@ -91,29 +94,34 @@ end
 
 T['a small schema draws as expected'] = function()
   local _, lines = draw(shop())
-  -- `orders` rises so the key from `users.id` runs straight; `coupons` waits below.
+  -- `orders` sits between the two tables it references, both lines straight.
   eq(lines, {
     '',
-    '                                    ╭─ orders ──────────╮',
-    '  ╭─ users ───────────────╮         │ # id         int4 │',
-    '  │ # id     int4         ├┼┼─────○<┤ > user_id    int4 │',
-    '  │   email  varchar(255) │   ╭───○┼┤ > coupon_id  int4 │',
-    '  ╰───────────────────────╯   │     ╰───────────────────╯',
-    '                              │',
-    '  ╭─ coupons ──╮              │',
-    '  │ # id  int4 ├┼○────────────╯',
-    '  ╰────────────╯',
+    '                         ╭─ orders ──────────╮',
+    '                         │ # id         int4 │         ╭─ users ───────────────╮',
+    '  ╭─ coupons ──╮         │ > user_id    int4 ├>○─────┼┼┤ # id     int4         │',
+    '  │ # id  int4 ├┼○─────○┼┤ > coupon_id  int4 │         │   email  varchar(255) │',
+    '  ╰────────────╯         ╰───────────────────╯         ╰───────────────────────╯',
     '',
   })
 end
 
-T['parents sit left of their children'] = function()
-  local tables = shop()
-  local placed, _, graph = draw(tables)
-  local users, orders = box_of(placed, graph, 'users'), box_of(placed, graph, 'orders')
-  local coupons = box_of(placed, graph, 'coupons')
-  eq(users.x < orders.x, true)
-  eq(coupons.x < orders.x, true)
+T['tables joined by a key sit in neighbouring columns'] = function()
+  local placed, _, graph = draw(shop())
+  local columns = {}
+  for _, box in pairs(placed.boxes) do
+    columns[box.x] = true
+  end
+  local xs = vim.tbl_keys(columns)
+  table.sort(xs)
+  local index = {}
+  for i, x in ipairs(xs) do
+    index[x] = i
+  end
+  for _, edge in ipairs(graph.edges) do
+    local a, b = placed.boxes[edge.parent], placed.boxes[edge.child]
+    eq(math.abs(index[a.x] - index[b.x]), 1)
+  end
 end
 
 T['a cycle still lays out, one table per column'] = function()
@@ -175,36 +183,45 @@ T['folded columns keep the keys an edge needs'] = function()
   }
   local placed, lines, graph = draw(tables, { max_rows = 5 })
   local wide = box_of(placed, graph, 'wide')
-  eq(#wide.rows, 6)
+  eq(#wide.rows, 5)
   eq(wide.hidden, 17)
   eq(wide.row_of[22] ~= nil, true)
-  eq(lines[wide.y + wide.h - 1]:find('… 17 more', 1, true) ~= nil, true)
+  -- The count sits in the bottom border, costing no row.
+  eq(wide.footer, '… 17 more')
+  eq(lines[wide.y + wide.h]:find('╰─ … 17 more ─', 1, true) ~= nil, true)
 
   local expanded = draw(tables, { max_rows = 5, expanded = { [2] = true } })
   eq(#box_of(expanded, graph, 'wide').rows, 22)
 
   local compact = draw(tables, { compact = true })
-  eq(#box_of(compact, graph, 'wide').rows, 3)
+  eq(#box_of(compact, graph, 'wide').rows, 2)
 end
 
-T['tables with no keys are packed below the others'] = function()
+T['tables with no keys fill space beside the others'] = function()
   local tables = shop()
+  local alone = draw(tables)
   table.insert(tables, { relation = 'settings', columns = { col('key', false, 'text') } })
   local placed, _, graph = draw(tables)
   local settings = box_of(placed, graph, 'settings')
+  -- Beside the group, not in a row of its own below it.
+  eq(placed.height, alone.height)
   for _, name in ipairs({ 'users', 'orders', 'coupons' }) do
-    local other = box_of(placed, graph, name)
-    eq(settings.y >= other.y + other.h, true)
+    eq(settings.x >= box_of(placed, graph, name).x + box_of(placed, graph, name).w, true)
   end
 end
 
-T['tracks in a gap never share a column'] = function()
+T['bundles share a track only where they never meet'] = function()
   local tables = { { relation = 'hub', columns = { pk('id'), pk('code') } } }
   for i = 1, 6 do
     table.insert(tables, {
       relation = 'leaf' .. i,
       columns = { pk('id'), col('x'), col('hub_id') },
       foreign_keys = { fk({ 'hub_id' }, 'hub') },
+    })
+    table.insert(tables, {
+      relation = 'twig' .. i,
+      columns = { pk('id'), col('leaf_id') },
+      foreign_keys = { fk({ 'leaf_id' }, 'leaf' .. i) },
     })
   end
   local placed = draw(tables)
@@ -213,16 +230,204 @@ T['tracks in a gap never share a column'] = function()
     for _, points in ipairs(route.points) do
       if #points == 4 then
         local x = points[2][1]
-        local span = { math.min(points[2][2], points[3][2]), math.max(points[2][2], points[3][2]) }
+        local low = math.min(points[2][2], points[3][2])
+        local high = math.max(points[2][2], points[3][2])
         for _, other in ipairs(seen[x] or {}) do
-          -- A shared track is only the bus out of the same row.
-          eq(other[1] > span[2] or other[2] < span[1] or other[3] == points[1][2], true)
+          -- One bundle's lines share its trunk; another bundle's keep a row apart.
+          eq(
+            other.parent == route.edge.parent or other.low > high + 1 or other.high < low - 1,
+            true
+          )
         end
         seen[x] = seen[x] or {}
-        table.insert(seen[x], { span[1], span[2], points[1][2] })
+        table.insert(seen[x], { low = low, high = high, parent = route.edge.parent })
       end
     end
   end
+end
+
+T['keys from one column share a single track'] = function()
+  local tables = { { relation = 'hub', columns = { pk('id') } } }
+  for i = 1, 6 do
+    table.insert(tables, {
+      relation = 'leaf' .. i,
+      columns = { pk('id'), col('hub_id') },
+      foreign_keys = { fk({ 'hub_id' }, 'hub') },
+    })
+  end
+  local placed, lines, graph = draw(tables)
+  local hub = box_of(placed, graph, 'hub')
+  -- At most one trunk on each side of the hub.
+  local right, left = {}, {}
+  for _, route in ipairs(placed.routes) do
+    for _, points in ipairs(route.points) do
+      if #points == 4 and points[1][1] == hub.x + hub.w + 2 then
+        right[points[2][1]] = true
+      elseif #points == 4 and points[4][1] == hub.x - 3 then
+        left[points[2][1]] = true
+      end
+    end
+  end
+  eq(vim.tbl_count(right) <= 1 and vim.tbl_count(left) <= 1, true)
+  -- No comb of parallel lines beside the hub.
+  eq(table.concat(lines, '\n'):find('┬┬', 1, true), nil)
+end
+
+T["a hub's tables spread over columns both sides of it"] = function()
+  local tables = { { relation = 'hub', columns = { pk('id') } } }
+  for i = 1, 30 do
+    table.insert(tables, {
+      relation = 'leaf' .. i,
+      columns = { pk('id'), col('hub_id'), col('a'), col('b'), col('c') },
+      foreign_keys = { fk({ 'hub_id' }, 'hub') },
+    })
+  end
+  local placed, _, graph = draw(tables)
+  local hub = box_of(placed, graph, 'hub')
+  local columns, left, right = {}, 0, 0
+  for i = 1, 30 do
+    local leaf = box_of(placed, graph, 'leaf' .. i)
+    columns[leaf.x] = true
+    if leaf.x < hub.x then
+      left = left + 1
+    else
+      right = right + 1
+    end
+  end
+  eq(vim.tbl_count(columns) >= 4, true)
+  eq(left > 0 and right > 0, true)
+  -- Wider than tall, in terminal cells.
+  eq(placed.width > 2 * placed.height, true)
+end
+
+T['columns take the icon of their key or type class'] = function()
+  local graph = model.graph({
+    tables = {
+      {
+        relation = 't',
+        columns = {
+          { name = 'id', type_name = 'int4', class = 'number', primary_key = true },
+          { name = 'name', type_name = 'text', class = 'text' },
+          { name = 'other', type_name = 'mystery' },
+        },
+      },
+    },
+  })
+  local placed = layout.layout(graph, {
+    icon = function(kind)
+      return ({ primary_key = 'P', text = 'T', unknown = 'U' })[kind] or '?'
+    end,
+  })
+  local box = placed.boxes[1]
+  local drawn = vim.tbl_map(function(row)
+    return { row.pieces[1].text, row.pieces[1].role }
+  end, box.rows)
+  eq(drawn, { { 'P', 'icon:primary_key' }, { 'T', 'icon:text' }, { 'U', 'icon:unknown' } })
+end
+
+T['the overview draws each table as one line'] = function()
+  local _, lines = draw(shop(), { overview = true, caps = { left = '(', right = ')' } })
+  eq(lines, {
+    '',
+    '  ( coupons )┼○─────○┼( orders )>○─────┼┼( users )',
+    '',
+  })
+end
+
+T['the overview marks a self-reference instead of looping'] = function()
+  local placed, lines = draw({
+    {
+      relation = 'categories',
+      columns = { pk('id'), col('parent_id', true) },
+      foreign_keys = { fk({ 'parent_id' }, 'categories') },
+    },
+  }, { overview = true })
+  eq(placed.boxes[1].h, 1)
+  eq(vim.trim(lines[2]), 'categories ↻')
+  eq(#placed.routes, 0)
+end
+
+T['a table opened with za keeps its columns in the overview'] = function()
+  local placed = draw(shop(), { overview = true, expanded = { [2] = true } })
+  eq(placed.boxes[1].label, true)
+  eq(placed.boxes[2].label, nil)
+  eq(#placed.boxes[2].rows, 3)
+end
+
+--- Pairs of edges sharing a stretch of line without sharing a table: a reader could not tell
+--- which table such a line leads to. Crossings share a single cell and are fine, as do lines
+--- that meet at a table both reach.
+local function ambiguous(tables, opts)
+  local graph = model.graph({ tables = tables })
+  local placed = layout.layout(graph, vim.tbl_extend('keep', opts or {}, { icon = icons }))
+  local _, drawn = canvas.draw(placed)
+  local owners = {}
+  for _, edge in ipairs(graph.edges) do
+    for _, cell in ipairs(drawn.cells['edge:' .. edge.id] or {}) do
+      local key = cell[1] .. ':' .. cell[2]
+      owners[key] = owners[key] or {}
+      owners[key][edge.id] = true
+    end
+  end
+  local found = {}
+  for key, here in pairs(owners) do
+    local y, x = key:match('(%d+):(%d+)')
+    local next_cell = owners[y .. ':' .. (tonumber(x) + 1)] or {}
+    for a in pairs(here) do
+      for b in pairs(here) do
+        local ea, eb = graph.edges[a], graph.edges[b]
+        if
+          a < b
+          and next_cell[a]
+          and next_cell[b]
+          and ea.parent ~= eb.parent
+          and ea.child ~= eb.child
+          and ea.parent ~= eb.child
+          and ea.child ~= eb.parent
+        then
+          table.insert(found, ea.label .. ' / ' .. eb.label)
+        end
+      end
+    end
+  end
+  return found
+end
+
+T['lines that must cross each other twice step aside instead of merging'] = function()
+  -- In this order `orders` lines up with `categories` and `products` with `users`: each
+  -- bundle leaves at the row the other arrives at.
+  local tables = {
+    {
+      relation = 'categories',
+      columns = { pk('id'), col('parent_id', true) },
+      foreign_keys = { fk({ 'parent_id' }, 'categories') },
+    },
+    { relation = 'coupons', columns = { pk('id'), col('code') } },
+    {
+      relation = 'order_items',
+      columns = { pk('order_id'), pk('product_id') },
+      foreign_keys = { fk({ 'order_id' }, 'orders'), fk({ 'product_id' }, 'products') },
+    },
+    {
+      relation = 'orders',
+      columns = { pk('id'), col('user_id'), col('coupon_id', true) },
+      foreign_keys = { fk({ 'user_id' }, 'users'), fk({ 'coupon_id' }, 'coupons') },
+    },
+    {
+      relation = 'products',
+      columns = { pk('id'), col('category_id') },
+      foreign_keys = { fk({ 'category_id' }, 'categories') },
+    },
+    {
+      relation = 'reviews',
+      columns = { pk('id'), col('user_id'), col('product_id') },
+      foreign_keys = { fk({ 'user_id' }, 'users'), fk({ 'product_id' }, 'products') },
+    },
+    { relation = 'users', columns = { pk('id'), col('email') } },
+  }
+  eq(ambiguous(tables, { overview = true }), {})
+  eq(ambiguous(tables), {})
+  eq(ambiguous(tables, { compact = true }), {})
 end
 
 T['canvas joins lines into the right glyphs'] = function()

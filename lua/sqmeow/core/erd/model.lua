@@ -335,6 +335,7 @@ end
 ---@class sqmeow.ErdColumn
 ---@field name string
 ---@field type string Short type name.
+---@field class string|nil What it holds, as the engine classifies its type: `text`, `number`, ...
 ---@field pk boolean
 ---@field fk boolean
 ---@field uk boolean Unique on its own.
@@ -396,6 +397,7 @@ function M.graph(schema)
       table.insert(columns, {
         name = column.name or '',
         type = M.short_type(column.type_name),
+        class = column.class,
         pk = column.primary_key == true,
         fk = reference ~= nil,
         uk = unique[column] == true and not column.primary_key,

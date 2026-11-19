@@ -252,15 +252,80 @@ T['za and C change which columns show'] = function()
       end
     end
   end
-  -- `id` is a key and shows; `email` folds into `… 1 more`.
-  eq(rows('users'), 2)
+  -- `id` is a key and shows; `email` folds into `… 1 more` in the border.
+  eq(rows('users'), 1)
   put('users')
   erd.actions.toggle_columns()
   eq(rows('users'), 2)
   eq(view.drawing.layout.boxes[1].hidden, 0)
   eq(under_cursor(), 'users')
   erd.actions.compact()
-  eq(view.compact, true)
+  eq(view.detail, 'keys')
+end
+
+T['a large schema starts with only key columns'] = function()
+  helpers.stub(require('sqmeow.config').get().ui.erd, 'compact_from', 3)
+  erd.open({ conn_id = 1 })
+  local view = assert(erd.state())
+  local function rows()
+    return #view.drawing.layout.boxes[1].rows
+  end
+  -- `users`: `id`, and `… 1 more` for `email` in the border.
+  eq(rows(), 1)
+  eq(view.drawing.layout.boxes[1].hidden, 1)
+  put('users')
+  erd.actions.compact()
+  eq(view.detail, 'full')
+  eq(view.drawing.layout.boxes[1].hidden, 0)
+end
+
+T['icons are highlighted as in the result grid'] = function()
+  erd.open({ conn_id = 1 })
+  local view = assert(erd.state())
+  local ns = vim.api.nvim_get_namespaces()['sqmeow.erd']
+  local found = {}
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(view.buf, ns, 0, -1, { details = true })) do
+    found[mark[4].hl_group] = true
+  end
+  eq(found.SqmeowIconKeyPrimary, true)
+  eq(found.SqmeowIconKeyForeign, true)
+end
+
+T['O shows the whole schema by name, and <CR> and <BS> move in and out'] = function()
+  erd.open({ conn_id = 1, schema = 'public', relation = 'orders' })
+  local view = assert(erd.state())
+  eq(view.drawing.layout.boxes[1].label, nil)
+
+  erd.actions.overview()
+  eq(requests[2].opts, { conn_id = 1, schema = 'public' })
+  eq(view.detail, 'overview')
+  for _, box in pairs(view.drawing.layout.boxes) do
+    eq(box.label, true)
+  end
+  -- The cursor stays on the table it was on.
+  eq(under_cursor(), 'orders')
+
+  erd.actions.focus()
+  eq(requests[3].opts.relation, 'orders')
+  eq(view.detail, nil)
+  eq(view.drawing.layout.boxes[1].label, nil)
+
+  erd.actions.back()
+  eq(requests[4].opts, { conn_id = 1, schema = 'public' })
+  eq(view.detail, 'overview')
+
+  -- On the whole schema, O switches columns back on without reading again.
+  erd.actions.overview()
+  eq(#requests, 4)
+  eq(view.detail, 'full')
+end
+
+T['a very large schema starts as an overview'] = function()
+  helpers.stub(require('sqmeow.config').get().ui.erd, 'overview_from', 3)
+  erd.open({ conn_id = 1 })
+  local view = assert(erd.state())
+  eq(view.drawing.layout.boxes[1].label, true)
+  eq(view.drawing.picture.lines[2]:find('users', 1, true) ~= nil, true)
 end
 
 T['a closed connection marks the diagram out of date'] = function()

@@ -12,8 +12,6 @@ local ns_focus = vim.api.nvim_create_namespace('sqmeow.erd.focus')
 local groups = {
   border = 'SqmeowErdBorder',
   title = 'SqmeowErdTitle',
-  pk = 'SqmeowIconKeyPrimary',
-  fk = 'SqmeowIconKeyForeign',
   key_name = 'SqmeowErdKey',
   type = 'SqmeowErdType',
   more = 'SqmeowErdMore',
@@ -36,9 +34,10 @@ local groups = {
 ---@field opts sqmeow.SchemaOpts What the drawing shows.
 ---@field conn_id integer|nil
 ---@field drawing sqmeow.ErdDrawing|nil Nil while loading the first time, or showing a message.
----@field history sqmeow.SchemaOpts[] Views `back` returns to.
+---@field history { opts: sqmeow.SchemaOpts, detail: sqmeow.ErdDetail|nil }[] Views `back`
+--- returns to, with how much each showed.
 ---@field expanded table<string, boolean> Tables showing every column, by schema and name.
----@field compact boolean
+---@field detail sqmeow.ErdDetail|nil Chosen with `C` or `O`; nil follows the table count.
 ---@field loading boolean
 ---@field disconnected boolean
 
@@ -62,6 +61,49 @@ end
 ---@return string
 local function node_key(node)
   return node.schema .. '\0' .. node.relation
+end
+
+--- How much a table shows: every column (`full`), key columns (`keys`), or only its name
+--- (`overview`).
+---@alias sqmeow.ErdDetail 'full'|'keys'|'overview'
+
+--- The detail a schema of this size starts at, `overview` left out when `overview` is false.
+---@param schema sqmeow.Schema
+---@param overview boolean
+---@return sqmeow.ErdDetail
+local function default_detail(schema, overview)
+  local cfg = config()
+  local count = #(schema.tables or {})
+  if overview and cfg.overview_from > 0 and count >= cfg.overview_from then
+    return 'overview'
+  end
+  if cfg.compact or (cfg.compact_from > 0 and count >= cfg.compact_from) then
+    return 'keys'
+  end
+  return 'full'
+end
+
+---@param v sqmeow.ErdView
+---@param schema sqmeow.Schema
+---@return sqmeow.ErdDetail
+local function detail_for(v, schema)
+  return v.detail or default_detail(schema, true)
+end
+
+--- The highlight a drawn role takes; icons take their kind's, as in the result grid.
+---@param role string
+---@return string|nil
+local function group_of(role)
+  if role == 'label' then
+    return 'SqmeowErdLabel'
+  elseif role == 'cap' then
+    return 'SqmeowErdCap'
+  end
+  local kind = role:match('^icon:(.+)$')
+  if kind then
+    return require('sqmeow.core.icons').highlights[kind] or 'SqmeowIconTypeUnknown'
+  end
+  return groups[role]
 end
 
 --- `%` is the statusline's escape.
@@ -143,7 +185,9 @@ local function show_box(v, d, id, row)
     return
   end
   local y = box.y + (row or 0)
-  local x = row and (box.x + 2) or (box.x + 3)
+  local x = box.label and (box.x + vim.api.nvim_strwidth(box.caps.left) + 1)
+    or row and (box.x + 2)
+    or (box.x + 3)
   vim.api.nvim_win_set_cursor(v.win, { y + 1, byte_of(d, y, x) })
   vim.api.nvim_win_call(v.win, function()
     local height = vim.api.nvim_win_get_height(0)
@@ -197,7 +241,7 @@ end
 ---@param v sqmeow.ErdView
 ---@param d sqmeow.ErdDrawing
 ---@return string
-local function detail(v, d)
+local function under_cursor(v, d)
   local box, column = current(v, d)
   if box then
     local node = d.graph.nodes[box.node]
@@ -249,7 +293,7 @@ local function winbar()
   if v.disconnected then
     table.insert(parts, '%#DiagnosticWarn#  disconnected')
   end
-  local right = d and escape(detail(v, d)) or ''
+  local right = d and escape(under_cursor(v, d)) or ''
   vim.wo[v.win].winbar = table.concat(parts) .. '%=%#Comment#' .. right .. ' '
 end
 
@@ -270,7 +314,9 @@ local function focus()
 
   local box = current(v, d)
   local edges = {}
-  if box then
+  if box and box.label then
+    paint(box.y, box.x, box.x + box.w - 1, 'SqmeowErdFocus')
+  elseif box then
     local right = box.x + box.w - 1
     local title_end = box.x + 3 + vim.api.nvim_strwidth(box.title)
     paint(box.y, box.x, box.x + 2, 'SqmeowErdFocus')
@@ -280,6 +326,8 @@ local function focus()
       paint(y, box.x, box.x, 'SqmeowErdFocus')
       paint(y, right, right, 'SqmeowErdFocus')
     end
+  end
+  if box then
     for _, edge in ipairs(d.graph.edges) do
       if edge.child == box.node or edge.parent == box.node then
         table.insert(edges, edge)
@@ -317,6 +365,13 @@ end
 
 ---@alias sqmeow.ErdPlace { schema: string, relation: string, row: integer|nil }
 
+--- How to read a diagram: `push` keeps the current one for `back`, `keep` is where the cursor
+--- stays, and `detail` replaces the chosen detail once the read succeeds (`auto`: the default).
+---@class sqmeow.ErdLoad
+---@field push boolean|nil
+---@field keep sqmeow.ErdPlace|nil
+---@field detail sqmeow.ErdDetail|'auto'|nil
+
 --- Draw `schema`, keeping the cursor on `keep` when it is still drawn.
 ---@param v sqmeow.ErdView
 ---@param schema sqmeow.Schema
@@ -329,16 +384,20 @@ local function draw(v, schema, keep)
   for _, node in ipairs(graph.nodes) do
     expanded[node.id] = v.expanded[node_key(node)]
   end
+  local detail = detail_for(v, schema)
+  local glyphs = require('sqmeow.config').get().icons.erd
   local layout = require('sqmeow.core.erd.layout').layout(graph, {
     max_rows = cfg.max_rows,
     max_width = cfg.max_column_width,
-    compact = v.compact,
+    compact = detail == 'keys',
+    overview = detail == 'overview',
+    caps = { left = glyphs.cap_left, right = glyphs.cap_right },
     dashed = cfg.dashed,
     expanded = expanded,
     icon = function(kind)
       return (icons.get(kind))
     end,
-  }, require('sqmeow.config').get().icons.erd)
+  }, glyphs)
   local picture, canvas = require('sqmeow.core.erd.canvas').draw(layout)
 
   ---@type sqmeow.ErdDrawing
@@ -365,7 +424,7 @@ local function draw(v, schema, keep)
   require('sqmeow.ui.buffer').set_lines(v.buf, picture.lines)
   vim.api.nvim_buf_clear_namespace(v.buf, ns, 0, -1)
   for _, span in ipairs(picture.spans) do
-    local group = groups[span.role]
+    local group = group_of(span.role)
     if group and span.stop > span.start then
       vim.api.nvim_buf_set_extmark(v.buf, ns, span.row, span.start, {
         end_col = span.stop,
@@ -413,7 +472,7 @@ end
 --- Read and draw `opts`.
 ---@param v sqmeow.ErdView
 ---@param opts sqmeow.SchemaOpts
----@param how { push: boolean|nil, keep: sqmeow.ErdPlace|nil }|nil
+---@param how sqmeow.ErdLoad|nil
 ---@return boolean started
 ---@return string|nil err
 local function load(v, opts, how)
@@ -453,7 +512,13 @@ local function load(v, opts, how)
       })
     end
     if how.push and v.drawing then
-      table.insert(v.history, v.opts)
+      table.insert(v.history, { opts = v.opts, detail = v.detail })
+    end
+    local detail = how.detail
+    if detail == 'auto' then
+      v.detail = nil
+    elseif detail then
+      v.detail = detail --[[@as sqmeow.ErdDetail]]
     end
     v.opts = opts
     v.conn_id = schema.conn_id
@@ -617,7 +682,7 @@ end
 
 ---@param v sqmeow.ErdView
 ---@param opts sqmeow.SchemaOpts
----@param how { push: boolean|nil, keep: sqmeow.ErdPlace|nil }|nil
+---@param how sqmeow.ErdLoad|nil
 ---@return boolean started
 local function reload(v, opts, how)
   local started, err = load(v, opts, how)
@@ -656,7 +721,7 @@ function M.actions.focus()
     schema = node.schema,
     relation = node.relation,
     hops = v.opts.relation and v.opts.hops or config().hops,
-  }, { push = true, keep = { schema = node.schema, relation = node.relation } })
+  }, { push = true, keep = { schema = node.schema, relation = node.relation }, detail = 'auto' })
 end
 
 function M.actions.back()
@@ -665,7 +730,7 @@ function M.actions.back()
     return notify('no earlier diagram')
   end
   local previous = table.remove(v.history)
-  if not reload(v, previous, { keep = remember() }) then
+  if not reload(v, previous.opts, { keep = remember(), detail = previous.detail or 'auto' }) then
     table.insert(v.history, previous)
   end
 end
@@ -706,7 +771,30 @@ function M.actions.compact()
   if not (v and d) then
     return
   end
-  v.compact = not v.compact
+  v.detail = detail_for(v, d.schema) == 'keys' and 'full' or 'keys'
+  draw(v, d.schema, remember())
+end
+
+--- Every table of the schema by name only, or back to columns. From a table's neighbourhood,
+--- reads the whole schema first.
+function M.actions.overview()
+  local v, d = drawn()
+  if not (v and d) then
+    return
+  end
+  if v.opts.relation then
+    reload(
+      v,
+      { conn_id = v.conn_id, schema = d.schema.schema },
+      { push = true, keep = remember(), detail = 'overview' }
+    )
+    return
+  end
+  if detail_for(v, d.schema) == 'overview' then
+    v.detail = default_detail(d.schema, false)
+  else
+    v.detail = 'overview'
+  end
   draw(v, d.schema, remember())
 end
 
@@ -798,7 +886,6 @@ local function ensure_window()
     opts = {},
     history = {},
     expanded = {},
-    compact = config().compact,
     loading = false,
     disconnected = false,
   }

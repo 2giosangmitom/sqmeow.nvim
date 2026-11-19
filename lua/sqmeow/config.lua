@@ -54,6 +54,10 @@ M.defaults = {
       max_tables = 200,
       -- Start with only key columns shown.
       compact = false,
+      -- Start with only key columns shown for schemas of at least this many tables. 0 never.
+      compact_from = 30,
+      -- Start with tables as names only, an overview, for schemas this large. 0 never.
+      overview_from = 60,
       -- Draw foreign keys outside the child's primary key dashed, as Mermaid does.
       dashed = false,
     },
@@ -141,7 +145,15 @@ M.defaults = {
     grid = { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' },
 
     -- Ends of a diagram's foreign keys, crow's foot notation. Each is one column wide.
-    erd = { one = '┼', zero = '○', many = '<', many_reversed = '>' },
+    -- `cap_left` and `cap_right` round off a table's name in the overview; '' leaves them out.
+    erd = {
+      one = '┼',
+      zero = '○',
+      many = '<',
+      many_reversed = '>',
+      cap_left = '',
+      cap_right = '',
+    },
 
     -- Before a result row with staged changes. Each is one column wide.
     edit = { changed = '~', deleted = '-', added = '+' },

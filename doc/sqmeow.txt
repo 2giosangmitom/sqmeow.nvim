@@ -664,6 +664,10 @@ Default configuration. Pass only changed fields to setup. Icons control display 
         max_tables = 200,
         -- Start with only key columns shown.
         compact = false,
+        -- Start with only key columns shown for schemas of at least this many tables. 0 never.
+        compact_from = 30,
+        -- Start with tables as names only, an overview, for schemas this large. 0 never.
+        overview_from = 60,
         -- Draw foreign keys outside the child's primary key dashed, as Mermaid does.
         dashed = false,
       },
@@ -751,7 +755,15 @@ Default configuration. Pass only changed fields to setup. Icons control display 
       grid = { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' },
 
       -- Ends of a diagram's foreign keys, crow's foot notation. Each is one column wide.
-      erd = { one = '┼', zero = '○', many = '<', many_reversed = '>' },
+      -- `cap_left` and `cap_right` round off a table's name in the overview; '' leaves them out.
+      erd = {
+        one = '┼',
+        zero = '○',
+        many = '<',
+        many_reversed = '>',
+        cap_left = '',
+        cap_right = '',
+      },
 
       -- Before a result row with staged changes. Each is one column wide.
       edit = { changed = '~', deleted = '-', added = '+' },
@@ -963,6 +975,7 @@ erd
  -             Follow one foreign key fewer
  za            Show or fold this table's columns
  C             Show only key columns, or every column
+ O             Overview: every table of the schema by name, or back to columns
  K             Show this table's structure
  gR            Browse this table's relationships
  y             Yank the qualified table name
@@ -1454,13 +1467,21 @@ Usage ~
 Draw an entity-relationship diagram in a new tab: every table of `schema`, or,
 with `relation`, that table and the tables within `hops` foreign keys of it.
 
-Tables are boxes laid out left to right, parents before children, with each
-foreign key drawn from the referenced column to the referencing one in crow's
-foot notation, read outward from the table: `┼┼` exactly one, `┼○` zero or
-one, `<○` zero or more. Read only; nothing queries rows. `gE` in the drawer opens it on the node under
-the cursor. In the diagram, `gd`/`gr` follow keys, `<CR>` redraws around a
+Tables are boxes in columns, each next to the tables it shares a key with,
+on either side, packed to fill the screen. Each foreign key is drawn from the
+referenced column to the referencing one in crow's foot notation, read
+outward from the table: `┼┼` exactly one, `┼○` zero or one, `<○` zero or
+more. Keys to the same column share one line until they split. Read only;
+nothing queries rows. `gE` in the drawer opens it on the node under the
+cursor. In the diagram, `gd`/`gr` follow keys, `<CR>` redraws around a
 table and `<BS>` goes back, `+`/`-` change the hops, `za` shows a table's
 folded columns, and `x` copies it as Mermaid. See |sqmeow-keymaps|.
+
+`O` shows an overview: every table of the schema as a one-line name, with
+its foreign keys, to see the whole schema at once. `<CR>` on a table opens
+its neighbourhood with columns, and `<BS>` returns to the overview. Large
+schemas start in the overview (`ui.erd.overview_from`), and from
+`ui.erd.compact_from` tables with key columns only (`C` toggles).
 
 Options live under `ui.erd` in |sqmeow-config|; colours are the
 `SqmeowErd*` highlight groups.

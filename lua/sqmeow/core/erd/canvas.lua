@@ -189,7 +189,8 @@ end
 ---@param h integer
 ---@param title string
 ---@param owner any
-function Canvas:box(x, y, w, h, title, owner)
+---@param footer string|nil Text in the bottom border.
+function Canvas:box(x, y, w, h, title, owner, footer)
   local right, bottom = x + w - 1, y + h - 1
   self:line(x, y, right, y, { role = 'border', owner = owner })
   self:line(x, bottom, right, bottom, { role = 'border', owner = owner })
@@ -198,6 +199,11 @@ function Canvas:box(x, y, w, h, title, owner)
   self:write(x + 2, y, ' ', 'border', owner)
   local width = self:write(x + 3, y, title, 'title', owner)
   self:write(x + 3 + width, y, ' ', 'border', owner)
+  if footer then
+    self:write(x + 2, bottom, ' ', 'border', owner)
+    width = self:write(x + 3, bottom, footer, 'more', owner)
+    self:write(x + 3 + width, bottom, ' ', 'border', owner)
+  end
 end
 
 --- A run of cells sharing one role.
@@ -268,11 +274,18 @@ function M.draw(layout)
   for _, id in ipairs(layout.order) do
     local box = layout.boxes[id]
     local owner = 'box:' .. id
-    canvas:box(box.x, box.y, box.w, box.h, box.title, owner)
-    for r, entry in ipairs(box.rows) do
-      local x = box.x + 2
-      for _, piece in ipairs(entry.pieces) do
-        x = x + canvas:write(x, box.y + r, piece.text, piece.role, owner)
+    if box.label then
+      local caps = box.caps or { left = '', right = '' }
+      local x = box.x + canvas:write(box.x, box.y, caps.left, 'cap', owner)
+      x = x + canvas:write(x, box.y, ' ' .. box.title .. ' ', 'label', owner)
+      canvas:write(x, box.y, caps.right, 'cap', owner)
+    else
+      canvas:box(box.x, box.y, box.w, box.h, box.title, owner, box.footer)
+      for r, entry in ipairs(box.rows) do
+        local x = box.x + 2
+        for _, piece in ipairs(entry.pieces) do
+          x = x + canvas:write(x, box.y + r, piece.text, piece.role, owner)
+        end
       end
     end
   end
