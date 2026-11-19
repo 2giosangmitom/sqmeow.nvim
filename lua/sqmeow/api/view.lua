@@ -344,6 +344,40 @@ function M.schema(opts, callback)
   return require('sqmeow.core.schema').collect(opts, callback)
 end
 
+--- Draw an entity-relationship diagram in a new tab: every table of `schema`, or,
+--- with `relation`, that table and the tables within `hops` foreign keys of it.
+---
+--- Tables are boxes in columns, each next to the tables it shares a key with,
+--- on either side, packed to fill the screen. Each foreign key is drawn from the
+--- referenced column to the referencing one in crow's foot notation, read
+--- outward from the table: `┼┼` exactly one, `┼○` zero or one, `<○` zero or
+--- more. Keys to the same column share one line until they split. Read only;
+--- nothing queries rows. `gE` in the drawer opens it on the node under the
+--- cursor. In the diagram, `gd`/`gr` follow keys, `<CR>` redraws around a
+--- table and `<BS>` goes back, `+`/`-` change the hops, `za` shows a table's
+--- folded columns, and `x` copies it as Mermaid. See |sqmeow-keymaps|.
+---
+--- `O` shows an overview: every table of the schema as a one-line name, with
+--- its foreign keys, to see the whole schema at once. `<CR>` on a table opens
+--- its neighbourhood with columns, and `<BS>` returns to the overview. Large
+--- schemas start in the overview (`ui.erd.overview_from`), and from
+--- `ui.erd.compact_from` tables with key columns only (`C` toggles).
+---
+--- Options live under `ui.erd` in |sqmeow-config|; colours are the
+--- `SqmeowErd*` highlight groups.
+---@tag sqmeow-diagram
+---@toc_entry Entity-relationship diagram
+---@param opts sqmeow.SchemaOpts|nil As |sqmeow-schema| takes; `hops`
+--- defaults to `ui.erd.hops`.
+---@return boolean started False when nothing was requested.
+---@return string|nil err Why it did not start.
+---@usage >lua
+---   require('sqmeow.api.view').diagram({ relation = 'orders', hops = 2 })
+--- <
+function M.diagram(opts)
+  return require('sqmeow.ui.erd').open(opts)
+end
+
 --- Open the result window.
 --- On Neovim 0.11+, drawer and result windows use 'winfixbuf': `:edit` and jumps
 --- that would replace their buffer fail with E1513. Switch to an editing window

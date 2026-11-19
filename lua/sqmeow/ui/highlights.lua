@@ -36,6 +36,19 @@ M.links = {
   SqmeowDetailName = 'Identifier',
   SqmeowDetailType = 'Type',
 
+  -- The entity-relationship diagram.
+  SqmeowErdBorder = 'FloatBorder',
+  SqmeowErdTitle = 'Title',
+  SqmeowErdKey = 'Identifier',
+  SqmeowErdType = 'Comment',
+  SqmeowErdMore = 'Comment',
+  SqmeowErdEdge = 'NonText',
+  SqmeowErdMarker = 'Operator',
+  SqmeowErdFocus = 'Special',
+  SqmeowErdEdgeActive = 'Function',
+  -- A table's name in the overview; its rounded ends take this group's background.
+  SqmeowErdLabel = 'PmenuSel',
+
   SqmeowIconConnection = 'Directory',
   SqmeowIconSchema = 'Directory',
   SqmeowIconTable = 'Type',
@@ -95,6 +108,9 @@ local function define()
   for group, attributes in pairs(M.attributes) do
     vim.api.nvim_set_hl(0, group, vim.tbl_extend('force', attributes, { default = true }))
   end
+  -- The ends of an overview label are drawn in the label's background colour.
+  local label = vim.api.nvim_get_hl(0, { name = 'SqmeowErdLabel', link = false })
+  vim.api.nvim_set_hl(0, 'SqmeowErdCap', { fg = label.bg, ctermfg = label.ctermbg, default = true })
 end
 
 --- Initialize colors independently of the optional plugin setup call.

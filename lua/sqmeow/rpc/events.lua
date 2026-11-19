@@ -14,6 +14,7 @@ function M.on_connection(payload)
   -- so pending schema reads are failed before the missing-connection check.
   if payload.state == 'error' or payload.state == 'closed' then
     require('sqmeow.core.schema').invalidate(payload.id)
+    require('sqmeow.ui.erd').invalidate(payload.id)
   end
   local connection = state.connections[payload.id]
   if not connection then
@@ -180,12 +181,14 @@ function M.on_engine_restart()
   require('sqmeow.ui.structure').close()
   require('sqmeow.ui.relationships').close()
   require('sqmeow.core.schema').reset()
+  require('sqmeow.ui.erd').invalidate()
   require('sqmeow.ui.result').forget()
 end
 
 --- Handle the engine stopping or exiting: nothing it was asked will be answered.
 function M.on_engine_stop()
   require('sqmeow.core.schema').reset('engine stopped')
+  require('sqmeow.ui.erd').invalidate()
 end
 
 --- Subscribe to engine events. Safe to call repeatedly.

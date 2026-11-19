@@ -42,6 +42,25 @@ M.defaults = {
       -- Display active column name and type in the winbar.
       winbar_column_info = true,
     },
+    -- The entity-relationship diagram (`gE` in the drawer).
+    erd = {
+      -- Foreign keys followed from the table a diagram opens on.
+      hops = 1,
+      -- Columns a table shows before the rest fold away; key columns always show. 0 shows all.
+      max_rows = 12,
+      -- Widest a column name or type is drawn.
+      max_column_width = 32,
+      -- Largest schema drawn whole; open a larger one from a table. 0 draws any size.
+      max_tables = 200,
+      -- Start with only key columns shown.
+      compact = false,
+      -- Start with only key columns shown for schemas of at least this many tables. 0 never.
+      compact_from = 30,
+      -- Start with tables as names only, an overview, for schemas this large. 0 never.
+      overview_from = 60,
+      -- Draw foreign keys outside the child's primary key dashed, as Mermaid does.
+      dashed = false,
+    },
     -- The border of every dialog.
     border = 'default',
     -- Boolean, or `{ editor = true, result = true, show_connection = true }`.
@@ -124,6 +143,17 @@ M.defaults = {
 
     -- What the result grid is drawn with.
     grid = { vertical = '│', horizontal = '─', cross = '┼', ellipsis = '…' },
+
+    -- Ends of a diagram's foreign keys, crow's foot notation. Each is one column wide.
+    -- `cap_left` and `cap_right` round off a table's name in the overview; '' leaves them out.
+    erd = {
+      one = '┼',
+      zero = '○',
+      many = '<',
+      many_reversed = '>',
+      cap_left = '',
+      cap_right = '',
+    },
 
     -- Before a result row with staged changes. Each is one column wide.
     edit = { changed = '~', deleted = '-', added = '+' },
