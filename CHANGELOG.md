@@ -1,5 +1,30 @@
 # Changelog
 
+## [3.3.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.2.0...v3.3.0) (2026-11-20)
+
+
+### Features
+
+* export database schemas as Mermaid ER diagrams ([#125](https://github.com/2giosangmitom/sqmeow.nvim/issues/125)) ([31af47d](https://github.com/2giosangmitom/sqmeow.nvim/commit/31af47d7ed114ee4acba98b91e85836d568100a9))
+* **query:** expose next_result and prev_result in api.query, commands, and editor keymaps ([#127](https://github.com/2giosangmitom/sqmeow.nvim/issues/127)) ([7d52fd4](https://github.com/2giosangmitom/sqmeow.nvim/commit/7d52fd446e67904373f17d4113ee182d65f9a537))
+* **view:** draw interactive ER diagrams in a tab ([#135](https://github.com/2giosangmitom/sqmeow.nvim/issues/135)) ([c92ea46](https://github.com/2giosangmitom/sqmeow.nvim/commit/c92ea46adce89b71fb36b9d1c6690bbd964f43e3))
+* **view:** expose result_index and total_results in api.view.status() ([#126](https://github.com/2giosangmitom/sqmeow.nvim/issues/126)) ([58c7433](https://github.com/2giosangmitom/sqmeow.nvim/commit/58c74336cfc226d42fb5d52f8e066f05dd7264a3))
+
+
+### Fixes
+
+* azure sql connection ignores redirect ([#124](https://github.com/2giosangmitom/sqmeow.nvim/issues/124)) ([453b0d8](https://github.com/2giosangmitom/sqmeow.nvim/commit/453b0d8bfad03f4c3bd18c11383cd7013f72635a))
+* **connection:** close connections whose server is lost ([a719760](https://github.com/2giosangmitom/sqmeow.nvim/commit/a719760038c3a59e14ddb9edea5ad905656fb1fd))
+* **connection:** detect lost connections from typed errors ([9c7aa00](https://github.com/2giosangmitom/sqmeow.nvim/commit/9c7aa008a20714bffadea5adc8e5b18239d6f90c))
+* **connection:** keep setup failures and healthy sessions apart ([9f4b3ae](https://github.com/2giosangmitom/sqmeow.nvim/commit/9f4b3aede2f9f88cae02f917c9a98f30c15b05e3))
+* **result:** start multi-statement runs on the first row-returning result ([#128](https://github.com/2giosangmitom/sqmeow.nvim/issues/128)) ([f68e911](https://github.com/2giosangmitom/sqmeow.nvim/commit/f68e9112d57ce0ba7f8ec406c86923ad7ec6bc23))
+* **tunnel:** stop the readiness probe from mistaking a stray socket for ssh ([#134](https://github.com/2giosangmitom/sqmeow.nvim/issues/134)) ([a06c848](https://github.com/2giosangmitom/sqmeow.nvim/commit/a06c848ed7683ebeddbdf76adcfd1a5d7de60343))
+
+
+### Documentation
+
+* rework contributor, agent, and issue guidance ([11e4d47](https://github.com/2giosangmitom/sqmeow.nvim/commit/11e4d47a3c19a6aa9c1aca1b94500386decba51e))
+
 ## [3.2.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.1.0...v3.2.0) (2026-11-04)
 
 
