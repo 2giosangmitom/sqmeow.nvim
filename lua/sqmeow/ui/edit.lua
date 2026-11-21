@@ -413,14 +413,8 @@ end
 --- The filetype planned statements are shown with.
 local function filetype(call)
   local connection = require('sqmeow.core.state').connections[call.conn_id]
-  local dialect = connection and connection.dialect
-  if dialect == 'mongodb' then
-    return 'json'
-  end
-  if dialect == 'surrealdb' then
-    return 'surql'
-  end
-  return dialect ~= 'redis' and 'sql' or ''
+  local ft = require('sqmeow.core.dialects').filetype(connection and connection.dialect)
+  return ft ~= 'redis' and ft or ''
 end
 
 --- The result whose changes are being applied, while they are.

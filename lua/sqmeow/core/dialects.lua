@@ -239,4 +239,14 @@ function M.fields(id)
   return vim.list_extend(fields, vim.deepcopy(dialect.fields))
 end
 
+--- Statement filetypes of the dialects that do not write SQL.
+local filetypes = { mongodb = 'json', surrealdb = 'surql', redis = 'redis' }
+
+--- Returns the filetype statements for a dialect are edited with.
+---@param id string|nil
+---@return string
+function M.filetype(id)
+  return filetypes[id] or 'sql'
+end
+
 return M

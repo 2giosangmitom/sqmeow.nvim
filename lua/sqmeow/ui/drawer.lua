@@ -705,18 +705,6 @@ local function is_relation(kind)
     or kind == 'key'
 end
 
---- The filetype for each dialect.
-local function dialect_filetype(dialect)
-  if dialect == 'mongodb' then
-    return 'json'
-  elseif dialect == 'surrealdb' then
-    return 'surql'
-  elseif dialect == 'redis' then
-    return 'redis'
-  end
-  return 'sql'
-end
-
 --- The statement that shows what a relation holds.
 ---@param limit integer|nil The most rows it may read, or nil for every row.
 local function preview_statement(node, limit)
@@ -879,7 +867,8 @@ local function show_editor(target, node, text, dialect, connection_name)
   vim.bo[target].buftype = 'nofile'
   vim.bo[target].bufhidden = 'hide'
   vim.bo[target].swapfile = false
-  vim.bo[target].filetype = dialect_filetype(dialect or (connection and connection.dialect))
+  vim.bo[target].filetype =
+    require('sqmeow.core.dialects').filetype(dialect or (connection and connection.dialect))
   vim.api.nvim_buf_set_lines(target, 0, -1, false, vim.split(text, '\n', { plain = true }))
   vim.bo[target].modified = false
 
@@ -972,7 +961,7 @@ local function preview(in_editor)
   local source_buf = nil
 
   if in_editor then
-    local ft = dialect_filetype(dialect_of(node.conn_id))
+    local ft = require('sqmeow.core.dialects').filetype(dialect_of(node.conn_id))
     local text = (ft == 'sql' or ft == 'surql') and (statement .. ';') or statement
 
     local rel_name = node.name or (node.path and node.path[#node.path]) or 'preview'
