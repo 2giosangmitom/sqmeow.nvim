@@ -380,17 +380,13 @@ function M.describe(summary, highlight)
   return table.concat(parts, '  ')
 end
 
-local function scratch(name, filetype)
-  return require('sqmeow.ui.buffer').scratch(name, filetype, false)
-end
-
 --- The buffer the grid is drawn into.
 ---@return integer
 function M.buffer()
   if buf and utils.buf_valid(buf) then
     return buf
   end
-  buf = scratch('sqmeow://result', 'sqmeow-result')
+  buf = require('sqmeow.ui.buffer').scratch('sqmeow://result', 'sqmeow-result')
   require('sqmeow.keymap').apply('result', buf, M.actions)
 
   local group = vim.api.nvim_create_augroup('sqmeow_result_' .. buf, { clear = true })
@@ -2059,23 +2055,14 @@ function M.open()
     popup = nil
   end
 
-  local config = require('sqmeow.config').get()
-  require('sqmeow.ui.layout').remember()
+  local height = require('sqmeow.config').get().ui.result.height
   local previous = vim.api.nvim_get_current_win()
-
-  vim.cmd(('botright %dsplit'):format(config.ui.result.height))
-  win = vim.api.nvim_get_current_win()
-  local layout = require('sqmeow.ui.layout')
-  layout.set_buffer(win, M.buffer())
-
-  vim.wo[win].number = false
-  vim.wo[win].relativenumber = false
-  vim.wo[win].signcolumn = 'no'
-  vim.wo[win].wrap = false
-  vim.wo[win].cursorline = true
   -- Other splits must not squash the grid, which would silently hide columns.
-  vim.wo[win].winfixheight = true
-  layout.fixbuf(win, true)
+  win = require('sqmeow.ui.layout').split(
+    ('botright %dsplit'):format(height),
+    M.buffer(),
+    'winfixheight'
+  )
 
   -- Opening a result should not steal the cursor from the query being written.
   if vim.api.nvim_win_is_valid(previous) then

@@ -102,6 +102,28 @@ function M.set_buffer(win, buf, opts)
   end
 end
 
+--- Record the layout, then open a plugin split showing `buf` without line numbers, signs
+--- or wrapping, locked to its buffer.
+---@param cmd string Ex command that opens the split and focuses it.
+---@param buf integer
+---@param fixed 'winfixwidth'|'winfixheight' The size other splits must not squash.
+---@return integer win
+function M.split(cmd, buf, fixed)
+  M.remember()
+  vim.cmd(cmd)
+  local win = vim.api.nvim_get_current_win()
+  M.set_buffer(win, buf)
+  local wo = vim.wo[win]
+  wo.number = false
+  wo.relativenumber = false
+  wo.signcolumn = 'no'
+  wo.wrap = false
+  wo.cursorline = true
+  wo[fixed] = true
+  M.fixbuf(win, true)
+  return win
+end
+
 --- Whether a window is somewhere an ordinary file could be opened.
 ---@param win integer
 ---@return boolean

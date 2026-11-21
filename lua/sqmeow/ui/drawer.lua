@@ -1521,15 +1521,7 @@ function M.buffer()
     return buf
   end
 
-  buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(buf, 'sqmeow://drawer')
-
-  vim.bo[buf].buftype = 'nofile'
-  vim.bo[buf].bufhidden = 'hide'
-  vim.bo[buf].swapfile = false
-  vim.bo[buf].filetype = 'sqmeow-drawer'
-  vim.bo[buf].modifiable = false
-
+  buf = require('sqmeow.ui.buffer').scratch('sqmeow://drawer', 'sqmeow-drawer')
   require('sqmeow.keymap').apply('drawer', buf, M.actions)
   return buf
 end
@@ -1542,24 +1534,15 @@ function M.open()
   end
 
   local config = require('sqmeow.config').get().ui.drawer
-  -- Whichever surface opens first records the layout, and whichever closes last puts it back.
-  require('sqmeow.ui.layout').remember()
   local previous = vim.api.nvim_get_current_win()
-
   local split = config.position == 'right' and 'botright' or 'topleft'
-  vim.cmd(('%s vertical %dsplit'):format(split, config.width))
-  win = vim.api.nvim_get_current_win()
-  local layout = require('sqmeow.ui.layout')
-  layout.set_buffer(win, M.buffer())
-
-  vim.wo[win].number = false
-  vim.wo[win].relativenumber = false
-  vim.wo[win].signcolumn = 'no'
-  vim.wo[win].wrap = false
-  vim.wo[win].cursorline = true
+  -- Whichever surface opens first records the layout, and whichever closes last puts it back.
   -- Another split must not squash the tree into unreadable width.
-  vim.wo[win].winfixwidth = true
-  layout.fixbuf(win, true)
+  win = require('sqmeow.ui.layout').split(
+    ('%s vertical %dsplit'):format(split, config.width),
+    M.buffer(),
+    'winfixwidth'
+  )
 
   M.render()
   vim.api.nvim_set_current_win(previous)
