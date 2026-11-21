@@ -174,24 +174,8 @@ impl SurrealAdapter {
         .map_err(Error::driver)?
     }
 
-    /// Every database in the namespace when the URL named none, and `None` otherwise.
-    pub async fn databases(&self) -> Option<Result<Vec<String>>> {
-        if !self.cluster {
-            return None;
-        }
-        Some(
-            async {
-                let info = self.one("INFO FOR NS STRUCTURE").await?;
-                let mut names = names(&info, "databases");
-                names.sort();
-                Ok(names)
-            }
-            .await,
-        )
-    }
-
     /// The database queries run on.
-    pub fn database(&self) -> String {
+    fn selected_database(&self) -> String {
         self.database
             .read()
             .unwrap_or_else(PoisonError::into_inner)
@@ -233,7 +217,7 @@ impl SurrealAdapter {
         let started = Instant::now();
         // The SDK keeps its own namespace and database, which a `USE` sent as a query leaves alone.
         if let Some((namespace, database)) = use_target(statement) {
-            let database = database.unwrap_or_else(|| self.database());
+            let database = database.unwrap_or_else(|| self.selected_database());
             match namespace {
                 Some(namespace) => self.db.use_ns(namespace).use_db(database.as_str()).await,
                 None => self.db.use_db(database.as_str()).await,
@@ -275,6 +259,30 @@ impl SurrealAdapter {
 
 #[async_trait::async_trait]
 impl Adapter for SurrealAdapter {
+    /// Every database in the namespace when the URL named none, and `None` otherwise.
+    async fn databases(&self) -> Option<Result<Vec<String>>> {
+        if !self.cluster {
+            return None;
+        }
+        Some(
+            async {
+                let info = self.one("INFO FOR NS STRUCTURE").await?;
+                let mut names = names(&info, "databases");
+                names.sort();
+                Ok(names)
+            }
+            .await,
+        )
+    }
+
+    fn database(&self) -> Option<String> {
+        Some(self.selected_database())
+    }
+
+    fn read_only_unenforced(&self) -> bool {
+        true
+    }
+
     fn dialect(&self) -> Dialect {
         Dialect::SurrealDb
     }
@@ -332,7 +340,7 @@ impl Adapter for SurrealAdapter {
     /// The database queries run on.
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
         Ok(vec![SchemaNode {
-            name: self.database(),
+            name: self.selected_database(),
             is_default: true,
         }])
     }

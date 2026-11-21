@@ -95,21 +95,6 @@ impl MongoAdapter {
         })
     }
 
-    /// Every database the user may read when the URL named none, and `None` otherwise.
-    pub async fn databases(&self) -> Option<Result<Vec<String>>> {
-        if !self.cluster {
-            return None;
-        }
-        // `authorizedDatabases` lists what a restricted user may read instead of refusing.
-        Some(
-            self.client
-                .list_database_names()
-                .authorized_databases(true)
-                .await
-                .map_err(Error::driver),
-        )
-    }
-
     /// Commands one after another, stopping at the first that fails.
     async fn apply_in_turn(
         &self,
@@ -176,7 +161,7 @@ impl MongoAdapter {
     }
 
     /// The database commands run on, which `use` changes.
-    pub fn database(&self) -> String {
+    fn selected_database(&self) -> String {
         self.db
             .read()
             .unwrap_or_else(PoisonError::into_inner)
@@ -199,7 +184,9 @@ impl MongoAdapter {
                 result
             }
             Statement::Command { db, command } => {
-                let database = self.client.database(&db.unwrap_or_else(|| self.database()));
+                let database = self
+                    .client
+                    .database(&db.unwrap_or_else(|| self.selected_database()));
                 let (command, tag) = tagged(command);
                 tokio::select! {
                     biased;
@@ -218,6 +205,29 @@ impl MongoAdapter {
 
 #[async_trait::async_trait]
 impl Adapter for MongoAdapter {
+    /// Every database the user may read when the URL named none, and `None` otherwise.
+    async fn databases(&self) -> Option<Result<Vec<String>>> {
+        if !self.cluster {
+            return None;
+        }
+        // `authorizedDatabases` lists what a restricted user may read instead of refusing.
+        Some(
+            self.client
+                .list_database_names()
+                .authorized_databases(true)
+                .await
+                .map_err(Error::driver),
+        )
+    }
+
+    fn database(&self) -> Option<String> {
+        Some(self.selected_database())
+    }
+
+    fn read_only_unenforced(&self) -> bool {
+        true
+    }
+
     fn dialect(&self) -> Dialect {
         Dialect::MongoDb
     }
@@ -245,7 +255,7 @@ impl Adapter for MongoAdapter {
             .iter()
             .map(|statement| match parse(statement)? {
                 Statement::Command { db, command } => {
-                    Ok((db.unwrap_or_else(|| self.database()), command))
+                    Ok((db.unwrap_or_else(|| self.selected_database()), command))
                 }
                 Statement::Use(_) => Err(Error::driver("only commands can be applied")),
             })
@@ -325,7 +335,7 @@ impl Adapter for MongoAdapter {
     /// The database commands run on.
     async fn schemas(&self) -> Result<Vec<SchemaNode>> {
         Ok(vec![SchemaNode {
-            name: self.database(),
+            name: self.selected_database(),
             is_default: true,
         }])
     }

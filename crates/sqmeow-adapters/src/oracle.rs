@@ -701,6 +701,10 @@ fn word_end(chars: &[char], index: usize) -> usize {
 
 #[async_trait::async_trait]
 impl Adapter for OracleAdapter {
+    fn read_only_unenforced(&self) -> bool {
+        true
+    }
+
     async fn execute_bound(
         &self,
         statement: &str,

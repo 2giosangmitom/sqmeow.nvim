@@ -262,6 +262,31 @@ pub trait Adapter: Send + Sync {
         Ok(Details::default())
     }
 
+    /// Lists child databases when the URL named none (a PostgreSQL cluster,
+    /// MongoDB server, SurrealDB namespace, or SQL Server instance), and
+    /// `None` when the connection is bound to one database.
+    async fn databases(&self) -> Option<Result<Vec<String>>> {
+        None
+    }
+
+    /// Returns the database MongoDB commands or SurrealDB queries run on.
+    fn database(&self) -> Option<String> {
+        None
+    }
+
+    /// Whether a read-only connection relies only on the engine's lexical
+    /// statement check because the server ignored or lacks a read-only session.
+    fn read_only_unenforced(&self) -> bool {
+        false
+    }
+
+    /// Lists the keys matching a glob; only Redis supports this.
+    async fn keys(&self, _pattern: &str) -> Result<Vec<RelationNode>> {
+        Err(crate::error::Error::driver(
+            "only Redis lists keys by a pattern",
+        ))
+    }
+
     /// Closes the underlying database sessions and their background workers.
     async fn close(&self);
 }

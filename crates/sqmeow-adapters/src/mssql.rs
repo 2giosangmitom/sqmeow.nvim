@@ -224,14 +224,6 @@ impl MsSqlAdapter {
         result
     }
 
-    pub async fn databases(&self) -> Option<Result<Vec<String>>> {
-        if !self.list_databases {
-            return None;
-        }
-        Some(self.metadata("SELECT name FROM sys.databases WHERE state = 0 AND HAS_DBACCESS(name) = 1 ORDER BY name", &[])
-            .await.map(|rows| rows.iter().map(|row| text(row, 0)).collect()))
-    }
-
     async fn run(
         &self,
         sql: &str,
@@ -630,6 +622,18 @@ async fn index_rows(client: &mut Connection, schema: &str, table: &str) -> Resul
 
 #[async_trait::async_trait]
 impl Adapter for MsSqlAdapter {
+    async fn databases(&self) -> Option<Result<Vec<String>>> {
+        if !self.list_databases {
+            return None;
+        }
+        Some(self.metadata("SELECT name FROM sys.databases WHERE state = 0 AND HAS_DBACCESS(name) = 1 ORDER BY name", &[])
+            .await.map(|rows| rows.iter().map(|row| text(row, 0)).collect()))
+    }
+
+    fn read_only_unenforced(&self) -> bool {
+        true
+    }
+
     fn plan(&self, result: &ResultSet, changes: &sqmeow_db::edit::Changes) -> Result<Vec<String>> {
         for (index, _) in changes
             .live_updates()

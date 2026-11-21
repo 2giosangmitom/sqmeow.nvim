@@ -100,24 +100,8 @@ impl PostgresAdapter {
         })
     }
 
-    /// The databases a connection to the whole cluster can open, or `None` for one database.
-    pub async fn databases(&self) -> Option<Result<Vec<String>>> {
-        if !self.cluster {
-            return None;
-        }
-        Some(
-            pg::query_scalar(
-                "select datname from pg_database
-                 where datallowconn and not datistemplate
-                 order by datname",
-            )
-            .fetch_all(&self.meta)
-            .await,
-        )
-    }
-
     /// Whether the server itself keeps a read-only connection read-only.
-    pub fn read_only_session(&self) -> bool {
+    fn read_only_session(&self) -> bool {
         self.read_only_session.load(Ordering::Relaxed)
     }
 
@@ -810,6 +794,26 @@ impl PostgresAdapter {
 
 #[async_trait::async_trait]
 impl Adapter for PostgresAdapter {
+    /// The databases a connection to the whole cluster can open, or `None` for one database.
+    async fn databases(&self) -> Option<Result<Vec<String>>> {
+        if !self.cluster {
+            return None;
+        }
+        Some(
+            pg::query_scalar(
+                "select datname from pg_database
+                 where datallowconn and not datistemplate
+                 order by datname",
+            )
+            .fetch_all(&self.meta)
+            .await,
+        )
+    }
+
+    fn read_only_unenforced(&self) -> bool {
+        !self.read_only_session()
+    }
+
     fn dialect(&self) -> Dialect {
         Dialect::Postgres
     }

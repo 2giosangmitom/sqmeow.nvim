@@ -315,9 +315,62 @@ impl RedisAdapter {
         Ok(result)
     }
 
+    /// The keys matching a glob on one server, or one cluster node, up to the cap.
+    async fn scan(&self, node: Option<&RoutingInfo>, pattern: &str) -> Result<Vec<Vec<u8>>> {
+        let mut names: Vec<Vec<u8>> = Vec::new();
+        let mut cursor = 0u64;
+        loop {
+            let mut command = redis::cmd("SCAN");
+            command
+                .cursor_arg(cursor)
+                .arg("MATCH")
+                .arg(pattern)
+                .arg("COUNT")
+                .arg(1000);
+            let (next, batch): (u64, Vec<Vec<u8>>) = match (&self.link, node) {
+                (Link::Cluster(connection), Some(routing)) => {
+                    let reply = connection
+                        .clone()
+                        .route_command(command, routing.clone())
+                        .await
+                        .map_err(Error::driver)?;
+                    FromRedisValue::from_redis_value(reply).map_err(Error::driver)?
+                }
+                _ => self.query(&command).await?,
+            };
+            names.extend(batch);
+            cursor = next;
+            if cursor == 0 || names.len() >= MAX_KEYS {
+                return Ok(names);
+            }
+        }
+    }
+
+    /// The address of each primary in the cluster, read from `CLUSTER NODES`.
+    async fn primaries(&self) -> Result<Vec<(String, u16)>> {
+        let nodes: String = self.query(redis::cmd("CLUSTER").arg("NODES")).await?;
+        Ok(nodes
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let address = fields.nth(1)?;
+                let flags = fields.next()?;
+                flags
+                    .split(',')
+                    .any(|flag| flag == "master")
+                    .then_some(())?;
+                let (host, port) = address.split('@').next()?.rsplit_once(':')?;
+                Some((host.trim_matches(['[', ']']).to_owned(), port.parse().ok()?))
+            })
+            .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl Adapter for RedisAdapter {
     /// The keys matching a glob, from one server or every primary of a cluster, each with the type
     /// of value it holds.
-    pub async fn keys(&self, pattern: &str) -> Result<Vec<RelationNode>> {
+    async fn keys(&self, pattern: &str) -> Result<Vec<RelationNode>> {
         let mut names = Vec::new();
         match &self.link {
             Link::Server(_) => names = self.scan(None, pattern).await?,
@@ -381,59 +434,10 @@ impl RedisAdapter {
             .collect())
     }
 
-    /// The keys matching a glob on one server, or one cluster node, up to the cap.
-    async fn scan(&self, node: Option<&RoutingInfo>, pattern: &str) -> Result<Vec<Vec<u8>>> {
-        let mut names: Vec<Vec<u8>> = Vec::new();
-        let mut cursor = 0u64;
-        loop {
-            let mut command = redis::cmd("SCAN");
-            command
-                .cursor_arg(cursor)
-                .arg("MATCH")
-                .arg(pattern)
-                .arg("COUNT")
-                .arg(1000);
-            let (next, batch): (u64, Vec<Vec<u8>>) = match (&self.link, node) {
-                (Link::Cluster(connection), Some(routing)) => {
-                    let reply = connection
-                        .clone()
-                        .route_command(command, routing.clone())
-                        .await
-                        .map_err(Error::driver)?;
-                    FromRedisValue::from_redis_value(reply).map_err(Error::driver)?
-                }
-                _ => self.query(&command).await?,
-            };
-            names.extend(batch);
-            cursor = next;
-            if cursor == 0 || names.len() >= MAX_KEYS {
-                return Ok(names);
-            }
-        }
+    fn read_only_unenforced(&self) -> bool {
+        true
     }
 
-    /// The address of each primary in the cluster, read from `CLUSTER NODES`.
-    async fn primaries(&self) -> Result<Vec<(String, u16)>> {
-        let nodes: String = self.query(redis::cmd("CLUSTER").arg("NODES")).await?;
-        Ok(nodes
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                let address = fields.nth(1)?;
-                let flags = fields.next()?;
-                flags
-                    .split(',')
-                    .any(|flag| flag == "master")
-                    .then_some(())?;
-                let (host, port) = address.split('@').next()?.rsplit_once(':')?;
-                Some((host.trim_matches(['[', ']']).to_owned(), port.parse().ok()?))
-            })
-            .collect())
-    }
-}
-
-#[async_trait::async_trait]
-impl Adapter for RedisAdapter {
     fn dialect(&self) -> Dialect {
         Dialect::Redis
     }

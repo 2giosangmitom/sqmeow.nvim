@@ -238,6 +238,10 @@ impl ScyllaAdapter {
 
 #[async_trait::async_trait]
 impl Adapter for ScyllaAdapter {
+    fn read_only_unenforced(&self) -> bool {
+        true
+    }
+
     fn dialect(&self) -> Dialect {
         Dialect::Scylla
     }
