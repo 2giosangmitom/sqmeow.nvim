@@ -102,7 +102,8 @@ run = [
 
 [tasks.test]
 description = "Run Rust unit tests, Lua UI tests and the integration suite"
-depends = ["test:rust", "test:ui", "test:integration"]
+# In sequence: the suites share one cargo target and parallel builds exhaust memory.
+run = [{ task = "test:rust" }, { task = "test:ui" }, { task = "test:integration" }]
 
 [tasks."test:rust"]
 description = "Rust unit tests"
