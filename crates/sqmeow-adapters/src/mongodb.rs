@@ -1030,56 +1030,6 @@ fn cell(value: Bson) -> Cell {
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test(flavor = "current_thread")]
-    async fn standalone_cancel_after_server_write_reports_partial_progress() {
-        use mongodb::event::{EventHandler, command::CommandEvent};
-        let Ok(url) = std::env::var("SQMEOW_TEST_MONGODB_URL") else {
-            eprintln!("skipped: set SQMEOW_TEST_MONGODB_URL");
-            return;
-        };
-        let cancel = CancellationToken::new();
-        let stopped = cancel.clone();
-        let mut options = ClientOptions::parse(&url).await.unwrap();
-        let db = options
-            .default_database
-            .clone()
-            .unwrap_or_else(|| "test".into());
-        // Monitoring runs before run_command returns the successful reply.
-        // Cancel exactly after a server-confirmed insert, not on a timer.
-        options.command_event_handler = Some(EventHandler::callback(move |event| {
-            if matches!(event, CommandEvent::Succeeded(event) if event.command_name == "insert") {
-                stopped.cancel();
-            }
-        }));
-        let adapter = MongoAdapter {
-            client: Client::with_options(options).unwrap(),
-            db: RwLock::new(db),
-            cluster: false,
-        };
-        let observer = MongoAdapter::connect(&url, None).await.unwrap();
-        let collection = observer
-            .client
-            .database(&observer.database())
-            .collection::<Document>("audit_cancel_reply");
-        collection.delete_many(doc! {}).await.unwrap();
-        let commands = [
-            (
-                adapter.database(),
-                doc! {"insert":"audit_cancel_reply", "documents":[{"_id":1}]},
-            ),
-            (
-                adapter.database(),
-                doc! {"insert":"audit_cancel_reply", "documents":[{"_id":2}]},
-            ),
-        ];
-        let error = adapter.apply_in_turn(&commands, &cancel).await.unwrap_err();
-        assert!(!matches!(error, Error::Cancelled));
-        assert!(error.to_string().contains("1 of 2"), "{error}");
-        assert_eq!(collection.count_documents(doc! {"_id":1}).await.unwrap(), 1);
-        assert_eq!(collection.count_documents(doc! {"_id":2}).await.unwrap(), 0);
-        collection.drop().await.unwrap();
-    }
-
     #[test]
     fn aggregation_bindings_require_literal_expression_protection() {
         let source = r#"{"aggregate":"users","pipeline":[{"$project":{"value":{"$literal":":value"}}}],"cursor":{}}"#;

@@ -477,3 +477,6 @@ fn trigger_event(sql: &str) -> String {
         })
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests;

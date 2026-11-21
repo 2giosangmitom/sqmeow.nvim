@@ -475,6 +475,7 @@ mod tests {
     use std::io::ErrorKind;
 
     use super::connect_retrying_with;
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn relationship_rows_group_by_constraint_and_source_not_target() {
@@ -537,5 +538,42 @@ mod tests {
 
         assert!(opened.is_err());
         assert_eq!(attempts, 1);
+    }
+
+    /// Statement splitting, per-statement results, and the row cap hold for
+    /// the embedded backends.
+    #[rstest::rstest]
+    #[case::sqlite("sqlite::memory:")]
+    #[case::duckdb("duckdb::memory:")]
+    #[tokio::test]
+    async fn statement_buffers_keep_their_boundaries(#[case] url: &str) {
+        use sqmeow_db::sql;
+        let db = super::Backend::connect(url).await.unwrap();
+        let dialect = db.dialect();
+        let source = "SELECT 'a;b' AS note;\n/* ; */ SELECT 2 AS n;";
+        let statements = sql::split(source, dialect);
+        assert_eq!(statements.len(), 2, "{dialect:?}");
+        for statement in &statements {
+            let results = db
+                .execute_results(&statement.sql, &statement.sql, 10, CancellationToken::new())
+                .await
+                .unwrap();
+            assert!(
+                results.iter().any(|r| r.row_count() > 0),
+                "{}",
+                statement.sql
+            );
+            assert_eq!(
+                sql::statement_at(&statements, statement.start_line),
+                Some(statement)
+            );
+        }
+        let result = db
+            .execute(&statements[0].sql, 0, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result.row_count(), 0);
+        assert!(result.is_truncated());
+        db.close().await;
     }
 }
