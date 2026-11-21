@@ -96,6 +96,18 @@ use oracle::OracleAdapter;
 use postgres::PostgresAdapter;
 use sqlite::SqliteAdapter;
 
+/// The kind every item shares, or the empty default when they differ or there are none.
+pub(crate) fn shared_kind<T: PartialEq + Default>(mut kinds: impl Iterator<Item = T>) -> T {
+    let Some(first) = kinds.next() else {
+        return T::default();
+    };
+    if kinds.all(|kind| kind == first) {
+        first
+    } else {
+        T::default()
+    }
+}
+
 /// Turn a routine's name and the database's own word for what it is into a node.
 pub(crate) fn routine_node(name: String, kind: &str) -> RoutineNode {
     let kind = if kind.eq_ignore_ascii_case("procedure") {

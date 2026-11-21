@@ -862,15 +862,7 @@ fn common_kind(rows: &[Value]) -> &'static str {
 }
 
 fn shared_kind<'a>(values: impl Iterator<Item = &'a Value>) -> &'static str {
-    let mut kinds = values.filter(|value| !value.is_nullish()).map(type_name);
-    let Some(first) = kinds.next() else {
-        return "";
-    };
-    if kinds.all(|kind| kind == first) {
-        first
-    } else {
-        ""
-    }
+    crate::shared_kind(values.filter(|value| !value.is_nullish()).map(type_name))
 }
 
 /// A value's type, spelled the way SurrealQL spells it.

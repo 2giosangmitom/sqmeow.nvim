@@ -1014,19 +1014,13 @@ fn to_result(statement: &str, reply: Value, max_rows: usize) -> ResultSet {
 
 /// The type every value in a column shares, or nothing when they differ.
 fn common_type(rows: &[Vec<Cell>], index: usize) -> String {
-    let mut kinds = rows
-        .iter()
-        .filter_map(|row| row.get(index))
-        .filter(|cell| !cell.is_null())
-        .map(Cell::type_name);
-    let Some(first) = kinds.next() else {
-        return String::new();
-    };
-    if kinds.all(|kind| kind == first) {
-        first.to_owned()
-    } else {
-        String::new()
-    }
+    crate::shared_kind(
+        rows.iter()
+            .filter_map(|row| row.get(index))
+            .filter(|cell| !cell.is_null())
+            .map(Cell::type_name),
+    )
+    .to_owned()
 }
 
 /// A reply without its RESP3 attribute, which annotates a reply rather than being one.

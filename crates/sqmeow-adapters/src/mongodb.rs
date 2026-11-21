@@ -917,19 +917,13 @@ fn to_result(statement: &str, documents: Vec<Document>) -> ResultSet {
 
 /// The BSON type every value of a field shares, or nothing when they differ.
 fn common_type(documents: &[Document], field: &str) -> &'static str {
-    let mut kinds = documents
-        .iter()
-        .filter_map(|document| document.get(field))
-        .filter(|value| !matches!(value, Bson::Null))
-        .map(type_name);
-    let Some(first) = kinds.next() else {
-        return "";
-    };
-    if kinds.all(|kind| kind == first) {
-        first
-    } else {
-        ""
-    }
+    crate::shared_kind(
+        documents
+            .iter()
+            .filter_map(|document| document.get(field))
+            .filter(|value| !matches!(value, Bson::Null))
+            .map(type_name),
+    )
 }
 
 /// A value's type, spelled the way `$type` spells it.
