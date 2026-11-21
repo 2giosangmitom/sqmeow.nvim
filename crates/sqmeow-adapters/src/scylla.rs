@@ -1,12 +1,11 @@
 //! The ScyllaDB adapter, which speaks to Apache Cassandra as well.
 
-use std::sync::Arc;
 use std::time::Instant;
 
+use crate::conn::{UrlParts, credentials, split_url, with_port};
 use bigdecimal::BigDecimal;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use futures_util::StreamExt;
-use percent_encoding::percent_decode_str;
 use scylla::client::pager::QueryPager;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
@@ -73,7 +72,7 @@ impl ScyllaAdapter {
             builder = builder.use_keyspace(keyspace, true);
         }
         if target.tls {
-            builder = builder.tls_context(Some(tls_config(target.ca.as_deref())?));
+            builder = builder.tls_context(Some(crate::conn::tls_config(target.ca.as_deref())?));
         }
 
         let session = tokio::time::timeout(crate::CONNECT_TIMEOUT, builder.build())
@@ -505,55 +504,17 @@ impl Adapter for ScyllaAdapter {
     async fn close(&self) {}
 }
 
-/// A TLS configuration trusting the machine's roots and the certificates in the `ca` file.
-pub(crate) fn tls_config(ca: Option<&str>) -> Result<Arc<rustls::ClientConfig>> {
-    let mut roots = rustls::RootCertStore::empty();
-    for certificate in rustls_native_certs::load_native_certs().certs {
-        // A root the machine holds that rustls cannot read is one fewer to trust, not a failure.
-        let _ = roots.add(certificate);
-    }
-    if let Some(path) = ca {
-        use rustls::pki_types::CertificateDer;
-        use rustls::pki_types::pem::PemObject;
-
-        let certificates = CertificateDer::pem_file_iter(path)
-            .map_err(|error| Error::driver(format!("`{path}` could not be read: {error}")))?;
-        for certificate in certificates {
-            let certificate = certificate.map_err(|error| {
-                Error::driver(format!("`{path}` holds no certificate: {error}"))
-            })?;
-            roots.add(certificate).map_err(Error::driver)?;
-        }
-    }
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(Error::driver)?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    Ok(Arc::new(config))
-}
-
 /// Read the hosts, login, keyspace and TLS options from
 /// `scylla://user:password@host1,host2:9042/keyspace?ssl=true&sslrootcert=ca.pem`.
 fn parse_url(url: &str) -> Result<Target> {
-    let rest = url
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .ok_or_else(|| Error::UnsupportedUrl(url.to_owned()))?;
-    let (rest, options) = rest.split_once('?').unwrap_or((rest, ""));
-    let (authority, keyspace) = rest.split_once('/').unwrap_or((rest, ""));
-    let (login, hosts) = match authority.rsplit_once('@') {
-        Some((login, hosts)) => (Some(login), hosts),
-        None => (None, authority),
-    };
-
-    let decode = |text: &str| {
-        percent_decode_str(text)
-            .decode_utf8()
-            .map(|text| text.into_owned())
-            .map_err(Error::driver)
-    };
+    let decode = crate::conn::decode;
+    let UrlParts {
+        login,
+        authority: hosts,
+        path: keyspace,
+        options,
+        ..
+    } = split_url(url)?;
     let mut tls = false;
     let mut ca = None;
     for option in options.split('&').filter(|option| !option.is_empty()) {
@@ -571,23 +532,10 @@ fn parse_url(url: &str) -> Result<Target> {
             }
         }
     }
-    let credentials = login
-        .map(|login| {
-            let (user, password) = login.split_once(':').unwrap_or((login, ""));
-            Ok::<_, Error>((decode(user)?, decode(password)?))
-        })
-        .transpose()?;
+    let credentials = login.map(credentials).transpose()?;
     let hosts = hosts
         .split(',')
-        .map(|host| {
-            let host = if host.is_empty() { "localhost" } else { host };
-            // A bracketed IPv6 address has colons of its own.
-            if host.ends_with(']') || !host.contains(':') {
-                format!("{host}:{DEFAULT_PORT}")
-            } else {
-                host.to_owned()
-            }
-        })
+        .map(|host| with_port(host, DEFAULT_PORT))
         .collect();
     let keyspace = (!keyspace.is_empty())
         .then(|| decode(keyspace))
@@ -817,12 +765,5 @@ mod tests {
 
         let error = parse_url("scylla://h/ks?compression=lz4").unwrap_err();
         assert!(error.to_string().contains("compression"), "{error}");
-    }
-
-    #[test]
-    fn a_tls_configuration_trusts_the_machine_and_refuses_a_missing_ca_file() {
-        assert!(tls_config(None).is_ok());
-        let error = tls_config(Some("/nonexistent/ca.pem")).unwrap_err();
-        assert!(error.to_string().contains("/nonexistent/ca.pem"), "{error}");
     }
 }

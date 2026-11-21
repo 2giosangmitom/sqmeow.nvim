@@ -3,8 +3,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use crate::conn::{UrlParts, split_url, with_port};
 use clickhouse::Client;
-use percent_encoding::percent_decode_str;
 use sqmeow_db::adapter::Adapter;
 use sqmeow_db::adapter::Dialect;
 use sqmeow_db::error::Error;
@@ -407,30 +407,16 @@ impl Adapter for ClickHouseAdapter {
 
 /// Read `clickhouse[s]://user:password@host:port/database?setting=value`.
 fn parse_url(url: &str) -> Result<Target> {
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| Error::UnsupportedUrl(url.to_owned()))?;
+    let decode = crate::conn::decode;
+    let UrlParts {
+        scheme,
+        login,
+        authority: host,
+        path: database,
+        options,
+    } = split_url(url)?;
     let tls = scheme.eq_ignore_ascii_case("clickhouses");
-    let (rest, options) = rest.split_once('?').unwrap_or((rest, ""));
-    let (authority, database) = rest.split_once('/').unwrap_or((rest, ""));
-    let (login, host) = match authority.rsplit_once('@') {
-        Some((login, host)) => (Some(login), host),
-        None => (None, authority),
-    };
-
-    let decode = |text: &str| {
-        percent_decode_str(text)
-            .decode_utf8()
-            .map(|text| text.into_owned())
-            .map_err(Error::driver)
-    };
-    let host = if host.is_empty() { "localhost" } else { host };
-    // A bracketed IPv6 address has colons of its own.
-    let host = if host.ends_with(']') || !host.contains(':') {
-        format!("{host}:{}", if tls { 8443 } else { 8123 })
-    } else {
-        host.to_owned()
-    };
+    let host = with_port(host, if tls { 8443 } else { 8123 });
     let (user, password) = match login {
         Some(login) => {
             let (user, password) = login.split_once(':').unwrap_or((login, ""));

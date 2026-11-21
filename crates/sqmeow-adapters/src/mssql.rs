@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use futures_util::TryStreamExt;
-use percent_encoding::percent_decode_str;
 use sqmeow_db::adapter::Adapter;
 use sqmeow_db::adapter::Dialect;
 use sqmeow_db::edit::TableBinder;
@@ -95,18 +94,13 @@ impl std::fmt::Debug for MsSqlAdapter {
 }
 
 fn parse_url(input: &str, database: Option<&str>) -> Result<(Config, bool)> {
+    let decode = crate::conn::decode;
     let url = url::Url::parse(input).map_err(|_| Error::driver("invalid MSSQL URL"))?;
     if !matches!(url.scheme(), "mssql" | "sqlserver") || url.fragment().is_some() {
         return Err(Error::driver(
             "expected mssql://user:password@host:1433/database",
         ));
     }
-    let decode = |s: &str| {
-        percent_decode_str(s)
-            .decode_utf8()
-            .map(|s| s.into_owned())
-            .map_err(Error::driver)
-    };
     let mut config = Config::new();
     config.host(
         url.host_str()

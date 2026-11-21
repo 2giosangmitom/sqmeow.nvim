@@ -10,6 +10,7 @@
 //! handled by the engine before an adapter receives the connection URL.
 
 mod clickhouse;
+mod conn;
 mod duckdb;
 mod mongodb;
 mod mssql;

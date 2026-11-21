@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Instant;
 
-use percent_encoding::percent_decode_str;
+use crate::conn::{UrlParts, credentials, decode, split_url, with_port};
 use sqmeow_db::adapter::Adapter;
 use sqmeow_db::adapter::Dialect;
 use sqmeow_db::edit::Changes;
@@ -98,7 +98,7 @@ impl SurrealAdapter {
 
         let open = async {
             let db = if target.tls {
-                let tls = crate::scylla::tls_config(target.ca.as_deref())?;
+                let tls = crate::conn::tls_config(target.ca.as_deref())?;
                 let config = Config::new().rustls((*tls).clone());
                 Surreal::new::<Wss>((target.address.as_str(), config)).await
             } else {
@@ -681,22 +681,13 @@ fn literal(value: &edit::Value) -> String {
 /// Read the address, login, namespace and database from
 /// `surrealdb://user:password@host:8000/namespace/database?auth=database`.
 fn parse_url(url: &str) -> Result<Target> {
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| Error::UnsupportedUrl(url.to_owned()))?;
-    let (rest, options) = rest.split_once('?').unwrap_or((rest, ""));
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let (login, host) = match authority.rsplit_once('@') {
-        Some((login, host)) => (Some(login), host),
-        None => (None, authority),
-    };
-
-    let decode = |text: &str| {
-        percent_decode_str(text)
-            .decode_utf8()
-            .map(|text| text.into_owned())
-            .map_err(Error::driver)
-    };
+    let UrlParts {
+        scheme,
+        login,
+        authority: host,
+        path,
+        options,
+    } = split_url(url)?;
     let mut level = Level::Root;
     let mut ca = None;
     for option in options.split('&').filter(|option| !option.is_empty()) {
@@ -713,20 +704,8 @@ fn parse_url(url: &str) -> Result<Target> {
             }
         }
     }
-    let credentials = login
-        .map(|login| {
-            let (user, password) = login.split_once(':').unwrap_or((login, ""));
-            Ok::<_, Error>((decode(user)?, decode(password)?))
-        })
-        .transpose()?;
-
-    let host = if host.is_empty() { "localhost" } else { host };
-    // A bracketed IPv6 address has colons of its own.
-    let address = if host.ends_with(']') || !host.contains(':') {
-        format!("{host}:{DEFAULT_PORT}")
-    } else {
-        host.to_owned()
-    };
+    let credentials = login.map(credentials).transpose()?;
+    let address = with_port(host, DEFAULT_PORT);
     let mut parts = path.split('/').filter(|part| !part.is_empty());
     let namespace = parts
         .next()

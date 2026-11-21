@@ -1,4 +1,5 @@
 //! Native session lifecycle and small, typed catalog-query helpers.
+use crate::conn::decode;
 use sqmeow_db::error::{Error, Result};
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -29,12 +30,6 @@ impl Options {
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
         url.set_query(None);
-        let decode = |value: &str| {
-            percent_encoding::percent_decode_str(value)
-                .decode_utf8()
-                .map(|s| s.into_owned())
-                .map_err(Error::driver)
-        };
         let mut host = url
             .host_str()
             .map(decode)

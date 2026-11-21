@@ -14,7 +14,7 @@ use std::sync::{
 };
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use percent_encoding::percent_decode_str;
+use crate::conn::decode;
 use sqmeow_db::adapter::Adapter;
 use sqmeow_db::adapter::Dialect;
 use sqmeow_db::edit::Source;
@@ -2220,12 +2220,6 @@ fn parse_url(url: &str) -> Result<Target> {
         _ => return Err(Error::UnsupportedUrl(url.to_owned())),
     };
     let (rest, options) = rest.split_once('?').unwrap_or((rest, ""));
-    let decode = |text: &str| {
-        percent_decode_str(text)
-            .decode_utf8()
-            .map(|text| text.into_owned())
-            .map_err(Error::driver)
-    };
     let mut auth = Auth::Default;
     let mut wallet_dir = None;
     let mut wallet_password = None;
