@@ -226,7 +226,7 @@ async fn group_nodes(
     // Redis holds keys and nothing else, and what a key holds decides how it is read back.
     if dialect == Dialect::Redis {
         // The drawer lists no more keys than the cap, so a count at it may be short.
-        let capped = relations.len() >= sqmeow_adapters::redis::MAX_KEYS;
+        let capped = relations.len() >= sqmeow_adapters::REDIS_MAX_KEYS;
         return Ok(KeyType::ALL
             .into_iter()
             .map(|wanted| {

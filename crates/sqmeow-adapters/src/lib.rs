@@ -9,18 +9,18 @@
 //! configuration stays in each adapter. Secret expansion and SSH forwarding are
 //! handled by the engine before an adapter receives the connection URL.
 
-pub mod clickhouse;
-pub mod duckdb;
-pub mod mongodb;
-pub mod mssql;
-pub mod mysql;
-pub mod oracle;
-pub mod postgres;
-pub mod redis;
-pub mod scylla;
-pub mod sqlite;
+mod clickhouse;
+mod duckdb;
+mod mongodb;
+mod mssql;
+mod mysql;
+mod oracle;
+mod postgres;
+mod redis;
+mod scylla;
+mod sqlite;
 mod stream;
-pub mod surrealdb;
+mod surrealdb;
 
 use sqmeow_db::adapter::Adapter;
 use sqmeow_db::adapter::Dialect;
@@ -79,20 +79,21 @@ where
     }
 }
 
-// `self::`, because a bare `clickhouse`, `duckdb` or `mongodb` would also name the driver crate.
-pub use self::clickhouse::ClickHouseAdapter;
-pub use self::duckdb::DuckDbAdapter;
-pub use self::mongodb::MongoAdapter;
-pub use mssql::MsSqlAdapter;
-pub use mysql::MySqlAdapter;
-pub use oracle::OracleAdapter;
-pub use postgres::PostgresAdapter;
-// `self::`, because a bare `redis` here would also name the driver crate.
-pub use self::redis::RedisAdapter;
-pub use self::scylla::ScyllaAdapter;
-pub use sqlite::SqliteAdapter;
-// `self::`, because a bare `surrealdb` would also name the driver crate.
-pub use self::surrealdb::SurrealAdapter;
+// `self::`, because a bare `clickhouse`, `duckdb`, `mongodb`, `redis` or `surrealdb` would also
+// name the driver crate.
+use self::clickhouse::ClickHouseAdapter;
+use self::duckdb::DuckDbAdapter;
+use self::mongodb::MongoAdapter;
+pub use self::mongodb::filtered as mongo_filtered;
+pub use self::redis::MAX_KEYS as REDIS_MAX_KEYS;
+use self::redis::RedisAdapter;
+use self::scylla::ScyllaAdapter;
+use self::surrealdb::SurrealAdapter;
+use mssql::MsSqlAdapter;
+use mysql::MySqlAdapter;
+use oracle::OracleAdapter;
+use postgres::PostgresAdapter;
+use sqlite::SqliteAdapter;
 
 /// Turn a routine's name and the database's own word for what it is into a node.
 pub(crate) fn routine_node(name: String, kind: &str) -> RoutineNode {

@@ -550,21 +550,6 @@ pub fn filtered(statement: &str, condition: &str, order: &str) -> Result<String>
     Ok(Bson::Document(command).into_relaxed_extjson().to_string())
 }
 
-/// The filter a document meets when field `name` holds `cell`, as the result read it.
-pub fn condition(name: &str, type_name: &str, cell: &Cell) -> Result<String> {
-    let value = match cell {
-        Cell::Null => Bson::Null,
-        Cell::Json(text) => serde_json::from_str::<serde_json::Value>(text)
-            .ok()
-            .and_then(|json| Bson::try_from(json).ok())
-            .unwrap_or_else(|| Bson::String(text.clone())),
-        other => id_bson(other, type_name)?,
-    };
-    let mut filter = Document::new();
-    filter.insert(name, value);
-    Ok(Bson::Document(filter).into_relaxed_extjson().to_string())
-}
-
 /// Whether an error says the deployment has no transactions, as a standalone server does.
 fn no_transactions(error: &mongodb::error::Error) -> bool {
     matches!(*error.kind, mongodb::error::ErrorKind::Command(ref command) if command.code == 20)
@@ -1281,19 +1266,5 @@ mod tests {
         );
         assert!(filtered(r#"{"count": "people"}"#, r#"{"a": 1}"#, "").is_err());
         assert!(filtered(r#"{"find": "people"}"#, "[1]", "").is_err());
-    }
-
-    #[test]
-    fn a_cell_becomes_the_filter_that_matches_it() {
-        let id = "65a1b2c3d4e5f60718293a4b";
-        assert_eq!(
-            condition("_id", "objectId", &Cell::Text(id.into())).unwrap(),
-            format!(r#"{{"_id":{{"$oid":"{id}"}}}}"#)
-        );
-        assert_eq!(condition("n", "int", &Cell::Int(3)).unwrap(), r#"{"n":3}"#);
-        assert_eq!(
-            condition("gone", "null", &Cell::Null).unwrap(),
-            r#"{"gone":null}"#
-        );
     }
 }

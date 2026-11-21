@@ -307,7 +307,7 @@ impl Core {
                 return Err("only one statement can be filtered".to_owned());
             };
             Some(if dialect == Dialect::MongoDb {
-                sqmeow_adapters::mongodb::filtered(&statement.sql, &condition, &order)
+                sqmeow_adapters::mongo_filtered(&statement.sql, &condition, &order)
                     .map_err(|error| error.to_string())?
             } else {
                 sql::filtered(dialect, &statement.sql, &condition, &order, &columns)
