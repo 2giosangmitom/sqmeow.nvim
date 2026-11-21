@@ -129,14 +129,62 @@ local function store(resolve_directory)
     return not has_symlink_component(path)
   end
 
-  --- Every loaded buffer holding one file.
-  ---@param path string Already normalised.
+  --- Every loaded buffer holding a file at or under a path.
+  ---@param dir string Already normalised.
   ---@return integer[]
-  function M.buffers_for(path)
+  local function buffers_under(dir)
+    local prefix = dir .. '/'
     return vim.tbl_filter(function(handle)
-      return vim.api.nvim_buf_is_valid(handle)
-        and vim.fs.normalize(vim.api.nvim_buf_get_name(handle)) == path
+      if not vim.api.nvim_buf_is_valid(handle) then
+        return false
+      end
+      local name = vim.fs.normalize(vim.api.nvim_buf_get_name(handle))
+      return name == dir or name:sub(1, #prefix) == prefix
     end, vim.api.nvim_list_bufs())
+  end
+
+  --- Move a file or folder, carrying open buffers along.
+  ---@param path string Already normalised.
+  ---@param target string Already normalised.
+  ---@return string|nil moved
+  ---@return string|nil error
+  local function move(path, target)
+    vim.fn.mkdir(vim.fs.dirname(target), 'p')
+    local ok, err = vim.uv.fs_rename(path, target)
+    if not ok then
+      return nil, ('could not rename %s: %s'):format(path, err)
+    end
+
+    for _, handle in ipairs(buffers_under(path)) do
+      local suffix = vim.fs.normalize(vim.api.nvim_buf_get_name(handle)):sub(#path + 1)
+      -- Otherwise `:w` writes the scratchpad back under its old name.
+      vim.api.nvim_buf_set_name(handle, target .. suffix)
+      vim.api.nvim_buf_call(handle, function()
+        vim.cmd('silent! write!')
+      end)
+    end
+
+    -- Renaming a buffer leaves an unlisted one behind under the old name.
+    for _, stale in ipairs(buffers_under(path)) do
+      pcall(vim.api.nvim_buf_delete, stale, { force = true })
+    end
+    return target
+  end
+
+  --- Delete a file, or a folder with `rf`, closing the buffers holding it.
+  ---@param path string Already normalised.
+  ---@param flags string|nil
+  ---@return boolean removed
+  ---@return string|nil error
+  local function delete(path, flags)
+    for _, handle in ipairs(buffers_under(path)) do
+      vim.api.nvim_buf_delete(handle, { force = true })
+    end
+    local failed = flags and vim.fn.delete(path, flags) or vim.fn.delete(path)
+    if failed ~= 0 then
+      return false, ('could not delete %s'):format(path)
+    end
+    return true
   end
 
   --- Every file and folder under the scratch directory, depth-first.
@@ -277,27 +325,7 @@ local function store(resolve_directory)
     if vim.uv.fs_stat(target) then
       return nil, ('there is already a scratchpad called %s'):format(M.relative(target))
     end
-
-    vim.fn.mkdir(vim.fs.dirname(target), 'p')
-    local ok, err = vim.uv.fs_rename(path, target)
-    if not ok then
-      return nil, ('could not rename %s: %s'):format(path, err)
-    end
-
-    for _, handle in ipairs(M.buffers_for(path)) do
-      -- Otherwise `:w` writes the scratchpad back under its old name.
-      vim.api.nvim_buf_set_name(handle, target)
-      vim.api.nvim_buf_call(handle, function()
-        vim.cmd('silent! write!')
-      end)
-    end
-
-    -- Renaming a buffer leaves an unlisted one behind under the old name.
-    for _, stale in ipairs(M.buffers_for(path)) do
-      pcall(vim.api.nvim_buf_delete, stale, { force = true })
-    end
-
-    return target
+    return move(path, target)
   end
 
   --- Delete a scratchpad.
@@ -313,29 +341,7 @@ local function store(resolve_directory)
     if not vim.uv.fs_stat(path) then
       return false, ('there is no scratchpad at %s'):format(path)
     end
-
-    for _, handle in ipairs(M.buffers_for(path)) do
-      vim.api.nvim_buf_delete(handle, { force = true })
-    end
-
-    if vim.fn.delete(path) ~= 0 then
-      return false, ('could not delete %s'):format(path)
-    end
-    return true
-  end
-
-  --- Every loaded buffer holding a file at or under a directory.
-  ---@param dir string Already normalised.
-  ---@return integer[]
-  local function buffers_under(dir)
-    local prefix = dir .. '/'
-    return vim.tbl_filter(function(handle)
-      if not vim.api.nvim_buf_is_valid(handle) then
-        return false
-      end
-      local name = vim.fs.normalize(vim.api.nvim_buf_get_name(handle))
-      return name == dir or name:sub(1, #prefix) == prefix
-    end, vim.api.nvim_list_bufs())
+    return delete(path)
   end
 
   --- Move a scratchpad folder to a new relative path under the scratch directory,
@@ -364,28 +370,7 @@ local function store(resolve_directory)
     if vim.uv.fs_stat(target) then
       return nil, ('there is already something called %s'):format(M.relative(target))
     end
-
-    vim.fn.mkdir(vim.fs.dirname(target), 'p')
-    local ok, err = vim.uv.fs_rename(path, target)
-    if not ok then
-      return nil, ('could not rename %s: %s'):format(path, err)
-    end
-
-    for _, handle in ipairs(buffers_under(path)) do
-      local suffix = vim.fs.normalize(vim.api.nvim_buf_get_name(handle)):sub(#path + 1)
-      -- Otherwise `:w` writes the scratchpad back under its old folder.
-      vim.api.nvim_buf_set_name(handle, target .. suffix)
-      vim.api.nvim_buf_call(handle, function()
-        vim.cmd('silent! write!')
-      end)
-    end
-
-    -- Renaming a buffer leaves an unlisted one behind under the old name.
-    for _, stale in ipairs(buffers_under(path)) do
-      pcall(vim.api.nvim_buf_delete, stale, { force = true })
-    end
-
-    return target
+    return move(path, target)
   end
 
   --- Delete a scratchpad folder and everything under it.
@@ -401,15 +386,7 @@ local function store(resolve_directory)
     if not vim.uv.fs_stat(path) then
       return false, ('there is no scratchpad folder at %s'):format(path)
     end
-
-    for _, handle in ipairs(buffers_under(path)) do
-      vim.api.nvim_buf_delete(handle, { force = true })
-    end
-
-    if vim.fn.delete(path, 'rf') ~= 0 then
-      return false, ('could not delete %s'):format(path)
-    end
-    return true
+    return delete(path, 'rf')
   end
 
   return M
@@ -433,28 +410,22 @@ end
 
 --- Actions the scratchpad's keys are bound to.
 M.actions = {
-  execute_statement = function()
-    require('sqmeow.api.query').execute_statement()
-  end,
-  execute_selection = function()
-    require('sqmeow.api.query').execute_selection()
-  end,
-  execute_buffer = function()
-    require('sqmeow.api.query').execute_buffer()
-  end,
-  cancel = function()
-    require('sqmeow.api.query').cancel()
-  end,
-  next_result = function()
-    require('sqmeow.api.query').next_result()
-  end,
-  prev_result = function()
-    require('sqmeow.api.query').prev_result()
-  end,
   help = function()
     require('sqmeow.ui.help').open('editor')
   end,
 }
+for _, name in ipairs({
+  'execute_statement',
+  'execute_selection',
+  'execute_buffer',
+  'cancel',
+  'next_result',
+  'prev_result',
+}) do
+  M.actions[name] = function()
+    require('sqmeow.api.query')[name]()
+  end
+end
 
 --- Bind the scratchpad's keys in a buffer.
 ---@param target integer
