@@ -253,7 +253,10 @@ impl ResultSet {
     }
 
     /// Every value in one column, in row order.
-    pub fn column_cells(&self, column: usize) -> impl ExactSizeIterator<Item = Cow<'_, Cell>> {
+    pub(crate) fn column_cells(
+        &self,
+        column: usize,
+    ) -> impl ExactSizeIterator<Item = Cow<'_, Cell>> {
         let values = self.column_values(column);
         (0..values.map_or(0, FrameColumn::len)).map(move |row| {
             retained::cell(values.expect("column exists"), row).expect("retained row")
@@ -419,14 +422,6 @@ impl ResultSet {
     /// Record where the rows are stored.
     pub fn set_source(&mut self, source: Option<Source>) {
         self.source = source;
-    }
-
-    /// How many pages of `size` rows this result holds.
-    pub fn page_count(&self, size: usize) -> usize {
-        if size == 0 {
-            return 1;
-        }
-        self.row_count.div_ceil(size).max(1)
     }
 }
 
@@ -820,18 +815,5 @@ mod tests {
         result.set_affected(2);
         result.set_affected(3);
         assert_eq!(result.affected(), Some(5));
-    }
-
-    #[test]
-    fn pages_round_up() {
-        let mut result = ResultSet::new("select 1", columns());
-        assert_eq!(result.page_count(100), 1);
-        for index in 0..101 {
-            result.push_row(vec![Cell::Int(index), Cell::Null]);
-        }
-        assert_eq!(result.page_count(100), 2);
-        assert_eq!(result.page_count(101), 1);
-        // A page size of zero would divide by zero; one page is the sane answer.
-        assert_eq!(result.page_count(0), 1);
     }
 }

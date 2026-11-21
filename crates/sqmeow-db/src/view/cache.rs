@@ -75,7 +75,7 @@ impl FrameCache {
             .map(|held| &held.frame)
     }
 
-    pub fn get_or_build(
+    pub(crate) fn get_or_build(
         &self,
         build: impl FnOnce() -> Result<DataFrame, String>,
     ) -> Result<DataFrame, String> {

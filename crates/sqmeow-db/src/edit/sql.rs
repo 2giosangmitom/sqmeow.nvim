@@ -246,7 +246,7 @@ impl Planner<'_> {
 }
 
 /// A value the user typed, as a SQL literal for a column of `type_name`.
-pub fn value_literal(dialect: Dialect, type_name: &str, value: Option<&str>) -> String {
+pub(crate) fn value_literal(dialect: Dialect, type_name: &str, value: Option<&str>) -> String {
     if TypeClass::from_type_name(type_name) == TypeClass::Binary
         && let Some(bytes) = value.and_then(hex_bytes)
     {
@@ -309,7 +309,7 @@ fn bytes_literal(dialect: Dialect, bytes: &[u8]) -> String {
 }
 
 /// Text as a quoted SQL string.
-pub fn quote_text(dialect: Dialect, text: &str) -> String {
+pub(crate) fn quote_text(dialect: Dialect, text: &str) -> String {
     let escaped = match dialect {
         Dialect::MySql => text.replace('\\', "\\\\").replace('\'', "''"),
         _ => text.replace('\'', "''"),

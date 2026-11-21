@@ -149,7 +149,7 @@ impl TypeClass {
 }
 
 /// Reduce a type name to the part worth matching on.
-pub fn normalize_type_name(raw: &str) -> String {
+pub(crate) fn normalize_type_name(raw: &str) -> String {
     let mut name = raw.trim();
     if let Some((head, _)) = name.split_once('(') {
         name = head.trim_end();
@@ -177,11 +177,6 @@ impl KeyKind {
             Self::Primary => Some("primary_key"),
             Self::Foreign => Some("foreign_key"),
         }
-    }
-
-    /// Whether this is a key at all.
-    pub fn is_key(self) -> bool {
-        !matches!(self, Self::None)
     }
 
     /// Resolve the name the protocol carries back to a kind.
@@ -285,8 +280,6 @@ mod tests {
 
     #[test]
     fn only_real_keys_are_keys() {
-        assert!(!KeyKind::None.is_key());
-        assert!(KeyKind::Primary.is_key());
         assert_eq!(KeyKind::None.name(), None);
         assert_eq!(KeyKind::Foreign.name(), Some("foreign_key"));
         assert_eq!(KeyKind::from_name("primary_key"), Some(KeyKind::Primary));

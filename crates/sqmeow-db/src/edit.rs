@@ -4,7 +4,7 @@ mod binder;
 mod sql;
 
 pub use binder::{TableBinder, TableName};
-pub use sql::{condition, literal, quote_text, sql_plan, value_literal};
+pub use sql::{condition, literal, sql_plan};
 
 use crate::adapter::Dialect;
 use crate::error::{Error, Result};

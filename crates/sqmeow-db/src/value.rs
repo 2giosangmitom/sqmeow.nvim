@@ -146,7 +146,7 @@ impl Cell {
     }
 
     /// Whether this value reads as a number, which is what decides right alignment.
-    pub fn is_numeric(&self) -> bool {
+    pub(crate) fn is_numeric(&self) -> bool {
         matches!(self, Self::Int(_) | Self::Float(_) | Self::Decimal(_))
     }
 
