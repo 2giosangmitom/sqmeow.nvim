@@ -1,5 +1,32 @@
 # Changelog
 
+## [3.3.1](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.3.0...v3.3.1) (2026-11-21)
+
+
+### Refactoring
+
+* **dialects:** one dialect-to-filetype map ([a57b667](https://github.com/2giosangmitom/sqmeow.nvim/commit/a57b667828945b931e91133d20eda6d6f49a238d))
+* **drawer:** reuse editor and prompt helpers ([6ed53e8](https://github.com/2giosangmitom/sqmeow.nvim/commit/6ed53e808bcb21400f3eca4afa5f47129fe9188d))
+* drop Rust integration tests and keep server-free cases as unit tests ([997c96a](https://github.com/2giosangmitom/sqmeow.nvim/commit/997c96a93cafa3a272de54e3506b75651ada07b8))
+* drop sqmeow-db helpers nothing outside tests used ([a8322c1](https://github.com/2giosangmitom/sqmeow.nvim/commit/a8322c1a86e5b437232aa00c409f2698d2c499ca))
+* **editor:** share scratchpad move and delete ([64d44d7](https://github.com/2giosangmitom/sqmeow.nvim/commit/64d44d7fd318790a15bbb1eccff926e5ef5233ad))
+* erase adapters behind Box&lt;dyn Adapter&gt; instead of a dispatch enum ([211f68f](https://github.com/2giosangmitom/sqmeow.nvim/commit/211f68f1a01bd1c3daa56e39bfc73e1f9650a72e))
+* fold sqmeow-rpc crate into sqmeow-core as the rpc module ([38476d7](https://github.com/2giosangmitom/sqmeow.nvim/commit/38476d7bd83bcc3197a725f6f8b21d43af622b9e))
+* **install:** share step, stderr and refusal handling ([b0ce1c1](https://github.com/2giosangmitom/sqmeow.nvim/commit/b0ce1c1e94786e4d31bc53964777c3a95a8811df))
+* keep adapter modules private and drop the unused MongoDB condition helper ([a0e2bcf](https://github.com/2giosangmitom/sqmeow.nvim/commit/a0e2bcfbd5e53b770f84f7b6703040cd5ad2dd9d))
+* move Rust workspace from core/ to crates/ ([d4cf5e8](https://github.com/2giosangmitom/sqmeow.nvim/commit/d4cf5e8e7b3e30eef667dcf6f03e477359d3e2bf))
+* **result:** fold repeated actions and guards ([f8a7722](https://github.com/2giosangmitom/sqmeow.nvim/commit/f8a7722a1bd53147a048a29f128a830eda6b9cb4))
+* share connection-URL and TLS helpers across adapters ([9a4f6a9](https://github.com/2giosangmitom/sqmeow.nvim/commit/9a4f6a969073c7235d7b724e89bfd23cccd570d9))
+* share the common-kind fold between document adapters ([f5a7e99](https://github.com/2giosangmitom/sqmeow.nvim/commit/f5a7e9914db195ed5d28236caa8573ace1cfe0de))
+* **table:** keep only the flat grid the result view draws ([d36869d](https://github.com/2giosangmitom/sqmeow.nvim/commit/d36869d17911796211dfb883f336e85cdcdc9b4b))
+* **ui:** drop caller-less drawer and layout helpers ([6e3b3f1](https://github.com/2giosangmitom/sqmeow.nvim/commit/6e3b3f1b8ab95394eba386cb5fc1aef1bb71fe4f))
+* **ui:** share split setup between the drawer and result grid ([5eafc98](https://github.com/2giosangmitom/sqmeow.nvim/commit/5eafc98bf03c98006ac9b5458d5fd0eecdfe0763))
+
+
+### Documentation
+
+* point local connections comment at mise run db:up ([29ede8f](https://github.com/2giosangmitom/sqmeow.nvim/commit/29ede8f48625cb6f9583ad218813a0795b2d2ce3))
+
 ## [3.3.0](https://github.com/2giosangmitom/sqmeow.nvim/compare/v3.2.0...v3.3.0) (2026-11-20)
 
 
