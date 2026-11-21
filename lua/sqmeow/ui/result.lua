@@ -830,9 +830,7 @@ function M.show_page(offset)
   -- Show the engine's view count only when it differs from the retained row count.
   call.view_rows = reply.total ~= call.rows and reply.total or nil
   page = { offset = offset, rows = reply.rows or {}, indices = reply.indices or {} }
-  draw()
-  M.update_winbar(call)
-  update_sticky()
+  M.redraw()
   return true
 end
 
@@ -1315,18 +1313,26 @@ function M.goto_column(index)
   return false
 end
 
---- The rows a visual selection covers, leaving visual mode.
----@return { row: integer|nil, insert: integer|nil }[]
-local function selected()
+--- The page positions of the lines a visual selection covers, leaving visual mode.
+---@return integer first
+---@return integer last
+local function visual_range()
   local first, last = vim.fn.line('v'), vim.fn.line('.')
   if first > last then
     first, last = last, first
   end
   vim.cmd.normal({ vim.keycode('<Esc>'), bang = true })
+  -- Buffer lines to rows of this page: the column names and the rule above them are not rows.
+  return math.max(first - HEADER_LINES, 1), last - HEADER_LINES
+end
 
+--- The rows a visual selection covers, leaving visual mode.
+---@return { row: integer|nil, insert: integer|nil }[]
+local function selected()
+  local first, last = visual_range()
   local inserts = require('sqmeow.ui.edit').inserts()
   local targets = {}
-  for position = math.max(first - HEADER_LINES, 1), last - HEADER_LINES do
+  for position = first, last do
     if position <= #page.rows then
       table.insert(targets, { row = page.indices[position] or (page.offset + position - 1) })
     elseif inserts[position - #page.rows] then
@@ -1500,31 +1506,17 @@ end
 --- Actions the result window's keys are bound to.
 M.actions = {}
 
-function M.actions.next_page()
-  require('sqmeow.api.query').next_page()
-end
-
-function M.actions.prev_page()
-  require('sqmeow.api.query').prev_page()
-end
-
-function M.actions.first_page()
-  require('sqmeow.api.query').first_page()
-end
-
-function M.actions.last_page()
-  require('sqmeow.api.query').last_page()
-end
-
-function M.actions.next_column()
-  if tbl and win and utils.shows(win, buf) then
-    tbl:next_column(win)
+for _, name in ipairs({ 'next_page', 'prev_page', 'first_page', 'last_page' }) do
+  M.actions[name] = function()
+    require('sqmeow.api.query')[name]()
   end
 end
 
-function M.actions.prev_column()
-  if tbl and win and utils.shows(win, buf) then
-    tbl:prev_column(win)
+for _, name in ipairs({ 'next_column', 'prev_column' }) do
+  M.actions[name] = function()
+    if tbl and win and utils.shows(win, buf) then
+      tbl[name](tbl, win)
+    end
   end
 end
 
@@ -1535,15 +1527,8 @@ end
 
 --- Write the rows the visual selection covers to a file.
 function M.actions.export_selection()
-  local first, last = vim.fn.line('v'), vim.fn.line('.')
-  if first > last then
-    first, last = last, first
-  end
-  vim.cmd.normal({ vim.keycode('<Esc>'), bang = true })
-
-  -- Buffer lines to rows of this page: the column names and the rule above them are not rows.
-  first = math.max(first - HEADER_LINES, 1)
-  last = math.min(last - HEADER_LINES, #page.rows)
+  local first, last = visual_range()
+  last = math.min(last, #page.rows)
   if last < first then
     return
   end
@@ -1740,22 +1725,12 @@ end
 --- Follow an outgoing (`gd`) or incoming (`gr`) foreign key for the cell under the cursor.
 ---@param direction 'outgoing'|'incoming'
 local function follow_relationship(direction)
-  local call = require('sqmeow.core.state').call
-  if not call then
-    return
-  end
   local cell = M.current_cell()
-  if not (cell and cell.row ~= nil) then
-    return utils.notify(
-      'place the cursor on a result row to follow a relationship',
-      vim.log.levels.WARN
-    )
-  end
-  M.follow_cell(direction, {
+  M.follow_cell(direction, cell and {
     column = cell.column,
     name = cell.name,
     is_null = cell.value == nil or cell.value == vim.NIL,
-  }, { row = cell.row })
+  }, { row = cell and cell.row })
 end
 
 --- Follow an outgoing foreign key (`gd`) from the cell under the cursor to its parent row.
@@ -1841,29 +1816,19 @@ function M.actions.filter_cell()
   end
 end
 
-function M.actions.filter()
-  require('sqmeow.ui.filter').open(1)
-end
-
-function M.actions.order()
-  require('sqmeow.ui.filter').open(2)
-end
-
-function M.actions.group()
-  require('sqmeow.ui.filter').open(3)
-end
-
-function M.actions.sort()
-  local here = cursor_column()
-  if here then
-    sort_by(here.column, false)
+-- Each opens the filter bar on its own field.
+for field, name in ipairs({ 'filter', 'order', 'group' }) do
+  M.actions[name] = function()
+    require('sqmeow.ui.filter').open(field)
   end
 end
 
-function M.actions.sort_add()
-  local here = cursor_column()
-  if here then
-    sort_by(here.column, true)
+for name, add in pairs({ sort = false, sort_add = true }) do
+  M.actions[name] = function()
+    local here = cursor_column()
+    if here then
+      sort_by(here.column, add)
+    end
   end
 end
 
@@ -1935,6 +1900,29 @@ function M.actions.set_null()
   require('sqmeow.ui.edit').set(cell, cell.column, vim.NIL)
 end
 
+--- Whether rows can be added to a result, saying why not when they cannot.
+---@param call sqmeow.CallSummary
+---@return boolean
+local function insertable(call)
+  if call.source.insertable then
+    return true
+  end
+  utils.notify(
+    'a row cannot be added to a result that shows more than one table',
+    vim.log.levels.WARN
+  )
+  return false
+end
+
+--- Stage a new row and put the cursor on it.
+---@param values table|nil
+local function add_row(values)
+  require('sqmeow.ui.edit').add_row(values)
+  if win then
+    vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(M.buffer()), 0 })
+  end
+end
+
 --- Stage a copy of the row under the cursor as a new row, leaving out its primary key.
 function M.actions.duplicate_row()
   local cell = editing() and M.current_cell()
@@ -1945,11 +1933,8 @@ function M.actions.duplicate_row()
   if not (call and call.source and call.columns) then
     return
   end
-  if not call.source.insertable then
-    return utils.notify(
-      'a row cannot be added to a result that shows more than one table',
-      vim.log.levels.WARN
-    )
+  if not insertable(call) then
+    return
   end
   local row, err =
     require('sqmeow.rpc.client').request('row', { call_id = call.call_id, row = cell.row })
@@ -1969,26 +1954,12 @@ function M.actions.duplicate_row()
       end
     end
   end
-  edit.add_row(values)
-  if win then
-    vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(M.buffer()), 0 })
-  end
+  add_row(values)
 end
 
 function M.actions.add_row()
-  if not editing() then
-    return
-  end
-  if not require('sqmeow.core.state').call.source.insertable then
-    return utils.notify(
-      'a row cannot be added to a result that shows more than one table',
-      vim.log.levels.WARN
-    )
-  end
-  require('sqmeow.ui.edit').add_row()
-  if win then
-    local last = vim.api.nvim_buf_line_count(M.buffer())
-    vim.api.nvim_win_set_cursor(win, { last, 0 })
+  if editing() and insertable(require('sqmeow.core.state').call) then
+    add_row()
   end
 end
 
