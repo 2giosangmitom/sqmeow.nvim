@@ -131,7 +131,8 @@ run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 [ -d node_modules ] || npm ci --silent
-node --test --test-concurrency=4 tests/integration/
+# Node expands the quoted glob itself; a bare directory is not accepted.
+node --test --test-concurrency=4 'tests/integration/*.test.mjs'
 '''
 
 [tasks.docs]
