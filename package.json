@@ -1,0 +1,12 @@
+{
+  "name": "sqmeow-integration-tests",
+  "private": true,
+  "type": "module",
+  "description": "Database integration tests that drive a headless Neovim through the plugin and engine.",
+  "scripts": {
+    "test:integration": "node --test --test-concurrency=4 'tests/integration/*.test.mjs'"
+  },
+  "devDependencies": {
+    "neovim": "^5.5.0"
+  }
+}
