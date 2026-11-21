@@ -62,16 +62,17 @@ jobs:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
-      - uses: taiki-e/install-action@v2
+      # Only the musl builds need mise, for the `dist-build-musl` task.
+      - uses: jdx/mise-action@v5
         if: matrix.musl
         with:
-          tool: just
+          cache: true
 
       - name: Build
         shell: bash
         run: |
           if [ "${{ matrix.musl }}" = true ]; then
-            just dist-build-musl ${{ matrix.target }}
+            mise run dist-build-musl ${{ matrix.target }}
           else
             cargo build --release --locked --target ${{ matrix.target }} -p sqmeow-core --features bundled
           fi

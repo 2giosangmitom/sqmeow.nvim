@@ -26,34 +26,40 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: cachix/install-nix-action@v31
-      - uses: nix-community/cache-nix-action@v6
+      # Dev builds link the system SQLite; the runner image may lack its headers.
+      - name: Install libsqlite3-dev
+        run: |
+          if ! dpkg -s libsqlite3-dev >/dev/null 2>&1; then
+            sudo apt-get update -q
+            sudo apt-get install -y --no-install-recommends libsqlite3-dev
+          fi
+
+      - uses: jdx/mise-action@v5
         with:
-          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+          cache: true
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ hashFiles('flake.lock') }}
+          key: ${{ hashFiles('mise.lock', 'Cargo.lock') }}
           # Keep downloaded crates, not the large compiled target/ directory.
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
-      # The databases only need to be ready before `just test`, so start them while the checks run.
-      # `just db-up` prints the container state and logs itself if a service fails to become
-      # healthy.
+      # The databases only need to be ready before `mise run test`, so start them while the checks
+      # run. `mise run db:up` prints the container state and logs itself if a service fails to
+      # become healthy.
       - name: Checks
         run: |
           set -euo pipefail
-          nix develop --command just db-up > "$RUNNER_TEMP/db-up.log" 2>&1 &
+          mise run db:up > "$RUNNER_TEMP/db-up.log" 2>&1 &
           db_up=$!
-          nix develop --command just docs-check
-          nix develop --command just lint
+          mise run docs:check
+          mise run lint
           if ! wait "$db_up"; then
             cat "$RUNNER_TEMP/db-up.log"
             exit 1
           fi
 
-      - run: nix develop --command just test
+      - run: mise run test
 
       - name: Database logs
         if: failure()

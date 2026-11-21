@@ -1,0 +1,167 @@
+# Toolchain and tasks. `mise install` sets up everything below; `mise run <task>` runs what CI runs.
+# SQLite links against the system libsqlite3 (install its development package).
+
+[settings]
+lockfile_platforms = ["linux-x64", "linux-arm64", "macos-arm64", "macos-x64", "windows-x64"]
+
+[tools]
+rust = { version = "stable", components = "rustfmt,clippy" }
+node = "24"
+neovim = "0.12"
+stylua = "2"
+"aqua:Kampfkarren/selene" = "0.32"
+lua-language-server = "3"
+
+# DuckDB C library and headers for dev builds. Keep the tag in step with the duckdb crate: its
+# version encodes DuckDB's as 1.MMmmpp, so 1.20000.x targets DuckDB v2.0.0. Each archive is flat:
+# the shared library sits next to duckdb.h.
+[tools."github:duckdb/duckdb"]
+version = "2.0.0"
+
+[tools."github:duckdb/duckdb".platforms]
+linux-x64 = { asset_pattern = "duckdb-shared-libs-linux-amd64.tar.gz" }
+linux-arm64 = { asset_pattern = "duckdb-shared-libs-linux-arm64.tar.gz" }
+macos-arm64 = { asset_pattern = "duckdb-shared-libs-osx-arm64.tar.gz" }
+macos-x64 = { asset_pattern = "duckdb-shared-libs-osx-amd64.tar.gz" }
+windows-x64 = { asset_pattern = "duckdb-shared-libs-windows-amd64.tar.gz" }
+
+[env]
+DUCKDB_LIB_DIR = { value = "{{ tools['github:duckdb/duckdb'].path }}", tools = true }
+DUCKDB_INCLUDE_DIR = { value = "{{ tools['github:duckdb/duckdb'].path }}", tools = true }
+# The dynamically linked engine loads libduckdb at runtime too.
+LD_LIBRARY_PATH = { value = "{{ tools['github:duckdb/duckdb'].path }}{% set p = get_env(name='LD_LIBRARY_PATH', default='') %}{% if p %}:{{ p }}{% endif %}", tools = true }
+DYLD_LIBRARY_PATH = { value = "{{ tools['github:duckdb/duckdb'].path }}{% set p = get_env(name='DYLD_LIBRARY_PATH', default='') %}{% if p %}:{{ p }}{% endif %}", tools = true }
+
+# Every cargo invocation appends $SQMEOW_CARGO_FLAGS (e.g. `-j 1` on low-memory machines). Dev
+# builds link the external SQLite and DuckDB above; only the dist-build tasks enable `bundled`.
+
+[tasks.build]
+description = "Compile the engine in release mode, which the plugin prefers to load"
+run = "cargo build --release ${SQMEOW_CARGO_FLAGS:-}"
+
+[tasks."build:debug"]
+description = "Compile the engine in debug mode, faster to iterate on"
+run = "cargo build ${SQMEOW_CARGO_FLAGS:-}"
+
+[tasks.dist-build]
+description = "Compile a release binary with bundled SQLite/DuckDB for distribution"
+# `builder` is `cargo` or another cargo wrapper.
+usage = '''
+arg "<target>" help="Rust target triple"
+arg "[builder]" default="cargo"
+'''
+run = 'exec $usage_builder build --release --locked --target "$usage_target" -p sqmeow-core --features bundled ${SQMEOW_CARGO_FLAGS:-}'
+
+# The rust-musl-cross images ship GCC 12; cross's images ship GCC 9, which cannot compile the
+# bundled DuckDB sources. The image's own `stable` cannot be updated in place, so it is reinstalled
+# to meet the workspace's rust-version. The host's Cargo registry is mounted for caching, and files
+# the root container writes are handed back to the caller.
+[tasks.dist-build-musl]
+description = "dist-build for x86_64- or aarch64-unknown-linux-musl, run in Docker"
+usage = 'arg "<target>" help="x86_64-unknown-linux-musl or aarch64-unknown-linux-musl"'
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker run --rm \
+    -v "$PWD:/src" -w /src \
+    -v "${CARGO_HOME:-$HOME/.cargo}/registry:/root/.cargo/registry" \
+    -v "${CARGO_HOME:-$HOME/.cargo}/git:/root/.cargo/git" \
+    -e TARGET="$usage_target" -e OWNER="$(id -u):$(id -g)" -e FLAGS="${SQMEOW_CARGO_FLAGS:-}" \
+    "ghcr.io/rust-cross/rust-musl-cross:${usage_target%%-*}-musl" \
+    sh -euc ' \
+        trap "chown -R \"\$OWNER\" target /root/.cargo/registry /root/.cargo/git" EXIT; \
+        rustup toolchain uninstall stable >/dev/null 2>&1 || true; \
+        rustup toolchain install stable --profile minimal --target "$TARGET"; \
+        rustup default stable; \
+        cargo build --release --locked --target "$TARGET" -p sqmeow-core --features bundled $FLAGS'
+'''
+
+[tasks.fmt]
+description = "Format Rust and Lua code"
+run = ["cargo fmt --all", "stylua ."]
+
+[tasks.lint]
+description = "Run Rust and Lua linters"
+depends = ["lint:rust", "lint:lua"]
+
+[tasks."lint:rust"]
+description = "rustfmt check and clippy with warnings denied"
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy --all-targets ${SQMEOW_CARGO_FLAGS:-} -- -D warnings",
+]
+
+[tasks."lint:lua"]
+description = "stylua check, selene and LuaLS"
+# LuaLS resolves plugin types from .tests/, which `mise run docs:check` populates on a fresh checkout.
+run = [
+  "stylua --check .",
+  "selene lua plugin tests",
+  "lua-language-server --check=. --checklevel=Warning",
+]
+
+[tasks.test]
+description = "Run Rust unit tests, Lua UI tests and the integration suite"
+depends = ["test:rust", "test:ui", "test:integration"]
+
+[tasks."test:rust"]
+description = "Rust unit tests"
+run = "cargo test ${SQMEOW_CARGO_FLAGS:-}"
+
+[tasks."test:ui"]
+description = "Lua mini.test suite against a headless Neovim"
+depends = ["build:debug"]
+# The plugin loads a release build before a debug one, so one left over from `mise run build` is what
+# the suite would test; keep it current. tests/ui/minit.lua installs the plugins the suite needs
+# under .tests/ and gives it a data directory of its own.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [ -x target/release/sqmeow-core ]; then
+    cargo build --release ${SQMEOW_CARGO_FLAGS:-}
+fi
+nvim -l tests/ui/minit.lua
+'''
+
+[tasks."test:integration"]
+description = "node:test suite against real databases; services not started by db:up are skipped"
+depends = ["build:debug"]
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+[ -d node_modules ] || npm ci --silent
+node --test --test-concurrency=4 tests/integration/
+'''
+
+[tasks.docs]
+description = "Regenerate doc/sqmeow.txt from the annotated sources"
+run = "nvim -l tests/ui/minit.lua --docs"
+
+[tasks."docs:check"]
+description = "Fail if the committed help file is behind the sources"
+depends = ["docs"]
+run = "git diff --exit-code doc/"
+
+[tasks."db:up"]
+description = "Start the database servers used by the integration tests"
+# `--wait` reports a failed start as a bare "container ... exited (1)". Dump the containers and their
+# logs so the reason is in the CI output, and bound the wait so a wedged healthcheck cannot hold the
+# job open.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if ! docker compose up -d --wait --wait-timeout 600; then
+    docker compose ps --all
+    docker compose logs --no-color --tail=200
+    exit 1
+fi
+'''
+
+[tasks."db:down"]
+description = "Stop the database servers and throw away their data"
+run = "docker compose down -v"
+
+[tasks.ci]
+description = "Everything CI runs: lint, test and docs:check"
+# In order: docs:check fetches the plugins under .tests/ that LuaLS needs for lint:lua.
+run = [{ task = "docs:check" }, { task = "lint" }, { task = "test" }]
