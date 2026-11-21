@@ -92,6 +92,48 @@ suite('mongodb', serverUrl('mongodb'), (ctx) => {
     await db.run('{"drop": "insert_find"}');
   });
 
+  it('cancel after server write reports partial progress', async () => {
+    const { db } = ctx;
+    const worker = db.conn;
+    const observer = await db.connect(ctx.url, { keep: false });
+    await empty(db, 'audit_cancel_reply');
+    const held = await db.run('{"find": "audit_cancel_reply"}');
+    // Enough writes that the cancellation lands between two of them.
+    const count = 3000;
+    const commands = Array.from(
+      { length: count },
+      (_, index) => `{"insert": "audit_cancel_reply", "documents": [{"_id": ${index + 1}}]}`,
+    );
+    const handle = await db.applyStart(commands, held.call_id, { conn: worker });
+    let written = false;
+    for (let attempt = 0; attempt < 300 && !written; attempt += 1) {
+      const seen = await db.run('{"find": "audit_cancel_reply", "filter": {"_id": 1}}', {
+        conn_id: observer.id,
+      });
+      written = seen.count > 0;
+      if (!written) await db.sleep(10);
+    }
+    assert.ok(written, 'the first write must reach the server before cancellation');
+    await db.cancel(held.call_id);
+    const done = await db.applyWait(handle);
+    // Writes already sent cannot be taken back, so the outcome says how far it got.
+    assert.ok(done.error, 'a cancelled apply reports it');
+    assert.ok(!/^nothing was applied/.test(done.error), done.error);
+    const progress = done.error.match(/(\d+) of (\d+)/);
+    assert.ok(progress, done.error);
+    const [, sent, total] = progress.map(Number);
+    assert.equal(total, count);
+    assert.ok(sent >= 1 && sent < count, done.error);
+    const rows = await db.run('{"count": "audit_cancel_reply"}', { conn_id: observer.id });
+    assert.equal(
+      Number(rows.cells[0][column(rows, 'n')].value),
+      sent,
+      'no write runs after the one it reports',
+    );
+    await db.run('{"drop": "audit_cancel_reply"}');
+    await db.disconnect(observer.id);
+  });
+
   it('reports an error and keeps working', async () => {
     const { db } = ctx;
     contains(await db.fail('{"nope": 1}'), 'no such command', { caseless: true });
