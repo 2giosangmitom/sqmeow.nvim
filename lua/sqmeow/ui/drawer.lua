@@ -751,16 +751,8 @@ function M.actions.toggle()
     return
   end
 
-  -- Each file section toggles independently; folder nodes have their own kind.
-  if node.kind == 'scratchpads' then
-    expanded[node.id] = not expanded[node.id] or nil
-    return M.render()
-  end
-  if node.id == HISTORY then
-    expanded[HISTORY] = not expanded[HISTORY] or nil
-    return M.render()
-  end
-  if node.kind == 'scratchpad_group' then
+  -- Each file section and folder, and the history, toggles independently by its id.
+  if node.kind == 'scratchpads' or node.kind == 'scratchpad_group' or node.id == HISTORY then
     expanded[node.id] = not expanded[node.id] or nil
     return M.render()
   end
@@ -877,17 +869,22 @@ local function new_editor_buffer(label, name)
 end
 
 --- Populate, bind and display an editor without executing its contents.
-local function show_editor(target, node, text)
+---@param target integer
+---@param node table|nil The node whose connection the editor runs against.
+---@param text string
+---@param dialect string|nil Defaults to the node's connection's.
+---@param connection_name string|nil Defaults to the node's connection's.
+local function show_editor(target, node, text, dialect, connection_name)
+  local connection = node and require('sqmeow.core.state').connections[node.conn_id]
   vim.bo[target].buftype = 'nofile'
   vim.bo[target].bufhidden = 'hide'
   vim.bo[target].swapfile = false
-  vim.bo[target].filetype = dialect_filetype(dialect_of(node.conn_id))
+  vim.bo[target].filetype = dialect_filetype(dialect or (connection and connection.dialect))
   vim.api.nvim_buf_set_lines(target, 0, -1, false, vim.split(text, '\n', { plain = true }))
   vim.bo[target].modified = false
 
-  local connection = require('sqmeow.core.state').connections[node.conn_id]
   local editor = require('sqmeow.ui.editor')
-  editor.attach(target, connection and connection.name)
+  editor.attach(target, connection_name or (connection and connection.name))
   local editing_win
   for _, candidate in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     if vim.api.nvim_win_get_buf(candidate) == target then
@@ -946,48 +943,11 @@ local function preview(in_editor)
 
     local entry = node.entry
     local conn_name = entry.connection
-    local state = require('sqmeow.core.state')
-    local conn = conn_name and state.connection_by_name(conn_name)
-    local dialect = (conn and conn.dialect) or entry.dialect or 'sql'
-    local ft = dialect_filetype(dialect)
+    local conn = conn_name and require('sqmeow.core.state').connection_by_name(conn_name)
     local text = entry.statement or ''
-
-    local target_buf = vim.api.nvim_create_buf(true, true)
-    local base_name = ('[Query: %s]'):format(conn_name or 'history')
-    local ok = pcall(vim.api.nvim_buf_set_name, target_buf, base_name)
-    if not ok then
-      local count = 1
-      while true do
-        local try_name = ('[Query: %s (%d)]'):format(conn_name or 'history', count)
-        if pcall(vim.api.nvim_buf_set_name, target_buf, try_name) then
-          break
-        end
-        count = count + 1
-      end
-    end
-
-    vim.bo[target_buf].buftype = 'nofile'
-    vim.bo[target_buf].bufhidden = 'hide'
-    vim.bo[target_buf].swapfile = false
-    vim.bo[target_buf].filetype = ft
-    vim.api.nvim_buf_set_lines(target_buf, 0, -1, false, vim.split(text, '\n', { plain = true }))
-    vim.bo[target_buf].modified = false
-
-    local editor = require('sqmeow.ui.editor')
-    editor.attach(target_buf, conn_name)
-
-    local ed_win = nil
-    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-      if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_buf(w) == target_buf then
-        ed_win = w
-        break
-      end
-    end
-    if not ed_win then
-      ed_win = require('sqmeow.ui.layout').editing_window()
-      vim.api.nvim_win_set_buf(ed_win, target_buf)
-    end
-    vim.api.nvim_set_current_win(ed_win)
+    local target = new_editor_buffer('Query', conn_name or 'history')
+    local ed_win =
+      show_editor(target, nil, text, (conn and conn.dialect) or entry.dialect, conn_name)
     local first_line = vim.split(text, '\n', { plain = true })[1] or ''
     vim.api.nvim_win_set_cursor(ed_win, { 1, #first_line })
     return
@@ -1167,14 +1127,40 @@ function M.actions.yank_select()
   utils.notify('yanked ' .. statement)
 end
 
+--- Ask for a new name, calling `apply` only with a non-empty one that differs from `current`.
+---@param prompt string
+---@param current string
+---@param apply fun(name: string)
+local function ask_name(prompt, current, apply)
+  vim.ui.input({ prompt = prompt, default = current }, function(name)
+    if name and name ~= '' and name ~= current then
+      apply(name)
+    end
+  end)
+end
+
+--- Rename or move a scratchpad file or folder through its store, reporting the outcome.
+---@param node table
+---@param method 'rename'|'rename_dir'
+---@param what string What the node is, for the error message.
+---@param prompt string
+local function rename_pad(node, method, what, prompt)
+  local current = node.rel or node.name
+  ask_name(prompt, current, function(name)
+    local renamed, err = node.store[method](node.file, name)
+    if not renamed then
+      return utils.notify(err or ('the %s could not be renamed'):format(what), vim.log.levels.ERROR)
+    end
+    utils.notify(('renamed %s to %s'):format(current, node.store.relative(renamed)))
+    M.render()
+  end)
+end
+
 --- Rename the connection or the scratchpad under the cursor.
 function M.actions.rename()
   local node = M.current_node()
   if node and node.kind == 'connection' then
-    return vim.ui.input({ prompt = 'Call it: ', default = node.name }, function(name)
-      if not name or name == '' or name == node.name then
-        return
-      end
+    return ask_name('Call it: ', node.name, function(name)
       -- A connection that was saved under the old name is renamed with it.
       if require('sqmeow.sources').find(node.name) then
         require('sqmeow.api.connection').edit(node.name, { name = name })
@@ -1183,42 +1169,12 @@ function M.actions.rename()
       require('sqmeow.api.connection').rename(node.conn_id, name)
     end)
   end
-
   if node and node.kind == 'scratchpad_group' then
-    return vim.ui.input({ prompt = 'Move the folder to: ', default = node.rel }, function(name)
-      if not name or name == '' or name == node.rel then
-        return
-      end
-
-      local renamed, err = node.store.rename_dir(node.file, name)
-      if not renamed then
-        return utils.notify(err or 'the folder could not be renamed', vim.log.levels.ERROR)
-      end
-
-      utils.notify(('renamed %s to %s'):format(node.rel, node.store.relative(renamed)))
-      M.render()
-    end)
+    return rename_pad(node, 'rename_dir', 'folder', 'Move the folder to: ')
   end
-
-  if not node or node.kind ~= 'scratchpad' then
-    return
+  if node and node.kind == 'scratchpad' then
+    rename_pad(node, 'rename', 'scratchpad', 'Rename the scratchpad to: ')
   end
-
-  local current = node.rel or node.name
-  vim.ui.input({ prompt = 'Rename the scratchpad to: ', default = current }, function(name)
-    if not name or name == '' or name == current then
-      return
-    end
-
-    local renamed, err = node.store.rename(node.file, name)
-    if not renamed then
-      return utils.notify(err or 'the scratchpad could not be renamed', vim.log.levels.ERROR)
-    end
-
-    local editor = node.store
-    utils.notify(('renamed %s to %s'):format(current, editor.relative(renamed)))
-    M.render()
-  end)
 end
 
 --- Run queries against the connection under the cursor.
@@ -1383,6 +1339,17 @@ function M.actions.edit()
   end
 end
 
+--- Ask a yes/no question, calling `yes` only when the answer is yes.
+---@param prompt string
+---@param yes fun()
+local function confirm(prompt, yes)
+  vim.ui.select({ 'no', 'yes' }, { prompt = prompt }, function(answer)
+    if answer == 'yes' then
+      yes()
+    end
+  end)
+end
+
 --- Ask before deleting the connection a node shows, then close it and forget its saved entry.
 ---@param node table A connection node, or the name and id of one.
 local function delete_connection(node)
@@ -1398,13 +1365,7 @@ local function delete_connection(node)
     return
   end
 
-  vim.ui.select({ 'no', 'yes' }, {
-    prompt = ('Delete the connection `%s`?'):format(node.name),
-  }, function(answer)
-    if answer ~= 'yes' then
-      return
-    end
-
+  confirm(('Delete the connection `%s`?'):format(node.name), function()
     if not require('sqmeow.api.connection').remove(node.name) then
       return
     end
@@ -1419,74 +1380,56 @@ local function delete_connection(node)
   end)
 end
 
+--- Ask before deleting a scratchpad file or folder through its store, reporting the outcome.
+---@param node table
+---@param method 'remove'|'remove_dir'
+---@param what string What the node is.
+---@param prompt string
+local function delete_pad(node, method, what, prompt)
+  local name = node.rel or node.name
+  confirm(prompt:format(name), function()
+    local removed, err = node.store[method](node.file)
+    if not removed then
+      return utils.notify(err or ('the %s could not be deleted'):format(what), vim.log.levels.ERROR)
+    end
+    utils.notify(('deleted the %s %s'):format(what, name))
+    M.render()
+  end)
+end
+
 --- Delete the connection under the cursor, delete the scratchpad there, or empty the query log.
 function M.actions.delete()
   local node = M.current_node()
-  if node and (node.kind == 'history' or node.kind == 'query') then
-    return vim.ui.select(
-      { 'no', 'yes' },
-      { prompt = 'Forget every query in the log?' },
-      function(answer)
-        if answer ~= 'yes' then
-          return
-        end
-        require('sqmeow.server.history').clear()
-        utils.notify('the query log is empty')
-        M.render()
-      end
-    )
+  if not node then
+    return
   end
-
-  if node and node.kind == 'connection' then
-    return delete_connection(node)
-  end
-
-  -- One database of a cluster is a connection of its own once it has been opened.
-  if node and node.kind == 'database' then
-    local opened = opened_database(node)
-    if not opened then
-      return
-    end
-    return delete_connection({ kind = 'connection', name = opened.name, conn_id = opened.id })
-  end
-
-  if node and node.kind == 'scratchpad_group' then
-    return vim.ui.select({ 'no', 'yes' }, {
-      prompt = ('Delete the folder `%s` and everything in it?'):format(node.rel),
-    }, function(answer)
-      if answer ~= 'yes' then
-        return
-      end
-
-      local removed, err = node.store.remove_dir(node.file)
-      if not removed then
-        return utils.notify(err or 'the folder could not be deleted', vim.log.levels.ERROR)
-      end
-
-      utils.notify('deleted the folder ' .. node.rel)
+  if node.kind == 'history' or node.kind == 'query' then
+    return confirm('Forget every query in the log?', function()
+      require('sqmeow.server.history').clear()
+      utils.notify('the query log is empty')
       M.render()
     end)
   end
 
-  if not node or node.kind ~= 'scratchpad' then
+  if node.kind == 'connection' then
+    return delete_connection(node)
+  end
+
+  -- One database of a cluster is a connection of its own once it has been opened.
+  if node.kind == 'database' then
+    local opened = opened_database(node)
+    if opened then
+      delete_connection({ kind = 'connection', name = opened.name, conn_id = opened.id })
+    end
     return
   end
 
-  vim.ui.select({ 'no', 'yes' }, {
-    prompt = ('Delete the scratchpad `%s`?'):format(node.rel or node.name),
-  }, function(answer)
-    if answer ~= 'yes' then
-      return
-    end
-
-    local removed, err = node.store.remove(node.file)
-    if not removed then
-      return utils.notify(err or 'the scratchpad could not be deleted', vim.log.levels.ERROR)
-    end
-
-    utils.notify('deleted the scratchpad ' .. (node.rel or node.name))
-    M.render()
-  end)
+  if node.kind == 'scratchpad_group' then
+    return delete_pad(node, 'remove_dir', 'folder', 'Delete the folder `%s` and everything in it?')
+  end
+  if node.kind == 'scratchpad' then
+    delete_pad(node, 'remove', 'scratchpad', 'Delete the scratchpad `%s`?')
+  end
 end
 
 --- Open the history section and put the cursor on it.
