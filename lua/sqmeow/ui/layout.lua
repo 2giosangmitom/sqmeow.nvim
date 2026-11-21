@@ -116,7 +116,7 @@ local function usable(win)
     return false
   end
   -- `winfixbuf` only exists from Neovim 0.11, and reading it on an older one would error.
-  if vim.fn.exists('&winfixbuf') == 1 and vim.wo[win].winfixbuf then
+  if fixbuf_supported() and vim.wo[win].winfixbuf then
     return false
   end
 
@@ -174,12 +174,6 @@ end
 --- Forget the recorded layout without applying it.
 function M.forget()
   saved = nil
-end
-
---- Whether a layout is waiting to be restored.
----@return boolean
-function M.is_remembered()
-  return saved ~= nil
 end
 
 return M

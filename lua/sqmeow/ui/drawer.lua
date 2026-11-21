@@ -21,7 +21,6 @@ local patterns = {}
 
 -- The nui tree the drawer was last drawn with, kept so the cursor can be turned into a node.
 local tree = nil
-local preview_buf = nil
 local preview_bufs = {}
 
 local function node_key(conn_id, path)
@@ -1049,8 +1048,6 @@ local function preview(in_editor)
       preview_bufs[key] = target_buf
     end
 
-    preview_buf = target_buf
-
     local ed_win = show_editor(target_buf, node, text)
     vim.b[target_buf].sqmeow_preview_statement = text
     local rel_schema = node.path and #node.path > 1 and node.path[1] or nil
@@ -1613,15 +1610,8 @@ function M.reset()
   cache = {}
   M.cancel_edits()
   tree = nil
-  preview_buf = nil
   preview_bufs = {}
   M.render()
-end
-
---- The buffer holding the relation preview, if open.
----@return integer|nil
-function M.preview_buffer()
-  return (preview_buf and vim.api.nvim_buf_is_valid(preview_buf)) and preview_buf or nil
 end
 
 --- Databases discovered at the root of a cluster connection, if cached.
