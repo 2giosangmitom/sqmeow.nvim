@@ -1,4 +1,4 @@
-# Local development databases from compose.yaml. Start them with `just db-up`.
+# Local development databases from compose.yaml. Start them with `mise run db:up`.
 # SQLite and DuckDB run in memory and do not need Docker.
 # Credentials below are the disposable test credentials from compose.yaml.
 
