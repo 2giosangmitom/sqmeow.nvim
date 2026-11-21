@@ -35,6 +35,23 @@ local function progress(message)
   vim.api.nvim_echo({ { 'sqmeow: ' .. message, 'MoreMsg' } }, false, {})
 end
 
+--- Record what the running install is doing, and say so.
+---@param step string
+---@param message string
+local function advance(step, message)
+  if running then
+    running.step = step
+  end
+  progress(message)
+end
+
+--- A finished program's error output, without trailing whitespace.
+---@param result table
+---@return string
+local function stderr(result)
+  return ((result.stderr or ''):gsub('%s+$', ''))
+end
+
 --- Start a program asynchronously and call back when it exits.
 ---@param command string[]
 ---@param opts table
@@ -113,10 +130,7 @@ function M.triple()
   local architecture = architectures[machine]
   local system = systems[uname.sysname]
 
-  if not (architecture and system) then
-    return nil, ('no prebuilt engine for %s %s'):format(uname.sysname, machine)
-  end
-  if uname.sysname == 'Darwin' and architecture == 'x86_64' then
+  if not (architecture and system) or (uname.sysname == 'Darwin' and architecture == 'x86_64') then
     return nil, ('no prebuilt engine for %s %s'):format(uname.sysname, machine)
   end
   return ('%s-%s'):format(architecture, system)
@@ -218,8 +232,7 @@ function M.fetch(url, destination, opts, callback)
       if result.code == 0 then
         return callback(true)
       end
-      local stderr = result.stderr or ''
-      last = ('%s failed: %s'):format(command[1], stderr:gsub('%s+$', ''))
+      last = ('%s failed: %s'):format(command[1], stderr(result))
       attempt()
     end)
   end
@@ -257,10 +270,7 @@ function M.unpack(archive, directory, callback)
 
   spawn(command, { text = true }, function(result)
     if result.code ~= 0 then
-      return callback(
-        false,
-        ('could not unpack %s: %s'):format(archive, (result.stderr or ''):gsub('%s+$', ''))
-      )
+      return callback(false, ('could not unpack %s: %s'):format(archive, stderr(result)))
     end
     callback(true)
   end)
@@ -281,10 +291,7 @@ function M.download(opts, callback)
     return callback(nil, err)
   end
 
-  if running then
-    running.step = 'downloading'
-  end
-  progress('downloading ' .. M.binary)
+  advance('downloading', 'downloading ' .. M.binary)
 
   local url, version_err = M.archive_url(opts.version, triple)
   if not url then
@@ -325,10 +332,7 @@ function M.download(opts, callback)
         )
       end
 
-      if running then
-        running.step = 'unpacking'
-      end
-      progress('unpacking ' .. M.binary)
+      advance('unpacking', 'unpacking ' .. M.binary)
 
       -- Unpack beside the download rather than into the bin directory, so a running
       -- engine is never opened for writing while the archive is extracted.
@@ -405,17 +409,11 @@ function M.build(callback)
     return callback(nil, 'cargo is not installed, so the engine cannot be built from source')
   end
 
-  if running then
-    running.step = 'building'
-  end
-  progress(('building %s with cargo, which takes a few minutes'):format(M.binary))
+  advance('building', ('building %s with cargo, which takes a few minutes'):format(M.binary))
 
   spawn({ 'cargo', 'build', '--release' }, { cwd = root, text = true }, function(result)
     if result.code ~= 0 then
-      return callback(
-        nil,
-        ('cargo build failed: %s'):format((result.stderr or ''):gsub('%s+$', ''))
-      )
+      return callback(nil, ('cargo build failed: %s'):format(stderr(result)))
     end
 
     local built = vim.fs.joinpath(root, 'target', 'release', M.binary)
@@ -444,26 +442,29 @@ function M.install(opts)
   opts = type(opts) == 'string' and { method = opts } or opts or {}
   ---@cast opts table
 
-  if opts.method and not vim.tbl_contains(M.methods, opts.method) then
-    local err = ('`%s` is not a way to install the engine; pick one of %s'):format(
-      opts.method,
-      table.concat(M.methods, ', ')
-    )
+  --- Refuse to start, through the callback when there is one.
+  local function refuse(err, loud)
     if opts.callback then
       opts.callback(nil, err)
       return
     end
-    notify(err, vim.log.levels.ERROR)
+    if loud then
+      notify(err, vim.log.levels.ERROR)
+    end
     return false, err
   end
 
+  if opts.method and not vim.tbl_contains(M.methods, opts.method) then
+    return refuse(
+      ('`%s` is not a way to install the engine; pick one of %s'):format(
+        opts.method,
+        table.concat(M.methods, ', ')
+      ),
+      true
+    )
+  end
   if running then
-    local err = ('an engine is already being installed (%s)'):format(running.step)
-    if opts.callback then
-      opts.callback(nil, err)
-      return
-    end
-    return false, err
+    return refuse(('an engine is already being installed (%s)'):format(running.step))
   end
   running = { step = opts.method == 'cargo' and 'building' or 'downloading' }
 
@@ -537,8 +538,7 @@ function M.version(path)
     return nil, tostring(result)
   end
   if result.code ~= 0 then
-    local message = (result.stderr or ''):gsub('%s+$', '')
-    return nil, message
+    return nil, stderr(result)
   end
 
   return (result.stdout or ''):match('([%d%.]+)')
