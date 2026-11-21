@@ -1,8 +1,8 @@
 use rmpv::Value;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::error::{Error, Result};
-use crate::message::Message;
+use crate::rpc::error::{Error, Result};
+use crate::rpc::message::Message;
 
 /// Sends notifications and responses to the peer.
 ///

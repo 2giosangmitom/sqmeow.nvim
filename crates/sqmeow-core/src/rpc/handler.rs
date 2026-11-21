@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rmpv::Value;
 
-use crate::client::Client;
+use crate::rpc::client::Client;
 
 /// Represents a pending reply to a peer request.
 ///

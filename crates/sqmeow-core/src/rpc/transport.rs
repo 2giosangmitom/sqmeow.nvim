@@ -2,7 +2,7 @@ use std::io::{BufReader, BufWriter, Write};
 
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-use crate::message::Message;
+use crate::rpc::message::Message;
 
 /// Holds both halves of a framed msgpack-rpc stream.
 pub struct Transport {

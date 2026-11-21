@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::client::Client;
-use crate::handler::{Handler, Reply};
-use crate::message::Message;
-use crate::transport::{self, Transport};
+use crate::rpc::client::Client;
+use crate::rpc::handler::{Handler, Reply};
+use crate::rpc::message::Message;
+use crate::rpc::transport::{self, Transport};
 
 /// Represents a live msgpack-rpc session with one peer.
 ///

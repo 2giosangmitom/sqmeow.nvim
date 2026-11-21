@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sqmeow-rpc", "crates/sqmeow-db", "crates/sqmeow-adapters", "crates/sqmeow-core"]
+members = ["crates/sqmeow-db", "crates/sqmeow-adapters", "crates/sqmeow-core"]
 
 [workspace.package]
 version = "3.3.0" # x-release-please-version
@@ -11,7 +11,6 @@ repository = "https://github.com/2giosangmitom/sqmeow.nvim"
 
 [workspace.dependencies]
 async-trait = "0.1"
-sqmeow-rpc = { path = "crates/sqmeow-rpc" }
 sqmeow-db = { path = "crates/sqmeow-db" }
 sqmeow-adapters = { path = "crates/sqmeow-adapters" }
 

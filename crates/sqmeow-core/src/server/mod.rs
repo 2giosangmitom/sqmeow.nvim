@@ -41,9 +41,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::rpc::handler::{Handler, Reply};
 use crate::server::nvim::Nvim;
 use rmpv::Value;
-use sqmeow_rpc::handler::{Handler, Reply};
 use tokio::sync::Notify;
 
 use crate::server::args::Args;

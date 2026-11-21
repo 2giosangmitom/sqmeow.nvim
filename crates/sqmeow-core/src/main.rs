@@ -9,12 +9,13 @@
 //! frames and tracing goes to stderr. Closing the editor channel or requesting
 //! `shutdown` ends the server; saved result archives are managed separately.
 
+mod rpc;
 mod server;
 
 use std::sync::Arc;
 
+use crate::rpc::connection::Connection;
 use crate::server::nvim::Nvim;
-use sqmeow_rpc::connection::Connection;
 use tracing_subscriber::EnvFilter;
 
 use crate::server::Core;

@@ -1,6 +1,6 @@
 use rmpv::Value;
 
-use crate::error::{Error, Result};
+use crate::rpc::error::{Error, Result};
 
 /// Message type tag for a request, per the msgpack-rpc specification.
 pub const KIND_REQUEST: u64 = 0;

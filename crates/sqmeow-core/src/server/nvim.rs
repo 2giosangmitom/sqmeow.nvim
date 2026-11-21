@@ -1,7 +1,7 @@
 use rmpv::Value;
 
-use sqmeow_rpc::client::Client;
-use sqmeow_rpc::error::Result;
+use crate::rpc::client::Client;
+use crate::rpc::error::Result;
 
 /// Typed Neovim calls over [`Client`].
 #[derive(Clone)]

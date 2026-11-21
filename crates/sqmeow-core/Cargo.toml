@@ -12,11 +12,11 @@ name = "sqmeow-core"
 path = "src/main.rs"
 
 [dependencies]
-sqmeow-rpc.workspace = true
 sqmeow-db.workspace = true
 sqmeow-adapters.workspace = true
 
 rmpv.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",
