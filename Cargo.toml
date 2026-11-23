@@ -64,7 +64,7 @@ oracledb = "26.0.0-beta.5"
 tiberius = { version = "0.13", default-features = false, features = ["rustls", "tds73", "chrono"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
-sqlparser = { version = "0.63", default-features = false, features = ["std", "visitor"] }
+sqlparser = { version = "0.64", default-features = false, features = ["std", "visitor"] }
 percent-encoding = "2"
 url = "2"
 serde_json = "1"
