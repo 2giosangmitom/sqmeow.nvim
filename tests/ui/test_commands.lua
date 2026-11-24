@@ -41,7 +41,7 @@ local T = MiniTest.new_set({
 })
 
 T['completes subcommand names, sorted'] = function()
-  eq(complete('Sqmeow ex'), { 'execute', 'export' })
+  eq(complete('Sqmeow ex'), { 'execute', 'explain', 'export' })
 
   local all = complete('Sqmeow ')
   local sorted = vim.deepcopy(all)

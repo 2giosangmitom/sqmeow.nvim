@@ -418,6 +418,8 @@ for _, name in ipairs({
   'execute_statement',
   'execute_selection',
   'execute_buffer',
+  'explain_statement',
+  'explain_selection',
   'cancel',
   'next_result',
   'prev_result',

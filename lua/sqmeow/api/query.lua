@@ -236,8 +236,9 @@ end
 ---@return boolean stopped Whether the engine accepted cancellation.
 function M.cancel()
   local state = require('sqmeow.core.state')
-  -- Changes being applied are stopped by their result's call id.
+  -- Changes being applied or an in-flight silent EXPLAIN are stopped by their own call ids.
   local call_id = require('sqmeow.ui.edit').applying()
+    or require('sqmeow.ui.explain').active_call_id()
   if not call_id then
     if not state.call or state.call.state ~= 'executing' then
       return false
@@ -285,6 +286,89 @@ end
 --- Show the previous statement's result from a multi-statement run.
 function M.prev_result()
   require('sqmeow.ui.result').actions.prev_result()
+end
+
+--- Explain a SQL statement in the visual execution plan viewer.
+--- Runs silently over RPC without opening the result grid or recording history.
+--- On PostgreSQL, read-only statements use `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`
+--- and mutating statements use safe `EXPLAIN (FORMAT JSON)`.
+---@param sql string SQL statement to explain.
+---@param opts table|nil `conn_id` picks a connection; `source_buf` picks the
+--- buffer for binding lookup; `analyze` overrides read-only auto-detection.
+---@return integer|nil call_id
+---@return string|nil error
+function M.explain(sql, opts)
+  opts = opts or {}
+  local state = require('sqmeow.core.state')
+  local connection, reason
+  if opts.conn_id then
+    connection = state.connections[opts.conn_id]
+    reason = 'the connection this result came from is not open'
+  else
+    connection, reason = require('sqmeow.api.connection').target(opts.source_buf)
+  end
+
+  if not connection then
+    reason = reason or 'connect to a database first'
+    notify(reason, vim.log.levels.ERROR)
+    return nil, reason
+  end
+
+  return require('sqmeow.ui.explain').run(connection, sql, { analyze = opts.analyze })
+end
+
+--- Explain the statement under the cursor in the current buffer.
+---@param opts table|nil Forwarded to |sqmeow.api.query.explain()|.
+---@return integer|nil call_id
+---@return string|nil error
+function M.explain_statement(opts)
+  local buf = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
+  local sql = require('sqmeow.ui.explain').statement_at_line(lines, cursor_line)
+  if not sql then
+    notify('there is nothing to explain', vim.log.levels.WARN)
+    return nil, 'there is nothing to explain'
+  end
+  local merged = vim.tbl_extend('force', opts or {}, { source_buf = buf })
+  return M.explain(sql, merged)
+end
+
+--- Explain the current or most recent visual selection.
+---@param opts table|nil Forwarded to |sqmeow.api.query.explain()|.
+---@return integer|nil call_id
+---@return string|nil error
+function M.explain_selection(opts)
+  local buf = vim.api.nvim_get_current_buf()
+  local mode = vim.fn.mode()
+  local active = mode == 'v' or mode == 'V' or mode == '\22'
+  local first = vim.fn.getpos(active and 'v' or "'<")
+  local last = vim.fn.getpos(active and '.' or "'>")
+  if first[2] == 0 or last[2] == 0 then
+    return nil, 'there is no visual selection to explain'
+  end
+  local lines = vim.fn.getregion(first, last, {
+    type = active and mode or vim.fn.visualmode(),
+    exclusive = vim.o.selection == 'exclusive',
+  })
+  if active then
+    vim.cmd('normal! \27')
+  end
+  local merged = vim.tbl_extend('force', opts or {}, { source_buf = buf })
+  return M.explain(table.concat(lines, '\n'), merged)
+end
+
+--- Explain a one-based, inclusive line range from the current buffer.
+---@param first integer First line, counted from one.
+---@param last integer Last line, inclusive.
+---@param opts table|nil Forwarded to |sqmeow.api.query.explain()|.
+---@return integer|nil call_id
+---@return string|nil error
+function M.explain_range(first, last, opts)
+  local buf = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(buf, first - 1, last, true)
+  local merged = vim.tbl_extend('force', opts or {}, { source_buf = buf })
+  return M.explain(table.concat(lines, '\n'), merged)
 end
 
 return M

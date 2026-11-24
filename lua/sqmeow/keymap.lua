@@ -235,11 +235,28 @@ M.defaults = {
     { action = 'newer', lhs = '<C-n>', desc = 'Show the filter used after this one' },
   },
 
+  -- The visual execution plan viewer.
+  explain = {
+    { action = 'next_operator', lhs = { 'j', '<Tab>' }, desc = 'Next operator' },
+    { action = 'prev_operator', lhs = { 'k', '<S-Tab>' }, desc = 'Previous operator' },
+    { action = 'details', lhs = { '<CR>', 'K', 'l' }, desc = 'Show operator details' },
+    { action = 'toggle_fold', lhs = { 'za', 'h' }, desc = 'Fold or unfold this subtree' },
+    { action = 'yank_json', lhs = 'y', desc = 'Yank the raw EXPLAIN JSON' },
+    { action = 'help', lhs = '?', desc = 'Show these mappings' },
+    { action = 'close', lhs = { 'q', '<Esc>' }, desc = 'Close the execution plan' },
+  },
+
   -- A scratchpad is an ordinary editing buffer.
   editor = {
     { action = 'execute_statement', lhs = '<CR>', desc = 'Run the statement under the cursor' },
     { action = 'execute_selection', lhs = '<CR>', mode = 'x', desc = 'Run the selection' },
     { action = 'execute_buffer', lhs = '<leader>E', desc = 'Run the whole buffer' },
+    {
+      action = 'explain_statement',
+      lhs = '<leader>X',
+      desc = 'Explain the statement under the cursor',
+    },
+    { action = 'explain_selection', lhs = '<leader>X', mode = 'x', desc = 'Explain the selection' },
     { action = 'cancel', lhs = '<C-c>', desc = 'Stop the running query' },
     { action = 'next_result', lhs = ']r', desc = "Show the next statement's result" },
     { action = 'prev_result', lhs = '[r', desc = "Show the previous statement's result" },
@@ -265,6 +282,18 @@ M.plug = {
     desc = 'Run the selection',
     run = function()
       require('sqmeow.api.query').execute_selection()
+    end,
+  },
+  ['sqmeow-explain'] = {
+    desc = 'Explain the statement under the cursor',
+    run = function()
+      require('sqmeow.api.query').explain_statement()
+    end,
+  },
+  ['sqmeow-explain-selection'] = {
+    desc = 'Explain the selection',
+    run = function()
+      require('sqmeow.api.query').explain_selection()
     end,
   },
   ['sqmeow-result-float'] = {

@@ -27,6 +27,18 @@ M.subcommands = {
       void(require('sqmeow.api.query').execute_statement())
     end,
   },
+  explain = {
+    desc = 'Explain the statement under the cursor, the selection, or the given SQL',
+    run = function(args, opts)
+      if #args > 0 then
+        return void(require('sqmeow.api.query').explain(table.concat(args, ' ')))
+      end
+      if opts.range and opts.range > 0 then
+        return void(require('sqmeow.api.query').explain_range(opts.line1, opts.line2))
+      end
+      void(require('sqmeow.api.query').explain_statement())
+    end,
+  },
   cancel = {
     desc = 'Stop the running query',
     run = function()

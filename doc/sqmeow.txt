@@ -992,12 +992,14 @@ filter
  <C-n>      Show the filter used after this one
 
 editor
- <CR>        Run the statement under the cursor
- <CR> (x)    Run the selection
- <leader>E   Run the whole buffer
- <C-c>       Stop the running query
- ]r          Show the next statement's result
- [r          Show the previous statement's result
+ <CR>            Run the statement under the cursor
+ <CR> (x)        Run the selection
+ <leader>E       Run the whole buffer
+ <leader>X       Explain the statement under the cursor
+ <leader>X (x)   Explain the selection
+ <C-c>           Stop the running query
+ ]r              Show the next statement's result
+ [r              Show the previous statement's result
 Type ~
 `(table<string, sqmeow.Keymap[]>)`
 
@@ -1293,6 +1295,57 @@ Show the next statement's result from a multi-statement run.
                                                 *sqmeow.api.query.prev_result()*
                         `sqmeow.api.query.prev_result`()
 Show the previous statement's result from a multi-statement run.
+
+------------------------------------------------------------------------------
+                                                    *sqmeow.api.query.explain()*
+                   `sqmeow.api.query.explain`({sql}, {opts})
+Explain a SQL statement in the visual execution plan viewer.
+Runs silently over RPC without opening the result grid or recording history.
+On PostgreSQL, read-only statements use `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`
+and mutating statements use safe `EXPLAIN (FORMAT JSON)`.
+Parameters ~
+{sql} `(string)` SQL statement to explain.
+{opts} `(table|nil)` `conn_id` picks a connection; `source_buf` picks the
+buffer for binding lookup; `analyze` overrides read-only auto-detection.
+Return ~
+`(integer|nil)` call_id
+Return ~
+`(string|nil)` error
+
+------------------------------------------------------------------------------
+                                          *sqmeow.api.query.explain_statement()*
+                  `sqmeow.api.query.explain_statement`({opts})
+Explain the statement under the cursor in the current buffer.
+Parameters ~
+{opts} `(table|nil)` Forwarded to |sqmeow.api.query.explain()|.
+Return ~
+`(integer|nil)` call_id
+Return ~
+`(string|nil)` error
+
+------------------------------------------------------------------------------
+                                          *sqmeow.api.query.explain_selection()*
+                  `sqmeow.api.query.explain_selection`({opts})
+Explain the current or most recent visual selection.
+Parameters ~
+{opts} `(table|nil)` Forwarded to |sqmeow.api.query.explain()|.
+Return ~
+`(integer|nil)` call_id
+Return ~
+`(string|nil)` error
+
+------------------------------------------------------------------------------
+                                              *sqmeow.api.query.explain_range()*
+           `sqmeow.api.query.explain_range`({first}, {last}, {opts})
+Explain a one-based, inclusive line range from the current buffer.
+Parameters ~
+{first} `(integer)` First line, counted from one.
+{last} `(integer)` Last line, inclusive.
+{opts} `(table|nil)` Forwarded to |sqmeow.api.query.explain()|.
+Return ~
+`(integer|nil)` call_id
+Return ~
+`(string|nil)` error
 
 
 ==============================================================================
