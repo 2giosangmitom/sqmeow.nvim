@@ -27,8 +27,8 @@ local function sample_plan()
         ['Actual Rows'] = 500,
         ['Actual Loops'] = 1,
         ['Actual Total Time'] = 10.0,
-        ['Shared Hit Blocks'] = 20,
-        ['Shared Read Blocks'] = 2,
+        ['Shared Hit Blocks'] = 135,
+        ['Shared Read Blocks'] = 7,
         Plans = {
           {
             ['Node Type'] = 'Seq Scan',
@@ -72,13 +72,15 @@ local T = MiniTest.new_set({
   },
 })
 
-T['detects read-only statements through leading comments'] = function()
+T['detects read-only statements and rejects data-modifying CTEs'] = function()
   eq(explain.is_read_only('SELECT * FROM orders'), true)
   eq(
     explain.is_read_only('-- comment\n/* block */\nWITH cte AS (SELECT 1) SELECT * FROM cte'),
     true
   )
+  eq(explain.is_read_only("SELECT 'DELETE FROM orders'"), true)
   eq(explain.is_read_only('VALUES (1, 2)'), true)
+  eq(explain.is_read_only('WITH d AS (DELETE FROM orders RETURNING id) SELECT * FROM d'), false)
   eq(explain.is_read_only('UPDATE orders SET status = 1'), false)
   eq(explain.is_read_only('DELETE FROM orders WHERE id = 1'), false)
   eq(explain.is_read_only('INSERT INTO orders VALUES (1)'), false)
@@ -89,7 +91,7 @@ T['strips existing EXPLAIN prefixes and trailing semicolons'] = function()
   eq(explain.strip_explain('EXPLAIN SELECT * FROM orders;'), 'SELECT * FROM orders')
 end
 
-T['builds dialect-specific EXPLAIN queries safely'] = function()
+T['builds dialect-specific EXPLAIN queries safely and rejects multi-statement input'] = function()
   local sql, analyze, err = explain.build_query('postgres', 'SELECT * FROM orders;')
   eq(err, nil)
   eq(analyze, true)
@@ -100,25 +102,33 @@ T['builds dialect-specific EXPLAIN queries safely'] = function()
   eq(wanalyze, false)
   eq(wsql, 'EXPLAIN (FORMAT JSON) DELETE FROM orders WHERE id = 1')
 
-  local forced, fanalyze = explain.build_query('cockroachdb', 'SELECT 1', { analyze = false })
+  local forced, fanalyze = explain.build_query('postgres', 'SELECT 1', { analyze = false })
   eq(fanalyze, false)
   eq(forced, 'EXPLAIN (FORMAT JSON) SELECT 1')
+
+  local multi, _, multi_err = explain.build_query('postgres', 'SELECT 1; DELETE FROM orders;')
+  eq(multi, nil)
+  eq(multi_err ~= nil, true)
+
+  local crdb, _, crdb_err = explain.build_query('cockroachdb', 'SELECT 1')
+  eq(crdb, nil)
+  eq(crdb_err ~= nil, true)
 
   local bad, _, bad_err = explain.build_query('redis', 'GET foo')
   eq(bad, nil)
   eq(bad_err ~= nil, true)
 end
 
-T['extracts the statement containing the cursor line'] = function()
+T['extracts the statement containing the cursor line without splitting quoted semicolons'] = function()
   local lines = {
-    'SELECT 1;',
+    "SELECT 'a;b';",
     '',
-    'SELECT *',
+    'SELECT * -- ; not a terminator',
     'FROM orders;',
     'SELECT 3;',
   }
-  eq(explain.statement_at_line(lines, 1), 'SELECT 1;')
-  eq(explain.statement_at_line(lines, 3), 'SELECT *\nFROM orders;')
+  eq(explain.statement_at_line(lines, 1), "SELECT 'a;b';")
+  eq(explain.statement_at_line(lines, 3), 'SELECT * -- ; not a terminator\nFROM orders;')
   eq(explain.statement_at_line(lines, 5), 'SELECT 3;')
 end
 
@@ -228,8 +238,44 @@ T['runs silently via RPC without opening result grid or overwriting state.call']
   eq(history_appended, false)
   eq(state.call, prev_call)
   eq(explain.state() ~= nil, true)
+  eq(explain.active_call_id(), nil)
   eq(rpc_methods[2].method, 'rows')
   eq(rpc_methods[2].args.call_id, 101)
+end
+
+T['routes query.cancel() to an in-flight silent EXPLAIN and guards invalidate()'] = function()
+  local cancelled_id = nil
+  local rows_called = false
+
+  helpers.stub(rpc, 'request', function(method, args)
+    if method == 'execute' then
+      return 202, nil
+    elseif method == 'cancel' then
+      cancelled_id = args.call_id
+      return true, nil
+    elseif method == 'rows' then
+      rows_called = true
+      return { rows = {} }, nil
+    end
+    return nil, nil
+  end)
+
+  local cid = explain.run({ id = 1, name = 'pg', dialect = 'postgres' }, 'SELECT 1')
+  eq(cid, 202)
+  eq(explain.active_call_id(), 202)
+
+  -- query.cancel() stops the active explain call without replacing state.call
+  eq(require('sqmeow.api.query').cancel(), true)
+  eq(cancelled_id, 202)
+
+  -- Queued done callback dropped if invalidate() runs before scheduled rows fetch
+  events.on_call({ call_id = 202, conn_id = 1, state = 'done', rows = 1 })
+  explain.invalidate()
+  vim.wait(100, function()
+    return rows_called
+  end)
+  eq(rows_called, false)
+  eq(explain.active_call_id(), nil)
 end
 
 return T

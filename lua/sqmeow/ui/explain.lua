@@ -55,6 +55,13 @@ local detail_popup = nil
 ---@type table<integer, sqmeow.ExplainPending>
 local silent_calls = {}
 
+--- Most recent active EXPLAIN call id, for cancellation via `api.query.cancel()`.
+---@type integer|nil
+local active_call_id = nil
+
+--- Monotonic counter bumped on engine restart/stop to drop queued `done` callbacks.
+local generation = 0
+
 --- True while `rpc.request('execute', ...)` for an EXPLAIN call is waiting for its `call_id`.
 local in_flight = false
 
@@ -62,19 +69,170 @@ local in_flight = false
 ---@type table[]
 local buffered_events = {}
 
---- Strip leading SQL line (`--`) and block (`/* ... */`) comments.
+--- Split `sql` into statements while respecting quotes, dollar-quotes, and comments.
+--- Each entry records `{ text, start_line, end_line }` with 1-based line numbers.
+---@param sql string
+---@return { text: string, start_line: integer, end_line: integer }[]
+local function split_statements(sql)
+  local stmts = {}
+  local len = #sql
+  local i = 1
+  local line = 1
+  local stmt_start = 1
+  local stmt_start_line = 1
+
+  local function flush(end_pos, end_line)
+    local raw = sql:sub(stmt_start, end_pos)
+    local trimmed = vim.trim(raw)
+    if trimmed ~= '' then
+      table.insert(stmts, {
+        text = trimmed,
+        start_line = stmt_start_line,
+        end_line = end_line,
+      })
+    end
+  end
+
+  while i <= len do
+    local ch = sql:sub(i, i)
+    local two = sql:sub(i, i + 1)
+
+    if ch == '\n' then
+      line = line + 1
+      i = i + 1
+    elseif two == '--' then
+      local nl = sql:find('\n', i + 2, true)
+      if nl then
+        line = line + 1
+        i = nl + 1
+      else
+        i = len + 1
+      end
+    elseif two == '/*' then
+      local close = sql:find('*/', i + 2, true)
+      if close then
+        for _ in sql:sub(i + 2, close + 1):gmatch('\n') do
+          line = line + 1
+        end
+        i = close + 2
+      else
+        i = len + 1
+      end
+    elseif ch == "'" or ch == '"' then
+      local quote = ch
+      i = i + 1
+      while i <= len do
+        local c = sql:sub(i, i)
+        if c == '\n' then
+          line = line + 1
+          i = i + 1
+        elseif c == quote then
+          if sql:sub(i + 1, i + 1) == quote then
+            i = i + 2
+          else
+            i = i + 1
+            break
+          end
+        else
+          i = i + 1
+        end
+      end
+    elseif ch == '$' then
+      local tag = sql:match('^%$[%w_]*%$', i)
+      if tag then
+        local close = sql:find(tag, i + #tag, true)
+        if close then
+          for _ in sql:sub(i + #tag, close - 1):gmatch('\n') do
+            line = line + 1
+          end
+          i = close + #tag
+        else
+          i = len + 1
+        end
+      else
+        i = i + 1
+      end
+    elseif ch == ';' then
+      flush(i, line)
+      i = i + 1
+      stmt_start = i
+      stmt_start_line = line
+      -- Advance start line past trailing newlines/whitespace before the next statement
+      while stmt_start <= len do
+        local ws = sql:sub(stmt_start, stmt_start)
+        if ws == '\n' then
+          line = line + 1
+          stmt_start = stmt_start + 1
+          stmt_start_line = line
+        elseif ws == ' ' or ws == '\t' or ws == '\r' then
+          stmt_start = stmt_start + 1
+        else
+          break
+        end
+      end
+      i = stmt_start
+    else
+      i = i + 1
+    end
+  end
+
+  if stmt_start <= len then
+    flush(len, line)
+  end
+  return stmts
+end
+
+--- Strip comments and quoted literals so keyword checks ignore string/comment contents.
 ---@param sql string
 ---@return string
-local function strip_leading_comments(sql)
-  local current = sql
-  while true do
-    local next_sql = current:gsub('^%s*%-%-[^\n]*\n?', ''):gsub('^%s*/%*.-%*/%s*', '')
-    if next_sql == current then
-      break
+local function strip_comments_and_literals(sql)
+  local out = {}
+  local len = #sql
+  local i = 1
+  while i <= len do
+    local ch = sql:sub(i, i)
+    local two = sql:sub(i, i + 1)
+    if two == '--' then
+      local nl = sql:find('\n', i + 2, true)
+      table.insert(out, ' ')
+      i = nl and (nl + 1) or (len + 1)
+    elseif two == '/*' then
+      local close = sql:find('*/', i + 2, true)
+      table.insert(out, ' ')
+      i = close and (close + 2) or (len + 1)
+    elseif ch == "'" or ch == '"' then
+      local quote = ch
+      table.insert(out, ' ')
+      i = i + 1
+      while i <= len do
+        local c = sql:sub(i, i)
+        if c == quote then
+          if sql:sub(i + 1, i + 1) == quote then
+            i = i + 2
+          else
+            i = i + 1
+            break
+          end
+        else
+          i = i + 1
+        end
+      end
+    elseif ch == '$' then
+      local tag = sql:match('^%$[%w_]*%$', i)
+      if tag then
+        local close = sql:find(tag, i + #tag, true)
+        table.insert(out, ' ')
+        i = close and (close + #tag) or (len + 1)
+      else
+        table.insert(out, ch)
+        i = i + 1
+      end
+    else
+      table.insert(out, ch)
+      i = i + 1
     end
-    current = next_sql
   end
-  return vim.trim(current)
+  return vim.trim(table.concat(out))
 end
 
 --- Strip trailing semicolons and any leading `EXPLAIN (...)` prefix.
@@ -88,18 +246,44 @@ function M.strip_explain(sql)
   return vim.trim(cleaned)
 end
 
+local MUTATING_KEYWORDS = {
+  INSERT = true,
+  UPDATE = true,
+  DELETE = true,
+  MERGE = true,
+  CREATE = true,
+  ALTER = true,
+  DROP = true,
+  TRUNCATE = true,
+  COPY = true,
+  GRANT = true,
+  REVOKE = true,
+}
+
 --- Whether a SQL statement is read-only and safe to execute with `EXPLAIN ANALYZE`.
+--- Rejects data-modifying CTEs (e.g. `WITH d AS (DELETE ...) SELECT * FROM d`).
 ---@param sql string
 ---@return boolean
 function M.is_read_only(sql)
-  local clean = strip_leading_comments(sql):upper()
-  return clean:match('^SELECT%s') ~= nil
-    or clean:match('^WITH%s') ~= nil
-    or clean:match('^TABLE%s') ~= nil
-    or clean:match('^VALUES%s') ~= nil
+  local clean = strip_comments_and_literals(sql):upper()
+  local is_read_head = clean:match('^SELECT%f[%W]') ~= nil
+    or clean:match('^WITH%f[%W]') ~= nil
+    or clean:match('^TABLE%f[%W]') ~= nil
+    or clean:match('^VALUES%f[%W]') ~= nil
+  if not is_read_head then
+    return false
+  end
+  if clean:match('^WITH%f[%W]') ~= nil then
+    for word in clean:gmatch('%a+') do
+      if MUTATING_KEYWORDS[word] then
+        return false
+      end
+    end
+  end
+  return true
 end
 
---- Build the dialect-specific EXPLAIN statement for a query.
+--- Build the dialect-specific EXPLAIN statement for a single query.
 ---@param dialect string
 ---@param sql string
 ---@param opts? { analyze?: boolean }
@@ -108,12 +292,20 @@ end
 ---@return string|nil err
 function M.build_query(dialect, sql, opts)
   opts = opts or {}
-  local cleaned = M.strip_explain(sql)
+  local stmts = split_statements(sql or '')
+  if #stmts == 0 then
+    return nil, false, 'there is nothing to explain'
+  end
+  if #stmts > 1 then
+    return nil, false, 'explain supports one statement at a time'
+  end
+
+  local cleaned = M.strip_explain(stmts[1].text)
   if cleaned == '' then
     return nil, false, 'there is nothing to explain'
   end
 
-  if dialect == 'postgres' or dialect == 'postgresql' or dialect == 'cockroachdb' then
+  if dialect == 'postgres' or dialect == 'postgresql' then
     local analyze = opts.analyze
     if analyze == nil then
       analyze = M.is_read_only(cleaned)
@@ -134,30 +326,16 @@ function M.statement_at_line(lines, cursor_line)
   if #lines == 0 then
     return nil
   end
-  local full = table.concat(lines, '\n')
-  if vim.trim(full) == '' then
+  local stmts = split_statements(table.concat(lines, '\n'))
+  if #stmts == 0 then
     return nil
   end
-
-  local stmt_start = 1
-  local current = {}
-  local chosen = nil
-  for index, line in ipairs(lines) do
-    table.insert(current, line)
-    if line:find(';', 1, true) then
-      if cursor_line >= stmt_start and cursor_line <= index then
-        chosen = table.concat(current, '\n')
-        break
-      end
-      current = {}
-      stmt_start = index + 1
+  for _, stmt in ipairs(stmts) do
+    if cursor_line >= stmt.start_line and cursor_line <= stmt.end_line then
+      return stmt.text
     end
   end
-  if not chosen and #current > 0 then
-    chosen = table.concat(current, '\n')
-  end
-  local trimmed = chosen and vim.trim(chosen) or ''
-  return trimmed ~= '' and trimmed or nil
+  return stmts[#stmts].text
 end
 
 ---@param n number|nil
@@ -206,6 +384,7 @@ end
 ---@param stats? sqmeow.ExplainStats
 ---@return sqmeow.ExplainStats
 function M.enrich(node, root_time, root_cost, is_analyze, stats)
+  local is_root = stats == nil
   stats = stats or { seq_scans = 0, mismatches = 0, shared_hit = 0, shared_read = 0 }
   local children = node.Plans or {}
   local child_time_sum = 0
@@ -251,8 +430,12 @@ function M.enrich(node, root_time, root_cost, is_analyze, stats)
     end
   end
 
-  stats.shared_hit = stats.shared_hit + (node['Shared Hit Blocks'] or 0)
-  stats.shared_read = stats.shared_read + (node['Shared Read Blocks'] or 0)
+  -- PostgreSQL reports buffer counters inclusively on parent nodes; read from the root
+  -- to avoid double-counting child buffers.
+  if is_root then
+    stats.shared_hit = node['Shared Hit Blocks'] or 0
+    stats.shared_read = node['Shared Read Blocks'] or 0
+  end
 
   node._meta = {
     total_time = total_time,
@@ -733,6 +916,9 @@ function M.on_call(payload)
 
   if payload.state == 'error' or payload.state == 'cancelled' then
     silent_calls[call_id] = nil
+    if active_call_id == call_id then
+      active_call_id = nil
+    end
     vim.schedule(function()
       notify('explain failed: ' .. tostring(payload.error or payload.state), vim.log.levels.ERROR)
     end)
@@ -741,12 +927,22 @@ function M.on_call(payload)
 
   if payload.state == 'done' then
     silent_calls[call_id] = nil
+    if active_call_id == call_id then
+      active_call_id = nil
+    end
+    local gen = generation
     vim.schedule(function()
+      if gen ~= generation then
+        return
+      end
       local reply, verr = require('sqmeow.rpc.client').request('rows', {
         call_id = call_id,
         offset = 0,
         limit = 10,
       })
+      if gen ~= generation then
+        return
+      end
       local raw = type(reply) == 'table' and reply.rows and reply.rows[1] and reply.rows[1][1]
         or nil
       if not raw then
@@ -793,6 +989,7 @@ function M.run(connection, sql, opts)
     sql = explain_sql,
   })
   if call_id then
+    active_call_id = call_id
     silent_calls[call_id] = {
       sql = M.strip_explain(sql),
       is_analyze = is_analyze,
@@ -815,9 +1012,17 @@ function M.run(connection, sql, opts)
   return call_id
 end
 
+--- The call id of an in-flight silent EXPLAIN run, if any.
+---@return integer|nil
+function M.active_call_id()
+  return active_call_id
+end
+
 --- Clear pending silent calls on engine restart or stop.
 function M.invalidate()
+  generation = generation + 1
   silent_calls = {}
+  active_call_id = nil
   in_flight = false
   buffered_events = {}
 end

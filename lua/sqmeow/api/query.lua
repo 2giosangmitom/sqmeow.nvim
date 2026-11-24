@@ -236,8 +236,9 @@ end
 ---@return boolean stopped Whether the engine accepted cancellation.
 function M.cancel()
   local state = require('sqmeow.core.state')
-  -- Changes being applied are stopped by their result's call id.
+  -- Changes being applied or an in-flight silent EXPLAIN are stopped by their own call ids.
   local call_id = require('sqmeow.ui.edit').applying()
+    or require('sqmeow.ui.explain').active_call_id()
   if not call_id then
     if not state.call or state.call.state ~= 'executing' then
       return false
@@ -289,7 +290,7 @@ end
 
 --- Explain a SQL statement in the visual execution plan viewer.
 --- Runs silently over RPC without opening the result grid or recording history.
---- On PostgreSQL and CockroachDB, read-only statements use `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`
+--- On PostgreSQL, read-only statements use `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`
 --- and mutating statements use safe `EXPLAIN (FORMAT JSON)`.
 ---@param sql string SQL statement to explain.
 ---@param opts table|nil `conn_id` picks a connection; `source_buf` picks the

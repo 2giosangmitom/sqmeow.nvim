@@ -1301,7 +1301,7 @@ Show the previous statement's result from a multi-statement run.
                    `sqmeow.api.query.explain`({sql}, {opts})
 Explain a SQL statement in the visual execution plan viewer.
 Runs silently over RPC without opening the result grid or recording history.
-On PostgreSQL and CockroachDB, read-only statements use `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`
+On PostgreSQL, read-only statements use `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`
 and mutating statements use safe `EXPLAIN (FORMAT JSON)`.
 Parameters ~
 {sql} `(string)` SQL statement to explain.
