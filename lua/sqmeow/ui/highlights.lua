@@ -49,6 +49,15 @@ M.links = {
   -- A table's name in the overview; its rounded ends take this group's background.
   SqmeowErdLabel = 'PmenuSel',
 
+  -- The visual execution plan viewer.
+  SqmeowExplainTitle = 'Title',
+  SqmeowExplainHot = 'DiagnosticError',
+  SqmeowExplainWarn = 'DiagnosticWarn',
+  SqmeowExplainOk = 'DiagnosticOk',
+  SqmeowExplainInfo = 'DiagnosticInfo',
+  SqmeowExplainFlag = 'DiagnosticError',
+  SqmeowExplainDim = 'Comment',
+
   SqmeowIconConnection = 'Directory',
   SqmeowIconSchema = 'Directory',
   SqmeowIconTable = 'Type',

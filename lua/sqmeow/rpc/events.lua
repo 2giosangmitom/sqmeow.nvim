@@ -92,6 +92,10 @@ end
 --- Handle a query changing state.
 ---@param payload table
 function M.on_call(payload)
+  if require('sqmeow.ui.explain').on_call(payload) then
+    return
+  end
+
   local state = require('sqmeow.core.state')
   local result = require('sqmeow.ui.result')
 
@@ -182,6 +186,7 @@ function M.on_engine_restart()
   require('sqmeow.ui.relationships').close()
   require('sqmeow.core.schema').reset()
   require('sqmeow.ui.erd').invalidate()
+  require('sqmeow.ui.explain').invalidate()
   require('sqmeow.ui.result').forget()
 end
 
@@ -189,6 +194,7 @@ end
 function M.on_engine_stop()
   require('sqmeow.core.schema').reset('engine stopped')
   require('sqmeow.ui.erd').invalidate()
+  require('sqmeow.ui.explain').invalidate()
 end
 
 --- Subscribe to engine events. Safe to call repeatedly.
